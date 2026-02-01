@@ -51,7 +51,7 @@ This allows running both OpenClaw and GoClaw from the same workspace with differ
 ```json
 {
   "gateway": {
-    "port": 3378
+    "port": 1337
   },
   "telegram": {
     "botToken": "YOUR_DEV_BOT_TOKEN",
