@@ -1,0 +1,22 @@
+# Binary (root level only)
+/goclaw
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Config with secrets
+goclaw.json
