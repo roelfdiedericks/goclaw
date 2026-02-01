@@ -5,6 +5,7 @@ go 1.22
 require github.com/charmbracelet/log v0.4.0
 
 require (
+	github.com/alecthomas/kong v1.13.0 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/charmbracelet/lipgloss v0.10.0 // indirect
 	github.com/go-logfmt/logfmt v0.6.0 // indirect
