@@ -22,16 +22,18 @@ func main() {
 		ShowCaller: true,
 	})
 
-	L_info("goclaw %s starting", version)
+	// Demo all three styles:
+	L_info("goclaw %s starting", version)           // printf style
+	L_info("initializing")                          // simple
+	L_info("startup", "version", version, "pid", os.Getpid()) // structured
 
 	// Load config
 	cfg, err := config.Load()
 	if err != nil {
-		L_fatal("failed to load config: %v", err)
+		L_fatal("config load failed", "error", err)
 	}
 
-	L_debug("config loaded")
-	L_object("config", cfg)
+	L_debug("config loaded", "config", cfg)
 
 	// TODO: Start gateway
 	// TODO: Start channel adapters

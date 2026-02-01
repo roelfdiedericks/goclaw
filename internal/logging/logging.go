@@ -5,6 +5,7 @@ package logging
 import (
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,7 +58,7 @@ func Init(cfg *Config) {
 			ReportTimestamp: true,
 			TimeFormat:      cfg.TimeFormat,
 			ReportCaller:    cfg.ShowCaller,
-			CallerOffset:    1, // Skip one frame (our L_* wrapper)
+			CallerOffset:    2, // Skip two frames (logMsg -> L_* -> caller)
 		})
 
 		// Map our levels to charmbracelet levels
@@ -81,47 +82,84 @@ func ensureInit() {
 	}
 }
 
-// L_trace logs at trace level (mapped to debug)
-func L_trace(format string, args ...interface{}) {
+// hasFmtVerb checks if a string contains printf-style format verbs
+func hasFmtVerb(s string) bool {
+	for i := 0; i < len(s)-1; i++ {
+		if s[i] == '%' {
+			next := s[i+1]
+			// Common format verbs: v, s, d, f, t, p, etc. Also %% is escape
+			if next != '%' && strings.ContainsRune("vsdtfgeopqxXbcUT+#", rune(next)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// logMsg handles the flexible logging format:
+// - logMsg(level, "message") -> simple
+// - logMsg(level, "value is %d", 42) -> printf
+// - logMsg(level, "loaded", "key", val, ...) -> structured
+func logMsg(level log.Level, msg string, args ...interface{}) {
 	ensureInit()
-	logger.Debug(fmt.Sprintf(format, args...))
+	
+	var finalMsg string
+	var keyvals []interface{}
+
+	if len(args) == 0 {
+		// Simple message
+		finalMsg = msg
+	} else if hasFmtVerb(msg) {
+		// Printf style
+		finalMsg = fmt.Sprintf(msg, args...)
+	} else {
+		// Structured: msg is the message, args are key-value pairs
+		finalMsg = msg
+		keyvals = args
+	}
+
+	switch level {
+	case log.DebugLevel:
+		logger.Debug(finalMsg, keyvals...)
+	case log.InfoLevel:
+		logger.Info(finalMsg, keyvals...)
+	case log.WarnLevel:
+		logger.Warn(finalMsg, keyvals...)
+	case log.ErrorLevel:
+		logger.Error(finalMsg, keyvals...)
+	case log.FatalLevel:
+		logger.Fatal(finalMsg, keyvals...)
+	}
+}
+
+// L_trace logs at trace level (mapped to debug)
+func L_trace(msg string, args ...interface{}) {
+	logMsg(log.DebugLevel, msg, args...)
 }
 
 // L_debug logs at debug level
-func L_debug(format string, args ...interface{}) {
-	ensureInit()
-	logger.Debug(fmt.Sprintf(format, args...))
+func L_debug(msg string, args ...interface{}) {
+	logMsg(log.DebugLevel, msg, args...)
 }
 
 // L_info logs at info level
-func L_info(format string, args ...interface{}) {
-	ensureInit()
-	logger.Info(fmt.Sprintf(format, args...))
+func L_info(msg string, args ...interface{}) {
+	logMsg(log.InfoLevel, msg, args...)
 }
 
 // L_warn logs at warn level
-func L_warn(format string, args ...interface{}) {
-	ensureInit()
-	logger.Warn(fmt.Sprintf(format, args...))
+func L_warn(msg string, args ...interface{}) {
+	logMsg(log.WarnLevel, msg, args...)
 }
 
 // L_error logs at error level
-func L_error(format string, args ...interface{}) {
-	ensureInit()
-	logger.Error(fmt.Sprintf(format, args...))
+func L_error(msg string, args ...interface{}) {
+	logMsg(log.ErrorLevel, msg, args...)
 }
 
 // L_fatal logs at fatal level and exits
-func L_fatal(format string, args ...interface{}) {
-	ensureInit()
-	logger.Fatal(fmt.Sprintf(format, args...))
-}
-
-// WithFields returns a logger with additional context fields
-// Usage: WithFields("user", 123, "action", "login").Info("logged in")
-func WithFields(keyvals ...interface{}) *log.Logger {
-	ensureInit()
-	return logger.With(keyvals...)
+func L_fatal(msg string, args ...interface{}) {
+	logMsg(log.FatalLevel, msg, args...)
 }
 
 // SetLevel changes the log level at runtime
@@ -150,15 +188,11 @@ func IsShuttingDown() bool {
 	return atomic.LoadInt32(&shuttingDown) == 1
 }
 
-// L_object prints an object for debugging (uses %+v)
-func L_object(label string, obj interface{}) {
-	ensureInit()
-	logger.Debug(label, "value", fmt.Sprintf("%+v", obj))
-}
-
 // L_elapsed logs with elapsed time since start
-func L_elapsed(start time.Time, format string, args ...interface{}) {
+func L_elapsed(start time.Time, msg string, args ...interface{}) {
 	ensureInit()
 	elapsed := time.Since(start)
-	logger.Info(fmt.Sprintf(format, args...), "elapsed", elapsed.String())
+	// Append elapsed to keyvals
+	args = append(args, "elapsed", elapsed.String())
+	logMsg(log.InfoLevel, msg, args...)
 }
