@@ -1,0 +1,374 @@
+package logging
+
+import (
+	"fmt"
+	"io"
+	"log"
+	"log/syslog"
+	"os"
+	"path"
+	"runtime"
+	"sync/atomic"
+	"time"
+
+	mqtt "github.com/eclipse/paho.mqtt.golang"
+	logrus "github.com/sirupsen/logrus"
+)
+
+// Log levels for session-specific logging
+const (
+	LOG_FATAL = 0
+	LOG_ERROR = 1
+	LOG_WARN  = 2
+	LOG_INFO  = 3
+	LOG_DEBUG = 4
+	LOG_TRACE = 5
+)
+
+var (
+	l           *logrus.Logger
+	g_debug     bool
+	g_trace     bool
+	g_use_syslog bool
+	
+	// Global shutdown flag for the entire application
+	// This is a bit unconventional to have in the logging package,
+	// but it's the one package that's imported everywhere with dot imports
+	shuttingDown int32 // Atomic flag: 0 = running, 1 = shutting down
+)
+
+// FormatterHook is a hook that writes logs of specified LogLevels with a formatter to specified Writer
+type FormatterHook struct {
+	Writer    io.Writer
+	LogLevels []logrus.Level
+	Formatter logrus.Formatter
+}
+
+// Fire will be called when some logging function is called with current hook
+// It will format log entry and write it to appropriate writer
+func (hook *FormatterHook) Fire(entry *logrus.Entry) error {
+	line, err := hook.Formatter.Format(entry)
+	if err != nil {
+		return err
+	}
+	_, err = hook.Writer.Write(line)
+	return err
+}
+
+// Levels define on which log levels this hook would trigger
+func (hook *FormatterHook) Levels() []logrus.Level {
+	return hook.LogLevels
+}
+
+// InitLogging initializes the logging system with the specified options
+func InitLogging(debug, trace, useSyslog bool) {
+	g_debug = debug
+	g_trace = trace
+	g_use_syslog = useSyslog
+	
+	l = logrus.New()
+
+	if g_trace {
+		l.Level = logrus.TraceLevel
+	} else if g_debug {
+		l.Level = logrus.DebugLevel
+	} else {
+		l.Level = logrus.InfoLevel
+	}
+
+	l.AddHook(&FormatterHook{ // Send logs with level higher than info to stderr
+		Writer: os.Stderr,
+		LogLevels: []logrus.Level{
+			logrus.DebugLevel,
+			logrus.TraceLevel,
+			logrus.PanicLevel,
+			logrus.FatalLevel,
+			logrus.ErrorLevel,
+			logrus.WarnLevel,
+			logrus.InfoLevel,
+		},
+		Formatter: &logrus.TextFormatter{
+			CallerPrettyfier: func(f *runtime.Frame) (string, string) {
+				// We're handling caller info in the L_* functions, so return empty here
+				return "", ""
+			},
+			ForceColors:            true,
+			DisableTimestamp:       false,
+			TimestampFormat:        "2006-01-02 15:04:05",
+			DisableColors:          false,
+			QuoteEmptyFields:       true,
+			DisableLevelTruncation: true,
+			PadLevelText:           true,
+			FullTimestamp:          true,
+			// Customizing delimiters
+			FieldMap: logrus.FieldMap{
+				logrus.FieldKeyTime:  "@timestamp",
+				logrus.FieldKeyLevel: "severity",
+				logrus.FieldKeyMsg:   "message",
+				logrus.FieldKeyFunc:  "caller",
+			},
+		},
+	})
+
+	if (g_use_syslog) {
+		syslogWriter, _ := syslog.New(syslog.LOG_INFO, "ratbond")
+		l.AddHook(&FormatterHook{ // Send logs with level higher than info to stderr
+			Writer: syslogWriter,
+			LogLevels: []logrus.Level{
+				logrus.PanicLevel,
+				logrus.FatalLevel,
+				logrus.ErrorLevel,
+				logrus.WarnLevel,
+				logrus.InfoLevel,
+			},
+			Formatter: &logrus.TextFormatter{
+				CallerPrettyfier: func(f *runtime.Frame) (string, string) {
+					// We're handling caller info in the L_* functions, so return empty here
+					return "", ""
+				},
+				ForceColors:            false,
+				DisableTimestamp:       true,
+				DisableColors:          true,
+				QuoteEmptyFields:       true,
+				DisableLevelTruncation: false,
+				PadLevelText:           false,
+				FullTimestamp:          false,
+				// Customizing delimiters
+				FieldMap: logrus.FieldMap{
+					//logrus.FieldKeyTime:  "@timestamp",
+					logrus.FieldKeyLevel: "severity",
+					logrus.FieldKeyMsg:   "message",
+					logrus.FieldKeyFunc:  "caller",
+				},
+			},
+		})
+	}
+
+	l.SetOutput(io.Discard)
+	l.SetReportCaller(false) // We handle caller info in L_* functions
+	/*hook, err := lSyslog.NewSyslogHook("", "", syslog.LOG_INFO, "")
+	if err == nil {
+		l.Hooks.Add(hook)
+	}
+	*/
+
+	//l.Infof("Starting up...(debug:%t) (trace:%t)", g_debug, g_trace)
+	w := l.Writer()
+
+	mqtt.ERROR = log.New(w, "[MQTT:ERROR] ", log.Lshortfile)
+	mqtt.CRITICAL = log.New(w, "[MQTT:CRIT] ", log.Lshortfile)
+	mqtt.WARN = log.New(w, "[MQTT:WARN]  ", log.Lshortfile)
+	//mqtt.DEBUG = log.New(w, "[MQTT:DEBUG] ", log.Lshortfile)
+}
+
+// L_debug logs a debug message
+func L_debug(format string, args ...interface{}) {
+	if l == nil {
+		InitLogging(false, false, false)
+	}
+	// Get caller info
+	_, file, line, _ := runtime.Caller(1)
+	l.WithField("source", fmt.Sprintf("%s:%d", path.Base(file), line)).Debugf(format, args...)
+	
+	// Check for session-specific logging
+	if ctx := GetCurrentContext(); ctx != nil && ctx.LoggingConfig != nil {
+		config := ctx.LoggingConfig
+		config.mu.Lock()
+		defer config.mu.Unlock()
+		
+		if config.Enabled && config.LogLevel >= LOG_DEBUG && time.Now().Before(config.ExpiresAt) {
+			if config.LogFile != nil {
+				logLine := fmt.Sprintf("[%s] [DEBUG] [Session %d] %s (source=%s:%d)\n",
+					time.Now().Format("2006-01-02 15:04:05.000"),
+					ctx.SessionID,
+					fmt.Sprintf(format, args...),
+					path.Base(file), line)
+				config.LogFile.WriteString(logLine)
+				config.BytesWritten += int64(len(logLine))
+			}
+		} else if time.Now().After(config.ExpiresAt) {
+			// Logging has expired, disable it
+			DisableLoggingForSession(ctx.SessionID)
+		}
+	}
+}
+
+// L_info logs an info message
+func L_info(format string, args ...interface{}) {
+	if l == nil {
+		InitLogging(false, false, false)
+	}
+	// Get caller info
+	_, file, line, _ := runtime.Caller(1)
+	l.WithField("source", fmt.Sprintf("%s:%d", path.Base(file), line)).Infof(format, args...)
+	
+	// Check for session-specific logging
+	if ctx := GetCurrentContext(); ctx != nil && ctx.LoggingConfig != nil {
+		config := ctx.LoggingConfig
+		config.mu.Lock()
+		defer config.mu.Unlock()
+		
+		if config.Enabled && config.LogLevel >= LOG_INFO && time.Now().Before(config.ExpiresAt) {
+			if config.LogFile != nil {
+				logLine := fmt.Sprintf("[%s] [INFO] [Session %d] %s (source=%s:%d)\n",
+					time.Now().Format("2006-01-02 15:04:05.000"),
+					ctx.SessionID,
+					fmt.Sprintf(format, args...),
+					path.Base(file), line)
+				config.LogFile.WriteString(logLine)
+				config.BytesWritten += int64(len(logLine))
+			}
+		} else if time.Now().After(config.ExpiresAt) {
+			// Logging has expired, disable it
+			DisableLoggingForSession(ctx.SessionID)
+		}
+	}
+}
+
+// L_warn logs a warning message
+func L_warn(format string, args ...interface{}) {
+	if l == nil {
+		InitLogging(false, false, false)
+	}
+	// Get caller info
+	_, file, line, _ := runtime.Caller(1)
+	l.WithField("source", fmt.Sprintf("%s:%d", path.Base(file), line)).Warnf(format, args...)
+	
+	// Check for session-specific logging
+	if ctx := GetCurrentContext(); ctx != nil && ctx.LoggingConfig != nil {
+		config := ctx.LoggingConfig
+		config.mu.Lock()
+		defer config.mu.Unlock()
+		
+		if config.Enabled && config.LogLevel >= LOG_WARN && time.Now().Before(config.ExpiresAt) {
+			if config.LogFile != nil {
+				logLine := fmt.Sprintf("[%s] [WARN] [Session %d] %s (source=%s:%d)\n",
+					time.Now().Format("2006-01-02 15:04:05.000"),
+					ctx.SessionID,
+					fmt.Sprintf(format, args...),
+					path.Base(file), line)
+				config.LogFile.WriteString(logLine)
+				config.BytesWritten += int64(len(logLine))
+			}
+		} else if time.Now().After(config.ExpiresAt) {
+			// Logging has expired, disable it
+			DisableLoggingForSession(ctx.SessionID)
+		}
+	}
+}
+
+// L_error logs an error message
+func L_error(format string, args ...interface{}) {
+	if l == nil {
+		InitLogging(false, false, false)
+	}
+	// Get caller info
+	_, file, line, _ := runtime.Caller(1)
+	l.WithField("source", fmt.Sprintf("%s:%d", path.Base(file), line)).Errorf(format, args...)
+	
+	// Check for session-specific logging
+	if ctx := GetCurrentContext(); ctx != nil && ctx.LoggingConfig != nil {
+		config := ctx.LoggingConfig
+		config.mu.Lock()
+		defer config.mu.Unlock()
+		
+		if config.Enabled && config.LogLevel >= LOG_ERROR && time.Now().Before(config.ExpiresAt) {
+			if config.LogFile != nil {
+				logLine := fmt.Sprintf("[%s] [ERROR] [Session %d] %s (source=%s:%d)\n",
+					time.Now().Format("2006-01-02 15:04:05.000"),
+					ctx.SessionID,
+					fmt.Sprintf(format, args...),
+					path.Base(file), line)
+				config.LogFile.WriteString(logLine)
+				config.BytesWritten += int64(len(logLine))
+			}
+		} else if time.Now().After(config.ExpiresAt) {
+			// Logging has expired, disable it
+			DisableLoggingForSession(ctx.SessionID)
+		}
+	}
+}
+
+// L_fatal logs a fatal error message and exits
+func L_fatal(format string, args ...interface{}) {
+	if l == nil {
+		InitLogging(false, false, false)
+	}
+	// Get caller info
+	_, file, line, _ := runtime.Caller(1)
+	
+	// Check for session-specific logging BEFORE fatalf (which exits)
+	if ctx := GetCurrentContext(); ctx != nil && ctx.LoggingConfig != nil {
+		config := ctx.LoggingConfig
+		config.mu.Lock()
+		defer config.mu.Unlock()
+		
+		if config.Enabled && config.LogLevel >= LOG_FATAL && time.Now().Before(config.ExpiresAt) {
+			if config.LogFile != nil {
+				logLine := fmt.Sprintf("[%s] [FATAL] [Session %d] %s (source=%s:%d)\n",
+					time.Now().Format("2006-01-02 15:04:05.000"),
+					ctx.SessionID,
+					fmt.Sprintf(format, args...),
+					path.Base(file), line)
+				config.LogFile.WriteString(logLine)
+				config.BytesWritten += int64(len(logLine))
+				config.LogFile.Sync() // Force flush since we're about to exit
+			}
+		}
+	}
+	
+	l.WithField("source", fmt.Sprintf("%s:%d", path.Base(file), line)).Fatalf(format, args...)
+}
+
+// L_trace logs a trace message
+func L_trace(format string, args ...interface{}) {
+	if l == nil {
+		InitLogging(false, false, false)
+	}
+	// Get caller info
+	_, file, line, _ := runtime.Caller(1)
+	l.WithField("source", fmt.Sprintf("%s:%d", path.Base(file), line)).Tracef(format, args...)
+	
+	// Check for session-specific logging
+	if ctx := GetCurrentContext(); ctx != nil && ctx.LoggingConfig != nil {
+		config := ctx.LoggingConfig
+		config.mu.Lock()
+		defer config.mu.Unlock()
+		
+		if config.Enabled && config.LogLevel >= LOG_TRACE && time.Now().Before(config.ExpiresAt) {
+			if config.LogFile != nil {
+				logLine := fmt.Sprintf("[%s] [TRACE] [Session %d] %s (source=%s:%d)\n",
+					time.Now().Format("2006-01-02 15:04:05.000"),
+					ctx.SessionID,
+					fmt.Sprintf(format, args...),
+					path.Base(file), line)
+				config.LogFile.WriteString(logLine)
+				config.BytesWritten += int64(len(logLine))
+			}
+		} else if time.Now().After(config.ExpiresAt) {
+			// Logging has expired, disable it
+			DisableLoggingForSession(ctx.SessionID)
+		}
+	}
+}
+
+// GetLogger returns the underlying logrus logger
+func GetLogger() *logrus.Logger {
+	if l == nil {
+		InitLogging(false, false, false)
+	}
+	return l
+}
+
+// SetShuttingDown marks the application as shutting down globally
+// This prevents various components from attempting operations during shutdown
+func SetShuttingDown() {
+	atomic.StoreInt32(&shuttingDown, 1)
+	L_info("Application marked as shutting down globally")
+}
+
+// IsShuttingDown returns true if the application is shutting down
+// Components should check this before attempting operations that may fail during shutdown
+func IsShuttingDown() bool {
+	return atomic.LoadInt32(&shuttingDown) == 1
+}
