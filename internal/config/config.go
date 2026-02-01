@@ -33,7 +33,7 @@ type LLMConfig struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		Gateway: GatewayConfig{
-			Port: 3378, // Default: different from openclaw's 3377
+			Port: 1337, // 1337 for leet
 		},
 		LLM: LLMConfig{
 			Provider: "anthropic",

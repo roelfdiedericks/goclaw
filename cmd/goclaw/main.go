@@ -143,7 +143,7 @@ func runGateway(ctx *Context) error {
 	// TODO: Initialize Telegram adapter
 	// TODO: Start HTTP server
 
-	L_info("gateway ready", "port", 3378)
+	L_info("gateway ready", "port", 1337)
 
 	// Block forever for now
 	select {}
