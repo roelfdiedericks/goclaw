@@ -69,6 +69,20 @@ type CompactionResult struct {
 	Details             *CompactionDetails
 }
 
+// CompactionStatus contains the current health state of the compaction manager
+type CompactionStatus struct {
+	OllamaFailures    int       // Current consecutive failure count
+	OllamaThreshold   int       // Threshold before fallback
+	UsingFallback     bool      // True if currently using main model due to failures
+	LastOllamaAttempt time.Time // Time of last Ollama attempt
+	ResetMinutes      int       // Minutes until Ollama retry reset
+	MinutesUntilReset int       // Remaining minutes until Ollama is tried again
+	RetryInProgress   bool      // True if compaction is currently running
+	PendingRetries    int       // Number of pending summary retries in SQLite
+	OllamaConfigured  bool      // True if Ollama client is configured
+	OllamaAvailable   bool      // True if Ollama is currently available
+}
+
 // NewCompactionManager creates a new compaction manager
 func NewCompactionManager(cfg *CompactionManagerConfig) *CompactionManager {
 	// Apply defaults
@@ -109,6 +123,50 @@ func (m *CompactionManager) SetStore(store Store) {
 // SetWriter sets the legacy JSONL writer
 func (m *CompactionManager) SetWriter(writer *JSONLWriter) {
 	m.writer = writer
+}
+
+// GetStatus returns the current health state of the compaction manager
+func (m *CompactionManager) GetStatus(ctx context.Context) CompactionStatus {
+	if m == nil {
+		return CompactionStatus{}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	status := CompactionStatus{
+		OllamaFailures:    m.ollamaFailures,
+		OllamaThreshold:   m.config.OllamaFailureThreshold,
+		UsingFallback:     m.ollamaFailures >= m.config.OllamaFailureThreshold,
+		LastOllamaAttempt: m.lastOllamaAttempt,
+		ResetMinutes:      m.config.OllamaResetMinutes,
+		RetryInProgress:   m.inProgress.Load(),
+		OllamaConfigured:  m.ollamaClient != nil,
+	}
+
+	// Calculate minutes until Ollama reset
+	if status.UsingFallback && !m.lastOllamaAttempt.IsZero() {
+		elapsed := time.Since(m.lastOllamaAttempt)
+		resetDuration := time.Duration(m.config.OllamaResetMinutes) * time.Minute
+		if elapsed < resetDuration {
+			status.MinutesUntilReset = int((resetDuration - elapsed).Minutes())
+		}
+	}
+
+	// Check Ollama availability
+	if m.ollamaClient != nil {
+		status.OllamaAvailable = m.ollamaClient.IsAvailable()
+	}
+
+	// Get pending retries from store
+	if m.store != nil {
+		pending, err := m.store.GetPendingSummaryRetry(ctx)
+		if err == nil && pending != nil {
+			status.PendingRetries = 1 // We only track one at a time currently
+		}
+	}
+
+	return status
 }
 
 // Start begins the background retry goroutine

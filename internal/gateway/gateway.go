@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	gcontext "github.com/roelfdiedericks/goclaw/internal/context"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
@@ -51,6 +52,7 @@ type Gateway struct {
 	mediaStore          *media.MediaStore
 	memoryManager       *memory.Manager
 	ollamaClient        *llm.OllamaClient
+	commandHandler      *commands.Handler
 }
 
 // Regex for detecting context overflow errors
@@ -227,6 +229,10 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 		"store", storeType,
 		"checkpoints", cfg.Session.Checkpoint.Enabled,
 		"memoryFlush", cfg.Session.MemoryFlush.Enabled)
+
+	// Initialize command handler
+	g.commandHandler = commands.NewHandler(g)
+	L_debug("command handler initialized")
 
 	return g, nil
 }
@@ -687,6 +693,36 @@ func (g *Gateway) GetSessionInfo(ctx context.Context, sessionKey string) (*Sessi
 	}
 
 	return info, nil
+}
+
+// GetCompactionStatus returns the current compaction manager health status
+func (g *Gateway) GetCompactionStatus(ctx context.Context) session.CompactionStatus {
+	if g.compactor == nil {
+		return session.CompactionStatus{}
+	}
+	return g.compactor.GetStatus(ctx)
+}
+
+// GetSessionInfoForCommands returns session info in the format expected by the commands package
+func (g *Gateway) GetSessionInfoForCommands(ctx context.Context, sessionKey string) (*commands.SessionInfo, error) {
+	info, err := g.GetSessionInfo(ctx, sessionKey)
+	if err != nil {
+		return nil, err
+	}
+	return &commands.SessionInfo{
+		SessionKey:      info.SessionKey,
+		Messages:        info.Messages,
+		TotalTokens:     info.TotalTokens,
+		MaxTokens:       info.MaxTokens,
+		UsagePercent:    info.UsagePercent,
+		CompactionCount: info.CompactionCount,
+		LastCompaction:  info.LastCompaction,
+	}, nil
+}
+
+// CommandHandler returns the unified command handler
+func (g *Gateway) CommandHandler() *commands.Handler {
+	return g.commandHandler
 }
 
 // buildMemoryFlushConfig builds the memory flush config from gateway config
