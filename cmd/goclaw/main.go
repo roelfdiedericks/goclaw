@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"syscall"
@@ -10,7 +12,14 @@ import (
 	"github.com/alecthomas/kong"
 	"github.com/sevlyar/go-daemon"
 
+	"github.com/roelfdiedericks/goclaw/internal/config"
+	"github.com/roelfdiedericks/goclaw/internal/gateway"
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/telegram"
+	"github.com/roelfdiedericks/goclaw/internal/tools"
+	"github.com/roelfdiedericks/goclaw/internal/tui"
+	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
 const version = "0.0.1"
@@ -40,10 +49,12 @@ type CLI struct {
 }
 
 // GatewayCmd runs gateway in foreground
-type GatewayCmd struct{}
+type GatewayCmd struct {
+	TUI bool `help:"Run with interactive TUI" short:"i"`
+}
 
 func (g *GatewayCmd) Run(ctx *Context) error {
-	return runGateway(ctx)
+	return runGateway(ctx, g.TUI)
 }
 
 // StartCmd daemonizes the gateway
@@ -78,7 +89,7 @@ func (s *StartCmd) Run(ctx *Context) error {
 	defer cntxt.Release()
 
 	L_info("daemon started", "pid", os.Getpid())
-	return runGateway(ctx)
+	return runGateway(ctx, false)
 }
 
 // StopCmd stops the daemon
@@ -135,18 +146,153 @@ type Context struct {
 }
 
 // runGateway is the actual gateway logic
-func runGateway(ctx *Context) error {
+func runGateway(ctx *Context, useTUI bool) error {
 	L_info("starting gateway", "version", version)
 
-	// TODO: Load config
-	// TODO: Initialize LLM client
-	// TODO: Initialize Telegram adapter
-	// TODO: Start HTTP server
+	// Load config
+	cfg, err := config.Load()
+	if err != nil {
+		L_error("failed to load config", "error", err)
+		return err
+	}
+	L_debug("config loaded", "users", len(cfg.Users))
 
-	L_info("gateway ready", "port", 1337)
+	// Create user registry
+	users := user.NewRegistry(cfg)
+	L_debug("user registry created", "users", users.Count())
 
-	// Block forever for now
-	select {}
+	// Create LLM client
+	llmClient, err := llm.NewClient(&cfg.LLM)
+	if err != nil {
+		L_error("failed to create LLM client", "error", err)
+		return err
+	}
+	L_debug("LLM client created", "model", cfg.LLM.Model)
+
+	// Create browser pool if enabled
+	var browserPool *tools.BrowserPool
+	if cfg.Tools.Browser.Enabled {
+		var err error
+		browserPool, err = tools.NewBrowserPool(tools.BrowserPoolConfig{
+			Headless:  cfg.Tools.Browser.Headless,
+			NoSandbox: cfg.Tools.Browser.NoSandbox,
+			Profile:   cfg.Tools.Browser.Profile,
+		})
+		if err != nil {
+			L_warn("failed to create browser pool, browser tool disabled", "error", err)
+		} else {
+			defer browserPool.Close()
+		}
+	}
+
+	// Create tool registry and register base defaults (no media-dependent tools yet)
+	toolsReg := tools.NewRegistry()
+	tools.RegisterDefaults(toolsReg, tools.ToolsConfig{
+		WorkingDir:     cfg.Gateway.WorkingDir,
+		BraveAPIKey:    cfg.Tools.Web.BraveAPIKey,
+		BrowserPool:    nil,       // Browser registered after gateway (needs MediaStore)
+		BrowserEnabled: false,     // Deferred
+	})
+	L_debug("base tools registered", "count", toolsReg.Count())
+
+	// Create gateway (creates MediaStore internally)
+	gw, err := gateway.New(cfg, users, llmClient, toolsReg)
+	if err != nil {
+		L_error("failed to create gateway", "error", err)
+		os.Exit(1)
+	}
+	L_info("gateway initialized")
+
+	// Register browser tool (needs gateway's MediaStore)
+	if cfg.Tools.Browser.Enabled && browserPool != nil {
+		if mediaStore := gw.MediaStore(); mediaStore != nil {
+			toolsReg.Register(tools.NewBrowserTool(browserPool, mediaStore))
+			L_debug("browser tool registered")
+		}
+	}
+
+	// Register memory tools (needs gateway's memory manager)
+	if memMgr := gw.MemoryManager(); memMgr != nil {
+		toolsReg.Register(tools.NewMemorySearchTool(memMgr))
+		toolsReg.Register(tools.NewMemoryGetTool(memMgr))
+		L_debug("memory tools registered")
+	}
+
+	// Setup context with cancellation for graceful shutdown
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start session file watcher for live OpenClaw sync
+	if err := gw.StartSessionWatcher(runCtx); err != nil {
+		L_warn("failed to start session watcher", "error", err)
+		// Continue anyway - we just won't get live updates
+	}
+
+	// Handle signals
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigCh
+		L_info("received signal", "signal", sig)
+		gw.Shutdown()
+		cancel()
+	}()
+
+	// Start Telegram bot if configured
+	var telegramBot *telegram.Bot
+	messageChannels := make(map[string]tools.MessageChannel)
+
+	if cfg.Telegram.Enabled && cfg.Telegram.BotToken != "" {
+		var err error
+		telegramBot, err = telegram.New(&cfg.Telegram, gw, users)
+		if err != nil {
+			L_error("failed to create telegram bot", "error", err)
+		} else {
+			telegramBot.Start()
+			gw.RegisterChannel(telegramBot)
+			L_info("telegram bot started")
+			defer telegramBot.Stop()
+
+			// Create Telegram message channel adapter for message tool
+			if mediaStore := gw.MediaStore(); mediaStore != nil {
+				adapter := telegram.NewMessageChannelAdapter(telegramBot, mediaStore.BaseDir())
+				messageChannels["telegram"] = adapter
+			}
+		}
+	} else {
+		L_debug("telegram not enabled or no token configured")
+	}
+
+	// Register message tool with available channels
+	if len(messageChannels) > 0 {
+		messageTool := tools.NewMessageTool(messageChannels)
+		toolsReg.Register(messageTool)
+		L_debug("message tool registered", "channels", len(messageChannels))
+	}
+
+	if useTUI {
+		// Run TUI mode
+		L_info("starting TUI mode")
+		return runTUI(runCtx, gw, users, cfg.TUI.ShowLogs)
+	}
+
+	// Non-TUI mode: just wait for signals
+	L_info("gateway ready", "port", cfg.Gateway.Port)
+	L_info("press Ctrl+C to stop")
+
+	<-runCtx.Done()
+	L_info("gateway shutting down")
+	return nil
+}
+
+// runTUI runs the interactive TUI mode
+func runTUI(ctx context.Context, gw *gateway.Gateway, users *user.Registry, showLogs bool) error {
+	owner := users.Owner()
+	if owner == nil {
+		return fmt.Errorf("no owner user configured")
+	}
+	return tui.Run(ctx, gw, owner, showLogs)
 }
 
 // getPid returns the pid and whether the process is running

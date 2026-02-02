@@ -20,3 +20,6 @@ go.work.sum
 
 # Config with secrets
 goclaw.json
+
+# Reference code (not part of goclaw)
+ref/
