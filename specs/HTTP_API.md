@@ -6,7 +6,112 @@ GoClaw exposes a minimal HTTP interface for web UI and API access. Security is p
 
 **Philosophy:** HTTP is for *using* the agent, not *administering* it. Admin happens via CLI/TUI where you already have filesystem access.
 
-## Security
+## Users & Authentication
+
+### users.json
+
+Users are managed in a separate `users.json` file (not in `goclaw.json`).
+
+**Location (same priority as goclaw.json):**
+1. `./users.json` (current directory - highest priority)
+2. `~/.openclaw/users.json` (fallback)
+
+**No plaintext passwords. Ever.** Passwords are stored as Argon2id hashes.
+
+```json
+{
+  "rodent": {
+    "name": "TheRoDent",
+    "role": "owner",
+    "telegram_id": "123456789",
+    "http_password_hash": "$argon2id$v=19$m=65536,t=3,p=4$..."
+  },
+  "alice": {
+    "name": "Alice",
+    "role": "user",
+    "telegram_id": "987654321",
+    "http_password_hash": "$argon2id$v=19$m=65536,t=3,p=4$..."
+  }
+}
+```
+
+**The key IS the username.** No separate `http_username` field needed.
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| (key) | Yes | Username (HTTP auth, session key). Max 32 chars, `^[a-z][a-z0-9_]{0,31}$` |
+| `name` | Yes | Display name |
+| `role` | Yes | `"owner"` or `"user"` |
+| `telegram_id` | No | Telegram user ID (from @userinfobot) |
+| `http_password_hash` | No | Argon2id hash of password |
+
+**Rules:**
+- At least one identity required per user (telegram_id or http_password_hash)
+- Same user can have both Telegram and HTTP identities → same session
+
+### Session Keys
+
+| User | Session Key |
+|------|-------------|
+| Owner (e.g., `rodent`) | `primary` |
+| Other users (e.g., `alice`) | `user:alice` |
+
+**Owner always uses `"primary"` session** — this is non-negotiable. All channels (Telegram, HTTP, TUI, cron) for the owner share the same session.
+
+Non-owner users get isolated sessions keyed by their username: `user:<username>`.
+
+### User Management CLI
+
+Users are created via CLI tool (not manual JSON editing):
+
+```bash
+# Add owner user
+goclaw user add rodent --name "TheRoDent" --role owner
+
+# Set Telegram identity
+goclaw user set-telegram rodent 123456789
+
+# Set HTTP password (prompts for password, hashes it)
+goclaw user set-http rodent
+Password: ********
+Confirm: ********
+HTTP password set for user 'rodent'
+
+# List users
+goclaw user list
+
+# Delete user (preserves session data)
+goclaw user delete alice
+
+# Delete owner (requires --force)
+goclaw user delete rodent --force
+
+# Delete user AND purge all session data (destructive!)
+goclaw user delete alice --purge
+```
+
+The CLI handles password hashing. Users never touch raw hashes.
+
+### User Deletion
+
+**Default behavior (`goclaw user delete alice`):**
+- Removes user from `users.json`
+- Does NOT touch SQLite session data
+- User can no longer authenticate
+- Session history preserved (can recreate user later)
+
+**With --purge flag (`goclaw user delete alice --purge`):**
+- Removes user from `users.json`
+- ALSO deletes session data from SQLite (`user:alice`)
+- Deletes compaction history
+- Irreversible - requires typing `DELETE <username>` to confirm
+
+**Deleting owner (`goclaw user delete rodent --force`):**
+- Requires `--force` flag
+- Warning: this breaks everything until a new owner is configured
+- Does NOT delete `primary` session data (use `--purge` for that too)
+
+## HTTP Security
 
 ### Authentication
 
@@ -16,17 +121,51 @@ GoClaw exposes a minimal HTTP interface for web UI and API access. Security is p
 Authorization: Basic base64(username:password)
 ```
 
-- No username configured? HTTP disabled.
-- No password configured? HTTP disabled.
-- No defaults. Ever.
+- No users with HTTP credentials? HTTP server disabled.
 - No localhost bypass. No special cases. No "trusted proxies".
 
+### Auth Flow
+
 ```go
-type HTTPConfig struct {
-    Enabled  bool   `json:"enabled"`
-    Listen   string `json:"listen"`   // e.g., "127.0.0.1:1337" or ":1337"
-    Username string `json:"username"` // Required if enabled
-    Password string `json:"password"` // Required if enabled
+func authMiddleware(users *user.Registry) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            ip := getSourceIP(r)
+            
+            // Rate limit check
+            if isRateLimited(ip) {
+                writeUnauthorized(w)
+                return
+            }
+            
+            username, password, ok := r.BasicAuth()
+            if !ok {
+                recordFailure(ip)
+                writeUnauthorized(w)
+                return
+            }
+            
+            // Look up user by username (key in users.json)
+            user := users.Get(username)
+            if user == nil {
+                recordFailure(ip)
+                writeUnauthorized(w)
+                return
+            }
+            
+            // Verify password against stored hash
+            if !user.VerifyHTTPPassword(password) {
+                recordFailure(ip)
+                writeUnauthorized(w)
+                return
+            }
+            
+            // Success - attach user to context
+            clearFailure(ip)
+            ctx := context.WithValue(r.Context(), userContextKey, user)
+            next.ServeHTTP(w, r.WithContext(ctx))
+        })
+    }
 }
 ```
 
@@ -37,29 +176,11 @@ type HTTPConfig struct {
 ```go
 var failedIPs sync.Map // map[string]time.Time
 
-func authMiddleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        ip := getSourceIP(r)
-        
-        // Check if IP is in timeout
-        if lastFail, ok := failedIPs.Load(ip); ok {
-            if time.Since(lastFail.(time.Time)) < 10*time.Second {
-                writeUnauthorized(w)
-                return
-            }
-        }
-        
-        user, pass, ok := r.BasicAuth()
-        if !ok || user != cfg.Username || pass != cfg.Password {
-            failedIPs.Store(ip, time.Now())
-            writeUnauthorized(w)
-            return
-        }
-        
-        // Success - clear any previous failure
-        failedIPs.Delete(ip)
-        next.ServeHTTP(w, r)
-    })
+func isRateLimited(ip string) bool {
+    if lastFail, ok := failedIPs.Load(ip); ok {
+        return time.Since(lastFail.(time.Time)) < 10*time.Second
+    }
+    return false
 }
 ```
 
@@ -113,13 +234,13 @@ Fingerprinting gets you nothing.
 
 ## Configuration
 
+HTTP config in `goclaw.json` (no credentials here):
+
 ```json
 {
   "http": {
     "enabled": true,
-    "listen": "127.0.0.1:1337",
-    "username": "admin",
-    "password": "your-secure-password-here"
+    "listen": "127.0.0.1:1337"
   }
 }
 ```
@@ -128,12 +249,10 @@ Fingerprinting gets you nothing.
 |-------|----------|-------------|
 | `enabled` | No | Default: false |
 | `listen` | Yes | Address to bind (e.g., `127.0.0.1:1337`, `:1337`) |
-| `username` | Yes | Basic Auth username |
-| `password` | Yes | Basic Auth password |
 
 **Validation on startup:**
-- If `enabled: true` but no username → error, refuse to start
-- If `enabled: true` but no password → error, refuse to start
+- If `enabled: true` but no users have HTTP credentials → error, refuse to start
+- If `users.json` doesn't exist → create empty, warn
 
 ## Endpoints
 
@@ -151,12 +270,12 @@ GET  /api/status → Agent status (JSON)
 
 Web UI dashboard. Shows:
 - Agent status (model, uptime)
-- Session info
+- Session info (for authenticated user)
 - Recent activity
 
 ### GET /chat
 
-Web UI chat interface. Simple send/receive.
+Web UI chat interface. Simple send/receive via SSE.
 
 ### POST /api/send
 
@@ -165,8 +284,7 @@ Send a message to the agent.
 **Request:**
 ```json
 {
-  "message": "What's the weather like?",
-  "session": "main"
+  "message": "What's the weather like?"
 }
 ```
 
@@ -178,7 +296,11 @@ Send a message to the agent.
 }
 ```
 
-Response is delivered via SSE stream, not in this response.
+Response content is delivered via SSE stream, not in this response.
+
+Session is determined by authenticated user:
+- Owner → `primary` session
+- Other users → `user:<user_id>` session
 
 ### GET /api/events
 
@@ -197,24 +319,47 @@ data: {"role":"assistant","content":"The weather is..."}
 event: tool_use
 data: {"tool":"weather","input":{"location":"Johannesburg"}}
 
-event: status
+event: typing
 data: {"typing":true}
+
+event: done
+data: {"id":"msg_abc123"}
 ```
 
 ### GET /api/status
 
-Agent status as JSON.
+Agent status as JSON. Session key depends on user role.
 
+**Owner response:**
 ```json
 {
   "ok": true,
+  "user": "rodent",
   "uptime": "2h15m",
-  "model": "claude-opus-4-5",
-  "session": "agent:main:main",
-  "context": {
-    "used": 45000,
-    "max": 200000,
-    "percent": 22.5
+  "model": "claude-sonnet-4-20250514",
+  "session": {
+    "key": "primary",
+    "messages": 42,
+    "tokens": 45000,
+    "max_tokens": 200000,
+    "usage_percent": 22.5
+  }
+}
+```
+
+**Non-owner response:**
+```json
+{
+  "ok": true,
+  "user": "alice",
+  "uptime": "2h15m",
+  "model": "claude-sonnet-4-20250514",
+  "session": {
+    "key": "user:alice",
+    "messages": 12,
+    "tokens": 8500,
+    "max_tokens": 200000,
+    "usage_percent": 4.25
   }
 }
 ```
@@ -225,7 +370,7 @@ Agent status as JSON.
 
 - **Bootstrap 5.3** — CDN (`cdn.jsdelivr.net`)
 - **Bootstrap Icons** — CDN
-- **jQuery 3.7** — CDN
+- **Vanilla JS** — No jQuery needed for SSE
 - **html/template** — Go standard library
 
 No build step. No npm. No webpack. Single binary with embedded templates.
@@ -237,7 +382,7 @@ goclaw/
 ├── internal/
 │   └── http/
 │       ├── server.go       # HTTP server, auth middleware
-│       ├── handlers.go     # Route handlers
+│       ├── handlers.go     # Route handlers  
 │       ├── api.go          # API endpoints
 │       └── sse.go          # Server-Sent Events
 ├── html/
@@ -266,6 +411,7 @@ goclaw/
 <nav class="navbar navbar-dark bg-dark">
     <div class="container">
         <a class="navbar-brand" href="/">🐀 GoClaw</a>
+        <span class="navbar-text">{{.User.Name}}</span>
     </div>
 </nav>
 <div class="container mt-4">
@@ -276,27 +422,10 @@ goclaw/
 ```html
 {{define "footer"}}
 </div>
-<script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 {{end}}
-```
-
-**index.html:**
-```html
-{{template "header" .}}
-
-<h1>Dashboard</h1>
-<div class="card">
-    <div class="card-body">
-        <p><strong>Status:</strong> {{.Status}}</p>
-        <p><strong>Model:</strong> {{.Model}}</p>
-        <p><strong>Uptime:</strong> {{.Uptime}}</p>
-    </div>
-</div>
-
-{{template "footer" .}}
 ```
 
 ### Template Loading
@@ -315,7 +444,6 @@ Templates embedded at compile time. Single binary, no external dependencies.
 ### Reference Implementation
 
 See `httpdemo/` for a standalone HTTP server demo showing:
-- Basic Auth implementation
 - Template parsing and rendering
 - Static file serving
 - Path traversal protection
@@ -327,9 +455,11 @@ Can be moved to `internal/http/` and integrated with gateway.
 ### Middleware Chain
 
 ```go
-handler := authMiddleware(
+handler := authMiddleware(users)(
     stripHeadersMiddleware(
-        routes,
+        logRequestMiddleware(
+            routes,
+        ),
     ),
 )
 ```
@@ -339,7 +469,6 @@ handler := authMiddleware(
 ```go
 func stripHeadersMiddleware(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        // Wrap ResponseWriter to intercept headers
         wrapped := &headerStripper{ResponseWriter: w}
         next.ServeHTTP(wrapped, r)
     })
@@ -350,7 +479,6 @@ type headerStripper struct {
 }
 
 func (h *headerStripper) WriteHeader(code int) {
-    // Remove any auto-added headers
     h.Header().Del("X-Content-Type-Options")
     h.Header().Del("Date")
     h.ResponseWriter.WriteHeader(code)
@@ -368,12 +496,38 @@ func (s *HTTPServer) Shutdown(ctx context.Context) error {
 ## What HTTP is NOT For
 
 - Config editing → Use CLI or edit files
+- User management → Use CLI (`goclaw user`)
 - Session browsing → Use TUI
 - Tool management → Use CLI
 - Cron management → Use CLI/tool
 - Anything destructive → Local access only
 
 If HTTP is giving you grief, Telegram's always there. That's the whole point of multi-channel.
+
+## Password Hashing
+
+Argon2id with recommended parameters:
+
+```go
+import "golang.org/x/crypto/argon2"
+
+func hashPassword(password string) string {
+    salt := make([]byte, 16)
+    rand.Read(salt)
+    
+    hash := argon2.IDKey([]byte(password), salt, 3, 64*1024, 4, 32)
+    
+    return fmt.Sprintf("$argon2id$v=19$m=65536,t=3,p=4$%s$%s",
+        base64.RawStdEncoding.EncodeToString(salt),
+        base64.RawStdEncoding.EncodeToString(hash))
+}
+
+func verifyPassword(password, encoded string) bool {
+    // Parse encoded string, extract params/salt/hash
+    // Recompute hash with same params
+    // Constant-time compare
+}
+```
 
 ## See Also
 
