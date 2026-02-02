@@ -83,8 +83,14 @@ func (c *Client) IsAvailable() bool {
 
 // ContextTokens returns the model's context window size in tokens
 func (c *Client) ContextTokens() int {
-	// All Claude 3+ models have 200k context window
-	// https://docs.anthropic.com/en/docs/about-claude/models
+	return getModelContextWindow(c.model)
+}
+
+// getModelContextWindow returns the context window size for a given model
+// Based on: https://docs.anthropic.com/en/docs/about-claude/models
+// Standard context window is 200k for all Claude models
+// (Extended 1M context is a separate beta feature)
+func getModelContextWindow(_ string) int {
 	return 200000
 }
 
