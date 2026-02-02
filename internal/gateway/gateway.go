@@ -11,6 +11,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	gcontext "github.com/roelfdiedericks/goclaw/internal/context"
+	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
@@ -54,6 +55,7 @@ type Gateway struct {
 	ollamaClient        *llm.OllamaClient
 	commandHandler      *commands.Handler
 	skillManager        *skills.Manager
+	cronService         *cron.Service
 	lastOpenClawUserMsg string // Track user messages for mirroring
 }
 
@@ -307,6 +309,11 @@ func (g *Gateway) UnregisterChannel(name string) {
 	L_debug("channel unregistered", "channel", name)
 }
 
+// Channels returns all registered channels (for cron delivery)
+func (g *Gateway) Channels() map[string]Channel {
+	return g.channels
+}
+
 // MediaStore returns the media store
 func (g *Gateway) MediaStore() *media.MediaStore {
 	return g.mediaStore
@@ -542,6 +549,7 @@ func stripOpenClawMetadata(msg string) string {
 }
 
 // Start begins background tasks (call after New)
+// Note: Call StartCron separately AFTER channels are registered
 func (g *Gateway) Start(ctx context.Context) {
 	L_info("gateway: starting background tasks")
 
@@ -554,11 +562,130 @@ func (g *Gateway) Start(ctx context.Context) {
 	if g.compactor != nil {
 		g.compactor.Start(ctx)
 	}
+
+	// NOTE: Cron is NOT started here - call StartCron() after channels are registered
+}
+
+// StartCron initializes and starts the cron scheduler.
+func (g *Gateway) StartCron(ctx context.Context) error {
+	if g.cronService != nil && g.cronService.IsRunning() {
+		return fmt.Errorf("cron service already running")
+	}
+
+	// Create store with default paths
+	store := cron.NewStore("", "")
+
+	// Create and start service
+	g.cronService = cron.NewService(store, g)
+
+	// Set up channel provider for delivery
+	g.cronService.SetChannelProvider(&gatewayCronChannelProvider{g: g})
+
+	if err := g.cronService.Start(ctx); err != nil {
+		g.cronService = nil
+		return err
+	}
+
+	return nil
+}
+
+// gatewayCronChannelProvider wraps gateway channels for cron delivery.
+type gatewayCronChannelProvider struct {
+	g *Gateway
+}
+
+func (p *gatewayCronChannelProvider) Channels() map[string]cron.Channel {
+	result := make(map[string]cron.Channel)
+	for name, ch := range p.g.channels {
+		result[name] = &cronChannelAdapter{ch: ch}
+	}
+	return result
+}
+
+// cronChannelAdapter wraps a gateway.Channel as a cron.Channel.
+type cronChannelAdapter struct {
+	ch Channel
+}
+
+func (a *cronChannelAdapter) Name() string {
+	return a.ch.Name()
+}
+
+func (a *cronChannelAdapter) Send(ctx context.Context, msg string) error {
+	return a.ch.Send(ctx, msg)
+}
+
+// StopCron stops the cron scheduler.
+func (g *Gateway) StopCron() {
+	if g.cronService != nil {
+		g.cronService.Stop()
+		g.cronService = nil
+	}
+}
+
+// CronService returns the cron service (may be nil if not started).
+func (g *Gateway) CronService() *cron.Service {
+	return g.cronService
+}
+
+// RunAgentForCron implements the cron.GatewayRunner interface.
+// It converts between cron and gateway types and runs the agent.
+func (g *Gateway) RunAgentForCron(ctx context.Context, cronReq cron.AgentRequest, cronEvents chan<- cron.AgentEvent) {
+	// Look up the user
+	var reqUser *user.User
+	if cronReq.UserID != "" {
+		reqUser = g.users.Get(cronReq.UserID)
+	}
+	if reqUser == nil {
+		cronEvents <- cron.AgentErrorEvent{Error: "no authenticated user"}
+		close(cronEvents)
+		return
+	}
+
+	// Convert cron request to gateway request
+	req := AgentRequest{
+		Source:       cronReq.Source,
+		UserMsg:      cronReq.UserMsg,
+		SessionID:    cronReq.SessionID,
+		FreshContext: cronReq.FreshContext,
+		User:         reqUser,
+	}
+
+	// Create internal events channel
+	events := make(chan AgentEvent, 100)
+
+	// Run the agent in a goroutine
+	go g.RunAgent(ctx, req, events)
+
+	// Forward events, converting types
+	for event := range events {
+		switch e := event.(type) {
+		case EventAgentEnd:
+			cronEvents <- cron.AgentEndEvent{FinalText: e.FinalText}
+		case EventAgentError:
+			cronEvents <- cron.AgentErrorEvent{Error: e.Error}
+		}
+	}
+
+	// Close the cron events channel when done
+	close(cronEvents)
+}
+
+// GetOwnerUserID returns the owner user ID for cron jobs.
+func (g *Gateway) GetOwnerUserID() string {
+	owner := g.users.Owner()
+	if owner == nil {
+		return ""
+	}
+	return owner.ID
 }
 
 // Shutdown gracefully shuts down the gateway
 func (g *Gateway) Shutdown() {
 	L_info("gateway: shutting down")
+
+	// Stop cron service
+	g.StopCron()
 
 	// Stop skill manager
 	if g.skillManager != nil {
@@ -629,7 +756,13 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	}
 
 	// Get or create session
-	sess := g.sessions.Get(sessionKey)
+	// Use GetFresh for isolated cron jobs to ensure clean context
+	var sess *session.Session
+	if req.FreshContext {
+		sess = g.sessions.GetFresh(sessionKey)
+	} else {
+		sess = g.sessions.Get(sessionKey)
+	}
 	
 	// Add user message with images if any
 	if len(req.Images) > 0 {
@@ -1031,6 +1164,10 @@ func (g *Gateway) buildMemoryFlushConfig() *session.MemoryFlushConfig {
 
 // sessionKeyFor determines the session key for a request
 func (g *Gateway) sessionKeyFor(req AgentRequest) string {
+	// If a specific session ID is provided (e.g., cron jobs), use it
+	if req.SessionID != "" {
+		return req.SessionID
+	}
 	if req.IsGroup {
 		return fmt.Sprintf("group:%s", req.ChatID)
 	}

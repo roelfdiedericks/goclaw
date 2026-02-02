@@ -304,6 +304,19 @@ func (m *Manager) GetPrimary() *Session {
 	return m.Get(PrimarySession)
 }
 
+// GetFresh returns a fresh session with no prior messages.
+// Used for isolated cron jobs that need a clean context.
+// The session is stored for persistence but has no conversation history.
+func (m *Manager) GetFresh(id string) *Session {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Always create a new session to ensure it's clean
+	s := NewSession(id)
+	m.sessions[id] = s
+	return s
+}
+
 // GetIfExists returns a session if it exists, nil otherwise
 func (m *Manager) GetIfExists(id string) *Session {
 	m.mu.RLock()

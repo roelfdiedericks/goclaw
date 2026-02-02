@@ -17,6 +17,10 @@ type AgentRequest struct {
 	UserMsg       string                    // the user's message
 	Images        []session.ImageAttachment // image attachments (for multimodal)
 	OnMediaToSend MediaCallback             // optional callback for sending media to channel
+
+	// Cron-specific fields
+	SessionID    string // Override session ID (e.g., "cron:<jobId>" for isolated jobs)
+	FreshContext bool   // If true, skip prior conversation history (isolated cron jobs)
 }
 
 // HealthStatus provides gateway health information

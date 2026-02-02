@@ -64,4 +64,8 @@ func RegisterDefaults(reg *Registry, cfg ToolsConfig) {
 	} else {
 		L_debug("tools: skills skipped (no manager)")
 	}
+
+	// Cron tool (always register - it handles nil service gracefully via singleton)
+	reg.Register(NewCronTool())
+	L_debug("tools: cron registered")
 }

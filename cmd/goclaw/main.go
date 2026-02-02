@@ -7,12 +7,15 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/sevlyar/go-daemon"
 
 	"github.com/roelfdiedericks/goclaw/internal/config"
+	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -46,6 +49,7 @@ type CLI struct {
 	Stop    StopCmd    `cmd:"" help:"Stop the background daemon"`
 	Status  StatusCmd  `cmd:"" help:"Show gateway status"`
 	Version VersionCmd `cmd:"" help:"Show version"`
+	Cron    CronCmd    `cmd:"" help:"Manage cron jobs"`
 }
 
 // GatewayCmd runs gateway in foreground
@@ -136,6 +140,268 @@ type VersionCmd struct{}
 func (v *VersionCmd) Run(ctx *Context) error {
 	fmt.Printf("goclaw %s\n", version)
 	return nil
+}
+
+// CronCmd manages cron jobs
+type CronCmd struct {
+	List   CronListCmd   `cmd:"" help:"List all cron jobs"`
+	Add    CronAddCmd    `cmd:"" help:"Add a new cron job"`
+	Edit   CronEditCmd   `cmd:"" help:"Edit an existing cron job"`
+	Remove CronRemoveCmd `cmd:"" help:"Remove a cron job"`
+	Run    CronRunCmd    `cmd:"" help:"Run a job immediately"`
+	Runs   CronRunsCmd   `cmd:"" help:"View job execution history"`
+}
+
+// CronListCmd lists all cron jobs
+type CronListCmd struct{}
+
+func (c *CronListCmd) Run(ctx *Context) error {
+	store := cron.NewStore("", "")
+	if err := store.Load(); err != nil {
+		return fmt.Errorf("failed to load jobs: %w", err)
+	}
+
+	jobs := store.GetAllJobs()
+	if len(jobs) == 0 {
+		fmt.Println("No cron jobs configured.")
+		return nil
+	}
+
+	fmt.Printf("Found %d job(s):\n\n", len(jobs))
+	for _, job := range jobs {
+		status := "enabled"
+		if !job.Enabled {
+			status = "disabled"
+		}
+		fmt.Printf("%s (%s)\n", job.Name, status)
+		fmt.Printf("  ID: %s\n", job.ID)
+		fmt.Printf("  Session: %s\n", job.SessionTarget)
+		fmt.Printf("  Schedule: %s\n", formatCronSchedule(&job.Schedule))
+		if job.State.NextRunAtMs != nil {
+			fmt.Printf("  Next run: %s\n", time.UnixMilli(*job.State.NextRunAtMs).Format(time.RFC3339))
+		}
+		if job.State.LastRunAtMs != nil {
+			fmt.Printf("  Last run: %s (%s)\n", time.UnixMilli(*job.State.LastRunAtMs).Format(time.RFC3339), job.State.LastStatus)
+		}
+		fmt.Println()
+	}
+	return nil
+}
+
+// CronAddCmd adds a new cron job
+type CronAddCmd struct {
+	Name    string `arg:"" help:"Job name"`
+	Message string `arg:"" help:"Prompt message to execute"`
+	Every   string `help:"Run every interval (e.g., 5m, 2h, 1d)" xor:"schedule"`
+	At      string `help:"Run once at time (+5m, 2024-01-01T12:00:00Z)" xor:"schedule"`
+	Cron    string `help:"Run on cron schedule (e.g., '0 9 * * 1-5')" xor:"schedule"`
+	Tz      string `help:"Timezone for cron schedule"`
+	Session string `help:"Session target: main or isolated" default:"main"`
+	Deliver bool   `help:"Deliver output to channels"`
+}
+
+func (c *CronAddCmd) Run(ctx *Context) error {
+	store := cron.NewStore("", "")
+	if err := store.Load(); err != nil {
+		return fmt.Errorf("failed to load jobs: %w", err)
+	}
+
+	schedule, err := buildScheduleFromFlags(c.Every, c.At, c.Cron, c.Tz)
+	if err != nil {
+		return err
+	}
+
+	sessionTarget := cron.SessionTargetMain
+	if c.Session == "isolated" {
+		sessionTarget = cron.SessionTargetIsolated
+	}
+
+	job := &cron.CronJob{
+		Name:          c.Name,
+		Enabled:       true,
+		Schedule:      schedule,
+		SessionTarget: sessionTarget,
+		Payload: cron.Payload{
+			Kind:    cron.PayloadKindAgentTurn,
+			Message: c.Message,
+			Deliver: c.Deliver,
+		},
+	}
+
+	// Calculate initial next run
+	next, err := cron.NextRunTime(job, time.Now())
+	if err != nil {
+		return fmt.Errorf("invalid schedule: %w", err)
+	}
+	job.SetNextRun(next)
+
+	if err := store.AddJob(job); err != nil {
+		return fmt.Errorf("failed to add job: %w", err)
+	}
+
+	fmt.Printf("Job created successfully.\n")
+	fmt.Printf("ID: %s\n", job.ID)
+	fmt.Printf("Name: %s\n", job.Name)
+	fmt.Printf("Schedule: %s\n", formatCronSchedule(&job.Schedule))
+	if next != nil {
+		fmt.Printf("Next run: %s\n", next.Format(time.RFC3339))
+	}
+	return nil
+}
+
+// CronEditCmd edits an existing cron job
+type CronEditCmd struct {
+	ID      string  `arg:"" help:"Job ID to edit"`
+	Name    *string `help:"New job name"`
+	Message *string `help:"New prompt message"`
+	Enabled *bool   `help:"Enable or disable job"`
+}
+
+func (c *CronEditCmd) Run(ctx *Context) error {
+	store := cron.NewStore("", "")
+	if err := store.Load(); err != nil {
+		return fmt.Errorf("failed to load jobs: %w", err)
+	}
+
+	job := store.GetJob(c.ID)
+	if job == nil {
+		return fmt.Errorf("job not found: %s", c.ID)
+	}
+
+	if c.Name != nil {
+		job.Name = *c.Name
+	}
+	if c.Message != nil {
+		job.Payload.Message = *c.Message
+	}
+	if c.Enabled != nil {
+		job.Enabled = *c.Enabled
+	}
+
+	if err := store.UpdateJob(job); err != nil {
+		return fmt.Errorf("failed to update job: %w", err)
+	}
+
+	fmt.Printf("Job updated: %s\n", job.Name)
+	return nil
+}
+
+// CronRemoveCmd removes a cron job
+type CronRemoveCmd struct {
+	ID string `arg:"" help:"Job ID to remove"`
+}
+
+func (c *CronRemoveCmd) Run(ctx *Context) error {
+	store := cron.NewStore("", "")
+	if err := store.Load(); err != nil {
+		return fmt.Errorf("failed to load jobs: %w", err)
+	}
+
+	job := store.GetJob(c.ID)
+	if job == nil {
+		return fmt.Errorf("job not found: %s", c.ID)
+	}
+
+	name := job.Name
+	if err := store.DeleteJob(c.ID); err != nil {
+		return fmt.Errorf("failed to remove job: %w", err)
+	}
+
+	fmt.Printf("Job '%s' removed.\n", name)
+	return nil
+}
+
+// CronRunCmd runs a job immediately
+type CronRunCmd struct {
+	ID string `arg:"" help:"Job ID to run"`
+}
+
+func (c *CronRunCmd) Run(ctx *Context) error {
+	// Note: This requires the gateway to be running
+	// For now, just print a message
+	fmt.Printf("To run a job immediately, use the cron tool via the agent.\n")
+	fmt.Printf("The gateway must be running for job execution.\n")
+	return nil
+}
+
+// CronRunsCmd shows job execution history
+type CronRunsCmd struct {
+	ID string `arg:"" help:"Job ID to show history for"`
+}
+
+func (c *CronRunsCmd) Run(ctx *Context) error {
+	store := cron.NewStore("", "")
+	if err := store.Load(); err != nil {
+		return fmt.Errorf("failed to load jobs: %w", err)
+	}
+
+	job := store.GetJob(c.ID)
+	if job == nil {
+		return fmt.Errorf("job not found: %s", c.ID)
+	}
+
+	fmt.Printf("Run history for '%s' (ID: %s)\n\n", job.Name, job.ID)
+	if job.State.LastRunAtMs != nil {
+		fmt.Printf("Last run: %s\n", time.UnixMilli(*job.State.LastRunAtMs).Format(time.RFC3339))
+		fmt.Printf("Status: %s\n", job.State.LastStatus)
+		fmt.Printf("Duration: %dms\n", job.State.LastDurationMs)
+		if job.State.LastError != "" {
+			fmt.Printf("Error: %s\n", job.State.LastError)
+		}
+	} else {
+		fmt.Println("No runs recorded yet.")
+	}
+	return nil
+}
+
+func buildScheduleFromFlags(every, at, cronExpr, tz string) (cron.Schedule, error) {
+	if every != "" {
+		dur, err := cron.ParseDuration(every)
+		if err != nil {
+			return cron.Schedule{}, fmt.Errorf("invalid interval: %w", err)
+		}
+		return cron.Schedule{
+			Kind:    cron.ScheduleKindEvery,
+			EveryMs: dur.Milliseconds(),
+		}, nil
+	}
+
+	if at != "" {
+		atTime, err := cron.ParseAt(at, time.Now())
+		if err != nil {
+			return cron.Schedule{}, fmt.Errorf("invalid time: %w", err)
+		}
+		return cron.Schedule{
+			Kind: cron.ScheduleKindAt,
+			AtMs: atTime.UnixMilli(),
+		}, nil
+	}
+
+	if cronExpr != "" {
+		return cron.Schedule{
+			Kind: cron.ScheduleKindCron,
+			Expr: cronExpr,
+			Tz:   tz,
+		}, nil
+	}
+
+	return cron.Schedule{}, fmt.Errorf("must specify --every, --at, or --cron")
+}
+
+func formatCronSchedule(s *cron.Schedule) string {
+	switch s.Kind {
+	case cron.ScheduleKindAt:
+		return fmt.Sprintf("at %s", time.UnixMilli(s.AtMs).Format(time.RFC3339))
+	case cron.ScheduleKindEvery:
+		return fmt.Sprintf("every %s", time.Duration(s.EveryMs)*time.Millisecond)
+	case cron.ScheduleKindCron:
+		if s.Tz != "" {
+			return fmt.Sprintf("cron '%s' (%s)", s.Expr, s.Tz)
+		}
+		return fmt.Sprintf("cron '%s'", s.Expr)
+	default:
+		return "unknown"
+	}
 }
 
 // Context passed to all commands
@@ -248,26 +514,68 @@ func runGateway(ctx *Context, useTUI bool) error {
 		cancel()
 	}()
 
-	// Start Telegram bot if configured
+	// Start Telegram bot if configured (with persistent retry on connection failures)
 	var telegramBot *telegram.Bot
+	var telegramBotMu sync.Mutex
 	messageChannels := make(map[string]tools.MessageChannel)
 
 	if cfg.Telegram.Enabled && cfg.Telegram.BotToken != "" {
+		// Try initial connection
 		var err error
 		telegramBot, err = telegram.New(&cfg.Telegram, gw, users)
-		if err != nil {
-			L_error("failed to create telegram bot", "error", err)
-		} else {
+		if err == nil {
 			telegramBot.Start()
 			gw.RegisterChannel(telegramBot)
 			L_info("telegram bot started")
-			defer telegramBot.Stop()
 
 			// Create Telegram message channel adapter for message tool
 			if mediaStore := gw.MediaStore(); mediaStore != nil {
 				adapter := telegram.NewMessageChannelAdapter(telegramBot, mediaStore.BaseDir())
 				messageChannels["telegram"] = adapter
 			}
+		} else {
+			// Initial connection failed - start background retry goroutine
+			L_warn("telegram initial connection failed, will retry in background", "error", err)
+
+			go func() {
+				backoff := 5 * time.Second
+				maxBackoff := 5 * time.Minute
+				attempt := 1
+
+				for {
+					select {
+					case <-runCtx.Done():
+						L_info("telegram: shutdown requested, stopping retry")
+						return
+					case <-time.After(backoff):
+					}
+
+					L_info("telegram: retrying connection", "attempt", attempt, "backoff", backoff)
+					bot, err := telegram.New(&cfg.Telegram, gw, users)
+					if err != nil {
+						L_warn("telegram: connection failed", "error", err, "nextRetry", backoff)
+						attempt++
+						// Exponential backoff with cap
+						backoff *= 2
+						if backoff > maxBackoff {
+							backoff = maxBackoff
+						}
+						continue
+					}
+
+					// Success!
+					bot.Start()
+					gw.RegisterChannel(bot)
+					L_info("telegram bot started after retry", "attempts", attempt)
+
+					telegramBotMu.Lock()
+					telegramBot = bot
+					// Note: message channel adapter not set up here since messageChannels
+					// was already passed to tools. Would need refactoring for hot-add.
+					telegramBotMu.Unlock()
+					return
+				}
+			}()
 		}
 	} else {
 		L_debug("telegram not enabled or no token configured")
@@ -278,6 +586,13 @@ func runGateway(ctx *Context, useTUI bool) error {
 		messageTool := tools.NewMessageTool(messageChannels)
 		toolsReg.Register(messageTool)
 		L_debug("message tool registered", "channels", len(messageChannels))
+	}
+
+	// Start cron service AFTER channels are registered
+	if cfg.Cron.Enabled {
+		if err := gw.StartCron(runCtx); err != nil {
+			L_error("cron: failed to start service", "error", err)
+		}
 	}
 
 	if useTUI {
@@ -292,6 +607,14 @@ func runGateway(ctx *Context, useTUI bool) error {
 
 	<-runCtx.Done()
 	L_info("gateway shutting down")
+
+	// Stop telegram bot if running
+	telegramBotMu.Lock()
+	if telegramBot != nil {
+		telegramBot.Stop()
+	}
+	telegramBotMu.Unlock()
+
 	return nil
 }
 
