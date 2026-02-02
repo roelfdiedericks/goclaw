@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/charmbracelet/log"
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
 // skillsData holds the loaded skills (for atomic swap)
@@ -52,7 +52,7 @@ func NewLoader(bundledDir, managedDir, workspaceDir string, extraDirs []string) 
 // Higher precedence sources override lower ones:
 // extraDirs < bundled < managed < workspace
 func (l *Loader) LoadAll() ([]*Skill, error) {
-	log.Debug("skills: loading from all directories",
+	L_debug("skills: loading from all directories",
 		"bundled", l.bundledDir,
 		"managed", l.managedDir,
 		"workspace", l.workspaceDir,
@@ -119,7 +119,7 @@ func (l *Loader) LoadAll() ([]*Skill, error) {
 		}
 		loaded, failed, err := l.loadFromDirectory(src.path, src.source, newSkills, newCache)
 		if err != nil {
-			log.Warn("skills: failed to load directory", "path", src.path, "error", err)
+			L_warn("skills: failed to load directory", "path", src.path, "error", err)
 			// Continue loading from other directories
 		}
 		totalLoaded += loaded
@@ -136,7 +136,7 @@ func (l *Loader) LoadAll() ([]*Skill, error) {
 	})
 
 	// Log summary at INFO level
-	log.Info("skills: loaded",
+	L_info("skills: loaded",
 		"total", len(newSkills),
 		"failed", totalFailed,
 		"bundled", bySource[SourceBundled],
@@ -160,24 +160,24 @@ func (l *Loader) loadFromDirectory(dir string, source Source, skills map[string]
 	// Check if directory exists
 	info, err := os.Stat(dir)
 	if os.IsNotExist(err) {
-		log.Debug("skills: directory does not exist", "path", dir, "source", source)
+		L_debug("skills: directory does not exist", "path", dir, "source", source)
 		return 0, 0, nil
 	}
 	if err != nil {
-		log.Warn("skills: failed to stat directory", "path", dir, "error", err)
+		L_warn("skills: failed to stat directory", "path", dir, "error", err)
 		return 0, 0, err
 	}
 	if !info.IsDir() {
-		log.Debug("skills: path is not a directory", "path", dir)
+		L_debug("skills: path is not a directory", "path", dir)
 		return 0, 0, nil
 	}
 
-	log.Debug("skills: scanning directory", "path", dir, "source", source)
+	L_debug("skills: scanning directory", "path", dir, "source", source)
 
 	// Walk directory looking for SKILL.md files
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		log.Warn("skills: failed to read directory", "path", dir, "error", err)
+		L_warn("skills: failed to read directory", "path", dir, "error", err)
 		return 0, 0, err
 	}
 
@@ -193,7 +193,7 @@ func (l *Loader) loadFromDirectory(dir string, source Source, skills map[string]
 
 		skill, err := l.loadSkill(skillPath, source, cache)
 		if err != nil {
-			log.Warn("skills: failed to load skill",
+			L_warn("skills: failed to load skill",
 				"skill", entry.Name(),
 				"path", skillPath,
 				"error", err)
@@ -206,18 +206,18 @@ func (l *Loader) loadFromDirectory(dir string, source Source, skills map[string]
 		// Store with precedence (later sources override earlier ones)
 		existing, exists := skills[skill.Name]
 		if exists {
-			log.Debug("skills: overridden by higher precedence",
+			L_debug("skills: overridden by higher precedence",
 				"name", skill.Name,
 				"old_source", existing.Source,
 				"new_source", skill.Source)
 		}
 		skills[skill.Name] = skill
-		log.Debug("skills: loaded",
+		L_debug("skills: loaded",
 			"name", skill.Name,
 			"source", skill.Source)
 	}
 
-	log.Debug("skills: directory scan complete", "path", dir, "loaded", loaded, "failed", failed)
+	L_debug("skills: directory scan complete", "path", dir, "loaded", loaded, "failed", failed)
 	return loaded, failed, nil
 }
 

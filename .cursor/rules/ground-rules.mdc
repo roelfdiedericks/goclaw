@@ -6,6 +6,45 @@ alwaysApply: true
 
 # Ground Rules for GoClaw Development
 
+## Logging - USE THE RIGHT FUNCTIONS
+
+**ONLY use the logging functions from `internal/logging`:**
+
+```go
+import . "github.com/roelfdiedericks/goclaw/internal/logging"
+
+// Use these:
+L_trace("message", "key", value)
+L_debug("message", "key", value)
+L_info("message", "key", value)
+L_warn("message", "key", value)
+L_error("message", "key", value)
+```
+
+**DO NOT:**
+- Import `"github.com/charmbracelet/log"` directly
+- Import standard `"log"` package
+- Use `log.Debug()`, `log.Info()`, etc.
+- Use `fmt.Println()` for logging
+
+**Log Level Guidelines:**
+- `L_info` - Summary information (totals, counts, status changes)
+- `L_warn` - Specific failures WITH context (what failed and why)
+- `L_debug` - Per-item details (only visible with `-d` flag)
+- `L_trace` - Very verbose (only visible with `-t` flag)
+
+**Example - Good logging:**
+```go
+// INFO: Summary only
+L_info("skills: loaded", "total", 55, "failed", 2)
+
+// WARN: Each failure with details
+L_warn("skills: failed to load", "skill", "foo", "error", err)
+
+// DEBUG: Per-item details
+L_debug("skills: ineligible", "skill", "bar", "reason", "binary: mytool")
+```
+
 ## Git Commands - RESTRICTED
 
 **You are NOT allowed to run any git commands except `git log`.**
@@ -32,15 +71,8 @@ The user will handle all git operations manually.
 - **DO NOT run `goclaw gateway` or `make run/debug/tui`** - the user will test manually
 - Running the gateway could interfere with existing instances
 
-## Why This Rule Exists
+## Why These Rules Exist
 
-On 2026-02-02, a `git restore` command wiped out an entire day's worth of uncommitted work including:
-- All files in `internal/skills/` (9 Go files)
-- Changes to `internal/gateway/gateway.go`
-- Changes to `internal/skills/manager.go`
-- Changes to `internal/context/prompt.go`
-- And more
+**Git:** On 2026-02-02, a `git restore` command wiped out an entire day's worth of uncommitted work including all files in `internal/skills/`. This happened because the assistant panicked and ran `git restore` without understanding the situation. **Never again.**
 
-This happened because git showed files as "deleted" and the assistant panicked and ran `git restore --staged . && git restore .` without understanding the situation.
-
-**Never again.**
+**Logging:** Using `charmbracelet/log` directly bypasses the project's log level filtering and caller info. The `L_*` functions provide consistent formatting with file:line info and proper level filtering.
