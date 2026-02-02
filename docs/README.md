@@ -4,8 +4,10 @@ GoClaw is a Go implementation of an AI agent gateway, compatible with OpenClaw s
 
 It reimplements many of OpenClaw's concepts and functionality in go, and can actually run side-by-side with OpenClaw, in the same workspace directory. 
 
-It will read your openclaw.json file to overlay into it's own configuration file, so that it's easier to run side-by-side. It will also read your openclaw session history at startup so you can takeoff where you left in openclaw.
-It will also monitor your openclaw session and add any interactions with openclaw to it's own context in realtime.
+It will read your openclaw.json file to overlay into it's own configuration file, so that it's easier to run side-by-side. It will also read your openclaw session history at startup so you can takeoff where you left in openclaw, or goclaw
+
+The two "consciousness" streams are merged at startup to create one timeline.
+It will also monitor your openclaw session and add any other interactions with openclaw to the timeline.
 
 It was intended as a "mimimum viable" replacement for OpenClaw, focusing on Anthropic models for the main agent, and Ollama for context compaction and memory embeddings.
 
