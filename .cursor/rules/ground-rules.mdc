@@ -1,0 +1,40 @@
+---
+description: Ground rules for developing GoClaw
+alwaysApply: true
+---
+
+# GoClaw Development Ground Rules
+
+> **CURSOR NOTE**: This file is auto-loaded every session (`alwaysApply: true`). 
+> Read it at the start of each session. Update it when new conventions are established.
+
+## Directory Structure
+
+- **`/home/openclaw/.openclaw/workspace/`** is the agent workspace
+- **`memory/`** directory is for GoClaw's agent memory - DO NOT write development notes there
+- **`goclaw/`** is the GoClaw source code being developed
+
+## Reference Implementation
+
+- OpenClaw TypeScript reference code is in `goclaw/ref/openclaw/`
+- When implementing features, check OpenClaw's approach for parity
+- Key files: `ref/openclaw/src/agents/` for tools and agent logic
+
+## Code Conventions
+
+- Logging: Use `L_trace`, `L_debug`, `L_info`, `L_warn`, `L_error` from `internal/logging`
+- Config: Add new settings to `internal/config/config.go` and document in `goclaw.json`
+- Tools: Implement the `Tool` interface in `internal/tools/`
+
+## File Tools Security
+
+All file operations (read, write, edit) must use `internal/sandbox/`:
+- `sandbox.ValidatePath()` - validate path within workspace
+- `sandbox.AtomicWriteFile()` - atomic writes with permission preservation
+- No symlinks allowed in paths (prevents escape attacks)
+
+## Testing
+
+- Build check: `go build ./...`
+- Run debug: `make debug`
+- Check lints after edits
