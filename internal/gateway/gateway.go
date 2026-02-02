@@ -16,6 +16,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
 	"github.com/roelfdiedericks/goclaw/internal/session"
+	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -53,6 +54,7 @@ type Gateway struct {
 	memoryManager       *memory.Manager
 	ollamaClient        *llm.OllamaClient
 	commandHandler      *commands.Handler
+	skillManager        *skills.Manager
 }
 
 // Regex for detecting context overflow errors
@@ -234,6 +236,55 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 	g.commandHandler = commands.NewHandler(g)
 	L_debug("command handler initialized")
 
+	// Initialize skill manager (skills are config - load early)
+	if cfg.Skills.Enabled {
+		// Build skill configs map
+		skillConfigs := make(map[string]*skills.SkillEntryConfig)
+		for name, entry := range cfg.Skills.Entries {
+			skillConfigs[name] = &skills.SkillEntryConfig{
+				Enabled: entry.Enabled,
+				APIKey:  entry.APIKey,
+				Env:     entry.Env,
+				Config:  entry.Config,
+			}
+		}
+
+		skillMgrCfg := skills.ManagerConfig{
+			Enabled:       cfg.Skills.Enabled,
+			BundledDir:    cfg.Skills.BundledDir,
+			ManagedDir:    cfg.Skills.ManagedDir,
+			WorkspaceDir:  cfg.Skills.WorkspaceDir,
+			ExtraDirs:     cfg.Skills.ExtraDirs,
+			WatchEnabled:  cfg.Skills.Watch,
+			WatchDebounce: cfg.Skills.WatchDebounce,
+			SkillConfigs:  skillConfigs,
+		}
+
+		// Set default workspace skills dir if not overridden
+		if skillMgrCfg.WorkspaceDir == "" {
+			skillMgrCfg.WorkspaceDir = cfg.Gateway.WorkingDir + "/skills"
+		}
+
+		skillMgr, err := skills.NewManager(skillMgrCfg)
+		if err != nil {
+			L_warn("failed to create skill manager", "error", err)
+		} else {
+			g.skillManager = skillMgr
+
+			// Load skills synchronously (they're config, load them early)
+			if err := skillMgr.Load(); err != nil {
+				L_warn("failed to load skills", "error", err)
+			} else {
+				stats := skillMgr.GetStats()
+				L_info("skills: loaded",
+					"total", stats.TotalSkills,
+					"eligible", stats.EligibleSkills,
+					"flagged", stats.FlaggedSkills,
+					"watchEnabled", cfg.Skills.Watch)
+			}
+		}
+	}
+
 	return g, nil
 }
 
@@ -259,6 +310,35 @@ func (g *Gateway) MemoryManager() *memory.Manager {
 	return g.memoryManager
 }
 
+// SkillManager returns the skill manager
+func (g *Gateway) SkillManager() *skills.Manager {
+	return g.skillManager
+}
+
+// GetSkillsStartupWarning returns any security warnings about skills
+func (g *Gateway) GetSkillsStartupWarning() string {
+	if g.skillManager == nil {
+		return ""
+	}
+	return g.skillManager.GetStartupWarning()
+}
+
+// GetSkillsPrompt returns the formatted skills section for system prompt
+func (g *Gateway) GetSkillsPrompt() string {
+	if g.skillManager == nil {
+		return ""
+	}
+	return g.skillManager.FormatPrompt()
+}
+
+// GetSkillsStatusSection returns the skills section for /status output
+func (g *Gateway) GetSkillsStatusSection() string {
+	if g.skillManager == nil {
+		return ""
+	}
+	return g.skillManager.FormatStatusSection()
+}
+
 // StartSessionWatcher starts the session file watcher for live OpenClaw sync
 func (g *Gateway) StartSessionWatcher(ctx context.Context) error {
 	sess := g.sessions.GetPrimary()
@@ -281,6 +361,11 @@ func (g *Gateway) StartSessionWatcher(ctx context.Context) error {
 func (g *Gateway) Start(ctx context.Context) {
 	L_info("gateway: starting background tasks")
 
+	// Start skill watcher for live reloads (skills already loaded in New)
+	if g.skillManager != nil {
+		g.skillManager.StartWatcher()
+	}
+
 	// Start compaction manager background retry
 	if g.compactor != nil {
 		g.compactor.Start(ctx)
@@ -290,6 +375,11 @@ func (g *Gateway) Start(ctx context.Context) {
 // Shutdown gracefully shuts down the gateway
 func (g *Gateway) Shutdown() {
 	L_info("gateway: shutting down")
+
+	// Stop skill manager
+	if g.skillManager != nil {
+		g.skillManager.Stop()
+	}
 
 	// Stop compaction manager background tasks
 	if g.compactor != nil {
@@ -373,6 +463,9 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		workspaceFiles = g.promptCache.GetWorkspaceFiles()
 	}
 
+	// Get skills prompt
+	skillsPrompt := g.GetSkillsPrompt()
+
 	systemPrompt := gcontext.BuildSystemPrompt(gcontext.PromptParams{
 		WorkspaceDir:   g.config.Gateway.WorkingDir,
 		Tools:          g.tools,
@@ -382,6 +475,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		TotalTokens:    sess.GetTotalTokens(),
 		MaxTokens:      sess.GetMaxTokens(),
 		WorkspaceFiles: workspaceFiles,
+		SkillsPrompt:   skillsPrompt,
 	})
 
 	// Check if compaction is needed before proceeding

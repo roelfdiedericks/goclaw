@@ -1,40 +1,46 @@
 ---
-description: Ground rules for developing GoClaw
+description: Ground rules for GoClaw development
+globs:
 alwaysApply: true
 ---
 
-# GoClaw Development Ground Rules
+# Ground Rules for GoClaw Development
 
-> **CURSOR NOTE**: This file is auto-loaded every session (`alwaysApply: true`). 
-> Read it at the start of each session. Update it when new conventions are established.
+## Git Commands - RESTRICTED
 
-## Directory Structure
+**You are NOT allowed to run any git commands except `git log`.**
 
-- **`/home/openclaw/.openclaw/workspace/`** is the agent workspace
-- **`memory/`** directory is for GoClaw's agent memory - DO NOT write development notes there
-- **`goclaw/`** is the GoClaw source code being developed
+Forbidden commands include but are not limited to:
+- `git restore` - DO NOT USE, this wipes uncommitted work
+- `git checkout`
+- `git reset`
+- `git clean`
+- `git stash`
+- `git add`
+- `git commit`
+- `git push`
+- `git pull`
+- `git merge`
+- `git rebase`
+- `git status`
+- `git diff`
 
-## Reference Implementation
-
-- OpenClaw TypeScript reference code is in `goclaw/ref/openclaw/`
-- When implementing features, check OpenClaw's approach for parity
-- Key files: `ref/openclaw/src/agents/` for tools and agent logic
-
-## Code Conventions
-
-- Logging: Use `L_trace`, `L_debug`, `L_info`, `L_warn`, `L_error` from `internal/logging`
-- Config: Add new settings to `internal/config/config.go` and document in `goclaw.json`
-- Tools: Implement the `Tool` interface in `internal/tools/`
-
-## File Tools Security
-
-All file operations (read, write, edit) must use `internal/sandbox/`:
-- `sandbox.ValidatePath()` - validate path within workspace
-- `sandbox.AtomicWriteFile()` - atomic writes with permission preservation
-- No symlinks allowed in paths (prevents escape attacks)
+The user will handle all git operations manually.
 
 ## Testing
 
-- Build check: `go build ./...`
-- Run debug: `make debug`
-- Check lints after edits
+- **DO NOT run `goclaw gateway` or `make run/debug/tui`** - the user will test manually
+- Running the gateway could interfere with existing instances
+
+## Why This Rule Exists
+
+On 2026-02-02, a `git restore` command wiped out an entire day's worth of uncommitted work including:
+- All files in `internal/skills/` (9 Go files)
+- Changes to `internal/gateway/gateway.go`
+- Changes to `internal/skills/manager.go`
+- Changes to `internal/context/prompt.go`
+- And more
+
+This happened because git showed files as "deleted" and the assistant panicked and ran `git restore --staged . && git restore .` without understanding the situation.
+
+**Never again.**

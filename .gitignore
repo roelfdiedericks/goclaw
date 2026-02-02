@@ -23,3 +23,6 @@ goclaw.json
 
 # Reference code (not part of goclaw)
 ref/
+
+# Skills sparse checkout temp directory
+.skills-upstream/
