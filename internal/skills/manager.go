@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/charmbracelet/log"
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
 // Manager coordinates skill loading, auditing, and prompt generation.
@@ -47,7 +47,7 @@ type ManagerConfig struct {
 
 // NewManager creates a new skill manager.
 func NewManager(cfg ManagerConfig) (*Manager, error) {
-	log.Debug("skills: creating manager")
+	L_debug("skills: creating manager")
 
 	// Resolve default paths
 	bundledDir := cfg.BundledDir
@@ -67,7 +67,7 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 		}
 	}
 
-	log.Debug("skills: directories configured",
+	L_debug("skills: directories configured",
 		"bundled", bundledDir,
 		"managed", managedDir,
 		"workspace", cfg.WorkspaceDir,
@@ -91,7 +91,7 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	if cfg.WatchEnabled {
 		watcher, err := NewWatcher(cfg.WatchDebounce, m.onSkillsChanged)
 		if err != nil {
-			log.Warn("failed to create skill watcher", "error", err)
+			L_warn("failed to create skill watcher", "error", err)
 		} else {
 			m.watcher = watcher
 		}
@@ -118,11 +118,11 @@ func (m *Manager) StartWatcher() {
 
 	dirs := m.loader.WatchedDirs()
 	if err := m.watcher.WatchDirs(dirs); err != nil {
-		log.Warn("failed to watch skill directories", "error", err)
+		L_warn("failed to watch skill directories", "error", err)
 		return
 	}
 	m.watcher.Start() // This spawns a goroutine internally
-	log.Debug("skills: watcher started", "dirs", len(dirs))
+	L_debug("skills: watcher started", "dirs", len(dirs))
 }
 
 // Stop shuts down the manager.
@@ -153,6 +153,9 @@ func (m *Manager) Reload() error {
 		ConfigKeys: m.configKeys,
 	}
 
+	eligibleCount := 0
+	ineligibleCount := 0
+
 	for _, skill := range skills {
 		// Check per-skill config
 		if cfg, ok := m.skillConfigs[skill.Name]; ok {
@@ -164,12 +167,36 @@ func (m *Manager) Reload() error {
 		// Check eligibility
 		skill.IsEligible(ctx)
 
-		// Audit for security concerns (only if eligible)
 		if skill.Eligible {
+			eligibleCount++
+			// Audit for security concerns (only if eligible)
 			if m.auditor.AuditAndFlag(skill) {
 				m.flaggedSkills = append(m.flaggedSkills, skill)
 			}
+		} else {
+			ineligibleCount++
+			// Log why the skill is ineligible
+			missing := skill.GetMissingRequirements(ctx)
+			reason := "unknown"
+			if len(missing) > 0 {
+				reason = missing[0]
+				if len(missing) > 1 {
+					reason += fmt.Sprintf(" (+%d more)", len(missing)-1)
+				}
+			} else if !skill.Enabled {
+				reason = "disabled"
+			} else if skill.Metadata == nil {
+				reason = "no metadata (should be eligible?)"
+			}
+			L_debug("skills: ineligible", "skill", skill.Name, "reason", reason)
 		}
+	}
+
+	// Log summary of ineligible skills at INFO only if there are some
+	if ineligibleCount > 0 {
+		L_info("skills: eligibility check",
+			"eligible", eligibleCount,
+			"ineligible", ineligibleCount)
 	}
 
 	// Generate startup warning if there are flagged skills
@@ -181,7 +208,7 @@ func (m *Manager) Reload() error {
 // onSkillsChanged is called when skill files change.
 func (m *Manager) onSkillsChanged() {
 	if err := m.Reload(); err != nil {
-		log.Error("failed to reload skills", "error", err)
+		L_error("failed to reload skills", "error", err)
 	}
 }
 

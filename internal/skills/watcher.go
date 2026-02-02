@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/log"
 	"github.com/fsnotify/fsnotify"
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
 // Watcher monitors skill directories for changes.
@@ -53,7 +53,7 @@ func (w *Watcher) WatchDirs(dirs []string) error {
 
 		// Watch the directory itself
 		if err := w.watcher.Add(dir); err != nil {
-			log.Warn("failed to watch skill directory", "path", dir, "error", err)
+			L_warn("failed to watch skill directory", "path", dir, "error", err)
 			continue
 		}
 
@@ -62,13 +62,13 @@ func (w *Watcher) WatchDirs(dirs []string) error {
 		if err == nil {
 			for _, entry := range entries {
 				if err := w.watcher.Add(entry); err != nil {
-					log.Debug("failed to watch skill subdirectory", "path", entry, "error", err)
+					L_debug("failed to watch skill subdirectory", "path", entry, "error", err)
 				}
 			}
 		}
 
 		w.dirs = append(w.dirs, dir)
-		log.Debug("watching skill directory", "path", dir)
+		L_debug("watching skill directory", "path", dir)
 	}
 
 	return nil
@@ -97,7 +97,7 @@ func (w *Watcher) run() {
 			if !ok {
 				return
 			}
-			log.Warn("skill watcher error", "error", err)
+			L_warn("skill watcher error", "error", err)
 		}
 	}
 }
@@ -122,7 +122,7 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 		return
 	}
 
-	log.Debug("skill file changed",
+	L_debug("skill file changed",
 		"path", event.Name,
 		"op", event.Op.String())
 
@@ -136,7 +136,7 @@ func (w *Watcher) maybeWatchNewDir(path string) {
 		if strings.HasPrefix(path, dir) {
 			// It's a potential new skill directory
 			if err := w.watcher.Add(path); err == nil {
-				log.Debug("watching new skill directory", "path", path)
+				L_debug("watching new skill directory", "path", path)
 			}
 			return
 		}
@@ -160,7 +160,7 @@ func (w *Watcher) triggerReload() {
 		w.pendingTimer = nil
 		w.mu.Unlock()
 
-		log.Info("skills changed, reloading")
+		L_info("skills changed, reloading")
 		if w.onChange != nil {
 			w.onChange()
 		}
