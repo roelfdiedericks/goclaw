@@ -339,6 +339,69 @@ func (g *Gateway) GetSkillsStatusSection() string {
 	return g.skillManager.FormatStatusSection()
 }
 
+// GetSkillsListForCommand returns skill info for /skills command
+func (g *Gateway) GetSkillsListForCommand() *commands.SkillsListResult {
+	if g.skillManager == nil {
+		return nil
+	}
+
+	allSkills := g.skillManager.GetAllSkills()
+	eligibleSkills := g.skillManager.GetEligibleSkills()
+	flaggedSkills := g.skillManager.GetFlaggedSkills()
+
+	result := &commands.SkillsListResult{
+		Total:      len(allSkills),
+		Eligible:   len(eligibleSkills),
+		Ineligible: len(allSkills) - len(eligibleSkills) - len(flaggedSkills),
+		Flagged:    len(flaggedSkills),
+		Skills:     make([]commands.SkillInfo, 0, len(allSkills)),
+	}
+
+	// Create a set of eligible skill names for quick lookup
+	eligibleSet := make(map[string]bool)
+	for _, s := range eligibleSkills {
+		eligibleSet[s.Name] = true
+	}
+
+	// Create a set of flagged skill names
+	flaggedSet := make(map[string]bool)
+	for _, s := range flaggedSkills {
+		flaggedSet[s.Name] = true
+	}
+
+	for _, s := range allSkills {
+		info := commands.SkillInfo{
+			Name:        s.Name,
+			Description: s.Description,
+			Source:      string(s.Source),
+		}
+
+		if s.Metadata != nil && s.Metadata.Emoji != "" {
+			info.Emoji = s.Metadata.Emoji
+		}
+
+		if flaggedSet[s.Name] {
+			info.Status = "flagged"
+			if len(s.AuditFlags) > 0 {
+				info.Reason = s.AuditFlags[0].Pattern
+			}
+		} else if eligibleSet[s.Name] {
+			info.Status = "ready"
+		} else {
+			info.Status = "ineligible"
+			// Get reason for ineligibility
+			missing := s.GetMissingRequirements(skills.EligibilityContext{})
+			if len(missing) > 0 {
+				info.Reason = missing[0]
+			}
+		}
+
+		result.Skills = append(result.Skills, info)
+	}
+
+	return result
+}
+
 // StartSessionWatcher starts the session file watcher for live OpenClaw sync
 func (g *Gateway) StartSessionWatcher(ctx context.Context) error {
 	sess := g.sessions.GetPrimary()

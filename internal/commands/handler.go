@@ -17,6 +17,26 @@ type SessionProvider interface {
 	ResetSession(sessionKey string) error
 	GetCompactionStatus(ctx context.Context) session.CompactionStatus
 	GetSkillsStatusSection() string
+	GetSkillsListForCommand() *SkillsListResult
+}
+
+// SkillsListResult contains skill listing for /skills command
+type SkillsListResult struct {
+	Total      int
+	Eligible   int
+	Ineligible int
+	Flagged    int
+	Skills     []SkillInfo
+}
+
+// SkillInfo contains info about a single skill
+type SkillInfo struct {
+	Name        string
+	Description string
+	Emoji       string
+	Source      string // "bundled", "managed", "workspace"
+	Status      string // "ready", "ineligible", "flagged"
+	Reason      string // Why ineligible/flagged
 }
 
 // SessionInfo contains session status (mirrors gateway.SessionInfo)
@@ -57,6 +77,8 @@ func (h *Handler) Execute(ctx context.Context, cmd string, sessionKey string) *C
 	switch cmd {
 	case "/status":
 		return h.handleStatus(ctx, sessionKey)
+	case "/skills":
+		return h.handleSkills()
 	case "/compact":
 		return h.handleCompact(ctx, sessionKey)
 	case "/clear", "/reset":
@@ -252,16 +274,121 @@ func (h *Handler) handleClear(sessionKey string) *CommandResult {
 	}
 }
 
+// handleSkills returns the list of available skills
+func (h *Handler) handleSkills() *CommandResult {
+	result := h.provider.GetSkillsListForCommand()
+	if result == nil {
+		return &CommandResult{
+			Text:     "Skills system not available",
+			Markdown: "Skills system not available",
+		}
+	}
+
+	var text strings.Builder
+	var md strings.Builder
+
+	// Header
+	text.WriteString(fmt.Sprintf("Skills: %d total, %d eligible, %d ineligible",
+		result.Total, result.Eligible, result.Ineligible))
+	if result.Flagged > 0 {
+		text.WriteString(fmt.Sprintf(", %d flagged", result.Flagged))
+	}
+	text.WriteString("\n\n")
+
+	md.WriteString(fmt.Sprintf("**Skills:** %d total, %d eligible, %d ineligible",
+		result.Total, result.Eligible, result.Ineligible))
+	if result.Flagged > 0 {
+		md.WriteString(fmt.Sprintf(", %d flagged", result.Flagged))
+	}
+	md.WriteString("\n\n")
+
+	// Group by status
+	var ready, ineligible, flagged []SkillInfo
+	for _, s := range result.Skills {
+		switch s.Status {
+		case "ready":
+			ready = append(ready, s)
+		case "ineligible":
+			ineligible = append(ineligible, s)
+		case "flagged":
+			flagged = append(flagged, s)
+		}
+	}
+
+	// Ready skills
+	if len(ready) > 0 {
+		text.WriteString("Ready:\n")
+		md.WriteString("**Ready:**\n")
+		for _, s := range ready {
+			emoji := s.Emoji
+			if emoji == "" {
+				emoji = "•"
+			}
+			text.WriteString(fmt.Sprintf("  %s %s", emoji, s.Name))
+			md.WriteString(fmt.Sprintf("%s %s", emoji, s.Name))
+			if s.Description != "" {
+				text.WriteString(fmt.Sprintf(" - %s", truncate(s.Description, 40)))
+				md.WriteString(fmt.Sprintf(" - %s", truncate(s.Description, 40)))
+			}
+			text.WriteString("\n")
+			md.WriteString("\n")
+		}
+		text.WriteString("\n")
+		md.WriteString("\n")
+	}
+
+	// Ineligible skills (summarized)
+	if len(ineligible) > 0 {
+		text.WriteString(fmt.Sprintf("Ineligible (%d):\n", len(ineligible)))
+		md.WriteString(fmt.Sprintf("**Ineligible** (%d):\n", len(ineligible)))
+		for _, s := range ineligible {
+			text.WriteString(fmt.Sprintf("  • %s", s.Name))
+			md.WriteString(fmt.Sprintf("• %s", s.Name))
+			if s.Reason != "" {
+				text.WriteString(fmt.Sprintf(" - %s", s.Reason))
+				md.WriteString(fmt.Sprintf(" _%s_", s.Reason))
+			}
+			text.WriteString("\n")
+			md.WriteString("\n")
+		}
+		text.WriteString("\n")
+		md.WriteString("\n")
+	}
+
+	// Flagged skills
+	if len(flagged) > 0 {
+		text.WriteString(fmt.Sprintf("Flagged (%d):\n", len(flagged)))
+		md.WriteString(fmt.Sprintf("**⚠️ Flagged** (%d):\n", len(flagged)))
+		for _, s := range flagged {
+			text.WriteString(fmt.Sprintf("  ⚠️ %s", s.Name))
+			md.WriteString(fmt.Sprintf("⚠️ %s", s.Name))
+			if s.Reason != "" {
+				text.WriteString(fmt.Sprintf(" - %s", s.Reason))
+				md.WriteString(fmt.Sprintf(" _%s_", s.Reason))
+			}
+			text.WriteString("\n")
+			md.WriteString("\n")
+		}
+	}
+
+	return &CommandResult{
+		Text:     text.String(),
+		Markdown: md.String(),
+	}
+}
+
 // handleHelp returns available commands
 func (h *Handler) handleHelp() *CommandResult {
 	text := `Available commands:
   /status  - Show session info and compaction health
+  /skills  - List available skills
   /compact - Force context compaction
   /clear   - Clear conversation history
   /help    - Show this help`
 
 	md := `*Available commands:*
 /status - Show session info and compaction health
+/skills - List available skills
 /compact - Force context compaction
 /clear - Clear conversation history
 /help - Show this help`
@@ -270,6 +397,14 @@ func (h *Handler) handleHelp() *CommandResult {
 		Text:     text,
 		Markdown: md,
 	}
+}
+
+// truncate truncates a string to maxLen characters
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 // IsCommand checks if text is a command

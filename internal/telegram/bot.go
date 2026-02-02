@@ -383,6 +383,10 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 			// Convert markdown to Telegram HTML
 			formattedText := FormatMessage(finalText)
 
+			L_trace("telegram: formatting message",
+				"rawMarkdown", finalText,
+				"formattedHTML", formattedText)
+
 			if currentMsg == nil {
 				// Try HTML first, fallback to plain text
 				_, err := b.bot.Send(c.Chat(), formattedText, &tele.SendOptions{ParseMode: tele.ModeHTML})
