@@ -6,6 +6,22 @@ alwaysApply: true
 
 # Ground Rules for GoClaw Development
 
+## DISCUSS BEFORE IMPLEMENTING
+
+**Always discuss proposed changes before making them.**
+
+When a problem is identified:
+1. Explain the issue
+2. Propose options/solutions
+3. **Wait for approval** before writing any code
+
+DO NOT:
+- Start implementing a fix immediately after identifying a problem
+- Assume a solution is acceptable without asking
+- Make "obvious" changes without confirmation
+
+The user decides what approach to take. Your job is to present options, not make decisions.
+
 ## Logging - USE THE RIGHT FUNCTIONS
 
 **ONLY use the logging functions from `internal/logging`:**

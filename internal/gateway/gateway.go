@@ -108,6 +108,23 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 		"store", storeType,
 		"path", storePath)
 
+	// Inherit from OpenClaw session if configured
+	if cfg.Session.Inherit && cfg.Session.InheritFrom != "" && cfg.Session.Path != "" {
+		if err := g.sessions.InheritOpenClawSession(cfg.Session.Path, cfg.Session.InheritFrom, cfg.Session.WriteToKey); err != nil {
+			L_warn("session: failed to inherit OpenClaw session (starting fresh)",
+				"inheritFrom", cfg.Session.InheritFrom,
+				"error", err)
+		} else {
+			primary := g.sessions.GetPrimary()
+			if primary != nil {
+				L_info("session: inherited OpenClaw history",
+					"inheritFrom", cfg.Session.InheritFrom,
+					"messages", len(primary.Messages),
+					"file", primary.SessionFile)
+			}
+		}
+	}
+
 	// Initialize JSONL writer for legacy support
 	if cfg.Session.Path != "" {
 		g.jsonlWriter = session.NewJSONLWriter(cfg.Session.Path)

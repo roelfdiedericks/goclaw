@@ -3,8 +3,8 @@ package telegram
 import (
 	"bytes"
 	"strings"
+	"unicode/utf8"
 
-	"github.com/mattn/go-runewidth"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
@@ -248,23 +248,23 @@ func (r *TelegramRenderer) renderTable(w util.BufWriter, source []byte, node ast
 }
 
 func (r *TelegramRenderer) renderTableAsText(w util.BufWriter, source []byte, table ast.Node) {
-	// First pass: calculate column widths using display width (handles emojis)
+	// First pass: calculate column widths (rune count - emojis may not align perfectly)
 	var colWidths []int
 	for row := table.FirstChild(); row != nil; row = row.NextSibling() {
 		col := 0
 		for cell := row.FirstChild(); cell != nil; cell = cell.NextSibling() {
 			cellText := r.getCellText(source, cell)
-			displayWidth := runewidth.StringWidth(cellText)
+			width := utf8.RuneCountInString(cellText)
 			if col >= len(colWidths) {
-				colWidths = append(colWidths, displayWidth)
-			} else if displayWidth > colWidths[col] {
-				colWidths[col] = displayWidth
+				colWidths = append(colWidths, width)
+			} else if width > colWidths[col] {
+				colWidths[col] = width
 			}
 			col++
 		}
 	}
 
-	// Second pass: render with padding using display width
+	// Second pass: render with padding
 	isHeader := true
 	for row := table.FirstChild(); row != nil; row = row.NextSibling() {
 		w.WriteString("|")
@@ -272,11 +272,13 @@ func (r *TelegramRenderer) renderTableAsText(w util.BufWriter, source []byte, ta
 		for cell := row.FirstChild(); cell != nil; cell = cell.NextSibling() {
 			cellText := r.getCellText(source, cell)
 			w.WriteString(" ")
-			// Use FillRight to pad based on display width, not byte length
+			w.WriteString(cellText)
+			// Pad to column width
 			if col < len(colWidths) {
-				w.WriteString(runewidth.FillRight(cellText, colWidths[col]))
-			} else {
-				w.WriteString(cellText)
+				padding := colWidths[col] - utf8.RuneCountInString(cellText)
+				if padding > 0 {
+					w.WriteString(strings.Repeat(" ", padding))
+				}
 			}
 			w.WriteString(" |")
 			col++
