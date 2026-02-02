@@ -158,7 +158,9 @@ func (m *Manager) Reload() error {
 
 	for _, skill := range skills {
 		// Check per-skill config
+		var skillCfg *SkillEntryConfig
 		if cfg, ok := m.skillConfigs[skill.Name]; ok {
+			skillCfg = cfg
 			ctx.SkillConfig = cfg
 		} else {
 			ctx.SkillConfig = nil
@@ -171,7 +173,14 @@ func (m *Manager) Reload() error {
 			eligibleCount++
 			// Audit for security concerns (only if eligible)
 			if m.auditor.AuditAndFlag(skill) {
-				m.flaggedSkills = append(m.flaggedSkills, skill)
+				// Skill was flagged - check if whitelisted in config
+				if skillCfg != nil && skillCfg.Enabled {
+					skill.Enabled = true
+					skill.Whitelisted = true
+					L_info("skills: whitelisted flagged skill", "skill", skill.Name)
+				} else {
+					m.flaggedSkills = append(m.flaggedSkills, skill)
+				}
 			}
 		} else {
 			ineligibleCount++

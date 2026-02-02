@@ -218,6 +218,12 @@ func runGateway(ctx *Context, useTUI bool) error {
 		L_debug("memory tools registered")
 	}
 
+	// Register skills tool (needs gateway's skills manager)
+	if skillsMgr := gw.SkillManager(); skillsMgr != nil {
+		toolsReg.Register(tools.NewSkillsTool(skillsMgr))
+		L_debug("skills tool registered")
+	}
+
 	// Setup context with cancellation for graceful shutdown
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -238,6 +238,9 @@ func handleSkills(ctx context.Context, args *CommandArgs) *CommandResult {
 	// Header
 	text.WriteString(fmt.Sprintf("Skills: %d total, %d eligible, %d ineligible",
 		result.Total, result.Eligible, result.Ineligible))
+	if result.Whitelisted > 0 {
+		text.WriteString(fmt.Sprintf(", %d whitelisted", result.Whitelisted))
+	}
 	if result.Flagged > 0 {
 		text.WriteString(fmt.Sprintf(", %d flagged", result.Flagged))
 	}
@@ -245,17 +248,22 @@ func handleSkills(ctx context.Context, args *CommandArgs) *CommandResult {
 
 	md.WriteString(fmt.Sprintf("**Skills:** %d total, %d eligible, %d ineligible",
 		result.Total, result.Eligible, result.Ineligible))
+	if result.Whitelisted > 0 {
+		md.WriteString(fmt.Sprintf(", %d whitelisted", result.Whitelisted))
+	}
 	if result.Flagged > 0 {
 		md.WriteString(fmt.Sprintf(", %d flagged", result.Flagged))
 	}
 	md.WriteString("\n\n")
 
 	// Group by status
-	var ready, ineligible, flagged []SkillInfo
+	var ready, whitelisted, ineligible, flagged []SkillInfo
 	for _, s := range result.Skills {
 		switch s.Status {
 		case "ready":
 			ready = append(ready, s)
+		case "whitelisted":
+			whitelisted = append(whitelisted, s)
 		case "ineligible":
 			ineligible = append(ineligible, s)
 		case "flagged":
@@ -277,6 +285,28 @@ func handleSkills(ctx context.Context, args *CommandArgs) *CommandResult {
 			if s.Description != "" {
 				text.WriteString(fmt.Sprintf(" - %s", truncate(s.Description, 40)))
 				md.WriteString(fmt.Sprintf(" - %s", truncate(s.Description, 40)))
+			}
+			text.WriteString("\n")
+			md.WriteString("\n")
+		}
+		text.WriteString("\n")
+		md.WriteString("\n")
+	}
+
+	// Whitelisted skills (manually enabled despite audit flags)
+	if len(whitelisted) > 0 {
+		text.WriteString(fmt.Sprintf("Whitelisted (%d):\n", len(whitelisted)))
+		md.WriteString(fmt.Sprintf("**✓ Whitelisted** (%d):\n", len(whitelisted)))
+		for _, s := range whitelisted {
+			emoji := s.Emoji
+			if emoji == "" {
+				emoji = "✓"
+			}
+			text.WriteString(fmt.Sprintf("  %s %s", emoji, s.Name))
+			md.WriteString(fmt.Sprintf("%s %s", emoji, s.Name))
+			if s.Reason != "" {
+				text.WriteString(fmt.Sprintf(" (was: %s)", s.Reason))
+				md.WriteString(fmt.Sprintf(" _(was: %s)_", s.Reason))
 			}
 			text.WriteString("\n")
 			md.WriteString("\n")

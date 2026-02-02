@@ -366,12 +366,21 @@ func (g *Gateway) GetSkillsListForCommand() *commands.SkillsListResult {
 	eligibleSkills := g.skillManager.GetEligibleSkills()
 	flaggedSkills := g.skillManager.GetFlaggedSkills()
 
+	// Count whitelisted skills (eligible but have audit flags)
+	whitelistedCount := 0
+	for _, s := range eligibleSkills {
+		if s.Whitelisted {
+			whitelistedCount++
+		}
+	}
+
 	result := &commands.SkillsListResult{
-		Total:      len(allSkills),
-		Eligible:   len(eligibleSkills),
-		Ineligible: len(allSkills) - len(eligibleSkills) - len(flaggedSkills),
-		Flagged:    len(flaggedSkills),
-		Skills:     make([]commands.SkillInfo, 0, len(allSkills)),
+		Total:       len(allSkills),
+		Eligible:    len(eligibleSkills) - whitelistedCount, // Don't double-count whitelisted
+		Ineligible:  len(allSkills) - len(eligibleSkills) - len(flaggedSkills),
+		Flagged:     len(flaggedSkills),
+		Whitelisted: whitelistedCount,
+		Skills:      make([]commands.SkillInfo, 0, len(allSkills)),
 	}
 
 	// Create a set of eligible skill names for quick lookup
@@ -397,7 +406,13 @@ func (g *Gateway) GetSkillsListForCommand() *commands.SkillsListResult {
 			info.Emoji = s.Metadata.Emoji
 		}
 
-		if flaggedSet[s.Name] {
+		if s.Whitelisted {
+			// Manually enabled despite audit flags
+			info.Status = "whitelisted"
+			if len(s.AuditFlags) > 0 {
+				info.Reason = s.AuditFlags[0].Pattern
+			}
+		} else if flaggedSet[s.Name] {
 			info.Status = "flagged"
 			if len(s.AuditFlags) > 0 {
 				info.Reason = s.AuditFlags[0].Pattern
