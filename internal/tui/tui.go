@@ -565,6 +565,23 @@ func (m Model) handleCommand(cmd string) (tea.Model, tea.Cmd) {
 		m.chatViewport.SetContent(m.getChatContent())
 		m.chatViewport.GotoBottom()
 
+	case "/skills":
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		result := m.gateway.CommandHandler().Execute(ctx, "/skills", sessionKey)
+		m.chatLines = append(m.chatLines,
+			helpStyle.Render("Available Skills"),
+			"",
+		)
+		for _, line := range strings.Split(result.Text, "\n") {
+			if line != "" {
+				m.chatLines = append(m.chatLines, helpStyle.Render(line))
+			}
+		}
+		m.chatLines = append(m.chatLines, "")
+		m.chatViewport.SetContent(m.getChatContent())
+		m.chatViewport.GotoBottom()
+
 	default:
 		m.chatLines = append(m.chatLines,
 			errorStyle.Render(fmt.Sprintf("Unknown command: %s", cmd)),
