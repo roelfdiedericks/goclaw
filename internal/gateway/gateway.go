@@ -324,6 +324,9 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	} else {
 		sess.AddUserMessage(req.UserMsg, req.Source)
 	}
+	
+	// Persist user message to SQLite
+	g.persistMessage(ctx, sessionKey, "user", req.UserMsg, req.Source, "", "", nil, "")
 
 	// Build system prompt
 	var workspaceFiles []gcontext.WorkspaceFile
@@ -495,12 +498,15 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					Result:   result,
 					Error:    "permission_denied",
 				}
-				sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput)
-				sess.AddToolResult(response.ToolUseID, result)
-				continue
-			}
+			sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput)
+			sess.AddToolResult(response.ToolUseID, result)
+			// Persist denied tool use/result
+			g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "")
+			g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, "")
+			continue
+		}
 
-			events <- EventToolStart{
+		events <- EventToolStart{
 				RunID:    runID,
 				ToolName: response.ToolName,
 				ToolID:   response.ToolUseID,
@@ -538,12 +544,17 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			// Add to session and continue loop
 			sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput)
 			sess.AddToolResult(response.ToolUseID, result)
+			// Persist tool use and result to SQLite
+			g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "")
+			g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, errStr)
 			continue
 		}
 
 		// No tool use - we're done
 		finalText = response.Text
 		sess.AddAssistantMessage(finalText)
+		// Persist assistant message
+		g.persistMessage(ctx, sessionKey, "assistant", finalText, "", "", "", nil, "")
 		break
 	}
 
@@ -738,4 +749,39 @@ func (g *Gateway) Users() *user.Registry {
 // SessionManager returns the session manager
 func (g *Gateway) SessionManager() *session.Manager {
 	return g.sessions
+}
+
+// persistMessage writes a message to SQLite storage for audit trail
+func (g *Gateway) persistMessage(ctx context.Context, sessionKey, role, content, source, toolCallID, toolName string, toolInput []byte, toolError string) {
+	store := g.sessions.GetStore()
+	if store == nil {
+		return // No store configured
+	}
+
+	msg := &session.StoredMessage{
+		ID:         session.GenerateRecordID(),
+		SessionKey: sessionKey,
+		Timestamp:  time.Now(),
+		Role:       role,
+		Content:    content,
+		Source:     source,
+		ToolCallID: toolCallID,
+		ToolName:   toolName,
+		ToolInput:  toolInput,
+	}
+
+	// For tool_result, store the result in ToolResult field and mark errors
+	if role == "tool_result" {
+		msg.ToolResult = content // Store actual result
+		msg.Content = ""        // Keep content empty for tool results
+		if toolError != "" {
+			msg.ToolIsError = true
+		}
+	}
+
+	if err := store.AppendMessage(ctx, sessionKey, msg); err != nil {
+		L_warn("failed to persist message to SQLite", "role", role, "error", err)
+	} else {
+		L_trace("message persisted to SQLite", "role", role, "toolName", toolName)
+	}
 }
