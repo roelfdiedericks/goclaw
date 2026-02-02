@@ -581,6 +581,17 @@ func (g *Gateway) StartCron(ctx context.Context) error {
 	// Set up channel provider for delivery
 	g.cronService.SetChannelProvider(&gatewayCronChannelProvider{g: g})
 
+	// Set up heartbeat config if enabled
+	if g.config.Cron.Heartbeat.Enabled {
+		heartbeatCfg := &cron.HeartbeatConfig{
+			Enabled:         g.config.Cron.Heartbeat.Enabled,
+			IntervalMinutes: g.config.Cron.Heartbeat.IntervalMinutes,
+			Prompt:          g.config.Cron.Heartbeat.Prompt,
+			WorkspaceDir:    g.config.Gateway.WorkingDir, // Workspace for checking HEARTBEAT.md
+		}
+		g.cronService.SetHeartbeatConfig(heartbeatCfg)
+	}
+
 	if err := g.cronService.Start(ctx); err != nil {
 		g.cronService = nil
 		return err
@@ -649,6 +660,7 @@ func (g *Gateway) RunAgentForCron(ctx context.Context, cronReq cron.AgentRequest
 		SessionID:    cronReq.SessionID,
 		FreshContext: cronReq.FreshContext,
 		User:         reqUser,
+		IsHeartbeat:  cronReq.IsHeartbeat,
 	}
 
 	// Create internal events channel
@@ -763,6 +775,17 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	} else {
 		sess = g.sessions.Get(sessionKey)
 	}
+
+	// Ensure session has the model's context window size set
+	if sess.GetMaxTokens() == 0 && g.llm != nil {
+		sess.SetMaxTokens(g.llm.ContextTokens())
+	}
+
+	// For heartbeat: snapshot message count so we can rollback after (ephemeral)
+	messageCountBefore := 0
+	if req.IsHeartbeat {
+		messageCountBefore = sess.MessageCount()
+	}
 	
 	// Add user message with images if any
 	if len(req.Images) > 0 {
@@ -771,8 +794,10 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		sess.AddUserMessage(req.UserMsg, req.Source)
 	}
 	
-	// Persist user message to SQLite
-	g.persistMessage(ctx, sessionKey, "user", req.UserMsg, req.Source, "", "", nil, "")
+	// Persist user message to SQLite (skip for heartbeat - ephemeral)
+	if !req.IsHeartbeat {
+		g.persistMessage(ctx, sessionKey, "user", req.UserMsg, req.Source, "", "", nil, "")
+	}
 
 	// Build system prompt
 	var workspaceFiles []gcontext.WorkspaceFile
@@ -950,9 +975,11 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				}
 			sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput)
 			sess.AddToolResult(response.ToolUseID, result)
-			// Persist denied tool use/result
-			g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "")
-			g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, "")
+			// Persist denied tool use/result (skip for heartbeat - ephemeral)
+			if !req.IsHeartbeat {
+				g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "")
+				g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, "")
+			}
 			continue
 		}
 
@@ -998,17 +1025,21 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			// Add to session and continue loop
 			sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput)
 			sess.AddToolResult(response.ToolUseID, result)
-			// Persist tool use and result to SQLite
-			g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "")
-			g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, errStr)
+			// Persist tool use and result to SQLite (skip for heartbeat - ephemeral)
+			if !req.IsHeartbeat {
+				g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "")
+				g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, errStr)
+			}
 			continue
 		}
 
 		// No tool use - we're done
 		finalText = response.Text
 		sess.AddAssistantMessage(finalText)
-		// Persist assistant message
-		g.persistMessage(ctx, sessionKey, "assistant", finalText, "", "", "", nil, "")
+		// Persist assistant message (skip for heartbeat - ephemeral)
+		if !req.IsHeartbeat {
+			g.persistMessage(ctx, sessionKey, "assistant", finalText, "", "", "", nil, "")
+		}
 		break
 	}
 
@@ -1016,6 +1047,13 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		L_warn("agent run completed with empty response", "runID", runID, "messages", sess.MessageCount())
 	}
 	L_info("agent run completed", "runID", runID, "responseLen", len(finalText))
+
+	// For heartbeat: rollback in-memory session to before the run (ephemeral)
+	if req.IsHeartbeat && messageCountBefore > 0 {
+		sess.TruncateMessages(messageCountBefore)
+		L_debug("heartbeat: rolled back session messages", "before", messageCountBefore, "after", sess.MessageCount())
+	}
+
 	events <- EventAgentEnd{RunID: runID, FinalText: finalText}
 
 	// Check if checkpoint should be generated (async, non-blocking)
@@ -1088,6 +1126,11 @@ func (g *Gateway) GetSessionInfo(ctx context.Context, sessionKey string) (*Sessi
 		return nil, fmt.Errorf("session not found: %s", sessionKey)
 	}
 
+	// Ensure session has MaxTokens set
+	if sess.GetMaxTokens() == 0 && g.llm != nil {
+		sess.SetMaxTokens(g.llm.ContextTokens())
+	}
+
 	info := &SessionInfo{
 		SessionKey:      sessionKey,
 		Messages:        sess.MessageCount(),
@@ -1132,6 +1175,14 @@ func (g *Gateway) GetSessionInfoForCommands(ctx context.Context, sessionKey stri
 		CompactionCount: info.CompactionCount,
 		LastCompaction:  info.LastCompaction,
 	}, nil
+}
+
+// TriggerHeartbeat manually triggers a heartbeat check
+func (g *Gateway) TriggerHeartbeat(ctx context.Context) error {
+	if g.cronService == nil {
+		return fmt.Errorf("cron service not running")
+	}
+	return g.cronService.TriggerHeartbeatNow(ctx)
 }
 
 // CommandHandler returns the unified command handler

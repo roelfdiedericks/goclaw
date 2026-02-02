@@ -165,6 +165,15 @@ func (s *Session) MessageCount() int {
 	return len(s.Messages)
 }
 
+// TruncateMessages removes messages beyond the given count (for ephemeral runs like heartbeat)
+func (s *Session) TruncateMessages(count int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if count >= 0 && count < len(s.Messages) {
+		s.Messages = s.Messages[:count]
+	}
+}
+
 // Clear removes all messages from the session
 func (s *Session) Clear() {
 	s.mu.Lock()

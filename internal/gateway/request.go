@@ -21,6 +21,9 @@ type AgentRequest struct {
 	// Cron-specific fields
 	SessionID    string // Override session ID (e.g., "cron:<jobId>" for isolated jobs)
 	FreshContext bool   // If true, skip prior conversation history (isolated cron jobs)
+
+	// Heartbeat-specific fields
+	IsHeartbeat bool // If true, run is ephemeral - don't persist to session
 }
 
 // HealthStatus provides gateway health information

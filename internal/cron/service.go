@@ -3,7 +3,9 @@ package cron
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,8 +14,18 @@ import (
 )
 
 // BackupTickInterval is how often we poll even if no file changes or timers fire.
-// This serves as a fallback and can be used for heartbeat infrastructure.
 const BackupTickInterval = 5 * time.Minute
+
+// DefaultHeartbeatPrompt is the default prompt sent to the agent during heartbeat.
+const DefaultHeartbeatPrompt = `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
+
+// HeartbeatConfig configures the heartbeat system.
+type HeartbeatConfig struct {
+	Enabled         bool
+	IntervalMinutes int
+	Prompt          string
+	WorkspaceDir    string // For checking HEARTBEAT.md
+}
 
 // Package-level singleton
 var defaultService *Service
@@ -30,6 +42,7 @@ type AgentRequest struct {
 	SessionID    string
 	FreshContext bool
 	UserID       string // User ID to run as (typically owner for cron jobs)
+	IsHeartbeat  bool   // If true, run is ephemeral - don't persist to session
 }
 
 // AgentEvent is a marker interface for agent events.
@@ -86,6 +99,11 @@ type Service struct {
 	watcher          *fsnotify.Watcher // File watcher for jobs.json
 	ignoreWatchUntil time.Time         // Ignore watcher events until this time (debounce our own writes)
 	rescheduleCh     chan struct{}     // Signal to recalculate wake time (for in-process job adds)
+
+	// Heartbeat
+	heartbeatConfig *HeartbeatConfig
+	heartbeatTimer  *time.Timer
+	lastHeartbeat   time.Time
 }
 
 // NewService creates a new cron service and sets it as the global singleton.
@@ -102,6 +120,20 @@ func NewService(store *Store, gw GatewayRunner) *Service {
 // SetChannelProvider sets the channel provider for delivery.
 func (s *Service) SetChannelProvider(cp ChannelProvider) {
 	s.channelProvider = cp
+}
+
+// SetHeartbeatConfig configures the heartbeat system.
+func (s *Service) SetHeartbeatConfig(cfg *HeartbeatConfig) {
+	s.heartbeatConfig = cfg
+}
+
+// TriggerHeartbeatNow manually triggers a heartbeat check (for /heartbeat command)
+func (s *Service) TriggerHeartbeatNow(ctx context.Context) error {
+	if s.heartbeatConfig == nil || !s.heartbeatConfig.Enabled {
+		return fmt.Errorf("heartbeat not enabled")
+	}
+	go s.runHeartbeat(ctx)
+	return nil
 }
 
 // Start begins the cron scheduler.
@@ -140,6 +172,13 @@ func (s *Service) Start(ctx context.Context) error {
 	// Set up backup ticker
 	s.backupTicker = time.NewTicker(BackupTickInterval)
 
+	// Set up heartbeat timer if enabled
+	if s.heartbeatConfig != nil && s.heartbeatConfig.Enabled && s.heartbeatConfig.IntervalMinutes > 0 {
+		interval := time.Duration(s.heartbeatConfig.IntervalMinutes) * time.Minute
+		s.heartbeatTimer = time.NewTimer(interval)
+		L_info("cron: heartbeat enabled", "interval", interval)
+	}
+
 	// Initialize next run times for all jobs
 	s.initializeNextRuns()
 
@@ -171,6 +210,10 @@ func (s *Service) Stop() {
 	if s.backupTicker != nil {
 		s.backupTicker.Stop()
 		s.backupTicker = nil
+	}
+	if s.heartbeatTimer != nil {
+		s.heartbeatTimer.Stop()
+		s.heartbeatTimer = nil
 	}
 
 	L_info("cron: service stopped")
@@ -248,6 +291,12 @@ func (s *Service) runLoop(ctx context.Context) {
 		watcherErrors = s.watcher.Errors
 	}
 
+	// Get heartbeat timer channel (may be nil if heartbeat disabled)
+	var heartbeatC <-chan time.Time
+	if s.heartbeatTimer != nil {
+		heartbeatC = s.heartbeatTimer.C
+	}
+
 	jobsFile := filepath.Base(s.store.Path())
 
 	// Debounce timer for file changes
@@ -285,6 +334,16 @@ func (s *Service) runLoop(ctx context.Context) {
 			L_debug("cron: rescheduling due to job add")
 			continue
 
+		case <-heartbeatC:
+			// Heartbeat timer fired
+			s.timer.Stop()
+			go s.runHeartbeat(ctx)
+			// Reset heartbeat timer for next interval
+			if s.heartbeatConfig != nil && s.heartbeatConfig.IntervalMinutes > 0 {
+				interval := time.Duration(s.heartbeatConfig.IntervalMinutes) * time.Minute
+				s.heartbeatTimer.Reset(interval)
+			}
+
 		case event := <-watcherEvents:
 			// Only react to writes on the jobs file
 			if filepath.Base(event.Name) == jobsFile && (event.Op&fsnotify.Write != 0 || event.Op&fsnotify.Create != 0) {
@@ -320,7 +379,7 @@ func (s *Service) runLoop(ctx context.Context) {
 			L_warn("cron: file watcher error", "error", err)
 
 		case <-s.backupTicker.C:
-			// Backup tick - run due jobs and can be used for heartbeat later
+			// Backup tick - run due jobs
 			s.timer.Stop()
 			L_debug("cron: backup tick fired")
 			s.runDueJobs(ctx)
@@ -603,6 +662,110 @@ func (s *Service) RunNow(ctx context.Context, id string) error {
 
 	go s.executeJob(ctx, job)
 	return nil
+}
+
+// runHeartbeat executes the periodic heartbeat check.
+func (s *Service) runHeartbeat(ctx context.Context) {
+	if s.heartbeatConfig == nil || !s.heartbeatConfig.Enabled {
+		return
+	}
+
+	s.lastHeartbeat = time.Now()
+	L_info("heartbeat: starting")
+
+	// Check if HEARTBEAT.md has content
+	if s.heartbeatConfig.WorkspaceDir != "" {
+		heartbeatFile := filepath.Join(s.heartbeatConfig.WorkspaceDir, "HEARTBEAT.md")
+		content, err := os.ReadFile(heartbeatFile)
+		if err != nil {
+			if os.IsNotExist(err) {
+				L_debug("heartbeat: HEARTBEAT.md not found, skipping", "path", heartbeatFile)
+				return
+			}
+			L_warn("heartbeat: failed to read HEARTBEAT.md", "error", err)
+			// Continue anyway - the agent might handle it
+		} else {
+			// Check if file is effectively empty (only comments/whitespace)
+			trimmed := strings.TrimSpace(string(content))
+			lines := strings.Split(trimmed, "\n")
+			hasContent := false
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line != "" && !strings.HasPrefix(line, "#") {
+					hasContent = true
+					break
+				}
+			}
+			if !hasContent {
+				L_debug("heartbeat: HEARTBEAT.md is empty, skipping")
+				return
+			}
+		}
+	}
+
+	// Get owner user for heartbeat
+	userID := s.gateway.GetOwnerUserID()
+	if userID == "" {
+		L_error("heartbeat: no owner user configured")
+		return
+	}
+
+	// Build the prompt
+	prompt := s.heartbeatConfig.Prompt
+	if prompt == "" {
+		prompt = DefaultHeartbeatPrompt
+	}
+
+	// Run on main session (not isolated), but ephemeral (don't persist)
+	req := AgentRequest{
+		Source:       "heartbeat",
+		UserMsg:      prompt,
+		FreshContext: false, // Use main session with history (for reading)
+		SessionID:    "",    // Empty = main session
+		UserID:       userID,
+		IsHeartbeat:  true,  // Ephemeral - don't persist to session
+	}
+
+	L_debug("heartbeat: invoking agent", "prompt", truncateLog(prompt, 100))
+
+	events := make(chan AgentEvent, 100)
+	go s.gateway.RunAgentForCron(ctx, req, events)
+
+	// Collect response
+	var finalContent string
+	for event := range events {
+		switch e := event.(type) {
+		case AgentEndEvent:
+			finalContent = e.FinalText
+		case AgentErrorEvent:
+			L_error("heartbeat: agent error", "error", e.Error)
+			return
+		}
+	}
+
+	L_info("heartbeat: completed", "responseLen", len(finalContent))
+
+	// Check if response is HEARTBEAT_OK (suppress output)
+	trimmedResponse := strings.TrimSpace(finalContent)
+	if strings.HasPrefix(strings.ToUpper(trimmedResponse), "HEARTBEAT_OK") {
+		L_debug("heartbeat: agent said OK, no notification")
+		return
+	}
+
+	// Deliver response to channels
+	if finalContent != "" && s.channelProvider != nil {
+		channels := s.channelProvider.Channels()
+		if len(channels) > 0 {
+			msg := fmt.Sprintf("**[Heartbeat]**\n\n%s", finalContent)
+			for name, ch := range channels {
+				if err := ch.Send(ctx, msg); err != nil {
+					L_error("heartbeat: failed to deliver to channel", "channel", name, "error", err)
+				} else {
+					L_debug("heartbeat: delivered to channel", "channel", name)
+				}
+			}
+		}
+	}
 }
 
 // GetStatus returns a summary of the cron service status.
