@@ -39,6 +39,12 @@ func registerBuiltins(m *Manager) {
 		Description: "Show this help",
 		Handler:     handleHelp,
 	})
+
+	m.Register(&Command{
+		Name:        "/heartbeat",
+		Description: "Trigger heartbeat check",
+		Handler:     handleHeartbeat,
+	})
 }
 
 // handleStatus returns session status and compaction health
@@ -383,6 +389,23 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// handleHeartbeat triggers a heartbeat check
+func handleHeartbeat(ctx context.Context, args *CommandArgs) *CommandResult {
+	err := args.Provider.TriggerHeartbeat(ctx)
+	if err != nil {
+		return &CommandResult{
+			Text:     fmt.Sprintf("Heartbeat failed: %s", err),
+			Markdown: fmt.Sprintf("Heartbeat failed: `%s`", err),
+			Error:    err,
+		}
+	}
+
+	return &CommandResult{
+		Text:     "Heartbeat triggered.",
+		Markdown: "Heartbeat triggered.",
+	}
 }
 
 // formatDuration formats a duration in a human-readable way

@@ -81,6 +81,13 @@ func (c *Client) IsAvailable() bool {
 	return c != nil && c.client != nil
 }
 
+// ContextTokens returns the model's context window size in tokens
+func (c *Client) ContextTokens() int {
+	// All Claude 3+ models have 200k context window
+	// https://docs.anthropic.com/en/docs/about-claude/models
+	return 200000
+}
+
 // SimpleMessage sends a simple user message and returns the response text.
 // This is used for checkpoint/compaction summaries where we don't need tools.
 func (c *Client) SimpleMessage(ctx context.Context, userMessage, systemPrompt string) (string, error) {

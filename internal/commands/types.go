@@ -14,6 +14,7 @@ type SessionProvider interface {
 	GetCompactionStatus(ctx context.Context) session.CompactionStatus
 	GetSkillsStatusSection() string
 	GetSkillsListForCommand() *SkillsListResult
+	TriggerHeartbeat(ctx context.Context) error
 }
 
 // SkillsListResult contains skill listing for /skills command

@@ -28,7 +28,15 @@ type Config struct {
 
 // CronConfig configures the cron scheduler
 type CronConfig struct {
-	Enabled bool `json:"enabled"` // Enable cron scheduler (default: false)
+	Enabled   bool            `json:"enabled"`   // Enable cron scheduler (default: true)
+	Heartbeat HeartbeatConfig `json:"heartbeat"` // Heartbeat configuration
+}
+
+// HeartbeatConfig configures the periodic heartbeat system
+type HeartbeatConfig struct {
+	Enabled         bool   `json:"enabled"`         // Enable heartbeat (default: true)
+	IntervalMinutes int    `json:"intervalMinutes"` // Interval in minutes (default: 30)
+	Prompt          string `json:"prompt"`          // Custom heartbeat prompt (optional)
 }
 
 // SkillsConfig configures the skills system
@@ -338,6 +346,10 @@ func Load() (*Config, error) {
 		},
 		Cron: CronConfig{
 			Enabled: true, // Cron enabled by default
+			Heartbeat: HeartbeatConfig{
+				Enabled:         true,
+				IntervalMinutes: 30,
+			},
 		},
 	}
 
