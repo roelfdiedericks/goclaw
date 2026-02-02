@@ -20,6 +20,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/pkoukk/tiktoken-go v0.1.8
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/sevlyar/go-daemon v0.1.6
 	github.com/yuin/goldmark v1.5.3
 	golang.org/x/crypto v0.47.0

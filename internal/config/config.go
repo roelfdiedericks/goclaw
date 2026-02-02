@@ -23,6 +23,12 @@ type Config struct {
 	Media        MediaConfig           `json:"media"`
 	TUI          TUIConfig             `json:"tui"`
 	Skills       SkillsConfig          `json:"skills"`
+	Cron         CronConfig            `json:"cron"`
+}
+
+// CronConfig configures the cron scheduler
+type CronConfig struct {
+	Enabled bool `json:"enabled"` // Enable cron scheduler (default: false)
 }
 
 // SkillsConfig configures the skills system
@@ -329,6 +335,9 @@ func Load() (*Config, error) {
 			Watch:         true,
 			WatchDebounce: 500,
 			Entries:       make(map[string]SkillEntryConfig),
+		},
+		Cron: CronConfig{
+			Enabled: true, // Cron enabled by default
 		},
 	}
 

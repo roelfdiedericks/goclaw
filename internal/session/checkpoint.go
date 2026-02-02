@@ -249,26 +249,34 @@ func ParseCheckpointResponse(response string) (*CheckpointData, error) {
 		if start >= 0 && end > start {
 			jsonStr := response[start : end+1]
 			if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
-				// Log what we tried to parse for debugging
-				snippet := jsonStr
-				if len(snippet) > 200 {
-					snippet = snippet[:200] + "..."
-				}
-				L_debug("checkpoint: JSON extraction failed", "snippet", snippet, "error", err)
-				return nil, fmt.Errorf("failed to parse checkpoint response: %w", err)
+				// JSON extraction failed - fall back to using raw response as summary
+				L_info("checkpoint: JSON extraction failed, using raw response as summary",
+					"jsonError", err,
+					"responseLen", len(response))
+				return &CheckpointData{
+					Summary: truncateForLog(response, 4000),
+				}, nil
 			}
 			L_debug("checkpoint: extracted JSON from mixed response", "jsonStart", start)
 		} else {
-			// Log what we received for debugging
-			snippet := response
-			if len(snippet) > 200 {
-				snippet = snippet[:200] + "..."
-			}
-			L_debug("checkpoint: no JSON found in response", "snippet", snippet)
-			return nil, fmt.Errorf("failed to parse checkpoint response (no JSON found): %w", err)
+			// No JSON found - model probably returned plain text summary
+			// Use it as-is rather than failing
+			L_info("checkpoint: no JSON found, using raw response as summary",
+				"responseLen", len(response))
+			return &CheckpointData{
+				Summary: truncateForLog(response, 4000),
+			}, nil
 		}
 	}
 	return &data, nil
+}
+
+// truncateForLog truncates a string for logging, adding ellipsis if needed
+func truncateForLog(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // findJSONStart finds the start of a JSON object in a string
