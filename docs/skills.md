@@ -216,8 +216,15 @@ List all skills with optional filtering.
 **Output:**
 ```json
 {
-  "count": 11,
+  "summary": {
+    "total": 55,
+    "eligible": 11,
+    "ineligible": 43,
+    "flagged": 1,
+    "whitelisted": 0
+  },
   "filter": "eligible",
+  "count": 11,
   "skills": [
     {
       "name": "weather",
@@ -225,12 +232,29 @@ List all skills with optional filtering.
       "description": "Get current weather and forecasts",
       "status": "eligible",
       "source": "bundled"
+    },
+    {
+      "name": "session-logs",
+      "status": "ineligible",
+      "reasons": ["binary: rg"],
+      "missing": {"bins": ["rg"]},
+      "source": "bundled"
+    },
+    {
+      "name": "canvas",
+      "status": "flagged",
+      "reasons": ["Security flag: outside_workspace (warn)"],
+      "source": "bundled"
     }
   ]
 }
 ```
 
-With `verbose: true`, includes `path` and `requires` fields.
+Notes:
+- `summary` provides totals across all skills regardless of filter
+- `reasons` included for ineligible/flagged skills
+- `missing` shows which specific bins/env are not found
+- With `verbose: true`, also includes `path` and `requires` fields
 
 #### info
 

@@ -108,6 +108,22 @@ func (t *SkillsTool) executeList(filter string, verbose bool) (string, error) {
 		flaggedSet[s.Name] = true
 	}
 
+	// Count by status for summary
+	var eligibleCount, ineligibleCount, flaggedCount, whitelistedCount int
+	for _, s := range allSkills {
+		status := t.getStatus(s, eligibleSet, flaggedSet)
+		switch status {
+		case "eligible":
+			eligibleCount++
+		case "ineligible":
+			ineligibleCount++
+		case "flagged":
+			flaggedCount++
+		case "whitelisted":
+			whitelistedCount++
+		}
+	}
+
 	// Filter skills
 	var filtered []*skills.Skill
 	for _, s := range allSkills {
@@ -134,6 +150,11 @@ func (t *SkillsTool) executeList(filter string, verbose bool) (string, error) {
 		}
 	}
 
+	// Build eligibility context for missing checks
+	ctx := skills.EligibilityContext{
+		OS: runtime.GOOS,
+	}
+
 	// Build response
 	type requiresInfo struct {
 		Bins []string `json:"bins,omitempty"`
@@ -141,23 +162,46 @@ func (t *SkillsTool) executeList(filter string, verbose bool) (string, error) {
 		OS   []string `json:"os,omitempty"`
 	}
 
+	type missingInfo struct {
+		Bins []string `json:"bins,omitempty"`
+		Env  []string `json:"env,omitempty"`
+	}
+
 	type skillEntry struct {
 		Name        string        `json:"name"`
 		Emoji       string        `json:"emoji,omitempty"`
 		Description string        `json:"description"`
 		Status      string        `json:"status"`
+		Reasons     []string      `json:"reasons,omitempty"`
 		Source      string        `json:"source"`
 		Path        string        `json:"path,omitempty"`
 		Requires    *requiresInfo `json:"requires,omitempty"`
+		Missing     *missingInfo  `json:"missing,omitempty"`
+	}
+
+	type summaryInfo struct {
+		Total       int `json:"total"`
+		Eligible    int `json:"eligible"`
+		Ineligible  int `json:"ineligible"`
+		Flagged     int `json:"flagged"`
+		Whitelisted int `json:"whitelisted"`
 	}
 
 	type listResponse struct {
-		Count  int          `json:"count"`
-		Filter string       `json:"filter"`
-		Skills []skillEntry `json:"skills"`
+		Summary summaryInfo  `json:"summary"`
+		Filter  string       `json:"filter"`
+		Count   int          `json:"count"`
+		Skills  []skillEntry `json:"skills"`
 	}
 
 	resp := listResponse{
+		Summary: summaryInfo{
+			Total:       len(allSkills),
+			Eligible:    eligibleCount,
+			Ineligible:  ineligibleCount,
+			Flagged:     flaggedCount,
+			Whitelisted: whitelistedCount,
+		},
 		Count:  len(filtered),
 		Filter: filter,
 		Skills: make([]skillEntry, 0, len(filtered)),
@@ -168,15 +212,32 @@ func (t *SkillsTool) executeList(filter string, verbose bool) (string, error) {
 	}
 
 	for _, s := range filtered {
+		status := t.getStatus(s, eligibleSet, flaggedSet)
 		entry := skillEntry{
 			Name:        s.Name,
 			Description: s.Description,
-			Status:      t.getStatus(s, eligibleSet, flaggedSet),
+			Status:      status,
 			Source:      string(s.Source),
 		}
 
 		if s.Metadata != nil && s.Metadata.Emoji != "" {
 			entry.Emoji = s.Metadata.Emoji
+		}
+
+		// Add reasons for non-eligible skills
+		if status == "ineligible" || status == "flagged" {
+			entry.Reasons = t.getReasons(s, ctx)
+		}
+
+		// Add missing info for ineligible skills
+		if status == "ineligible" {
+			missingBins, missingEnv := t.getMissing(s, ctx)
+			if len(missingBins) > 0 || len(missingEnv) > 0 {
+				entry.Missing = &missingInfo{
+					Bins: missingBins,
+					Env:  missingEnv,
+				}
+			}
 		}
 
 		if verbose {
@@ -444,4 +505,38 @@ func (t *SkillsTool) getStatus(skill *skills.Skill, eligibleSet, flaggedSet map[
 		return "eligible"
 	}
 	return "ineligible"
+}
+
+// getReasons returns human-readable reasons why a skill is not eligible
+func (t *SkillsTool) getReasons(skill *skills.Skill, ctx skills.EligibilityContext) []string {
+	var reasons []string
+
+	// Get missing requirements (handles OS, bins, env, config)
+	missing := skill.GetMissingRequirements(ctx)
+	for _, m := range missing {
+		reasons = append(reasons, m)
+	}
+
+	// Security flags
+	for _, flag := range skill.AuditFlags {
+		reasons = append(reasons, fmt.Sprintf("Security flag: %s (%s)", flag.Pattern, flag.Severity))
+	}
+
+	return reasons
+}
+
+// getMissing returns which specific binaries and env vars are missing
+func (t *SkillsTool) getMissing(skill *skills.Skill, ctx skills.EligibilityContext) (bins []string, env []string) {
+	missing := skill.GetMissingRequirements(ctx)
+
+	for _, m := range missing {
+		// Parse the "type: value" format from GetMissingRequirements
+		if strings.HasPrefix(m, "binary: ") {
+			bins = append(bins, strings.TrimPrefix(m, "binary: "))
+		} else if strings.HasPrefix(m, "env: ") {
+			env = append(env, strings.TrimPrefix(m, "env: "))
+		}
+	}
+
+	return bins, env
 }
