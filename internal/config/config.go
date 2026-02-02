@@ -79,10 +79,12 @@ type FlushThresholdConfig struct {
 
 // CompactionConfig configures context compaction
 type CompactionConfig struct {
-	ReserveTokens      int             `json:"reserveTokens"`      // Tokens to reserve before compaction
-	PreferCheckpoint   bool            `json:"preferCheckpoint"`   // Use checkpoint for summary if available
-	Ollama             OllamaLLMConfig `json:"ollama"`             // Optional Ollama model for compaction summaries
-	SummaryRetrySeconds int            `json:"summaryRetrySeconds"` // Retry interval for failed summaries (0 = disabled, default: 300 = 5 min)
+	ReserveTokens          int             `json:"reserveTokens"`          // Tokens to reserve before compaction (default: 30000)
+	PreferCheckpoint       bool            `json:"preferCheckpoint"`       // Use checkpoint for summary if available
+	Ollama                 OllamaLLMConfig `json:"ollama"`                 // Optional Ollama model for compaction summaries
+	RetryIntervalSeconds   int             `json:"retryIntervalSeconds"`   // Background retry interval (default: 60, 0 = disabled)
+	OllamaFailureThreshold int             `json:"ollamaFailureThreshold"` // Fall back to main model after N consecutive Ollama failures (default: 3)
+	OllamaResetMinutes     int             `json:"ollamaResetMinutes"`     // Try Ollama again after N minutes (default: 30)
 }
 
 // OllamaLLMConfig configures an Ollama model for LLM tasks (compaction, checkpoints)
