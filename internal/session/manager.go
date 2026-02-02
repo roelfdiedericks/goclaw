@@ -51,9 +51,8 @@ type ManagerConfig struct {
 // Manager maintains all active sessions
 type Manager struct {
 	sessions map[string]*Session
-	store    Store          // Primary storage backend (SQLite or JSONL)
+	store    Store          // Primary storage backend (SQLite)
 	reader   *JSONLReader   // For reading OpenClaw sessions (inheritance)
-	writer   *JSONLWriter   // Legacy: direct JSONL writer (deprecated, use store)
 	watcher  *SessionWatcher
 	config   *ManagerConfig
 	mu       sync.RWMutex
@@ -99,12 +98,6 @@ func NewManagerWithConfig(cfg *ManagerConfig) (*Manager, error) {
 		L_debug("session: JSONL reader initialized for OpenClaw inheritance", "dir", cfg.SessionsDir)
 	}
 
-	// Legacy: also create writer for backwards compatibility
-	if cfg.EnablePersist && cfg.SessionsDir != "" && m.store == nil {
-		m.writer = NewJSONLWriter(cfg.SessionsDir)
-		L_debug("session: legacy JSONL writer initialized")
-	}
-
 	return m, nil
 }
 
@@ -118,9 +111,6 @@ func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey string) error {
 	
 	if m.reader == nil {
 		m.reader = NewJSONLReader(sessionsDir)
-	}
-	if m.writer == nil {
-		m.writer = NewJSONLWriter(sessionsDir)
 	}
 
 	// Load OpenClaw session from JSONL
@@ -172,18 +162,12 @@ func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey string) error {
 	sess.TotalTokens = estimator.EstimateSessionTokens(sess)
 	L_debug("session: recalculated tokens after merge", "totalTokens", sess.TotalTokens)
 	
-	// Set up our own session file for writing (separate from OpenClaw's)
-	if m.writer != nil {
-		sessionID := sess.ID
-		if sessionID == "" {
-			sessionID = "goclaw-primary"
-		}
-		_, sessionFile, err := m.writer.GetOrCreateEntry(PrimarySession, sessionID+"-goclaw", sessionsDir)
-		if err != nil {
-			L_warn("session: failed to create GoClaw session file", "error", err)
-		} else {
-			sess.SessionFile = sessionFile
-			L_debug("session: GoClaw session file created", "file", sessionFile)
+	// Set SessionFile to OpenClaw's file path (for watcher to monitor)
+	// GoClaw uses SQLite for storage, not JSONL
+	if m.reader != nil {
+		if entry, err := m.reader.GetSessionEntry(inheritKey); err == nil {
+			sess.SessionFile = entry.SessionFile
+			L_debug("session: will watch OpenClaw session file", "file", sess.SessionFile)
 		}
 	}
 
@@ -396,11 +380,6 @@ func (m *Manager) Count() int {
 // GetStore returns the storage backend (may be nil if not configured)
 func (m *Manager) GetStore() Store {
 	return m.store
-}
-
-// GetWriter returns the legacy JSONL writer (deprecated, use GetStore)
-func (m *Manager) GetWriter() *JSONLWriter {
-	return m.writer
 }
 
 // Close closes the storage backend

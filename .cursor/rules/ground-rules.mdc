@@ -22,6 +22,8 @@ DO NOT:
 
 The user decides what approach to take. Your job is to present options, not make decisions.
 
+Whenever you output the text "Let me start." or something similar STOP! Do not proceed until given permission.
+
 ## Logging - USE THE RIGHT FUNCTIONS
 
 **ONLY use the logging functions from `internal/logging`:**

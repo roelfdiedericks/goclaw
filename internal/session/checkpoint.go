@@ -13,7 +13,6 @@ import (
 // CheckpointGenerator generates rolling checkpoints asynchronously
 type CheckpointGenerator struct {
 	config       *CheckpointGeneratorConfig
-	writer       *JSONLWriter
 	store        Store
 	sessionKey   string
 	llmClient    CheckpointLLMClient
@@ -41,10 +40,9 @@ type CheckpointLLMClient interface {
 }
 
 // NewCheckpointGenerator creates a new checkpoint generator
-func NewCheckpointGenerator(cfg *CheckpointGeneratorConfig, writer *JSONLWriter) *CheckpointGenerator {
+func NewCheckpointGenerator(cfg *CheckpointGeneratorConfig) *CheckpointGenerator {
 	return &CheckpointGenerator{
 		config: cfg,
-		writer: writer,
 	}
 }
 
@@ -192,15 +190,6 @@ func (g *CheckpointGenerator) Generate(ctx context.Context, sess *Session, sessi
 
 		sess.SetLastRecordID(storedCP.ID)
 		L_info("checkpoint saved to store", "id", storedCP.ID)
-	} else if g.writer != nil && sessionFile != "" {
-		record, err := g.writer.WriteCheckpointRecord(sessionFile, sess.GetLastRecordID(), checkpoint)
-		if err != nil {
-			return fmt.Errorf("failed to write checkpoint record: %w", err)
-		}
-
-		// Update session with new checkpoint
-		sess.LastCheckpoint = record
-		sess.SetLastRecordID(record.ID)
 	}
 
 	// Update generation tracking

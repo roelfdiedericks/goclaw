@@ -47,7 +47,6 @@ type Gateway struct {
 	config              *config.Config
 	startTime           time.Time
 	checkpointGenerator *session.CheckpointGenerator
-	jsonlWriter         *session.JSONLWriter
 	compactor           *session.Compactor
 	promptCache         *gcontext.PromptCache
 	mediaStore          *media.MediaStore
@@ -55,6 +54,7 @@ type Gateway struct {
 	ollamaClient        *llm.OllamaClient
 	commandHandler      *commands.Handler
 	skillManager        *skills.Manager
+	lastOpenClawUserMsg string // Track user messages for mirroring
 }
 
 // Regex for detecting context overflow errors
@@ -124,11 +124,6 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 		}
 	}
 
-	// Initialize JSONL writer for legacy support
-	if cfg.Session.Path != "" {
-		g.jsonlWriter = session.NewJSONLWriter(cfg.Session.Path)
-	}
-
 	// Initialize checkpoint generator
 	checkpointCfg := &session.CheckpointGeneratorConfig{
 		Enabled:                cfg.Session.Checkpoint.Enabled,
@@ -138,15 +133,15 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 		TurnThreshold:          cfg.Session.Checkpoint.TurnThreshold,
 		MinTokensForGen:        cfg.Session.Checkpoint.MinTokensForGen,
 	}
-	g.checkpointGenerator = session.NewCheckpointGenerator(checkpointCfg, g.jsonlWriter)
+	g.checkpointGenerator = session.NewCheckpointGenerator(checkpointCfg)
 	L_debug("session: checkpoint generator configured",
 		"enabled", cfg.Session.Checkpoint.Enabled,
 		"model", cfg.Session.Checkpoint.Model,
 		"tokenThresholds", cfg.Session.Checkpoint.TokenThresholdPercents,
 		"turnThreshold", cfg.Session.Checkpoint.TurnThreshold)
 
-	// Initialize compaction manager with fallback support
-	// Always use PrimarySession for owner's session - no WriteToKey confusion
+	// Initialize compaction manager
+	// Always use PrimarySession for owner's session
 	compactorCfg := &session.CompactionManagerConfig{
 		ReserveTokens:          cfg.Session.Compaction.ReserveTokens,
 		PreferCheckpoint:       cfg.Session.Compaction.PreferCheckpoint,
@@ -156,7 +151,6 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 		SessionKey:             session.PrimarySession,
 	}
 	g.compactor = session.NewCompactionManager(compactorCfg)
-	g.compactor.SetWriter(g.jsonlWriter)
 	g.compactor.SetStore(g.sessions.GetStore())
 	L_debug("session: compaction manager configured",
 		"reserveTokens", cfg.Session.Compaction.ReserveTokens,
@@ -443,9 +437,108 @@ func (g *Gateway) StartSessionWatcher(ctx context.Context) error {
 
 	// Start watching with a callback to handle new records
 	return g.sessions.StartWatching(ctx, sess.SessionFile, func(records []session.Record) {
-		// Handle new records from OpenClaw (e.g., mirror to other channels)
 		L_debug("session: received new OpenClaw records", "count", len(records))
+		g.mirrorOpenClawRecords(ctx, records)
 	})
+}
+
+// mirrorOpenClawRecords sends new OpenClaw messages to all channels
+func (g *Gateway) mirrorOpenClawRecords(ctx context.Context, records []session.Record) {
+	for _, r := range records {
+		msgRec, ok := r.(*session.MessageRecord)
+		if !ok {
+			continue
+		}
+		
+		// Extract text content from message
+		var content string
+		for _, c := range msgRec.Message.Content {
+			if c.Type == "text" {
+				content = c.Text
+				break
+			}
+		}
+		
+		L_trace("session: processing OpenClaw record",
+			"role", msgRec.Message.Role,
+			"hasContent", content != "",
+			"contentLen", len(content))
+		
+		if content == "" {
+			continue
+		}
+		
+		switch msgRec.Message.Role {
+		case "user":
+			// Store user message for pairing with next assistant response
+			// Strip OpenClaw metadata formatting from user messages
+			g.lastOpenClawUserMsg = stripOpenClawMetadata(content)
+			L_debug("session: tracked OpenClaw user message", "length", len(g.lastOpenClawUserMsg))
+			
+		case "assistant":
+			// Mirror assistant response paired with the stored user message
+			userMsg := g.lastOpenClawUserMsg
+			if userMsg == "" {
+				L_debug("session: mirroring assistant without user message (may have been from previous session)")
+			}
+			g.lastOpenClawUserMsg = "" // Reset after pairing
+			
+			for _, ch := range g.channels {
+				if err := ch.SendMirror(ctx, "openclaw", userMsg, content); err != nil {
+					L_debug("session: mirror send failed", "channel", ch.Name(), "error", err)
+				}
+			}
+		}
+	}
+}
+
+// stripOpenClawMetadata removes OpenClaw's message metadata from user messages.
+// Handles: channel metadata, message IDs, media attachments, and injected instructions.
+func stripOpenClawMetadata(msg string) string {
+	lines := strings.Split(msg, "\n")
+	var result []string
+	
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		
+		// Skip empty lines
+		if trimmed == "" {
+			continue
+		}
+		
+		// Skip [message_id: N] lines
+		if strings.HasPrefix(trimmed, "[message_id:") {
+			continue
+		}
+		
+		// Skip [media attached: ...] lines
+		if strings.HasPrefix(trimmed, "[media attached:") {
+			continue
+		}
+		
+		// Skip OpenClaw's media instruction lines
+		if strings.HasPrefix(trimmed, "To send an image back") ||
+			strings.Contains(trimmed, "MEDIA:/path") ||
+			strings.Contains(trimmed, "media/path/filePath") {
+			continue
+		}
+		
+		// Strip leading metadata bracket from content lines
+		// Format: [Telegram Roelf Diedericks id:123456789 +53s 2026-02-02 21:58 GMT+2] actual content
+		if idx := strings.Index(line, "] "); idx != -1 && strings.HasPrefix(line, "[") {
+			// Check if this looks like metadata (contains "id:" or timestamp-like content)
+			prefix := line[:idx]
+			if strings.Contains(prefix, "id:") || strings.Contains(prefix, "20") {
+				line = strings.TrimSpace(line[idx+2:])
+			}
+		}
+		
+		if line != "" {
+			result = append(result, line)
+		}
+	}
+	
+	return strings.Join(result, "\n")
 }
 
 // Start begins background tasks (call after New)

@@ -20,8 +20,7 @@ type CompactionManager struct {
 	// Clients
 	ollamaClient CompactionLLMClient // Primary (cheap) - can be nil
 	mainClient   CompactionLLMClient // Fallback (main model)
-	store        Store               // SQLite access
-	writer       *JSONLWriter        // Legacy JSONL writer
+	store        Store               // Storage backend
 
 	// State (in-memory, transient)
 	ollamaFailures    int
@@ -118,11 +117,6 @@ func (m *CompactionManager) SetMainClient(client CompactionLLMClient) {
 // SetStore sets the store for persistence
 func (m *CompactionManager) SetStore(store Store) {
 	m.store = store
-}
-
-// SetWriter sets the legacy JSONL writer
-func (m *CompactionManager) SetWriter(writer *JSONLWriter) {
-	m.writer = writer
 }
 
 // GetStatus returns the current health state of the compaction manager
@@ -296,23 +290,6 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 		}
 
 		sess.SetLastRecordID(storedComp.ID)
-	} else if m.writer != nil && sessionFile != "" {
-		// Legacy: Write to JSONL
-		compactionRecord := &CompactionRecord{
-			Summary:          summary,
-			FirstKeptEntryID: firstKeptID,
-			TokensBefore:     tokensBefore,
-			Details:          details,
-			FromHook:         false,
-			FromCheckpoint:   fromCheckpoint,
-		}
-
-		err := m.writer.WriteCompactionRecord(sessionFile, sess.GetLastRecordID(), compactionRecord)
-		if err != nil {
-			return nil, fmt.Errorf("failed to write compaction record: %w", err)
-		}
-
-		sess.SetLastRecordID(compactionRecord.ID)
 	}
 
 	// Truncate messages in session
@@ -668,10 +645,8 @@ type Compactor = CompactionManager
 type CompactorConfig = CompactionManagerConfig
 
 // NewCompactor creates a CompactionManager (backwards compatibility)
-func NewCompactor(cfg *CompactorConfig, writer *JSONLWriter) *CompactionManager {
-	mgr := NewCompactionManager(cfg)
-	mgr.SetWriter(writer)
-	return mgr
+func NewCompactor(cfg *CompactorConfig) *CompactionManager {
+	return NewCompactionManager(cfg)
 }
 
 // SetLLMClient sets both Ollama and main client to the same client (backwards compatibility)
