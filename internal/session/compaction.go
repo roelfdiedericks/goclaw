@@ -269,10 +269,11 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 	// Extract file tracking details
 	details = m.extractFileDetails(sess)
 
-	// Emergency truncation keeps 20%, normal keeps 10%
-	keepPercent := 10
+	// Normal compaction keeps 50%, emergency keeps 70%
+	// This preserves more context and reduces amnesia after compaction
+	keepPercent := 50
 	if emergencyTruncation {
-		keepPercent = 20
+		keepPercent = 70
 	}
 	firstKeptID := m.findFirstKeptID(sess, keepPercent)
 
@@ -603,15 +604,16 @@ func (m *CompactionManager) extractFileDetails(sess *Session) *CompactionDetails
 // findFirstKeptID finds the ID of the first message to keep after compaction
 func (m *CompactionManager) findFirstKeptID(sess *Session, keepPercent int) string {
 	if keepPercent <= 0 {
-		keepPercent = 10
+		keepPercent = 50
 	}
 	if keepPercent > 100 {
 		keepPercent = 100
 	}
 
 	keepCount := (len(sess.Messages) * keepPercent) / 100
-	if keepCount < 5 {
-		keepCount = 5
+	// Minimum floor of 20 messages to prevent amnesia
+	if keepCount < 20 {
+		keepCount = 20
 	}
 	if keepCount > len(sess.Messages) {
 		keepCount = len(sess.Messages)

@@ -95,7 +95,6 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 		StorePath:   storePath,
 		SessionsDir: cfg.Session.Path, // For JSONL sessions
 		InheritFrom: cfg.Session.InheritFrom,
-		WriteToKey:  cfg.Session.WriteToKey,
 		WorkingDir:  cfg.Gateway.WorkingDir,
 	}
 
@@ -110,7 +109,7 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 
 	// Inherit from OpenClaw session if configured
 	if cfg.Session.Inherit && cfg.Session.InheritFrom != "" && cfg.Session.Path != "" {
-		if err := g.sessions.InheritOpenClawSession(cfg.Session.Path, cfg.Session.InheritFrom, cfg.Session.WriteToKey); err != nil {
+		if err := g.sessions.InheritOpenClawSession(cfg.Session.Path, cfg.Session.InheritFrom); err != nil {
 			L_warn("session: failed to inherit OpenClaw session (starting fresh)",
 				"inheritFrom", cfg.Session.InheritFrom,
 				"error", err)
@@ -147,17 +146,14 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 		"turnThreshold", cfg.Session.Checkpoint.TurnThreshold)
 
 	// Initialize compaction manager with fallback support
-	sessionKey := cfg.Session.WriteToKey
-	if sessionKey == "" {
-		sessionKey = session.PrimarySession
-	}
+	// Always use PrimarySession for owner's session - no WriteToKey confusion
 	compactorCfg := &session.CompactionManagerConfig{
 		ReserveTokens:          cfg.Session.Compaction.ReserveTokens,
 		PreferCheckpoint:       cfg.Session.Compaction.PreferCheckpoint,
 		RetryIntervalSeconds:   cfg.Session.Compaction.RetryIntervalSeconds,
 		OllamaFailureThreshold: cfg.Session.Compaction.OllamaFailureThreshold,
 		OllamaResetMinutes:     cfg.Session.Compaction.OllamaResetMinutes,
-		SessionKey:             sessionKey,
+		SessionKey:             session.PrimarySession,
 	}
 	g.compactor = session.NewCompactionManager(compactorCfg)
 	g.compactor.SetWriter(g.jsonlWriter)
@@ -742,7 +738,11 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			}
 
 			// Execute tool with session context
-			result, err := g.tools.Execute(ctx, response.ToolName, response.ToolInput)
+			toolCtx := tools.WithSessionContext(ctx, &tools.SessionContext{
+				Channel: req.Source,
+				ChatID:  req.ChatID,
+			})
+			result, err := g.tools.Execute(toolCtx, response.ToolName, response.ToolInput)
 
 			errStr := ""
 			if err != nil {
@@ -873,9 +873,8 @@ func (g *Gateway) GetSessionInfo(ctx context.Context, sessionKey string) (*Sessi
 
 	// Get last compaction from store
 	store := g.sessions.GetStore()
-	writeKey := g.config.Session.WriteToKey
-	if store != nil && writeKey != "" {
-		compactions, err := store.GetCompactions(ctx, writeKey)
+	if store != nil {
+		compactions, err := store.GetCompactions(ctx, session.PrimarySession)
 		if err == nil && len(compactions) > 0 {
 			info.LastCompaction = &compactions[len(compactions)-1]
 		}

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -172,6 +174,8 @@ func (c *Client) StreamMessage(
 
 	if err := stream.Err(); err != nil {
 		L_error("stream error", "error", err)
+		// Dump full error to file for debugging
+		dumpAPIError(err, c.model, len(apiMessages), len(apiTools))
 		return nil, fmt.Errorf("stream error: %w", err)
 	}
 
@@ -364,4 +368,34 @@ func convertTools(defs []tools.ToolDefinition) []anthropic.ToolUnionParam {
 	}
 
 	return result
+}
+
+// dumpAPIError writes API error details to apierror.txt for debugging
+func dumpAPIError(err error, model string, messageCount, toolCount int) {
+	content := fmt.Sprintf(`Anthropic API Error
+====================
+Timestamp: %s
+Model: %s
+Messages: %d
+Tools: %d
+
+Error:
+%v
+
+Full Error String:
+%s
+`,
+		time.Now().Format(time.RFC3339),
+		model,
+		messageCount,
+		toolCount,
+		err,
+		err.Error(),
+	)
+
+	if writeErr := os.WriteFile("apierror.txt", []byte(content), 0644); writeErr != nil {
+		L_warn("failed to write apierror.txt", "error", writeErr)
+	} else {
+		L_info("API error dumped to apierror.txt")
+	}
 }

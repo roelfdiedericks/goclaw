@@ -3,19 +3,20 @@ package session
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
-// PrimarySession is the default session key for owner's DMs/TUI
+// PrimarySession is the ONE session key for owner's DMs/TUI
+// All primary session operations use this key - no exceptions
 const PrimarySession = "primary"
 
 // Default OpenClaw session paths
 const (
 	DefaultOpenClawSessionsDir = "~/.openclaw/agents/main/sessions"
 	DefaultOpenClawSessionKey  = "agent:main:main"
-	DefaultGoClawSessionKey    = "goclaw:main:main"
 )
 
 // SessionInfo provides summary information about a session
@@ -41,7 +42,6 @@ type ManagerConfig struct {
 	// OpenClaw session inheritance (read-only)
 	SessionsDir string // Directory for OpenClaw session files (for watching)
 	InheritFrom string // Session key to inherit from (e.g., "agent:main:main")
-	WriteToKey  string // Session key to write to (e.g., "goclaw:main:main")
 	WorkingDir  string // Working directory for new sessions
 
 	// Legacy
@@ -108,14 +108,13 @@ func NewManagerWithConfig(cfg *ManagerConfig) (*Manager, error) {
 	return m, nil
 }
 
-// InheritOpenClawSession loads an OpenClaw session for inheritance.
-// We monitor the OpenClaw session file for changes to stay in sync.
-// GoClaw writes to its own session file (writeKey), not OpenClaw's.
-func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey, writeKey string) error {
+// InheritOpenClawSession loads an OpenClaw session and merges with GoClaw's own history.
+// Messages from both sources are merged chronologically by timestamp.
+// GoClaw always uses PrimarySession ("primary") for the owner's session.
+func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey string) error {
 	L_debug("session: attempting to inherit OpenClaw session",
 		"sessionsDir", sessionsDir,
-		"inheritKey", inheritKey,
-		"writeToKey", writeKey)
+		"inheritKey", inheritKey)
 	
 	if m.reader == nil {
 		m.reader = NewJSONLReader(sessionsDir)
@@ -124,26 +123,62 @@ func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey, writeKey strin
 		m.writer = NewJSONLWriter(sessionsDir)
 	}
 
+	// Load OpenClaw session from JSONL
 	sess, records, err := m.reader.LoadSession(inheritKey)
 	if err != nil {
 		if err == ErrSessionNotFound {
 			L_info("session: no OpenClaw session to inherit (starting fresh)",
 				"inheritKey", inheritKey)
-			return nil // Not an error - just start fresh
+			// Create empty session for GoClaw
+			sess = NewSession("goclaw-primary")
+		} else {
+			return fmt.Errorf("failed to load session %q: %w", inheritKey, err)
 		}
-		return fmt.Errorf("failed to load session %q: %w", inheritKey, err)
+	}
+
+	openclawMsgCount := len(sess.Messages)
+
+	// Load GoClaw's own messages from SQLite and merge
+	// Note: Runtime writes go to PrimarySession ("primary"), not writeKey
+	if m.store != nil {
+		ctx := context.Background()
+		goclawMsgs, err := m.store.GetMessages(ctx, PrimarySession, MessageQueryOpts{})
+		if err != nil {
+			L_warn("session: failed to load GoClaw messages from SQLite", "error", err)
+		} else if len(goclawMsgs) > 0 {
+			L_debug("session: loaded GoClaw messages from SQLite", "count", len(goclawMsgs))
+			
+			// Merge OpenClaw and GoClaw messages by timestamp
+			sess.Messages = mergeMessagesByTimestamp(sess.Messages, goclawMsgs)
+			
+			L_info("session: merged message histories",
+				"openclaw", openclawMsgCount,
+				"goclaw", len(goclawMsgs),
+				"merged", len(sess.Messages))
+		}
 	}
 
 	// Set up the session for GoClaw use
-	sess.Key = writeKey
-	sess.LastRecordID = GetLastRecordID(records)
-	sess.CompactionCount = GetCompactionCount(records)
-	sess.LastCheckpoint = GetMostRecentCheckpoint(records)
-	sess.TotalTokens = CalculateTotalTokens(records)
+	sess.Key = PrimarySession
+	if records != nil {
+		sess.LastRecordID = GetLastRecordID(records)
+		sess.CompactionCount = GetCompactionCount(records)
+		sess.LastCheckpoint = GetMostRecentCheckpoint(records)
+	}
+
+	// Recalculate total tokens from merged messages (not just OpenClaw records)
+	// This ensures accurate token count for compaction decisions
+	estimator := GetTokenEstimator()
+	sess.TotalTokens = estimator.EstimateSessionTokens(sess)
+	L_debug("session: recalculated tokens after merge", "totalTokens", sess.TotalTokens)
 	
 	// Set up our own session file for writing (separate from OpenClaw's)
 	if m.writer != nil {
-		_, sessionFile, err := m.writer.GetOrCreateEntry(writeKey, sess.ID+"-goclaw", sessionsDir)
+		sessionID := sess.ID
+		if sessionID == "" {
+			sessionID = "goclaw-primary"
+		}
+		_, sessionFile, err := m.writer.GetOrCreateEntry(PrimarySession, sessionID+"-goclaw", sessionsDir)
 		if err != nil {
 			L_warn("session: failed to create GoClaw session file", "error", err)
 		} else {
@@ -157,15 +192,73 @@ func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey, writeKey strin
 	m.sessions[PrimarySession] = sess
 	m.mu.Unlock()
 
-	L_info("session: inherited OpenClaw session",
+	L_info("session: initialized with merged history",
 		"inheritKey", inheritKey,
-		"writeToKey", writeKey,
+		"sessionKey", PrimarySession,
 		"messages", len(sess.Messages),
 		"totalTokens", sess.TotalTokens,
 		"compactionCount", sess.CompactionCount,
 		"hasCheckpoint", sess.LastCheckpoint != nil)
 
 	return nil
+}
+
+// mergeMessagesByTimestamp combines messages from OpenClaw (JSONL) and GoClaw (SQLite)
+// into a single chronologically ordered list, deduplicating by timestamp+role+content.
+// This handles the case where both sources have the same message with different IDs.
+func mergeMessagesByTimestamp(openclawMsgs []Message, goclawMsgs []StoredMessage) []Message {
+	// Build deduplication key: timestamp (unix seconds) + role + first 50 chars of content
+	makeKey := func(ts int64, role, content string) string {
+		contentKey := content
+		if len(contentKey) > 50 {
+			contentKey = contentKey[:50]
+		}
+		return fmt.Sprintf("%d:%s:%s", ts, role, contentKey)
+	}
+
+	// Track seen messages by dedup key
+	seen := make(map[string]bool)
+
+	// Start with OpenClaw messages
+	var result []Message
+	for _, msg := range openclawMsgs {
+		key := makeKey(msg.Timestamp.Unix(), msg.Role, msg.Content)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, msg)
+	}
+
+	// Add GoClaw messages, skipping duplicates
+	for _, sm := range goclawMsgs {
+		key := makeKey(sm.Timestamp.Unix(), sm.Role, sm.Content)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		msg := Message{
+			ID:        sm.ID,
+			Role:      sm.Role,
+			Content:   sm.Content,
+			Source:    sm.Source,
+			Timestamp: sm.Timestamp,
+			ToolUseID: sm.ToolCallID,
+			ToolName:  sm.ToolName,
+		}
+		if sm.ToolInput != nil {
+			msg.ToolInput = sm.ToolInput
+		}
+		result = append(result, msg)
+	}
+
+	// Sort by timestamp (chronological order)
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Timestamp.Before(result[j].Timestamp)
+	})
+
+	return result
 }
 
 // StartWatching begins monitoring the OpenClaw session file for changes.
