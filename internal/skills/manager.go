@@ -47,6 +47,8 @@ type ManagerConfig struct {
 
 // NewManager creates a new skill manager.
 func NewManager(cfg ManagerConfig) (*Manager, error) {
+	log.Debug("skills: creating manager")
+
 	// Resolve default paths
 	bundledDir := cfg.BundledDir
 	if bundledDir == "" {
@@ -64,6 +66,12 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 			managedDir = filepath.Join(home, ".openclaw", "skills")
 		}
 	}
+
+	log.Debug("skills: directories configured",
+		"bundled", bundledDir,
+		"managed", managedDir,
+		"workspace", cfg.WorkspaceDir,
+		"extraDirs", cfg.ExtraDirs)
 
 	m := &Manager{
 		bundledDir:   bundledDir,

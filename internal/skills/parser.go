@@ -129,9 +129,15 @@ func parseMetadataFromJSON(metadataStr string) (*OpenClawMetadata, error) {
 	// Try parsing as wrapper with openclaw key
 	var wrapper struct {
 		OpenClaw *OpenClawMetadata `json:"openclaw"`
+		ClawdBot *OpenClawMetadata `json:"clawdbot"` // Legacy name
 	}
-	if err := json.Unmarshal([]byte(metadataStr), &wrapper); err == nil && wrapper.OpenClaw != nil {
-		return wrapper.OpenClaw, nil
+	if err := json.Unmarshal([]byte(metadataStr), &wrapper); err == nil {
+		if wrapper.OpenClaw != nil {
+			return wrapper.OpenClaw, nil
+		}
+		if wrapper.ClawdBot != nil {
+			return wrapper.ClawdBot, nil
+		}
 	}
 
 	return nil, fmt.Errorf("failed to parse metadata JSON")
@@ -139,8 +145,11 @@ func parseMetadataFromJSON(metadataStr string) (*OpenClawMetadata, error) {
 
 // parseMetadataFromMap parses metadata from a YAML map
 func parseMetadataFromMap(metadataMap map[string]interface{}) (*OpenClawMetadata, error) {
-	// Look for openclaw key
+	// Look for openclaw or clawdbot key
 	openclawData, ok := metadataMap["openclaw"]
+	if !ok {
+		openclawData, ok = metadataMap["clawdbot"] // Legacy name
+	}
 	if !ok {
 		// Maybe the map IS the openclaw metadata directly
 		openclawData = metadataMap

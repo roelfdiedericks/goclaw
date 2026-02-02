@@ -27,6 +27,8 @@ type PromptParams struct {
 	MaxTokens      int // Model's context window
 	// Optional cached workspace files (if nil, loads from disk)
 	WorkspaceFiles []WorkspaceFile
+	// Skills prompt section (pre-formatted XML)
+	SkillsPrompt   string
 }
 
 // BuildSystemPrompt builds the full system prompt with workspace context injection
@@ -94,6 +96,12 @@ func BuildSystemPrompt(params PromptParams) string {
 	files = FilterForSession(files, params.IsSubagent)
 	if len(files) > 0 {
 		sections = append(sections, buildProjectContextSection(files, params.IsSubagent))
+	}
+
+	// 9b. Skills section (main agent only)
+	if !isMinimal && params.SkillsPrompt != "" {
+		sections = append(sections, params.SkillsPrompt)
+		logging.L_debug("context: skills section injected", "chars", len(params.SkillsPrompt))
 	}
 
 	// 10. Silent replies (main agent only)

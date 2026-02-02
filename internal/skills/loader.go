@@ -52,6 +52,12 @@ func NewLoader(bundledDir, managedDir, workspaceDir string, extraDirs []string) 
 // Higher precedence sources override lower ones:
 // extraDirs < bundled < managed < workspace
 func (l *Loader) LoadAll() ([]*Skill, error) {
+	log.Debug("skills: loading from all directories",
+		"bundled", l.bundledDir,
+		"managed", l.managedDir,
+		"workspace", l.workspaceDir,
+		"extraDirs", len(l.extraDirs))
+
 	// Get current cache for reuse
 	oldData := l.data.Load()
 	oldCache := oldData.cache
@@ -103,13 +109,23 @@ func (l *Loader) LoadAll() ([]*Skill, error) {
 		}{l.workspaceDir, SourceWorkspace})
 	}
 
+	totalLoaded := 0
+	totalFailed := 0
+	bySource := make(map[Source]int)
+
 	for _, src := range sources {
 		if src.path == "" {
 			continue
 		}
-		if err := l.loadFromDirectory(src.path, src.source, newSkills, newCache); err != nil {
-			log.Warn("failed to load skills from directory", "path", src.path, "error", err)
+		loaded, failed, err := l.loadFromDirectory(src.path, src.source, newSkills, newCache)
+		if err != nil {
+			log.Warn("skills: failed to load directory", "path", src.path, "error", err)
 			// Continue loading from other directories
+		}
+		totalLoaded += loaded
+		totalFailed += failed
+		if loaded > 0 {
+			bySource[src.source] = loaded
 		}
 	}
 
@@ -118,6 +134,14 @@ func (l *Loader) LoadAll() ([]*Skill, error) {
 		skills: newSkills,
 		cache:  newCache,
 	})
+
+	// Log summary at INFO level
+	log.Info("skills: loaded",
+		"total", len(newSkills),
+		"failed", totalFailed,
+		"bundled", bySource[SourceBundled],
+		"managed", bySource[SourceManaged],
+		"workspace", bySource[SourceWorkspace])
 
 	// Build result slice
 	skills := make([]*Skill, 0, len(newSkills))
@@ -132,24 +156,29 @@ func (l *Loader) LoadAll() ([]*Skill, error) {
 }
 
 // loadFromDirectory scans a directory for SKILL.md files and loads them.
-func (l *Loader) loadFromDirectory(dir string, source Source, skills map[string]*Skill, cache map[string]skillCacheEntry) error {
+func (l *Loader) loadFromDirectory(dir string, source Source, skills map[string]*Skill, cache map[string]skillCacheEntry) (loaded int, failed int, err error) {
 	// Check if directory exists
 	info, err := os.Stat(dir)
 	if os.IsNotExist(err) {
-		log.Debug("skill directory does not exist", "path", dir)
-		return nil
+		log.Debug("skills: directory does not exist", "path", dir, "source", source)
+		return 0, 0, nil
 	}
 	if err != nil {
-		return err
+		log.Warn("skills: failed to stat directory", "path", dir, "error", err)
+		return 0, 0, err
 	}
 	if !info.IsDir() {
-		return nil
+		log.Debug("skills: path is not a directory", "path", dir)
+		return 0, 0, nil
 	}
+
+	log.Debug("skills: scanning directory", "path", dir, "source", source)
 
 	// Walk directory looking for SKILL.md files
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return err
+		log.Warn("skills: failed to read directory", "path", dir, "error", err)
+		return 0, 0, err
 	}
 
 	for _, entry := range entries {
@@ -164,28 +193,32 @@ func (l *Loader) loadFromDirectory(dir string, source Source, skills map[string]
 
 		skill, err := l.loadSkill(skillPath, source, cache)
 		if err != nil {
-			log.Warn("failed to load skill",
+			log.Warn("skills: failed to load skill",
+				"skill", entry.Name(),
 				"path", skillPath,
 				"error", err)
+			failed++
 			continue
 		}
+
+		loaded++
 
 		// Store with precedence (later sources override earlier ones)
 		existing, exists := skills[skill.Name]
 		if exists {
-			log.Debug("skill overridden by higher precedence",
+			log.Debug("skills: overridden by higher precedence",
 				"name", skill.Name,
 				"old_source", existing.Source,
 				"new_source", skill.Source)
 		}
 		skills[skill.Name] = skill
-		log.Debug("loaded skill",
+		log.Debug("skills: loaded",
 			"name", skill.Name,
-			"source", skill.Source,
-			"path", skill.Location)
+			"source", skill.Source)
 	}
 
-	return nil
+	log.Debug("skills: directory scan complete", "path", dir, "loaded", loaded, "failed", failed)
+	return loaded, failed, nil
 }
 
 // loadSkill loads a single skill file, using cache if available.

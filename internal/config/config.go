@@ -22,6 +22,27 @@ type Config struct {
 	PromptCache  PromptCacheConfig     `json:"promptCache"`
 	Media        MediaConfig           `json:"media"`
 	TUI          TUIConfig             `json:"tui"`
+	Skills       SkillsConfig          `json:"skills"`
+}
+
+// SkillsConfig configures the skills system
+type SkillsConfig struct {
+	Enabled       bool                        `json:"enabled"`
+	BundledDir    string                      `json:"bundledDir"`    // Override bundled skills path
+	ManagedDir    string                      `json:"managedDir"`    // Override managed skills path
+	WorkspaceDir  string                      `json:"workspaceDir"`  // Override workspace skills path
+	ExtraDirs     []string                    `json:"extraDirs"`     // Additional skill directories
+	Watch         bool                        `json:"watch"`         // Watch for file changes
+	WatchDebounce int                         `json:"watchDebounceMs"` // Debounce interval in ms
+	Entries       map[string]SkillEntryConfig `json:"entries"`       // Per-skill configuration
+}
+
+// SkillEntryConfig holds per-skill configuration
+type SkillEntryConfig struct {
+	Enabled bool              `json:"enabled"`
+	APIKey  string            `json:"apiKey,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	Config  map[string]any    `json:"config,omitempty"`
 }
 
 // MediaConfig configures media file storage
@@ -302,6 +323,12 @@ func Load() (*Config, error) {
 		},
 		TUI: TUIConfig{
 			ShowLogs: true, // Show logs panel by default
+		},
+		Skills: SkillsConfig{
+			Enabled:       true,
+			Watch:         true,
+			WatchDebounce: 500,
+			Entries:       make(map[string]SkillEntryConfig),
 		},
 	}
 

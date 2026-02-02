@@ -16,6 +16,7 @@ type SessionProvider interface {
 	ForceCompact(ctx context.Context, sessionKey string) (*session.CompactionResult, error)
 	ResetSession(sessionKey string) error
 	GetCompactionStatus(ctx context.Context) session.CompactionStatus
+	GetSkillsStatusSection() string
 }
 
 // SessionInfo contains session status (mirrors gateway.SessionInfo)
@@ -178,6 +179,18 @@ func (h *Handler) handleStatus(ctx context.Context, sessionKey string) *CommandR
 			text.WriteString(fmt.Sprintf("  Summary: %s\n", summary))
 			md.WriteString(fmt.Sprintf("Summary: %s\n", summary))
 		}
+	}
+
+	// Add skills info
+	skillsSection := h.provider.GetSkillsStatusSection()
+	if skillsSection != "" {
+		text.WriteString("\n")
+		text.WriteString(skillsSection)
+		text.WriteString("\n")
+
+		md.WriteString("\n*")
+		md.WriteString(skillsSection)
+		md.WriteString("*\n")
 	}
 
 	return &CommandResult{
