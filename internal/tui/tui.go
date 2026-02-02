@@ -302,6 +302,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Continue listening for more logs
 		cmds = append(cmds, m.waitForLog())
 
+	case compactResultMsg:
+		// Display compaction result
+		for _, line := range strings.Split(msg.result, "\n") {
+			if line != "" {
+				m.chatLines = append(m.chatLines, helpStyle.Render(line))
+			}
+		}
+		m.chatLines = append(m.chatLines, "")
+		m.chatViewport.SetContent(m.getChatContent())
+		m.chatViewport.GotoBottom()
+
 	case mirrorMsg:
 		// Display mirrored conversation from another channel
 		m.chatLines = append(m.chatLines,
@@ -497,34 +508,77 @@ func (m *Model) waitForEvent() tea.Cmd {
 // handleCommand processes slash commands
 func (m Model) handleCommand(cmd string) (tea.Model, tea.Cmd) {
 	m.input.Reset()
-	
-	switch cmd {
+	sessionKey := "user:" + m.user.ID
+
+	switch strings.ToLower(strings.TrimSpace(cmd)) {
 	case "/exit", "/quit":
 		m.cancel()
 		return m, tea.Quit
-	case "/clear", "/reset":
-		m.chatLines = []string{assistantStyle.Render("Chat cleared."), ""}
-		m.currentLine = ""
-		m.chatViewport.SetContent(m.getChatContent())
-		// Also reset the session
-		m.gateway.ResetSession("user:" + m.user.ID)
-	case "/help":
+
+	case "/status":
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		result := m.gateway.CommandHandler().Execute(ctx, "/status", sessionKey)
 		m.chatLines = append(m.chatLines,
-			helpStyle.Render("Commands:"),
-			helpStyle.Render("  /clear, /reset - Clear chat history"),
-			helpStyle.Render("  /exit, /quit - Exit the TUI"),
-			helpStyle.Render("  /help - Show this help"),
+			helpStyle.Render("Session Status"),
+			"",
+		)
+		// Split the result into lines for proper display
+		for _, line := range strings.Split(result.Text, "\n") {
+			if line != "" {
+				m.chatLines = append(m.chatLines, helpStyle.Render(line))
+			}
+		}
+		m.chatLines = append(m.chatLines, "")
+		m.chatViewport.SetContent(m.getChatContent())
+		m.chatViewport.GotoBottom()
+
+	case "/compact":
+		// Show "working" message
+		m.chatLines = append(m.chatLines,
+			helpStyle.Render("Compacting session... (this may take a minute)"),
 			"",
 		)
 		m.chatViewport.SetContent(m.getChatContent())
+		m.chatViewport.GotoBottom()
+
+		// Run compaction in background
+		return m, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			result := m.gateway.CommandHandler().Execute(ctx, "/compact", sessionKey)
+			return compactResultMsg{result: result.Text}
+		}
+
+	case "/clear", "/reset":
+		result := m.gateway.CommandHandler().Execute(m.ctx, "/clear", sessionKey)
+		m.chatLines = []string{assistantStyle.Render(result.Text), ""}
+		m.currentLine = ""
+		m.chatViewport.SetContent(m.getChatContent())
+
+	case "/help":
+		result := m.gateway.CommandHandler().Execute(m.ctx, "/help", sessionKey)
+		for _, line := range strings.Split(result.Text, "\n") {
+			m.chatLines = append(m.chatLines, helpStyle.Render(line))
+		}
+		m.chatLines = append(m.chatLines, "")
+		m.chatViewport.SetContent(m.getChatContent())
+		m.chatViewport.GotoBottom()
+
 	default:
 		m.chatLines = append(m.chatLines,
 			errorStyle.Render(fmt.Sprintf("Unknown command: %s", cmd)),
+			helpStyle.Render("Type /help for available commands."),
 			"",
 		)
 		m.chatViewport.SetContent(m.getChatContent())
 	}
 	return m, nil
+}
+
+// compactResultMsg is sent when compaction completes
+type compactResultMsg struct {
+	result string
 }
 
 // getChatContent returns the full chat content as a string

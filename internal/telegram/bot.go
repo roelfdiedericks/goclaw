@@ -90,108 +90,47 @@ func (b *Bot) setupHandlers() {
 
 	// Handle /help command
 	b.bot.Handle("/help", func(c tele.Context) error {
-		help := `*GoClaw Commands*
-
-/start - Start the bot
-/help - Show this help
-/status - Show session info and last compaction
-/clear - Clear conversation history
-/compact - Force context compaction
-
-Just send a message to chat with me!`
-		return c.Send(help, &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+		result := b.gateway.CommandHandler().Execute(b.ctx, "/help", "")
+		return c.Send(result.Markdown, &tele.SendOptions{ParseMode: tele.ModeMarkdown})
 	})
 
 	// Handle /status command
 	b.bot.Handle("/status", func(c tele.Context) error {
-		userID := fmt.Sprintf("%d", c.Sender().ID)
-		u := b.users.FromIdentity("telegram", userID)
-		if u == nil {
-			return c.Send("You're not authorized to use this bot.")
-		}
-
-		// Owner uses primary session
-		var sessionKey string
-		if u.Role == "owner" {
-			sessionKey = session.PrimarySession
-		} else {
-			sessionKey = fmt.Sprintf("user:%s", u.ID)
+		sessionKey, err := b.getSessionKey(c)
+		if err != nil {
+			return c.Send(err.Error())
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		info, err := b.gateway.GetSessionInfo(ctx, sessionKey)
-		if err != nil {
-			return c.Send(fmt.Sprintf("Error: %s", err))
-		}
-
-		// Build status message
-		status := fmt.Sprintf(`*Session Status*
-
-Messages: %d
-Tokens: %d / %d (%.1f%%)
-Compactions: %d`,
-			info.Messages,
-			info.TotalTokens,
-			info.MaxTokens,
-			info.UsagePercent,
-			info.CompactionCount)
-
-		if info.LastCompaction != nil {
-			status += fmt.Sprintf(`
-
-*Last Compaction* (%s)
-Tokens before: %d
-Summary:
-%s`,
-				info.LastCompaction.Timestamp.Format("2006-01-02 15:04"),
-				info.LastCompaction.TokensBefore,
-				info.LastCompaction.Summary)
-		}
+		result := b.gateway.CommandHandler().Execute(ctx, "/status", sessionKey)
 
 		// Telegram has a 4096 char limit, truncate if needed
-		if len(status) > 4000 {
-			status = status[:4000] + "..."
+		msg := result.Markdown
+		if len(msg) > 4000 {
+			msg = msg[:4000] + "..."
 		}
 
-		return c.Send(status, &tele.SendOptions{ParseMode: tele.ModeMarkdown})
+		return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeMarkdown})
 	})
 
 	// Handle /clear command
 	b.bot.Handle("/clear", func(c tele.Context) error {
-		userID := fmt.Sprintf("%d", c.Sender().ID)
-		u := b.users.FromIdentity("telegram", userID)
-		if u == nil {
-			return c.Send("You're not authorized to use this bot.")
+		sessionKey, err := b.getSessionKey(c)
+		if err != nil {
+			return c.Send(err.Error())
 		}
-		
-		// Owner uses primary session (inherited from OpenClaw), others use user-specific
-		var sessionKey string
-		if u.Role == "owner" {
-			sessionKey = session.PrimarySession
-		} else {
-			sessionKey = fmt.Sprintf("user:%s", u.ID)
-		}
-		
-		b.gateway.ResetSession(sessionKey)
-		return c.Send("Conversation cleared.")
+
+		result := b.gateway.CommandHandler().Execute(b.ctx, "/clear", sessionKey)
+		return c.Send(result.Text)
 	})
 
 	// Handle /compact command
 	b.bot.Handle("/compact", func(c tele.Context) error {
-		userID := fmt.Sprintf("%d", c.Sender().ID)
-		u := b.users.FromIdentity("telegram", userID)
-		if u == nil {
-			return c.Send("You're not authorized to use this bot.")
-		}
-
-		// Owner uses primary session (inherited from OpenClaw), others use user-specific
-		var sessionKey string
-		if u.Role == "owner" {
-			sessionKey = session.PrimarySession
-		} else {
-			sessionKey = fmt.Sprintf("user:%s", u.ID)
+		sessionKey, err := b.getSessionKey(c)
+		if err != nil {
+			return c.Send(err.Error())
 		}
 
 		// Send "working" message
@@ -200,25 +139,30 @@ Summary:
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 
-		result, err := b.gateway.ForceCompact(ctx, sessionKey)
-		if err != nil {
-			if msg != nil {
-				c.Bot().Edit(msg, fmt.Sprintf("Compaction failed: %s", err))
-			}
-			return nil
-		}
-
-		summary := fmt.Sprintf("Compaction complete!\n\nTokens before: %d\nSummary: %s",
-			result.TokensBefore,
-			truncate(result.Summary, 200))
+		result := b.gateway.CommandHandler().Execute(ctx, "/compact", sessionKey)
 
 		if msg != nil {
-			c.Bot().Edit(msg, summary)
+			c.Bot().Edit(msg, result.Markdown, &tele.SendOptions{ParseMode: tele.ModeMarkdown})
 		} else {
-			c.Send(summary)
+			c.Send(result.Markdown, &tele.SendOptions{ParseMode: tele.ModeMarkdown})
 		}
 		return nil
 	})
+}
+
+// getSessionKey returns the session key for the current user
+func (b *Bot) getSessionKey(c tele.Context) (string, error) {
+	userID := fmt.Sprintf("%d", c.Sender().ID)
+	u := b.users.FromIdentity("telegram", userID)
+	if u == nil {
+		return "", fmt.Errorf("You're not authorized to use this bot.")
+	}
+
+	// Owner uses primary session (inherited from OpenClaw), others use user-specific
+	if u.Role == "owner" {
+		return session.PrimarySession, nil
+	}
+	return fmt.Sprintf("user:%s", u.ID), nil
 }
 
 // handleMessage handles incoming text messages
