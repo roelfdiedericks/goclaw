@@ -27,10 +27,11 @@ type Skill struct {
 	Metadata *OpenClawMetadata
 
 	// Runtime state
-	Eligible   bool           // Passes eligibility checks
-	Enabled    bool           // Not disabled by config or audit
-	AuditFlags []AuditWarning // Security warnings found
-	LoadedAt   time.Time
+	Eligible    bool           // Passes eligibility checks
+	Enabled     bool           // Not disabled by config or audit
+	Whitelisted bool           // Manually enabled via config despite audit flags
+	AuditFlags  []AuditWarning // Security warnings found
+	LoadedAt    time.Time
 }
 
 // Frontmatter represents the YAML frontmatter of a SKILL.md file

@@ -18,11 +18,12 @@ type SessionProvider interface {
 
 // SkillsListResult contains skill listing for /skills command
 type SkillsListResult struct {
-	Total      int
-	Eligible   int
-	Ineligible int
-	Flagged    int
-	Skills     []SkillInfo
+	Total       int
+	Eligible    int
+	Ineligible  int
+	Flagged     int
+	Whitelisted int
+	Skills      []SkillInfo
 }
 
 // SkillInfo contains info about a single skill

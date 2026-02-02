@@ -188,6 +188,131 @@ Flagged Skills: 1
   - suspicious-skill (disabled): env_file, webhook_site
 ```
 
+### /skills
+
+Lists all skills with their status. See the Skills Tool section below.
+
+## Skills Tool
+
+The `skills` tool provides structured access to the skills registry for the agent. This is the preferred way to query skills programmatically rather than manually reading SKILL.md files.
+
+### Actions
+
+#### list
+
+List all skills with optional filtering.
+
+**Input:**
+```json
+{
+  "action": "list",
+  "filter": "eligible",
+  "verbose": false
+}
+```
+
+**Filters:** `all`, `eligible`, `ineligible`, `flagged`, `whitelisted`
+
+**Output:**
+```json
+{
+  "count": 11,
+  "filter": "eligible",
+  "skills": [
+    {
+      "name": "weather",
+      "emoji": "🌤️",
+      "description": "Get current weather and forecasts",
+      "status": "eligible",
+      "source": "bundled"
+    }
+  ]
+}
+```
+
+With `verbose: true`, includes `path` and `requires` fields.
+
+#### info
+
+Get detailed information about a specific skill.
+
+**Input:**
+```json
+{
+  "action": "info",
+  "skill": "himalaya"
+}
+```
+
+**Output:**
+```json
+{
+  "name": "himalaya",
+  "emoji": "📧",
+  "description": "CLI to manage emails via IMAP/SMTP",
+  "status": "ineligible",
+  "path": "/home/user/.openclaw/workspace/goclaw/skills/himalaya/SKILL.md",
+  "source": "bundled",
+  "requires": {
+    "bins": ["himalaya"]
+  },
+  "missing": ["binary: himalaya"],
+  "install": [
+    {
+      "id": "brew",
+      "kind": "brew",
+      "label": "Install via Homebrew",
+      "command": "brew install himalaya"
+    }
+  ]
+}
+```
+
+#### check
+
+Check why a skill is ineligible and get fix suggestions.
+
+**Input:**
+```json
+{
+  "action": "check",
+  "skill": "video-frames"
+}
+```
+
+**Output (ineligible):**
+```json
+{
+  "name": "video-frames",
+  "eligible": false,
+  "reasons": ["binary: ffmpeg"],
+  "fixes": ["brew install ffmpeg", "apt install ffmpeg"]
+}
+```
+
+**Output (flagged):**
+```json
+{
+  "name": "suspicious-skill",
+  "eligible": false,
+  "reasons": ["Security flag: env_file (warn)"],
+  "fixes": ["{\"skills\":{\"entries\":{\"suspicious-skill\":{\"enabled\":true}}}}"]
+}
+```
+
+### Status Values
+
+- `eligible` - Ready to use
+- `ineligible` - Missing requirements (binaries, env vars, wrong OS)
+- `flagged` - Disabled by security auditor
+- `whitelisted` - Manually enabled despite audit flags
+
+### Future Extensions
+
+Future versions may support:
+- `search` - Search skill registries (clawdhub.com, etc.)
+- `install` - Install skills from approved registries with audit
+
 ## Syncing Bundled Skills
 
 GoClaw bundled skills are synced from OpenClaw. To update:

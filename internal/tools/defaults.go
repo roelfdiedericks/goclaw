@@ -4,6 +4,7 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
+	"github.com/roelfdiedericks/goclaw/internal/skills"
 )
 
 // ToolsConfig holds configuration for tools
@@ -14,6 +15,7 @@ type ToolsConfig struct {
 	BrowserEnabled bool
 	MemoryManager  *memory.Manager
 	MediaStore     *media.MediaStore
+	SkillsManager  *skills.Manager
 }
 
 // RegisterDefaults registers the default set of tools
@@ -53,5 +55,13 @@ func RegisterDefaults(reg *Registry, cfg ToolsConfig) {
 		L_debug("tools: memory_search and memory_get registered")
 	} else {
 		L_debug("tools: memory tools skipped (no manager)")
+	}
+
+	// Skills tool
+	if cfg.SkillsManager != nil {
+		reg.Register(NewSkillsTool(cfg.SkillsManager))
+		L_debug("tools: skills registered")
+	} else {
+		L_debug("tools: skills skipped (no manager)")
 	}
 }
