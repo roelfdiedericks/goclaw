@@ -228,6 +228,9 @@ func runGateway(ctx *Context, useTUI bool) error {
 		// Continue anyway - we just won't get live updates
 	}
 
+	// Start gateway background tasks (compaction retry, etc.)
+	gw.Start(runCtx)
+
 	// Handle signals
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

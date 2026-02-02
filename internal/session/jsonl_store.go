@@ -434,6 +434,26 @@ func (s *JSONLStore) GetCompactions(ctx context.Context, sessionKey string) ([]S
 	return compactions, nil
 }
 
+// GetPendingSummaryRetry is not supported by JSONL store
+func (s *JSONLStore) GetPendingSummaryRetry(ctx context.Context) (*StoredCompaction, error) {
+	return nil, fmt.Errorf("GetPendingSummaryRetry not supported by JSONL store")
+}
+
+// UpdateCompactionSummary is not supported by JSONL store
+func (s *JSONLStore) UpdateCompactionSummary(ctx context.Context, compactionID string, summary string) error {
+	return fmt.Errorf("UpdateCompactionSummary not supported by JSONL store")
+}
+
+// GetMessagesInRange is not supported by JSONL store
+func (s *JSONLStore) GetMessagesInRange(ctx context.Context, sessionKey string, startAfterID, endBeforeID string) ([]StoredMessage, error) {
+	return nil, fmt.Errorf("GetMessagesInRange not supported by JSONL store")
+}
+
+// GetPreviousCompaction is not supported by JSONL store
+func (s *JSONLStore) GetPreviousCompaction(ctx context.Context, sessionKey string, beforeTimestamp time.Time) (*StoredCompaction, error) {
+	return nil, fmt.Errorf("GetPreviousCompaction not supported by JSONL store")
+}
+
 // Close is a no-op for JSONL store (no persistent connections)
 func (s *JSONLStore) Close() error {
 	L_debug("jsonl_store: closed")

@@ -125,19 +125,37 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 		"tokenThresholds", cfg.Session.Checkpoint.TokenThresholdPercents,
 		"turnThreshold", cfg.Session.Checkpoint.TurnThreshold)
 
-	// Initialize compactor
-	compactorCfg := &session.CompactorConfig{
-		ReserveTokens:    cfg.Session.Compaction.ReserveTokens,
-		PreferCheckpoint: cfg.Session.Compaction.PreferCheckpoint,
+	// Initialize compaction manager with fallback support
+	sessionKey := cfg.Session.WriteToKey
+	if sessionKey == "" {
+		sessionKey = session.PrimarySession
 	}
-	g.compactor = session.NewCompactor(compactorCfg, g.jsonlWriter)
-	L_debug("session: compactor configured",
+	compactorCfg := &session.CompactionManagerConfig{
+		ReserveTokens:          cfg.Session.Compaction.ReserveTokens,
+		PreferCheckpoint:       cfg.Session.Compaction.PreferCheckpoint,
+		RetryIntervalSeconds:   cfg.Session.Compaction.RetryIntervalSeconds,
+		OllamaFailureThreshold: cfg.Session.Compaction.OllamaFailureThreshold,
+		OllamaResetMinutes:     cfg.Session.Compaction.OllamaResetMinutes,
+		SessionKey:             sessionKey,
+	}
+	g.compactor = session.NewCompactionManager(compactorCfg)
+	g.compactor.SetWriter(g.jsonlWriter)
+	g.compactor.SetStore(g.sessions.GetStore())
+	L_debug("session: compaction manager configured",
 		"reserveTokens", cfg.Session.Compaction.ReserveTokens,
-		"preferCheckpoint", cfg.Session.Compaction.PreferCheckpoint)
+		"preferCheckpoint", cfg.Session.Compaction.PreferCheckpoint,
+		"retryInterval", cfg.Session.Compaction.RetryIntervalSeconds,
+		"ollamaFailureThreshold", cfg.Session.Compaction.OllamaFailureThreshold,
+		"ollamaResetMinutes", cfg.Session.Compaction.OllamaResetMinutes)
+
+	// Create main model adapter (always available as fallback)
+	mainAdapter := session.NewLLMAdapterFunc(llmClient.SimpleMessage, llmClient.Model())
+	g.compactor.SetMainClient(mainAdapter)
+	g.checkpointGenerator.SetLLMClients(mainAdapter, mainAdapter)
 
 	// Initialize Ollama client for compaction/checkpoints if configured
 	if cfg.Session.Compaction.Ollama.URL != "" && cfg.Session.Compaction.Ollama.Model != "" {
-		L_info("compaction: using ollama model",
+		L_info("compaction: using ollama as primary model",
 			"url", cfg.Session.Compaction.Ollama.URL,
 			"model", cfg.Session.Compaction.Ollama.Model)
 
@@ -149,16 +167,16 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 		)
 		g.ollamaClient = ollamaClient
 
-		// Create adapter and set as LLM client for both checkpoint and compaction
+		// Create adapter and set as primary for compaction (main is already set as fallback)
 		ollamaAdapter := session.NewLLMAdapterFunc(ollamaClient.SimpleMessage, ollamaClient.Model())
-		g.checkpointGenerator.SetLLMClients(ollamaAdapter, ollamaAdapter)
-		g.compactor.SetLLMClient(ollamaAdapter)
+		g.compactor.SetOllamaClient(ollamaAdapter)
+		g.checkpointGenerator.SetLLMClients(ollamaAdapter, mainAdapter)
+
+		L_info("compaction: fallback to main model after failures",
+			"threshold", compactorCfg.OllamaFailureThreshold,
+			"resetMinutes", compactorCfg.OllamaResetMinutes)
 	} else {
-		// Use main Anthropic model for compaction/checkpoints
-		L_debug("compaction: using main anthropic model (ollama not configured)")
-		llmAdapter := session.NewLLMAdapterFunc(llmClient.SimpleMessage, llmClient.Model())
-		g.checkpointGenerator.SetLLMClients(llmAdapter, llmAdapter)
-		g.compactor.SetLLMClient(llmAdapter)
+		L_debug("compaction: using main model only (ollama not configured)")
 	}
 
 	// Initialize memory manager if enabled
@@ -253,9 +271,24 @@ func (g *Gateway) StartSessionWatcher(ctx context.Context) error {
 	})
 }
 
+// Start begins background tasks (call after New)
+func (g *Gateway) Start(ctx context.Context) {
+	L_info("gateway: starting background tasks")
+
+	// Start compaction manager background retry
+	if g.compactor != nil {
+		g.compactor.Start(ctx)
+	}
+}
+
 // Shutdown gracefully shuts down the gateway
 func (g *Gateway) Shutdown() {
 	L_info("gateway: shutting down")
+
+	// Stop compaction manager background tasks
+	if g.compactor != nil {
+		g.compactor.Stop()
+	}
 
 	if g.promptCache != nil {
 		g.promptCache.Close()

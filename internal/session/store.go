@@ -29,6 +29,12 @@ type Store interface {
 	AppendCompaction(ctx context.Context, sessionKey string, comp *StoredCompaction) error
 	GetCompactions(ctx context.Context, sessionKey string) ([]StoredCompaction, error)
 
+	// Compaction retry operations
+	GetPendingSummaryRetry(ctx context.Context) (*StoredCompaction, error)
+	UpdateCompactionSummary(ctx context.Context, compactionID string, summary string) error
+	GetMessagesInRange(ctx context.Context, sessionKey string, startAfterID, endBeforeID string) ([]StoredMessage, error)
+	GetPreviousCompaction(ctx context.Context, sessionKey string, beforeTimestamp time.Time) (*StoredCompaction, error)
+
 	// Lifecycle
 	Close() error
 	Migrate() error // Run schema migrations
