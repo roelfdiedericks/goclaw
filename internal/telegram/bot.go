@@ -10,6 +10,7 @@ import (
 
 	tele "gopkg.in/telebot.v4"
 
+	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -83,71 +84,63 @@ func (b *Bot) setupHandlers() {
 	// Handle photo messages
 	b.bot.Handle(tele.OnPhoto, b.handlePhoto)
 
-	// Handle /start command
+	// Handle /start command (Telegram-specific, not in global registry)
 	b.bot.Handle("/start", func(c tele.Context) error {
 		return c.Send("Hello! I'm GoClaw, your AI assistant. Send me a message to get started.")
 	})
 
-	// Handle /help command
-	b.bot.Handle("/help", func(c tele.Context) error {
-		result := b.gateway.CommandHandler().Execute(b.ctx, "/help", "")
-		return c.Send(result.Markdown, &tele.SendOptions{ParseMode: tele.ModeMarkdown})
-	})
+	// Register handlers for all commands in the global registry
+	mgr := commands.GetManager()
+	for _, cmd := range mgr.List() {
+		cmdName := cmd.Name // capture for closure
+		
+		// Special handling for long-running commands
+		if cmdName == "/compact" {
+			b.bot.Handle(cmdName, func(c tele.Context) error {
+				sessionKey, err := b.getSessionKey(c)
+				if err != nil {
+					return c.Send(err.Error())
+				}
 
-	// Handle /status command
-	b.bot.Handle("/status", func(c tele.Context) error {
-		sessionKey, err := b.getSessionKey(c)
-		if err != nil {
-			return c.Send(err.Error())
+				// Send "working" message
+				msg, _ := c.Bot().Send(c.Chat(), "Compacting session... (this may take a minute)")
+
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+				defer cancel()
+
+				result := mgr.Execute(ctx, cmdName, sessionKey)
+
+				if msg != nil {
+					c.Bot().Edit(msg, FormatMessage(result.Markdown), &tele.SendOptions{ParseMode: tele.ModeHTML})
+				} else {
+					c.Send(FormatMessage(result.Markdown), &tele.SendOptions{ParseMode: tele.ModeHTML})
+				}
+				return nil
+			})
+			continue
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+		// Standard command handler
+		b.bot.Handle(cmdName, func(c tele.Context) error {
+			sessionKey, err := b.getSessionKey(c)
+			if err != nil {
+				return c.Send(err.Error())
+			}
 
-		result := b.gateway.CommandHandler().Execute(ctx, "/status", sessionKey)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
 
-		// Telegram has a 4096 char limit, truncate if needed
-		msg := result.Markdown
-		if len(msg) > 4000 {
-			msg = msg[:4000] + "..."
-		}
+			result := mgr.Execute(ctx, cmdName, sessionKey)
 
-		return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeMarkdown})
-	})
+			// Telegram has a 4096 char limit, truncate if needed
+			msg := FormatMessage(result.Markdown)
+			if len(msg) > 4000 {
+				msg = msg[:4000] + "..."
+			}
 
-	// Handle /clear command
-	b.bot.Handle("/clear", func(c tele.Context) error {
-		sessionKey, err := b.getSessionKey(c)
-		if err != nil {
-			return c.Send(err.Error())
-		}
-
-		result := b.gateway.CommandHandler().Execute(b.ctx, "/clear", sessionKey)
-		return c.Send(result.Text)
-	})
-
-	// Handle /compact command
-	b.bot.Handle("/compact", func(c tele.Context) error {
-		sessionKey, err := b.getSessionKey(c)
-		if err != nil {
-			return c.Send(err.Error())
-		}
-
-		// Send "working" message
-		msg, _ := c.Bot().Send(c.Chat(), "Compacting session... (this may take a minute)")
-
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		defer cancel()
-
-		result := b.gateway.CommandHandler().Execute(ctx, "/compact", sessionKey)
-
-		if msg != nil {
-			c.Bot().Edit(msg, result.Markdown, &tele.SendOptions{ParseMode: tele.ModeMarkdown})
-		} else {
-			c.Send(result.Markdown, &tele.SendOptions{ParseMode: tele.ModeMarkdown})
-		}
-		return nil
-	})
+			return c.Send(msg, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		})
+	}
 }
 
 // getSessionKey returns the session key for the current user

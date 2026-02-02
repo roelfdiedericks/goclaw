@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/user"
@@ -505,36 +506,33 @@ func (m *Model) waitForEvent() tea.Cmd {
 	}
 }
 
-// handleCommand processes slash commands
+// handleCommand processes slash commands via the global command manager
 func (m Model) handleCommand(cmd string) (tea.Model, tea.Cmd) {
 	m.input.Reset()
 	sessionKey := "user:" + m.user.ID
+	cmdLower := strings.ToLower(strings.TrimSpace(cmd))
 
-	switch strings.ToLower(strings.TrimSpace(cmd)) {
+	// TUI-specific commands (not in global registry)
+	switch cmdLower {
 	case "/exit", "/quit":
 		m.cancel()
 		return m, tea.Quit
+	}
 
-	case "/status":
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		result := m.gateway.CommandHandler().Execute(ctx, "/status", sessionKey)
+	// Check if command exists in registry
+	mgr := commands.GetManager()
+	if mgr.Get(cmdLower) == nil {
 		m.chatLines = append(m.chatLines,
-			helpStyle.Render("Session Status"),
+			errorStyle.Render(fmt.Sprintf("Unknown command: %s", cmd)),
+			helpStyle.Render("Type /help for available commands."),
 			"",
 		)
-		// Split the result into lines for proper display
-		for _, line := range strings.Split(result.Text, "\n") {
-			if line != "" {
-				m.chatLines = append(m.chatLines, helpStyle.Render(line))
-			}
-		}
-		m.chatLines = append(m.chatLines, "")
 		m.chatViewport.SetContent(m.getChatContent())
-		m.chatViewport.GotoBottom()
+		return m, nil
+	}
 
-	case "/compact":
-		// Show "working" message
+	// Special handling for long-running commands
+	if cmdLower == "/compact" {
 		m.chatLines = append(m.chatLines,
 			helpStyle.Render("Compacting session... (this may take a minute)"),
 			"",
@@ -542,54 +540,38 @@ func (m Model) handleCommand(cmd string) (tea.Model, tea.Cmd) {
 		m.chatViewport.SetContent(m.getChatContent())
 		m.chatViewport.GotoBottom()
 
-		// Run compaction in background
 		return m, func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
-			result := m.gateway.CommandHandler().Execute(ctx, "/compact", sessionKey)
+			result := mgr.Execute(ctx, cmdLower, sessionKey)
 			return compactResultMsg{result: result.Text}
 		}
+	}
 
-	case "/clear", "/reset":
-		result := m.gateway.CommandHandler().Execute(m.ctx, "/clear", sessionKey)
+	// Special handling for /clear (resets display)
+	if cmdLower == "/clear" || cmdLower == "/reset" {
+		result := mgr.Execute(m.ctx, cmdLower, sessionKey)
 		m.chatLines = []string{assistantStyle.Render(result.Text), ""}
 		m.currentLine = ""
 		m.chatViewport.SetContent(m.getChatContent())
+		return m, nil
+	}
 
-	case "/help":
-		result := m.gateway.CommandHandler().Execute(m.ctx, "/help", sessionKey)
-		for _, line := range strings.Split(result.Text, "\n") {
+	// Standard command execution
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	result := mgr.Execute(ctx, cmdLower, sessionKey)
+
+	// Display result
+	for _, line := range strings.Split(result.Text, "\n") {
+		if line != "" {
 			m.chatLines = append(m.chatLines, helpStyle.Render(line))
 		}
-		m.chatLines = append(m.chatLines, "")
-		m.chatViewport.SetContent(m.getChatContent())
-		m.chatViewport.GotoBottom()
-
-	case "/skills":
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		result := m.gateway.CommandHandler().Execute(ctx, "/skills", sessionKey)
-		m.chatLines = append(m.chatLines,
-			helpStyle.Render("Available Skills"),
-			"",
-		)
-		for _, line := range strings.Split(result.Text, "\n") {
-			if line != "" {
-				m.chatLines = append(m.chatLines, helpStyle.Render(line))
-			}
-		}
-		m.chatLines = append(m.chatLines, "")
-		m.chatViewport.SetContent(m.getChatContent())
-		m.chatViewport.GotoBottom()
-
-	default:
-		m.chatLines = append(m.chatLines,
-			errorStyle.Render(fmt.Sprintf("Unknown command: %s", cmd)),
-			helpStyle.Render("Type /help for available commands."),
-			"",
-		)
-		m.chatViewport.SetContent(m.getChatContent())
 	}
+	m.chatLines = append(m.chatLines, "")
+	m.chatViewport.SetContent(m.getChatContent())
+	m.chatViewport.GotoBottom()
+
 	return m, nil
 }
 
