@@ -34,8 +34,9 @@ func isMinimalJSON(data []byte) bool {
 // Config represents the merged goclaw configuration
 type Config struct {
 	Gateway      GatewayConfig         `json:"gateway"`
-	LLM   LLMConfig             `json:"llm"`
-	Tools ToolsConfig           `json:"tools"`
+	Agent        AgentIdentityConfig   `json:"agent"`
+	LLM          LLMConfig             `json:"llm"`
+	Tools        ToolsConfig           `json:"tools"`
 	Telegram     TelegramConfig        `json:"telegram"`
 	HTTP         HTTPConfig            `json:"http"`
 	Session      SessionConfig         `json:"session"`
@@ -46,6 +47,29 @@ type Config struct {
 	TUI          TUIConfig             `json:"tui"`
 	Skills       SkillsConfig          `json:"skills"`
 	Cron         CronConfig            `json:"cron"`
+}
+
+// AgentIdentityConfig configures the agent's display identity
+type AgentIdentityConfig struct {
+	Name   string `json:"name"`   // Agent's display name (default: "GoClaw")
+	Emoji  string `json:"emoji"`  // Optional emoji prefix (default: "")
+	Typing string `json:"typing"` // Custom typing indicator text (default: derived from Name)
+}
+
+// DisplayName returns the agent name with emoji prefix if configured
+func (c *AgentIdentityConfig) DisplayName() string {
+	if c.Emoji != "" {
+		return c.Emoji + " " + c.Name
+	}
+	return c.Name
+}
+
+// TypingText returns the typing indicator text
+func (c *AgentIdentityConfig) TypingText() string {
+	if c.Typing != "" {
+		return c.Typing
+	}
+	return c.Name + " is typing..."
 }
 
 // HTTPConfig configures the HTTP server
@@ -342,6 +366,10 @@ func Load() (*LoadResult, error) {
 			LogFile:    filepath.Join(openclawDir, "goclaw.log"),
 			PIDFile:    filepath.Join(openclawDir, "goclaw.pid"),
 			WorkingDir: filepath.Join(openclawDir, "workspace"),
+		},
+		Agent: AgentIdentityConfig{
+			Name:  "GoClaw",
+			Emoji: "",
 		},
 		LLM: LLMConfig{
 			Provider:      "anthropic",

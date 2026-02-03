@@ -910,7 +910,8 @@ func (b *Bot) SendMirror(ctx context.Context, source, userMsg, response string) 
 
 	// Telegram max message is 4096 chars. Reserve space for formatting.
 	const maxTelegramMsg = 4096
-	const headerReserve = 100 // for "📱 <b>source</b>\n\n<b>You:</b> ...\n\n<b>Assistant:</b> "
+	agentName := b.gateway.AgentIdentity().Name
+	headerReserve := 80 + len(agentName) // for "📱 <b>source</b>\n\n<b>You:</b> ...\n\n<b>AgentName:</b> "
 
 	// Calculate available space
 	availableForContent := maxTelegramMsg - headerReserve
@@ -927,8 +928,8 @@ func (b *Bot) SendMirror(ctx context.Context, source, userMsg, response string) 
 	escapedUser := escapeHTML(truncatedUser)
 	escapedResponse := FormatMessage(truncatedResponse) // Convert markdown to HTML
 
-	mirror := fmt.Sprintf("📱 <b>%s</b>\n\n<b>You:</b> %s\n\n<b>Assistant:</b> %s",
-		source, escapedUser, escapedResponse)
+	mirror := fmt.Sprintf("📱 <b>%s</b>\n\n<b>You:</b> %s\n\n<b>%s:</b> %s",
+		source, escapedUser, agentName, escapedResponse)
 
 	_, err := b.bot.Send(chat, mirror, &tele.SendOptions{ParseMode: tele.ModeHTML})
 	if err != nil {
@@ -943,8 +944,8 @@ func (b *Bot) SendMirror(ctx context.Context, source, userMsg, response string) 
 			"source", source,
 			"mirrorLen", len(mirror),
 			"snippet", snippet)
-		plainMirror := fmt.Sprintf("📱 %s\n\nYou: %s\n\nAssistant: %s",
-			source, truncatedUser, truncatedResponse)
+		plainMirror := fmt.Sprintf("📱 %s\n\nYou: %s\n\n%s: %s",
+			source, truncatedUser, agentName, truncatedResponse)
 		_, err = b.bot.Send(chat, plainMirror)
 	}
 	if err != nil {

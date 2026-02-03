@@ -739,6 +739,10 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		if err != nil {
 			L_warn("transcript: failed to initialize manager", "error", err)
 		} else {
+			// Set agent name for transcript labels
+			if cfg.Agent.Name != "" {
+				transcriptMgr.SetAgentName(cfg.Agent.Name)
+			}
 			transcriptMgr.Start()
 			defer transcriptMgr.Stop()
 			toolsReg.Register(tools.NewTranscriptTool(transcriptMgr))

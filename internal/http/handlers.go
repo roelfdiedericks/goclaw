@@ -72,14 +72,29 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get agent identity for display
+	agentName := "GoClaw"
+	typingText := "GoClaw is typing..."
+	if s.channel != nil && s.channel.gateway != nil {
+		identity := s.channel.gateway.AgentIdentity()
+		if identity != nil {
+			agentName = identity.DisplayName()
+			typingText = identity.TypingText()
+		}
+	}
+
 	data := struct {
-		Title     string
-		User      *UserTemplateData
-		Timestamp time.Time
+		Title      string
+		User       *UserTemplateData
+		AgentName  string
+		TypingText string
+		Timestamp  time.Time
 	}{
-		Title:     "GoClaw - Chat",
-		User:      &UserTemplateData{Name: u.Name, Username: u.ID, IsOwner: u.IsOwner()},
-		Timestamp: time.Now(),
+		Title:      "GoClaw - Chat",
+		User:       &UserTemplateData{Name: u.Name, Username: u.ID, IsOwner: u.IsOwner()},
+		AgentName:  agentName,
+		TypingText: typingText,
+		Timestamp:  time.Now(),
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -349,7 +364,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if lastIDStr := r.Header.Get("Last-Event-ID"); lastIDStr != "" {
 		if parsed, err := strconv.Atoi(lastIDStr); err == nil {
 			lastEventID = parsed
-			L_info("http: SSE reconnect", "user", u.ID, "session", sessionID[:8]+"...", "lastEventID", lastEventID)
+			L_trace("http: SSE reconnect", "user", u.ID, "session", sessionID[:8]+"...", "lastEventID", lastEventID)
 		}
 	} else {
 		L_info("http: SSE connection opened", "user", u.ID, "session", sessionID[:8]+"...")
@@ -401,7 +416,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
-			L_info("http: SSE connection closed", "user", u.ID, "session", sessionID[:8]+"...")
+			L_trace("http: SSE connection closed", "user", u.ID, "session", sessionID[:8]+"...")
 			return
 		case <-conn.Done:
 			L_info("http: SSE connection replaced", "user", u.ID, "session", sessionID[:8]+"...")
