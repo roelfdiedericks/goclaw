@@ -118,71 +118,87 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 		}
 	}
 
+	// Initialize shared failover manager for Ollama
+	sumCfg := cfg.Session.Summarization
+	failoverMgr := session.NewOllamaFailoverManager(session.FailoverConfig{
+		FailureThreshold: sumCfg.FailureThreshold,
+		ResetMinutes:     sumCfg.ResetMinutes,
+	})
+
 	// Initialize checkpoint generator
 	checkpointCfg := &session.CheckpointGeneratorConfig{
-		Enabled:                cfg.Session.Checkpoint.Enabled,
-		Model:                  cfg.Session.Checkpoint.Model,
-		FallbackToMain:         cfg.Session.Checkpoint.FallbackToMain,
-		TokenThresholdPercents: cfg.Session.Checkpoint.TokenThresholdPercents,
-		TurnThreshold:          cfg.Session.Checkpoint.TurnThreshold,
-		MinTokensForGen:        cfg.Session.Checkpoint.MinTokensForGen,
+		Enabled:         sumCfg.Checkpoint.Enabled,
+		Thresholds:      sumCfg.Checkpoint.Thresholds,
+		TurnThreshold:   sumCfg.Checkpoint.TurnThreshold,
+		MinTokensForGen: sumCfg.Checkpoint.MinTokensForGen,
 	}
 	g.checkpointGenerator = session.NewCheckpointGenerator(checkpointCfg)
 	L_debug("session: checkpoint generator configured",
-		"enabled", cfg.Session.Checkpoint.Enabled,
-		"model", cfg.Session.Checkpoint.Model,
-		"tokenThresholds", cfg.Session.Checkpoint.TokenThresholdPercents,
-		"turnThreshold", cfg.Session.Checkpoint.TurnThreshold)
+		"enabled", sumCfg.Checkpoint.Enabled,
+		"thresholds", sumCfg.Checkpoint.Thresholds,
+		"turnThreshold", sumCfg.Checkpoint.TurnThreshold)
 
 	// Initialize compaction manager
-	// Handles all sessions - uses sess.Key for multi-user support
 	compactorCfg := &session.CompactionManagerConfig{
-		ReserveTokens:          cfg.Session.Compaction.ReserveTokens,
-		MaxMessages:            cfg.Session.Compaction.MaxMessages,
-		PreferCheckpoint:       cfg.Session.Compaction.PreferCheckpoint,
-		RetryIntervalSeconds:   cfg.Session.Compaction.RetryIntervalSeconds,
-		OllamaFailureThreshold: cfg.Session.Compaction.OllamaFailureThreshold,
-		OllamaResetMinutes:     cfg.Session.Compaction.OllamaResetMinutes,
+		ReserveTokens:        sumCfg.Compaction.ReserveTokens,
+		MaxMessages:          sumCfg.Compaction.MaxMessages,
+		PreferCheckpoint:     sumCfg.Compaction.PreferCheckpoint,
+		RetryIntervalSeconds: sumCfg.RetryIntervalSeconds,
 	}
 	g.compactor = session.NewCompactionManager(compactorCfg)
 	g.compactor.SetStore(g.sessions.GetStore())
+	g.compactor.SetFailover(failoverMgr)
 	L_debug("session: compaction manager configured",
-		"reserveTokens", cfg.Session.Compaction.ReserveTokens,
-		"maxMessages", cfg.Session.Compaction.MaxMessages,
-		"preferCheckpoint", cfg.Session.Compaction.PreferCheckpoint,
-		"retryInterval", cfg.Session.Compaction.RetryIntervalSeconds,
-		"ollamaFailureThreshold", cfg.Session.Compaction.OllamaFailureThreshold,
-		"ollamaResetMinutes", cfg.Session.Compaction.OllamaResetMinutes)
+		"reserveTokens", sumCfg.Compaction.ReserveTokens,
+		"maxMessages", sumCfg.Compaction.MaxMessages,
+		"preferCheckpoint", sumCfg.Compaction.PreferCheckpoint,
+		"retryInterval", sumCfg.RetryIntervalSeconds)
 
-	// Create main model adapter (always available as fallback)
-	mainAdapter := session.NewLLMAdapterFunc(llmClient.SimpleMessage, llmClient.Model())
-	g.compactor.SetMainClient(mainAdapter)
-	g.checkpointGenerator.SetLLMClients(mainAdapter, mainAdapter)
+	// Create fallback model client (Anthropic with cheaper model)
+	var fallbackAdapter *session.LLMAdapter
+	if sumCfg.FallbackModel != "" {
+		fallbackClient, err := llm.NewClientWithModel(cfg.LLM.APIKey, sumCfg.FallbackModel, 4096)
+		if err != nil {
+			L_warn("summarization: failed to create fallback client", "model", sumCfg.FallbackModel, "error", err)
+			// Fall back to main model if fallback creation fails
+			fallbackAdapter = session.NewLLMAdapterFunc(llmClient.SimpleMessage, llmClient.Model())
+		} else {
+			fallbackAdapter = session.NewLLMAdapterFunc(fallbackClient.SimpleMessage, fallbackClient.Model())
+			L_info("summarization: fallback model configured", "model", sumCfg.FallbackModel)
+		}
+	} else {
+		// No fallback model - use main model
+		fallbackAdapter = session.NewLLMAdapterFunc(llmClient.SimpleMessage, llmClient.Model())
+		L_debug("summarization: using main model as fallback (no fallbackModel configured)")
+	}
+	g.compactor.SetFallbackClient(fallbackAdapter)
 
-	// Initialize Ollama client for compaction/checkpoints if configured
-	if cfg.Session.Compaction.Ollama.URL != "" && cfg.Session.Compaction.Ollama.Model != "" {
-		L_info("compaction: using ollama as primary model",
-			"url", cfg.Session.Compaction.Ollama.URL,
-			"model", cfg.Session.Compaction.Ollama.Model)
+	// Initialize Ollama client for summarization if configured
+	if sumCfg.Ollama.URL != "" && sumCfg.Ollama.Model != "" {
+		L_info("summarization: using ollama as primary model",
+			"url", sumCfg.Ollama.URL,
+			"model", sumCfg.Ollama.Model)
 
 		ollamaClient := llm.NewOllamaClient(
-			cfg.Session.Compaction.Ollama.URL,
-			cfg.Session.Compaction.Ollama.Model,
-			cfg.Session.Compaction.Ollama.TimeoutSeconds,
-			cfg.Session.Compaction.Ollama.ContextTokens,
+			sumCfg.Ollama.URL,
+			sumCfg.Ollama.Model,
+			sumCfg.Ollama.TimeoutSeconds,
+			sumCfg.Ollama.ContextTokens,
 		)
 		g.ollamaClient = ollamaClient
 
-		// Create adapter and set as primary for compaction (main is already set as fallback)
+		// Create adapter and set as primary for both checkpoint and compaction
 		ollamaAdapter := session.NewLLMAdapterFunc(ollamaClient.SimpleMessage, ollamaClient.Model())
 		g.compactor.SetOllamaClient(ollamaAdapter)
-		g.checkpointGenerator.SetLLMClients(ollamaAdapter, mainAdapter)
+		g.checkpointGenerator.SetLLMClients(ollamaAdapter, fallbackAdapter, failoverMgr)
 
-		L_info("compaction: fallback to main model after failures",
-			"threshold", compactorCfg.OllamaFailureThreshold,
-			"resetMinutes", compactorCfg.OllamaResetMinutes)
+		L_info("summarization: failover configured",
+			"failureThreshold", sumCfg.FailureThreshold,
+			"resetMinutes", sumCfg.ResetMinutes)
 	} else {
-		L_debug("compaction: using main model only (ollama not configured)")
+		// No Ollama - use fallback only
+		g.checkpointGenerator.SetLLMClients(nil, fallbackAdapter, failoverMgr)
+		L_debug("summarization: using fallback model only (ollama not configured)")
 	}
 
 	// Initialize memory manager if enabled
@@ -231,7 +247,7 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 
 	L_info("session management initialized",
 		"store", storeType,
-		"checkpoints", cfg.Session.Checkpoint.Enabled,
+		"checkpoints", cfg.Session.Summarization.Checkpoint.Enabled,
 		"memoryFlush", cfg.Session.MemoryFlush.Enabled)
 
 	// Initialize command handler

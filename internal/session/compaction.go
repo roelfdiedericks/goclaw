@@ -18,15 +18,14 @@ type CompactionManager struct {
 	config *CompactionManagerConfig
 
 	// Clients
-	ollamaClient CompactionLLMClient // Primary (cheap) - can be nil
-	mainClient   CompactionLLMClient // Fallback (main model)
-	store        Store               // Storage backend
+	ollamaClient   CompactionLLMClient    // Primary: Ollama (can be nil)
+	fallbackClient CompactionLLMClient    // Fallback: Anthropic model
+	failover       *OllamaFailoverManager // Shared failover state
+	store          Store                  // Storage backend
 
 	// State (in-memory, transient)
-	ollamaFailures    int
-	lastOllamaAttempt time.Time
-	inProgress        atomic.Bool
-	mu                sync.Mutex
+	inProgress atomic.Bool
+	mu         sync.Mutex
 
 	// Background goroutine control
 	stopCh chan struct{}
@@ -36,19 +35,12 @@ type CompactionManager struct {
 // CompactionManagerConfig holds all compaction settings
 type CompactionManagerConfig struct {
 	// Core settings
-	ReserveTokens    int  // Tokens to reserve before compaction (default: 30000)
+	ReserveTokens    int  // Tokens to reserve before compaction (default: 4000)
 	MaxMessages      int  // Trigger compaction if messages exceed this (default: 500, 0 = disabled)
 	PreferCheckpoint bool // Use checkpoint for summary if available
 
 	// Retry settings
 	RetryIntervalSeconds int // Background retry interval (default: 60, 0 = disabled)
-
-	// Fallback settings
-	OllamaFailureThreshold int // Fall back to main after N failures (default: 3)
-	OllamaResetMinutes     int // Try Ollama again after N minutes (default: 30)
-
-	// Note: SessionKey removed - now uses sess.Key from the Session object
-	// This allows one CompactionManager to handle multiple user sessions
 }
 
 // CompactionLLMClient interface for LLM calls during compaction
@@ -90,16 +82,10 @@ type CompactionStatus struct {
 func NewCompactionManager(cfg *CompactionManagerConfig) *CompactionManager {
 	// Apply defaults
 	if cfg.ReserveTokens == 0 {
-		cfg.ReserveTokens = 30000
+		cfg.ReserveTokens = 4000
 	}
 	if cfg.RetryIntervalSeconds == 0 {
 		cfg.RetryIntervalSeconds = 60
-	}
-	if cfg.OllamaFailureThreshold == 0 {
-		cfg.OllamaFailureThreshold = 3
-	}
-	if cfg.OllamaResetMinutes == 0 {
-		cfg.OllamaResetMinutes = 30
 	}
 
 	return &CompactionManager{
@@ -108,14 +94,19 @@ func NewCompactionManager(cfg *CompactionManagerConfig) *CompactionManager {
 	}
 }
 
-// SetOllamaClient sets the primary (cheap) LLM client
+// SetOllamaClient sets the primary (Ollama) LLM client
 func (m *CompactionManager) SetOllamaClient(client CompactionLLMClient) {
 	m.ollamaClient = client
 }
 
-// SetMainClient sets the fallback (main) LLM client
-func (m *CompactionManager) SetMainClient(client CompactionLLMClient) {
-	m.mainClient = client
+// SetFallbackClient sets the fallback (Anthropic) LLM client
+func (m *CompactionManager) SetFallbackClient(client CompactionLLMClient) {
+	m.fallbackClient = client
+}
+
+// SetFailover sets the shared failover manager
+func (m *CompactionManager) SetFailover(failover *OllamaFailoverManager) {
+	m.failover = failover
 }
 
 // SetStore sets the store for persistence
@@ -129,25 +120,22 @@ func (m *CompactionManager) GetStatus(ctx context.Context) CompactionStatus {
 		return CompactionStatus{}
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	status := CompactionStatus{
-		OllamaFailures:    m.ollamaFailures,
-		OllamaThreshold:   m.config.OllamaFailureThreshold,
-		UsingFallback:     m.ollamaFailures >= m.config.OllamaFailureThreshold,
-		LastOllamaAttempt: m.lastOllamaAttempt,
-		ResetMinutes:      m.config.OllamaResetMinutes,
-		RetryInProgress:   m.inProgress.Load(),
-		OllamaConfigured:  m.ollamaClient != nil,
+		RetryInProgress:  m.inProgress.Load(),
+		OllamaConfigured: m.ollamaClient != nil,
 	}
 
-	// Calculate minutes until Ollama reset
-	if status.UsingFallback && !m.lastOllamaAttempt.IsZero() {
-		elapsed := time.Since(m.lastOllamaAttempt)
-		resetDuration := time.Duration(m.config.OllamaResetMinutes) * time.Minute
-		if elapsed < resetDuration {
-			status.MinutesUntilReset = int((resetDuration - elapsed).Minutes())
+	// Get failover status if available
+	if m.failover != nil {
+		failoverStatus := m.failover.GetStatus()
+		status.OllamaFailures = failoverStatus.Failures
+		status.OllamaThreshold = failoverStatus.Threshold
+		status.UsingFallback = failoverStatus.UsingFallback
+		status.LastOllamaAttempt = failoverStatus.LastAttempt
+		status.ResetMinutes = failoverStatus.ResetMinutes
+		status.MinutesUntilReset = failoverStatus.ResetMinutes - failoverStatus.MinutesSince
+		if status.MinutesUntilReset < 0 {
+			status.MinutesUntilReset = 0
 		}
 	}
 
@@ -351,23 +339,18 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 	return result, nil
 }
 
-// generateSummaryWithFallback tries Ollama first, then falls back to main model
+// generateSummaryWithFallback tries Ollama first, then falls back to fallback model
 // Returns: summary, usedFallback, modelName, error
 func (m *CompactionManager) generateSummaryWithFallback(ctx context.Context, messages []Message) (string, bool, string, error) {
-	m.mu.Lock()
-	// Check if we should reset Ollama failure count
-	if m.ollamaFailures > 0 && time.Since(m.lastOllamaAttempt) > time.Duration(m.config.OllamaResetMinutes)*time.Minute {
-		L_debug("compaction: resetting ollama failure count", "previousFailures", m.ollamaFailures)
-		m.ollamaFailures = 0
-	}
-	shouldTryOllama := m.ollamaClient != nil && m.ollamaClient.IsAvailable() && m.ollamaFailures < m.config.OllamaFailureThreshold
-	m.mu.Unlock()
+	// Check if we should try Ollama (failover manager handles reset logic)
+	shouldTryOllama := m.ollamaClient != nil && m.ollamaClient.IsAvailable() &&
+		(m.failover == nil || m.failover.ShouldTryOllama())
 
-	// Try Ollama first (if available and not too many failures)
+	// Try Ollama first (if available and failover allows)
 	if shouldTryOllama {
-		m.mu.Lock()
-		m.lastOllamaAttempt = time.Now()
-		m.mu.Unlock()
+		if m.failover != nil {
+			m.failover.RecordAttempt()
+		}
 
 		model := m.ollamaClient.Model()
 		L_info("compaction: calling ollama for summary", "model", model, "messages", len(messages))
@@ -376,35 +359,35 @@ func (m *CompactionManager) generateSummaryWithFallback(ctx context.Context, mes
 		elapsed := time.Since(startTime)
 		if err == nil {
 			// Success - reset failure count
-			m.mu.Lock()
-			m.ollamaFailures = 0
-			m.mu.Unlock()
+			if m.failover != nil {
+				m.failover.RecordSuccess()
+			}
 			L_info("compaction: ollama summary completed", "model", model, "elapsed", elapsed.Round(time.Second))
 			return summary, false, model, nil
 		}
 
-		// Ollama failed - increment failure count
-		m.mu.Lock()
-		m.ollamaFailures++
-		failures := m.ollamaFailures
-		m.mu.Unlock()
+		// Ollama failed - record failure
+		var failures int
+		if m.failover != nil {
+			failures = m.failover.RecordFailure()
+		}
 		L_warn("compaction: ollama failed, trying fallback",
 			"error", err,
 			"elapsed", elapsed.Round(time.Second),
-			"failures", failures,
-			"threshold", m.config.OllamaFailureThreshold)
-	} else if m.ollamaClient != nil && m.ollamaFailures >= m.config.OllamaFailureThreshold {
+			"failures", failures)
+	} else if m.ollamaClient != nil && m.failover != nil && m.failover.IsUsingFallback() {
+		status := m.failover.GetStatus()
 		L_debug("compaction: skipping ollama (too many failures)",
-			"failures", m.ollamaFailures,
-			"threshold", m.config.OllamaFailureThreshold)
+			"failures", status.Failures,
+			"threshold", status.Threshold)
 	}
 
-	// Try main model as fallback
-	if m.mainClient != nil && m.mainClient.IsAvailable() {
-		model := m.mainClient.Model()
+	// Try fallback model
+	if m.fallbackClient != nil && m.fallbackClient.IsAvailable() {
+		model := m.fallbackClient.Model()
 		L_info("compaction: calling fallback model for summary", "model", model, "messages", len(messages))
 		startTime := time.Now()
-		summary, err := m.mainClient.GenerateSummary(ctx, messages, 4000)
+		summary, err := m.fallbackClient.GenerateSummary(ctx, messages, 4000)
 		elapsed := time.Since(startTime)
 		if err == nil {
 			L_info("compaction: fallback model summary completed", "model", model, "elapsed", elapsed.Round(time.Second))
@@ -451,13 +434,7 @@ func (m *CompactionManager) retryPendingSummary(ctx context.Context) {
 		return
 	}
 
-	// Reset Ollama failure count if enough time has passed
-	m.mu.Lock()
-	if m.ollamaFailures > 0 && time.Since(m.lastOllamaAttempt) > time.Duration(m.config.OllamaResetMinutes)*time.Minute {
-		L_debug("compaction: resetting ollama failure count for retry", "previousFailures", m.ollamaFailures)
-		m.ollamaFailures = 0
-	}
-	m.mu.Unlock()
+	// Note: Ollama failure reset is handled by failover manager's ShouldTryOllama()
 
 	// Get pending retry
 	pending, err := m.store.GetPendingSummaryRetry(ctx)
@@ -691,8 +668,8 @@ func NewCompactor(cfg *CompactorConfig) *CompactionManager {
 	return NewCompactionManager(cfg)
 }
 
-// SetLLMClient sets both Ollama and main client to the same client (backwards compatibility)
+// SetLLMClient sets both Ollama and fallback client to the same client (backwards compatibility)
 func (m *CompactionManager) SetLLMClient(client CompactionLLMClient) {
 	m.SetOllamaClient(client)
-	m.SetMainClient(client)
+	m.SetFallbackClient(client)
 }
