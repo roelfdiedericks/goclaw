@@ -5,7 +5,12 @@
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span><i class="bi bi-chat"></i> Chat</span>
-                <span id="connection-status" class="badge bg-secondary">Connecting...</span>
+                <div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary me-2" id="clear-history" title="Clear chat history">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                    <span id="connection-status" class="badge bg-secondary">Connecting...</span>
+                </div>
             </div>
             <div class="card-body chat-container" id="chat-messages">
                 <!-- Messages will be inserted here -->
@@ -32,6 +37,72 @@ $(document).ready(function() {
     var $input = $('#message-input');
     var $sendBtn = $('#send-btn');
     var $status = $('#connection-status');
+    var STORAGE_KEY = 'goclaw_chat_history';
+    var MAX_MESSAGES = 100; // Keep last 100 messages
+
+    // Load chat history from localStorage
+    function loadHistory() {
+        try {
+            var history = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+            history.forEach(function(msg) {
+                renderMessage(msg.role, msg.content, false);
+            });
+            $messages.scrollTop($messages[0].scrollHeight);
+        } catch (e) {
+            console.error('Failed to load chat history:', e);
+        }
+    }
+
+    // Save chat history to localStorage
+    function saveHistory() {
+        try {
+            var messages = [];
+            $messages.find('.message').each(function() {
+                var $msg = $(this);
+                var role = 'assistant';
+                if ($msg.hasClass('user')) role = 'user';
+                else if ($msg.hasClass('error')) role = 'error';
+                else if ($msg.hasClass('mirror-user')) role = 'mirror-user';
+                else if ($msg.hasClass('mirror-assistant')) role = 'mirror-assistant';
+                messages.push({
+                    role: role,
+                    content: $msg.find('.bubble').text()
+                });
+            });
+            // Keep only last MAX_MESSAGES
+            if (messages.length > MAX_MESSAGES) {
+                messages = messages.slice(-MAX_MESSAGES);
+            }
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+        } catch (e) {
+            console.error('Failed to save chat history:', e);
+        }
+    }
+
+    // Clear chat history
+    function clearHistory() {
+        localStorage.removeItem(STORAGE_KEY);
+        $messages.empty();
+    }
+
+    // Render a message (without saving - used for loading history)
+    function renderMessage(role, content, save) {
+        var roleClass = 'assistant';
+        if (role === 'user') roleClass = 'user';
+        else if (role === 'error') roleClass = 'error';
+        else if (role.startsWith('mirror-')) roleClass = 'mirror ' + role;
+        
+        var $msg = $('<div class="message ' + roleClass + '">' +
+            '<div class="bubble"></div>' +
+            '</div>');
+        $msg.find('.bubble').text(content);
+        $messages.append($msg);
+        
+        if (save !== false) {
+            saveHistory();
+        }
+        return $msg;
+    }
 
     // Connect to SSE
     function connect() {
@@ -77,6 +148,7 @@ $(document).ready(function() {
             hideTypingIndicator();
             currentRunId = null;
             $currentBubble = null;
+            saveHistory(); // Save after response complete
         });
         
         eventSource.addEventListener('mirror', function(e) {
@@ -94,6 +166,31 @@ $(document).ready(function() {
             $currentBubble = null;
         });
         
+        eventSource.addEventListener('agent_message', function(e) {
+            var data = JSON.parse(e.data);
+            if (data.type === 'text') {
+                appendMessage('assistant', data.text);
+            } else if (data.type === 'media') {
+                // Show media with optional caption
+                var $msg = $('<div class="message assistant"><div class="bubble media-bubble"></div></div>');
+                var $bubble = $msg.find('.bubble');
+                var $img = $('<img>').attr('src', data.url).attr('alt', data.filename || 'Media');
+                $img.on('load', function() {
+                    $messages.scrollTop($messages[0].scrollHeight);
+                });
+                $img.on('error', function() {
+                    $img.replaceWith($('<span class="text-muted">Failed to load image</span>'));
+                });
+                $bubble.append($img);
+                if (data.caption) {
+                    $bubble.append($('<div class="media-caption">').text(data.caption));
+                }
+                $messages.append($msg);
+                $messages.scrollTop($messages[0].scrollHeight);
+                saveHistory();
+            }
+        });
+        
         eventSource.onerror = function() {
             $status.text('Disconnected').removeClass('bg-success bg-secondary').addClass('bg-danger');
             eventSource.close();
@@ -103,16 +200,7 @@ $(document).ready(function() {
     }
     
     function appendMessage(role, content) {
-        var roleClass = 'assistant';
-        if (role === 'user') roleClass = 'user';
-        else if (role === 'error') roleClass = 'error';
-        else if (role.startsWith('mirror-')) roleClass = 'mirror ' + role;
-        
-        var $msg = $('<div class="message ' + roleClass + '">' +
-            '<div class="bubble"></div>' +
-            '</div>');
-        $msg.find('.bubble').text(content);
-        $messages.append($msg);
+        renderMessage(role, content, true);
         $messages.scrollTop($messages[0].scrollHeight);
     }
     
@@ -158,7 +246,15 @@ $(document).ready(function() {
         });
     });
     
-    // Start connection
+    // Clear history button
+    $('#clear-history').on('click', function() {
+        if (confirm('Clear chat history?')) {
+            clearHistory();
+        }
+    });
+
+    // Load history and start connection
+    loadHistory();
     connect();
     $input.focus();
 });

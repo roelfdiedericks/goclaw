@@ -244,8 +244,8 @@ func (m *Manager) isAllowedPath(absPath string) bool {
 	// Check if in workspace
 	if strings.HasPrefix(absPath, m.workspaceDir) {
 		relPath, _ := filepath.Rel(m.workspaceDir, absPath)
-		// Only allow memory/ and MEMORY.md
-		if relPath == "MEMORY.md" || strings.HasPrefix(relPath, "memory"+string(filepath.Separator)) || relPath == "memory" {
+		// Allow memory files: MEMORY.md, HEARTBEAT.md, memory/*
+		if relPath == "MEMORY.md" || relPath == "HEARTBEAT.md" || strings.HasPrefix(relPath, "memory"+string(filepath.Separator)) || relPath == "memory" {
 			return true
 		}
 	}

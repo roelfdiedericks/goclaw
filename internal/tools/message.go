@@ -20,8 +20,9 @@ type MessageChannel interface {
 
 // SessionContext provides current session information for the message tool.
 type SessionContext struct {
-	Channel string // Current channel name (e.g., "telegram", "tui")
-	ChatID  string // Current chat ID
+	Channel     string // Current channel name (e.g., "telegram", "tui")
+	ChatID      string // Current chat ID
+	OwnerChatID string // Owner's telegram chat ID (fallback for cron/heartbeat)
 }
 
 // sessionContextKey is used to store SessionContext in context.Context
@@ -57,7 +58,7 @@ func (t *MessageTool) Name() string {
 }
 
 func (t *MessageTool) Description() string {
-	return "Send, edit, delete, and react to messages. Use filePath to send local files (screenshots, images, etc.) to the user's channel."
+	return "Send, edit, delete, and react to messages. Use filePath to send local files (screenshots, images, etc.). For 'send' action: omit channel to broadcast to all channels (telegram, http web UI)."
 }
 
 func (t *MessageTool) Schema() map[string]interface{} {
@@ -69,10 +70,10 @@ func (t *MessageTool) Schema() map[string]interface{} {
 				"enum":        []string{"send", "edit", "delete", "react"},
 				"description": "Action to perform",
 			},
-			"channel": map[string]interface{}{
-				"type":        "string",
-				"description": "Target channel (telegram, tui). Defaults to current session's channel.",
-			},
+		"channel": map[string]interface{}{
+			"type":        "string",
+			"description": "Target channel (telegram, http). Defaults to current session's channel. If omitted for 'send' action, broadcasts to all channels.",
+		},
 			"to": map[string]interface{}{
 				"type":        "string",
 				"description": "Chat ID to send to. Defaults to current chat.",
@@ -133,6 +134,18 @@ func (t *MessageTool) Execute(ctx context.Context, input json.RawMessage) (strin
 	if channel == "" {
 		channel = sessionCtx.Channel
 	}
+
+	// For send action: broadcast if no channel specified OR channel doesn't have a MessageChannel
+	if params.Action == "send" {
+		// Check if channel exists in our message channels
+		_, hasChannel := t.channels[channel]
+		if channel == "" || !hasChannel {
+			L_debug("message: broadcasting (channel not available)", "requestedChannel", channel)
+			return t.broadcastSend(sessionCtx, params.Message, params.FilePath, params.Caption)
+		}
+	}
+
+	// For non-send actions: require valid channel
 	if channel == "" {
 		return "", fmt.Errorf("channel is required (not in active session)")
 	}
@@ -140,6 +153,11 @@ func (t *MessageTool) Execute(ctx context.Context, input json.RawMessage) (strin
 	chatID := params.To
 	if chatID == "" {
 		chatID = sessionCtx.ChatID
+	}
+	// Fallback to owner's chat ID for telegram (cron/heartbeat jobs)
+	if chatID == "" && channel == "telegram" && sessionCtx.OwnerChatID != "" {
+		chatID = sessionCtx.OwnerChatID
+		L_debug("message: using owner chat ID fallback", "chatID", chatID)
 	}
 	if chatID == "" && params.Action != "react" {
 		return "", fmt.Errorf("to (chat ID) is required (not in active session)")
@@ -170,6 +188,41 @@ func (t *MessageTool) Execute(ctx context.Context, input json.RawMessage) (strin
 	default:
 		return "", fmt.Errorf("unknown action: %s", params.Action)
 	}
+}
+
+// broadcastSend sends to all available channels (used when no channel specified)
+func (t *MessageTool) broadcastSend(sessionCtx *SessionContext, message, filePath, caption string) (string, error) {
+	if len(t.channels) == 0 {
+		return "", fmt.Errorf("no channels available")
+	}
+
+	var results []string
+	var lastErr error
+
+	for name, ch := range t.channels {
+		// Determine chatID for this channel
+		chatID := ""
+		if name == "telegram" && sessionCtx.OwnerChatID != "" {
+			chatID = sessionCtx.OwnerChatID
+		}
+		// HTTP channel doesn't need chatID (sends to all connected owner sessions)
+
+		L_debug("message: broadcast sending", "channel", name, "chatID", chatID, "hasFilePath", filePath != "")
+
+		result, err := t.send(ch, chatID, message, filePath, caption)
+		if err != nil {
+			L_warn("message: broadcast failed", "channel", name, "error", err)
+			lastErr = err
+			continue
+		}
+		results = append(results, fmt.Sprintf("%s: %s", name, result))
+	}
+
+	if len(results) == 0 {
+		return "", fmt.Errorf("broadcast failed on all channels: %w", lastErr)
+	}
+
+	return fmt.Sprintf("Broadcast sent to %d channels: %v", len(results), results), nil
 }
 
 // send sends a text or media message

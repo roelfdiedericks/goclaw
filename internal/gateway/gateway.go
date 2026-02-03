@@ -990,9 +990,14 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			}
 
 			// Execute tool with session context
+			ownerChatID := ""
+			if owner := g.users.Owner(); owner != nil {
+				ownerChatID = owner.TelegramID
+			}
 			toolCtx := tools.WithSessionContext(ctx, &tools.SessionContext{
-				Channel: req.Source,
-				ChatID:  req.ChatID,
+				Channel:     req.Source,
+				ChatID:      req.ChatID,
+				OwnerChatID: ownerChatID,
 			})
 			result, err := g.tools.Execute(toolCtx, response.ToolName, response.ToolInput)
 

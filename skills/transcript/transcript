@@ -1,0 +1,149 @@
+#!/bin/bash
+# transcript - Search conversation history in GoClaw sessions.db
+# Usage: transcript <command> [args]
+
+DB="/home/openclaw/.openclaw/goclaw/sessions.db"
+TZ_OFFSET="+2 hours"  # SAST
+
+usage() {
+    cat << 'EOF'
+Usage: transcript <command> [args]
+
+Commands:
+  recent [N]           Last N user messages (default: 10), excluding heartbeats
+  search <keyword>     Search all messages for keyword
+  last                 Time since last real user message
+  gaps [hours]         Show conversation gaps > N hours (default: 1)
+  today                All user messages from today
+  stats                Message counts by day (last 14 days)
+  full <keyword>       Full content of messages matching keyword
+
+Examples:
+  transcript recent 5
+  transcript search "sleep"
+  transcript last
+  transcript gaps 4
+  transcript today
+EOF
+    exit 1
+}
+
+cmd_recent() {
+    local limit=${1:-10}
+    sqlite3 "$DB" "
+SELECT datetime(timestamp, 'unixepoch', '$TZ_OFFSET') as time,
+       substr(content, 1, 100) as preview
+FROM messages 
+WHERE role='user' 
+  AND content NOT LIKE '%HEARTBEAT%' 
+  AND content NOT LIKE '%heartbeat%'
+  AND content NOT LIKE '%Memory checkpoint%'
+ORDER BY timestamp DESC 
+LIMIT $limit;"
+}
+
+cmd_search() {
+    local keyword="$1"
+    [[ -z "$keyword" ]] && { echo "Usage: transcript search <keyword>"; exit 1; }
+    sqlite3 "$DB" "
+SELECT datetime(timestamp, 'unixepoch', '$TZ_OFFSET') as time,
+       role,
+       substr(content, 1, 120) as preview
+FROM messages 
+WHERE content LIKE '%$keyword%'
+ORDER BY timestamp DESC 
+LIMIT 20;"
+}
+
+cmd_last() {
+    sqlite3 "$DB" "
+SELECT 
+  datetime(timestamp, 'unixepoch', '$TZ_OFFSET') as last_message,
+  CAST((strftime('%s','now') - timestamp) / 60 AS INT) as minutes_ago,
+  ROUND((strftime('%s','now') - timestamp) / 3600.0, 1) as hours_ago,
+  substr(content, 1, 80) as preview
+FROM messages 
+WHERE role='user' 
+  AND content NOT LIKE '%HEARTBEAT%'
+  AND content NOT LIKE '%heartbeat%'
+  AND content NOT LIKE '%Memory checkpoint%'
+ORDER BY timestamp DESC 
+LIMIT 1;"
+}
+
+cmd_gaps() {
+    local min_hours=${1:-1}
+    local min_seconds=$((min_hours * 3600))
+    sqlite3 "$DB" "
+WITH user_msgs AS (
+  SELECT timestamp, content,
+         LEAD(timestamp) OVER (ORDER BY timestamp) as next_timestamp
+  FROM messages 
+  WHERE role='user' 
+    AND content NOT LIKE '%HEARTBEAT%'
+    AND content NOT LIKE '%heartbeat%'
+    AND content NOT LIKE '%Memory checkpoint%'
+)
+SELECT 
+  datetime(timestamp, 'unixepoch', '$TZ_OFFSET') as from_time,
+  datetime(next_timestamp, 'unixepoch', '$TZ_OFFSET') as to_time,
+  ROUND((next_timestamp - timestamp) / 3600.0, 1) as hours,
+  substr(content, 1, 50) as last_msg
+FROM user_msgs
+WHERE next_timestamp IS NOT NULL
+  AND (next_timestamp - timestamp) > $min_seconds
+ORDER BY timestamp DESC
+LIMIT 10;"
+}
+
+cmd_today() {
+    local today=$(date +%Y-%m-%d)
+    sqlite3 "$DB" "
+SELECT datetime(timestamp, 'unixepoch', '$TZ_OFFSET') as time,
+       substr(content, 1, 100) as preview
+FROM messages 
+WHERE role='user'
+  AND date(timestamp, 'unixepoch', '$TZ_OFFSET') = '$today'
+  AND content NOT LIKE '%HEARTBEAT%'
+  AND content NOT LIKE '%heartbeat%'
+  AND content NOT LIKE '%Memory checkpoint%'
+ORDER BY timestamp;"
+}
+
+cmd_stats() {
+    sqlite3 "$DB" "
+SELECT date(timestamp, 'unixepoch', '$TZ_OFFSET') as day,
+       COUNT(*) as total,
+       SUM(CASE WHEN role='user' THEN 1 ELSE 0 END) as user,
+       SUM(CASE WHEN role='assistant' THEN 1 ELSE 0 END) as assistant,
+       SUM(CASE WHEN role='tool' THEN 1 ELSE 0 END) as tool
+FROM messages
+GROUP BY day
+ORDER BY day DESC
+LIMIT 14;"
+}
+
+cmd_full() {
+    local keyword="$1"
+    [[ -z "$keyword" ]] && { echo "Usage: transcript full <keyword>"; exit 1; }
+    sqlite3 "$DB" "
+SELECT datetime(timestamp, 'unixepoch', '$TZ_OFFSET') as time,
+       role,
+       content
+FROM messages 
+WHERE content LIKE '%$keyword%'
+ORDER BY timestamp DESC 
+LIMIT 5;"
+}
+
+# Main
+case "${1:-}" in
+    recent)  cmd_recent "$2" ;;
+    search)  cmd_search "$2" ;;
+    last)    cmd_last ;;
+    gaps)    cmd_gaps "$2" ;;
+    today)   cmd_today ;;
+    stats)   cmd_stats ;;
+    full)    cmd_full "$2" ;;
+    *)       usage ;;
+esac
