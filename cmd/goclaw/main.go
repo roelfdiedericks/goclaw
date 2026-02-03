@@ -638,13 +638,18 @@ type Context struct {
 func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	L_info("starting gateway", "version", version)
 
-	// Load config
-	cfg, err := config.Load()
+	// Load config (handles bootstrap from openclaw.json if needed)
+	loadResult, err := config.Load()
 	if err != nil {
 		L_error("failed to load config", "error", err)
 		return err
 	}
-	L_debug("config loaded")
+	cfg := loadResult.Config
+	if loadResult.Bootstrapped {
+		L_info("config bootstrapped from openclaw.json", "path", loadResult.SourcePath)
+	} else {
+		L_debug("config loaded", "path", loadResult.SourcePath)
+	}
 
 	// Load users from users.json (new format)
 	usersConfig, err := config.LoadUsers()

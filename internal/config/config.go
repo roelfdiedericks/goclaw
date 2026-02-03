@@ -3,12 +3,33 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
 	"dario.cat/mergo"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 )
+
+// ConfigBackupCount is the number of backup versions to keep
+const ConfigBackupCount = 5
+
+// LoadResult contains the loaded config and metadata about where it came from
+type LoadResult struct {
+	Config       *Config
+	SourcePath   string // Path to goclaw.json that was found/created
+	Bootstrapped bool   // True if config was bootstrapped from openclaw.json
+}
+
+// isMinimalJSON checks if JSON content is essentially empty (just {} or whitespace)
+func isMinimalJSON(data []byte) bool {
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return true // Can't parse = treat as empty
+	}
+	return len(m) == 0
+}
 
 // Config represents the merged goclaw configuration
 type Config struct {
@@ -262,12 +283,54 @@ type BrowserToolsConfig struct {
 	Profile   string `json:"profile"`   // Browser profile name (default: "openclaw")
 }
 
-// Load reads configuration from goclaw.json, falling back to openclaw.json
-// goclaw.json values override openclaw.json values
-func Load() (*Config, error) {
+// Load reads configuration from goclaw.json.
+//
+// Bootstrap mode (first run):
+//   - If no goclaw.json exists OR it's empty, extract config from openclaw.json
+//   - Write complete goclaw.json with defaults + openclaw values
+//   - From then on, goclaw.json is authoritative
+//
+// Normal mode (subsequent runs):
+//   - Load only from goclaw.json, ignore openclaw.json entirely
+//   - goclaw.json is the single source of truth
+func Load() (*LoadResult, error) {
 	home, _ := os.UserHomeDir()
 	openclawDir := filepath.Join(home, ".openclaw")
 
+	goclawGlobalPath := filepath.Join(openclawDir, "goclaw.json")
+	goclawLocalPath := "goclaw.json" // current working directory
+	openclawPath := filepath.Join(openclawDir, "openclaw.json")
+
+	logging.L_debug("config: checking files", "openclawDir", openclawDir, "cwd", mustGetwd())
+
+	// Determine which goclaw.json to use (local takes priority)
+	var goclawPath string
+	var goclawData []byte
+	var goclawExists bool
+
+	if data, err := os.ReadFile(goclawLocalPath); err == nil {
+		absPath, _ := filepath.Abs(goclawLocalPath)
+		goclawPath = absPath
+		goclawData = data
+		goclawExists = true
+		logging.L_debug("config: found local goclaw.json", "path", absPath, "size", len(data))
+	} else if data, err := os.ReadFile(goclawGlobalPath); err == nil {
+		goclawPath = goclawGlobalPath
+		goclawData = data
+		goclawExists = true
+		logging.L_debug("config: found global goclaw.json", "path", goclawGlobalPath, "size", len(data))
+	}
+
+	// Determine if we need bootstrap mode
+	needsBootstrap := !goclawExists || isMinimalJSON(goclawData)
+
+	if needsBootstrap {
+		logging.L_info("config: bootstrap mode - will extract from openclaw.json and write goclaw.json")
+	} else {
+		logging.L_debug("config: normal mode - using goclaw.json only")
+	}
+
+	// Build defaults
 	cfg := &Config{
 		Gateway: GatewayConfig{
 			LogFile:    filepath.Join(openclawDir, "goclaw.log"),
@@ -387,65 +450,57 @@ func Load() (*Config, error) {
 		},
 	}
 
-	openclawPath := filepath.Join(openclawDir, "openclaw.json")
-	goclawGlobalPath := filepath.Join(openclawDir, "goclaw.json")
-	goclawLocalPath := "goclaw.json" // current working directory
+	if needsBootstrap {
+		// BOOTSTRAP MODE: Extract from openclaw.json, then write goclaw.json
 
-	logging.L_debug("config: checking files", "openclawDir", openclawDir, "cwd", mustGetwd())
-
-	// Load base config from openclaw.json if it exists
-	if data, err := os.ReadFile(openclawPath); err == nil {
-		logging.L_debug("config: loading openclaw.json", "path", openclawPath, "size", len(data))
-		var base map[string]interface{}
-		if err := json.Unmarshal(data, &base); err == nil {
-			cfg.mergeOpenclawConfig(base, openclawDir)
+		// Load from openclaw.json if it exists
+		if data, err := os.ReadFile(openclawPath); err == nil {
+			logging.L_debug("config: loading openclaw.json for bootstrap", "path", openclawPath, "size", len(data))
+			var base map[string]interface{}
+			if err := json.Unmarshal(data, &base); err == nil {
+				cfg.mergeOpenclawConfig(base, openclawDir)
+			} else {
+				logging.L_warn("config: failed to parse openclaw.json", "error", err)
+			}
 		} else {
-			logging.L_warn("config: failed to parse openclaw.json", "error", err)
+			logging.L_debug("config: openclaw.json not found, using defaults only", "path", openclawPath)
 		}
-	} else {
-		logging.L_debug("config: openclaw.json not found", "path", openclawPath)
+
+		// Apply environment variable fallbacks
+		applyEnvFallbacks(cfg)
+
+		// Determine where to write goclaw.json
+		// If local goclaw.json existed (even if empty), write there; otherwise use global
+		if goclawPath == "" {
+			// No goclaw.json found anywhere - create in current directory
+			goclawPath, _ = filepath.Abs(goclawLocalPath)
+		}
+
+		// Write the bootstrapped config
+		if err := WriteConfigWithBackup(goclawPath, cfg); err != nil {
+			logging.L_error("config: failed to write bootstrapped config", "path", goclawPath, "error", err)
+			// Non-fatal - continue with in-memory config
+		} else {
+			logging.L_info("config: bootstrapped from openclaw.json", "path", goclawPath)
+		}
+
+		return &LoadResult{
+			Config:       cfg,
+			SourcePath:   goclawPath,
+			Bootstrapped: true,
+		}, nil
 	}
 
-	// Override with goclaw.json from ~/.openclaw if it exists
-	if data, err := os.ReadFile(goclawGlobalPath); err == nil {
-		logging.L_debug("config: loading global goclaw.json", "path", goclawGlobalPath, "size", len(data))
-		if err := mergeJSONConfig(cfg, data); err != nil {
-			logging.L_error("config: failed to merge global goclaw.json", "error", err)
-			return nil, err
-		}
-		logging.L_debug("config: global goclaw.json deep-merged")
-	} else {
-		logging.L_debug("config: global goclaw.json not found", "path", goclawGlobalPath)
-	}
+	// NORMAL MODE: Load only from goclaw.json, ignore openclaw.json
 
-	// Override with goclaw.json from current directory (highest priority)
-	if data, err := os.ReadFile(goclawLocalPath); err == nil {
-		absPath, _ := filepath.Abs(goclawLocalPath)
-		logging.L_debug("config: loading local goclaw.json", "path", absPath, "size", len(data))
-		if err := mergeJSONConfig(cfg, data); err != nil {
-			logging.L_error("config: failed to merge local goclaw.json", "error", err)
-			return nil, err
-		}
-		logging.L_debug("config: local goclaw.json deep-merged")
-	} else {
-		logging.L_trace("config: local goclaw.json not found", "path", goclawLocalPath)
+	if err := mergeJSONConfig(cfg, goclawData); err != nil {
+		logging.L_error("config: failed to parse goclaw.json", "path", goclawPath, "error", err)
+		return nil, err
 	}
+	logging.L_debug("config: loaded from goclaw.json", "path", goclawPath)
 
-	// Environment variable fallbacks
-	if cfg.LLM.APIKey == "" {
-		if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
-			logging.L_debug("config: using ANTHROPIC_API_KEY from environment")
-			cfg.LLM.APIKey = key
-		}
-	}
-	if key := os.Getenv("BRAVE_API_KEY"); key != "" && cfg.Tools.Web.BraveAPIKey == "" {
-		logging.L_debug("config: using BRAVE_API_KEY from environment")
-		cfg.Tools.Web.BraveAPIKey = key
-	}
-	if token := os.Getenv("TELEGRAM_BOT_TOKEN"); token != "" && cfg.Telegram.BotToken == "" {
-		logging.L_debug("config: using TELEGRAM_BOT_TOKEN from environment")
-		cfg.Telegram.BotToken = token
-	}
+	// Apply environment variable fallbacks (for secrets not in config file)
+	applyEnvFallbacks(cfg)
 
 	// Log final config summary
 	logging.L_debug("config: loaded",
@@ -455,7 +510,33 @@ func Load() (*Config, error) {
 		"workingDir", cfg.Gateway.WorkingDir,
 	)
 
-	return cfg, nil
+	return &LoadResult{
+		Config:       cfg,
+		SourcePath:   goclawPath,
+		Bootstrapped: false,
+	}, nil
+}
+
+// applyEnvFallbacks applies environment variable fallbacks for secrets
+func applyEnvFallbacks(cfg *Config) {
+	if cfg.LLM.APIKey == "" {
+		if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
+			logging.L_debug("config: using ANTHROPIC_API_KEY from environment")
+			cfg.LLM.APIKey = key
+		}
+	}
+	if cfg.Tools.Web.BraveAPIKey == "" {
+		if key := os.Getenv("BRAVE_API_KEY"); key != "" {
+			logging.L_debug("config: using BRAVE_API_KEY from environment")
+			cfg.Tools.Web.BraveAPIKey = key
+		}
+	}
+	if cfg.Telegram.BotToken == "" {
+		if token := os.Getenv("TELEGRAM_BOT_TOKEN"); token != "" {
+			logging.L_debug("config: using TELEGRAM_BOT_TOKEN from environment")
+			cfg.Telegram.BotToken = token
+		}
+	}
 }
 
 // mergeOpenclawConfig extracts relevant settings from openclaw.json
@@ -650,6 +731,103 @@ func mustGetwd() string {
 		return cwd
 	}
 	return "unknown"
+}
+
+// rotateBackups rotates config backup files.
+// Keeps up to ConfigBackupCount versions:
+//   - .bak.4 gets deleted (oldest)
+//   - .bak.3 → .bak.4
+//   - .bak.2 → .bak.3
+//   - .bak.1 → .bak.2
+//   - .bak → .bak.1
+func rotateBackups(configPath string) {
+	if ConfigBackupCount <= 1 {
+		return
+	}
+
+	backupBase := configPath + ".bak"
+	maxIndex := ConfigBackupCount - 1 // 4
+
+	// Delete oldest
+	oldestPath := fmt.Sprintf("%s.%d", backupBase, maxIndex)
+	if err := os.Remove(oldestPath); err != nil && !os.IsNotExist(err) {
+		logging.L_trace("config: failed to remove oldest backup", "path", oldestPath, "error", err)
+	}
+
+	// Rotate: .bak.3 → .bak.4, .bak.2 → .bak.3, .bak.1 → .bak.2
+	for i := maxIndex - 1; i >= 1; i-- {
+		src := fmt.Sprintf("%s.%d", backupBase, i)
+		dst := fmt.Sprintf("%s.%d", backupBase, i+1)
+		if err := os.Rename(src, dst); err != nil && !os.IsNotExist(err) {
+			logging.L_trace("config: failed to rotate backup", "src", src, "dst", dst, "error", err)
+		}
+	}
+
+	// .bak → .bak.1
+	if err := os.Rename(backupBase, backupBase+".1"); err != nil && !os.IsNotExist(err) {
+		logging.L_trace("config: failed to rotate .bak to .bak.1", "error", err)
+	}
+}
+
+// copyFile copies a file from src to dst
+func copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	// Get source file info for permissions
+	srcInfo, err := srcFile.Stat()
+	if err != nil {
+		return err
+	}
+
+	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	_, err = io.Copy(dstFile, srcFile)
+	return err
+}
+
+// WriteConfigWithBackup writes the config to the specified path with backup rotation.
+// 1. Rotates existing backups
+// 2. Copies current config to .bak
+// 3. Writes new config atomically
+func WriteConfigWithBackup(path string, cfg *Config) error {
+	// Rotate existing backups
+	rotateBackups(path)
+
+	// Copy current to .bak if it exists
+	if _, err := os.Stat(path); err == nil {
+		backupPath := path + ".bak"
+		if err := copyFile(path, backupPath); err != nil {
+			logging.L_warn("config: failed to create backup", "path", backupPath, "error", err)
+			// Continue anyway - backup is best-effort
+		} else {
+			logging.L_trace("config: created backup", "path", backupPath)
+		}
+	}
+
+	// Marshal config with indentation
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+
+	// Add trailing newline
+	data = append(data, '\n')
+
+	// Write atomically
+	if err := sandbox.AtomicWriteFile(path, data, 0600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+
+	logging.L_info("config: written with defaults", "path", path, "size", len(data))
+	return nil
 }
 
 // mergeJSONConfig deep-merges JSON data into an existing config.
