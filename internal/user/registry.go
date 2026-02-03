@@ -46,55 +46,6 @@ func NewRegistryFromUsers(users config.UsersConfig) *Registry {
 	return r
 }
 
-// NewRegistry creates a user registry from legacy config (deprecated, for compatibility)
-func NewRegistry(cfg *config.Config) *Registry {
-	r := &Registry{
-		users:      make(map[string]*User),
-		telegramID: make(map[string]string),
-	}
-
-	for id, userCfg := range cfg.Users {
-		user := &User{
-			ID:   id,
-			Name: userCfg.Name,
-			Role: Role(userCfg.Role),
-		}
-
-		// Convert identities to find telegram ID
-		for _, idCfg := range userCfg.Identities {
-			if idCfg.Provider == "telegram" {
-				user.TelegramID = idCfg.ID
-				r.telegramID[idCfg.ID] = id
-			}
-		}
-
-		// Convert credentials to find HTTP password
-		for _, credCfg := range userCfg.Credentials {
-			if credCfg.Type == "password" {
-				user.HTTPPasswordHash = credCfg.Hash
-				break
-			}
-		}
-
-		// Convert permissions to map
-		if len(userCfg.Permissions) > 0 {
-			user.Permissions = make(map[string]bool)
-			for _, perm := range userCfg.Permissions {
-				user.Permissions[perm] = true
-			}
-		}
-
-		r.users[id] = user
-
-		// Track owner
-		if user.Role == RoleOwner {
-			r.ownerID = id
-		}
-	}
-
-	return r
-}
-
 // FromIdentity looks up a user by their external identity
 // Supported providers: "telegram"
 // Returns nil if no user is found with that identity
