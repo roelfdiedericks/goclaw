@@ -333,6 +333,11 @@ func (g *Gateway) MemoryManager() *memory.Manager {
 	return g.memoryManager
 }
 
+// AgentIdentity returns the agent identity configuration
+func (g *Gateway) AgentIdentity() *config.AgentIdentityConfig {
+	return &g.config.Agent
+}
+
 // SkillManager returns the skill manager
 func (g *Gateway) SkillManager() *skills.Manager {
 	return g.skillManager

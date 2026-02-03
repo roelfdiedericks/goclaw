@@ -39,6 +39,11 @@ func NewManager(db *sql.DB, provider memory.EmbeddingProvider, cfg config.Transc
 	}, nil
 }
 
+// SetAgentName sets the agent's display name for transcript labels
+func (m *Manager) SetAgentName(name string) {
+	m.indexer.SetAgentName(name)
+}
+
 // Start begins background indexing
 func (m *Manager) Start() {
 	L_info("transcript: starting manager")

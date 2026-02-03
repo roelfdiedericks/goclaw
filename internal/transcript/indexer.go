@@ -32,6 +32,9 @@ type Indexer struct {
 	// Stats
 	lastSync      time.Time
 	chunksIndexed int
+
+	// Identity
+	agentName string // Agent's display name for transcript labels
 }
 
 // NewIndexer creates a new transcript indexer
@@ -54,12 +57,18 @@ func NewIndexer(db *sql.DB, provider memory.EmbeddingProvider, cfg config.Transc
 	}
 
 	return &Indexer{
-		db:       db,
-		provider: provider,
-		config:   cfg,
-		stopChan: make(chan struct{}),
-		syncChan: make(chan struct{}, 1),
+		db:        db,
+		provider:  provider,
+		config:    cfg,
+		stopChan:  make(chan struct{}),
+		syncChan:  make(chan struct{}, 1),
+		agentName: "GoClaw", // Default
 	}
+}
+
+// SetAgentName sets the agent's display name for transcript labels
+func (idx *Indexer) SetAgentName(name string) {
+	idx.agentName = name
 }
 
 // Start begins the background indexer goroutine
@@ -293,14 +302,21 @@ func (idx *Indexer) groupMessages(messages []*Message) []*ConversationChunk {
 func (idx *Indexer) buildChunkContent(messages []*Message) string {
 	var parts []string
 	for _, msg := range messages {
-		role := msg.Role
-		if role == "user" {
-			role = "Human"
-		} else if role == "assistant" {
-			role = "Assistant"
+		var label string
+		if msg.Role == "user" {
+			// Use actual user ID/name for searchability
+			if msg.UserID != "" {
+				label = msg.UserID
+			} else {
+				label = "User"
+			}
+		} else if msg.Role == "assistant" {
+			label = idx.agentName
+		} else {
+			label = msg.Role
 		}
 		cleaned := CleanContent(msg.Content)
-		parts = append(parts, fmt.Sprintf("%s: %s", role, cleaned))
+		parts = append(parts, fmt.Sprintf("%s: %s", label, cleaned))
 	}
 	return strings.Join(parts, "\n\n")
 }

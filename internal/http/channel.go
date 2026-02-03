@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/session"
@@ -26,6 +27,7 @@ type HTTPChannel struct {
 // GatewayRunner is the interface for running agent requests
 type GatewayRunner interface {
 	RunAgent(ctx context.Context, req gateway.AgentRequest, events chan<- gateway.AgentEvent) error
+	AgentIdentity() *config.AgentIdentityConfig
 }
 
 const maxEventBuffer = 200 // Keep last N events per session for replay

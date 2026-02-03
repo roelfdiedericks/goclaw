@@ -58,6 +58,10 @@ type Session struct {
 	// Metadata
 	FlushActioned bool `json:"flushActioned,omitempty"` // True if agent wrote to memory at 90%
 
+	// Identity & Display
+	IsGroupChat bool   `json:"-"` // True for group chats (affects user label display)
+	agentName   string // Agent's display name (set via SetAgentName)
+
 	mu sync.RWMutex
 }
 
@@ -72,6 +76,37 @@ func NewSession(id string) *Session {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+}
+
+// SetAgentName sets the agent's display name for label helpers
+func (s *Session) SetAgentName(name string) {
+	s.agentName = name
+}
+
+// StorageUserLabel returns the user label for storage/transcript indexing.
+// Always returns the actual username for searchability.
+func (s *Session) StorageUserLabel(userName string) string {
+	if userName == "" {
+		return "User"
+	}
+	return userName
+}
+
+// DisplayUserLabel returns the user label for display purposes.
+// Returns "You" in 1:1 chats, actual username in group chats.
+func (s *Session) DisplayUserLabel(userName string) string {
+	if s.IsGroupChat && userName != "" {
+		return userName
+	}
+	return "You"
+}
+
+// AgentLabel returns the agent's display name.
+func (s *Session) AgentLabel() string {
+	if s.agentName != "" {
+		return s.agentName
+	}
+	return "GoClaw"
 }
 
 // AddUserMessage adds a user message to the session

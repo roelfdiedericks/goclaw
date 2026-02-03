@@ -229,7 +229,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						userStyle.Render("You: ")+text,
 						"",
 					)
-					m.currentLine = assistantStyle.Render("Assistant: ")
+					m.currentLine = assistantStyle.Render(m.gateway.AgentIdentity().DisplayName() + ": ")
 					m.chatViewport.SetContent(m.getChatContent())
 					m.chatViewport.GotoBottom()
 
@@ -320,7 +320,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			mirrorStyle.Render(fmt.Sprintf("┌─ 📱 %s ─────────────────────", msg.source)),
 			mirrorStyle.Render("│ ")+userStyle.Render("You: ")+truncateMsg(msg.userMsg, 100),
 			mirrorStyle.Render("│"),
-			mirrorStyle.Render("│ ")+assistantStyle.Render("Assistant: ")+truncateMsg(msg.response, 300),
+			mirrorStyle.Render("│ ")+assistantStyle.Render(m.gateway.AgentIdentity().DisplayName()+": ")+truncateMsg(msg.response, 300),
 			mirrorStyle.Render("└────────────────────────────────"),
 			"",
 		)
@@ -362,7 +362,7 @@ func handleAgentEvent(m *Model, event gateway.AgentEvent) {
 			m.chatLines = append(m.chatLines, toolStyle.Render("[Tool completed]"))
 		}
 		m.chatLines = append(m.chatLines, "")
-		m.currentLine = assistantStyle.Render("Assistant: ")
+		m.currentLine = assistantStyle.Render(m.gateway.AgentIdentity().DisplayName() + ": ")
 	case gateway.EventAgentEnd:
 		m.finishCurrentLine()
 		m.chatLines = append(m.chatLines, "")
