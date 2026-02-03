@@ -4,6 +4,7 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,11 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
+// ChatPreferences stores per-chat preferences
+type ChatPreferences struct {
+	ShowThinking bool // Show tool calls and thinking output
+}
+
 // Bot represents the Telegram bot
 type Bot struct {
 	bot     *tele.Bot
@@ -29,8 +35,21 @@ type Bot struct {
 	// Track active messages for editing during streaming
 	activeMessages sync.Map // chatID -> *tele.Message
 
+	// Per-chat preferences
+	chatPrefs sync.Map // chatID (int64) -> *ChatPreferences
+
 	ctx    context.Context
 	cancel context.CancelFunc
+}
+
+// getChatPrefs returns preferences for a chat, creating if needed
+func (b *Bot) getChatPrefs(chatID int64) *ChatPreferences {
+	if prefs, ok := b.chatPrefs.Load(chatID); ok {
+		return prefs.(*ChatPreferences)
+	}
+	prefs := &ChatPreferences{ShowThinking: false}
+	b.chatPrefs.Store(chatID, prefs)
+	return prefs
 }
 
 // New creates a new Telegram bot
@@ -87,6 +106,42 @@ func (b *Bot) setupHandlers() {
 	// Handle /start command (Telegram-specific, not in global registry)
 	b.bot.Handle("/start", func(c tele.Context) error {
 		return c.Send("Hello! I'm GoClaw, your AI assistant. Send me a message to get started.")
+	})
+
+	// Handle /thinking command (channel-specific preference)
+	b.bot.Handle("/thinking", func(c tele.Context) error {
+		chatID := c.Chat().ID
+		prefs := b.getChatPrefs(chatID)
+		
+		// Parse subcommand
+		arg := strings.ToLower(strings.TrimSpace(c.Message().Payload))
+		
+		var resultMsg string
+		switch arg {
+		case "on":
+			prefs.ShowThinking = true
+			resultMsg = "Thinking output enabled. You'll now see tool calls and working output."
+		case "off":
+			prefs.ShowThinking = false
+			resultMsg = "Thinking output disabled. You'll only see final responses."
+		case "toggle", "":
+			prefs.ShowThinking = !prefs.ShowThinking
+			if prefs.ShowThinking {
+				resultMsg = "Thinking output enabled."
+			} else {
+				resultMsg = "Thinking output disabled."
+			}
+		case "status":
+			if prefs.ShowThinking {
+				resultMsg = "Thinking output is currently ON."
+			} else {
+				resultMsg = "Thinking output is currently OFF."
+			}
+		default:
+			resultMsg = "Usage: /thinking [on|off|toggle|status]"
+		}
+		
+		return c.Send(resultMsg)
 	})
 
 	// Register handlers for all commands in the global registry
@@ -355,13 +410,70 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 		case gateway.EventToolStart:
 			L_debug("telegram: tool started", "tool", e.ToolName)
 			_ = c.Notify(tele.Typing)
+			
+			// Show tool start if thinking mode is on
+			prefs := b.getChatPrefs(c.Chat().ID)
+			if prefs.ShowThinking {
+				inputStr := string(e.Input)
+				if len(inputStr) > 1024 {
+					inputStr = inputStr[:1024] + "..."
+				}
+				toolMsg := fmt.Sprintf("⚙️ <b>%s</b>\n<code>%s</code>", 
+					escapeHTML(e.ToolName), escapeHTML(inputStr))
+				_, _ = b.bot.Send(c.Chat(), toolMsg, &tele.SendOptions{ParseMode: tele.ModeHTML})
+			}
 
 		case gateway.EventToolEnd:
 			L_debug("telegram: tool ended", "tool", e.ToolName, "hasError", e.Error != "")
+			
+			// Show tool result if thinking mode is on
+			prefs := b.getChatPrefs(c.Chat().ID)
+			if prefs.ShowThinking {
+				status := "✓"
+				duration := ""
+				if e.DurationMs > 0 {
+					duration = fmt.Sprintf(" (%dms)", e.DurationMs)
+				}
+				if e.Error != "" {
+					status = "✗"
+				}
+				
+				result := e.Result
+				if e.Error != "" {
+					result = e.Error
+				}
+				if len(result) > 1024 {
+					result = result[:1024] + "..."
+				}
+				
+				toolMsg := fmt.Sprintf("%s Completed%s", status, duration)
+				if result != "" {
+					toolMsg += fmt.Sprintf("\n<code>%s</code>", escapeHTML(result))
+				}
+				_, _ = b.bot.Send(c.Chat(), toolMsg, &tele.SendOptions{ParseMode: tele.ModeHTML})
+			}
+		
+		case gateway.EventThinking:
+			L_debug("telegram: thinking", "contentLen", len(e.Content))
+			
+			// Show thinking content if thinking mode is on
+			prefs := b.getChatPrefs(c.Chat().ID)
+			if prefs.ShowThinking {
+				content := e.Content
+				if len(content) > 1024 {
+					content = content[:1024] + "..."
+				}
+				thinkMsg := fmt.Sprintf("💡 <i>%s</i>", escapeHTML(content))
+				_, _ = b.bot.Send(c.Chat(), thinkMsg, &tele.SendOptions{ParseMode: tele.ModeHTML})
+			}
 
 		case gateway.EventAgentEnd:
-			// Send or update final message with HTML formatting
-			finalText := response.String()
+			// Use enriched finalText from event (has media refs processed)
+			// instead of accumulated response.String() which has raw refs
+			finalText := e.FinalText
+			if finalText == "" {
+				finalText = response.String() // fallback to accumulated
+			}
 			if finalText == "" {
 				finalText = "(No response)"
 			}
@@ -373,31 +485,45 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 				"elapsed", elapsed.Round(time.Millisecond),
 			)
 
-			// Convert markdown to Telegram HTML
-			formattedText := FormatMessage(finalText)
-
-			L_trace("telegram: formatting message",
-				"rawMarkdown", finalText,
-				"formattedHTML", formattedText)
-
-			if currentMsg == nil {
-				// Try HTML first, fallback to plain text
-				_, err := b.bot.Send(c.Chat(), formattedText, &tele.SendOptions{ParseMode: tele.ModeHTML})
-				if err != nil {
-					L_debug("telegram: HTML send failed, falling back to plain text", "error", err)
-					_, err = b.bot.Send(c.Chat(), finalText)
-					if err != nil {
-						L_error("telegram: failed to send final message", "error", err)
-					}
+			// Check for inline media references
+			if containsMediaRefs(finalText) {
+				L_debug("telegram: response contains media refs, sending with media")
+				// Delete the streaming message if we have one (we'll send fresh)
+				if currentMsg != nil {
+					_ = b.bot.Delete(currentMsg)
+				}
+				// Send text/media segments
+				if err := b.sendWithMediaRefs(c.Chat(), finalText); err != nil {
+					L_error("telegram: failed to send with media", "error", err)
 				}
 			} else {
-				// Try HTML edit first, fallback to plain text
-				_, err := b.bot.Edit(currentMsg, formattedText, &tele.SendOptions{ParseMode: tele.ModeHTML})
-				if err != nil {
-					L_debug("telegram: HTML edit failed, falling back to plain text", "error", err)
-					_, err = b.bot.Edit(currentMsg, finalText)
+				// No media refs - send as regular text
+				// Convert markdown to Telegram HTML
+				formattedText := FormatMessage(finalText)
+
+				L_trace("telegram: formatting message",
+					"rawMarkdown", finalText,
+					"formattedHTML", formattedText)
+
+				if currentMsg == nil {
+					// Try HTML first, fallback to plain text
+					_, err := b.bot.Send(c.Chat(), formattedText, &tele.SendOptions{ParseMode: tele.ModeHTML})
 					if err != nil {
-						L_debug("telegram: failed to edit final message", "error", err)
+						L_debug("telegram: HTML send failed, falling back to plain text", "error", err)
+						_, err = b.bot.Send(c.Chat(), finalText)
+						if err != nil {
+							L_error("telegram: failed to send final message", "error", err)
+						}
+					}
+				} else {
+					// Try HTML edit first, fallback to plain text
+					_, err := b.bot.Edit(currentMsg, formattedText, &tele.SendOptions{ParseMode: tele.ModeHTML})
+					if err != nil {
+						L_debug("telegram: HTML edit failed, falling back to plain text", "error", err)
+						_, err = b.bot.Edit(currentMsg, finalText)
+						if err != nil {
+							L_debug("telegram: failed to edit final message", "error", err)
+						}
 					}
 				}
 			}
@@ -449,6 +575,239 @@ func (b *Bot) sendWithHTMLFallback(chat *tele.Chat, text string) (*tele.Message,
 		return b.bot.Send(chat, text)
 	}
 	return msg, nil
+}
+
+// mediaRefPattern matches enriched media refs: {{media:mime:'path'}}
+var mediaRefPattern = regexp.MustCompile(`\{\{media:([a-z]+/[a-z0-9.+-]+):'((?:[^'\\]|\\.)*)'\}\}`)
+
+// containsMediaRefs checks if text contains any media references
+func containsMediaRefs(text string) bool {
+	return mediaRefPattern.MatchString(text)
+}
+
+// mediaSegment represents a segment of text or media
+type mediaSegment struct {
+	IsMedia bool
+	Text    string // for text segments
+	Path    string // for media segments
+	Mime    string // for media segments
+}
+
+// splitMediaSegments splits text into text and media segments
+func splitMediaSegments(text string) []mediaSegment {
+	var segments []mediaSegment
+	lastIndex := 0
+
+	matches := mediaRefPattern.FindAllStringSubmatchIndex(text, -1)
+	for _, match := range matches {
+		// Text before this match
+		if match[0] > lastIndex {
+			textBefore := strings.TrimSpace(text[lastIndex:match[0]])
+			if textBefore != "" {
+				segments = append(segments, mediaSegment{Text: textBefore})
+			}
+		}
+
+		// Extract mime and path from match
+		mime := text[match[2]:match[3]]
+		escapedPath := text[match[4]:match[5]]
+		path := media.UnescapePath(escapedPath)
+
+		segments = append(segments, mediaSegment{
+			IsMedia: true,
+			Path:    path,
+			Mime:    mime,
+		})
+
+		lastIndex = match[1]
+	}
+
+	// Text after last match
+	if lastIndex < len(text) {
+		textAfter := strings.TrimSpace(text[lastIndex:])
+		if textAfter != "" {
+			segments = append(segments, mediaSegment{Text: textAfter})
+		}
+	}
+
+	return segments
+}
+
+// sendWithMediaRefs parses and sends text with inline media references
+// Supports captions (preceding text < 1024 chars) and albums (consecutive images)
+func (b *Bot) sendWithMediaRefs(chat *tele.Chat, text string) error {
+	segments := splitMediaSegments(text)
+
+	// Get media root
+	var mediaRoot string
+	if b.gateway != nil && b.gateway.MediaStore() != nil {
+		mediaRoot = b.gateway.MediaStore().BaseDir()
+	}
+
+	i := 0
+	for i < len(segments) {
+		seg := segments[i]
+
+		if !seg.IsMedia {
+			// Text segment - check if next segment is media for caption attachment
+			if i+1 < len(segments) && segments[i+1].IsMedia && !strings.HasPrefix(segments[i+1].Mime, "error/") {
+				// Check if text is short enough for caption
+				if len(seg.Text) <= TelegramCaptionLimit {
+					// Look ahead for consecutive images (for album)
+					imageSegments := b.collectConsecutiveImages(segments, i+1)
+
+					if len(imageSegments) > 1 {
+						// Album with caption
+						b.sendAlbum(chat, mediaRoot, imageSegments, seg.Text)
+						i += 1 + len(imageSegments) // skip text + all images
+						continue
+					}
+
+					// Single media with caption
+					nextSeg := segments[i+1]
+					absPath, err := media.ResolveMediaPath(mediaRoot, nextSeg.Path)
+					if err != nil {
+						// Send text separately, then continue
+						_, _ = b.sendWithHTMLFallback(chat, seg.Text)
+						i++
+						continue
+					}
+
+					b.sendMediaByMime(chat.ID, absPath, nextSeg.Mime, seg.Text)
+					i += 2 // skip both text and media
+					continue
+				}
+			}
+
+			// No media follows, or text too long - send text separately
+			if seg.Text != "" {
+				_, _ = b.sendWithHTMLFallback(chat, seg.Text)
+			}
+			i++
+			continue
+		}
+
+		// Media segment (not preceded by suitable caption text)
+		// Handle error mimes
+		if strings.HasPrefix(seg.Mime, "error/") {
+			errType := strings.TrimPrefix(seg.Mime, "error/")
+			errMsg := fmt.Sprintf("[Media %s: %s]", errType, seg.Path)
+			_, _ = b.sendWithHTMLFallback(chat, errMsg)
+			i++
+			continue
+		}
+
+		// Check for consecutive images (album without caption)
+		imageSegments := b.collectConsecutiveImages(segments, i)
+		if len(imageSegments) > 1 {
+			b.sendAlbum(chat, mediaRoot, imageSegments, "")
+			i += len(imageSegments)
+			continue
+		}
+
+		// Single media without caption
+		absPath, err := media.ResolveMediaPath(mediaRoot, seg.Path)
+		if err != nil {
+			L_warn("telegram: failed to resolve media path", "path", seg.Path, "error", err)
+			i++
+			continue
+		}
+
+		b.sendMediaByMime(chat.ID, absPath, seg.Mime, "")
+		i++
+	}
+
+	return nil
+}
+
+// collectConsecutiveImages collects consecutive image segments starting at index
+func (b *Bot) collectConsecutiveImages(segments []mediaSegment, startIdx int) []mediaSegment {
+	var images []mediaSegment
+	for j := startIdx; j < len(segments); j++ {
+		seg := segments[j]
+		if !seg.IsMedia {
+			break
+		}
+		if strings.HasPrefix(seg.Mime, "error/") {
+			break
+		}
+		if !strings.HasPrefix(seg.Mime, "image/") {
+			break
+		}
+		images = append(images, seg)
+	}
+	return images
+}
+
+// sendAlbum sends multiple images as a Telegram album
+func (b *Bot) sendAlbum(chat *tele.Chat, mediaRoot string, segments []mediaSegment, caption string) {
+	if len(segments) == 0 {
+		return
+	}
+
+	// Telegram album max is 10 items
+	maxItems := 10
+	if len(segments) > maxItems {
+		segments = segments[:maxItems]
+	}
+
+	var album tele.Album
+	for i, seg := range segments {
+		absPath, err := media.ResolveMediaPath(mediaRoot, seg.Path)
+		if err != nil {
+			L_warn("telegram: failed to resolve album item path", "path", seg.Path, "error", err)
+			continue
+		}
+
+		photo := &tele.Photo{File: tele.FromDisk(absPath)}
+		// Caption only on first item, formatted as HTML
+		if i == 0 && caption != "" {
+			photo.Caption = FormatMessage(caption)
+		}
+		album = append(album, photo)
+	}
+
+	if len(album) == 0 {
+		return
+	}
+
+	_, err := b.bot.SendAlbum(chat, album, &tele.SendOptions{ParseMode: tele.ModeHTML})
+	if err != nil {
+		L_warn("telegram: failed to send album", "count", len(album), "error", err)
+		// Fallback: send individually
+		for i, seg := range segments {
+			absPath, _ := media.ResolveMediaPath(mediaRoot, seg.Path)
+			cap := ""
+			if i == 0 {
+				cap = caption
+			}
+			b.sendMediaByMime(chat.ID, absPath, seg.Mime, cap)
+		}
+	} else {
+		L_debug("telegram: sent album", "count", len(album), "hasCaption", caption != "")
+	}
+}
+
+// sendMediaByMime sends media based on mimetype with optional caption
+func (b *Bot) sendMediaByMime(chatID int64, absPath, mime, caption string) {
+	switch {
+	case strings.HasPrefix(mime, "image/"):
+		if err := b.SendPhoto(chatID, absPath, caption); err != nil {
+			L_warn("telegram: failed to send photo", "path", absPath, "error", err)
+		}
+	case strings.HasPrefix(mime, "video/"):
+		if err := b.SendVideo(chatID, absPath, caption); err != nil {
+			L_warn("telegram: failed to send video", "path", absPath, "error", err)
+		}
+	case strings.HasPrefix(mime, "audio/"):
+		if err := b.SendAudio(chatID, absPath, caption); err != nil {
+			L_warn("telegram: failed to send audio", "path", absPath, "error", err)
+		}
+	default:
+		if err := b.SendDocument(chatID, absPath, caption); err != nil {
+			L_warn("telegram: failed to send document", "path", absPath, "error", err)
+		}
+	}
 }
 
 // TelegramCaptionLimit is Telegram's maximum caption length

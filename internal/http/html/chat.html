@@ -51,6 +51,8 @@ $(document).ready(function() {
     var pendingImage = null; // { data: base64, mimeType: string, dataUrl: string }
     var typingTimeout = null; // For hiding typing indicator after inactivity
     var TYPING_TIMEOUT_MS = 5000; // Hide typing after 5s of no stream data
+    var showThinking = false; // Whether to show tool calls and thinking output
+    var activeToolCalls = {}; // Track active tool calls by ID
     
     // Configure marked.js with highlight.js
     marked.setOptions({
@@ -70,7 +72,53 @@ $(document).ready(function() {
     function renderMarkdown(text) {
         if (!text) return '';
         var html = marked.parse(text);
-        return DOMPurify.sanitize(html);
+        html = DOMPurify.sanitize(html);
+        html = renderMediaRefs(html);
+        return html;
+    }
+    
+    // Render media references: {{"{{media:mime:'path'}}"}} -> HTML elements
+    function renderMediaRefs(html) {
+        // Pattern: {{"{{media:mimetype:'escaped-path'}}"}}
+        // Also handles error mimes: {{"{{media:error/not-found:'path'}}"}}
+        var pattern = /\{\{media:([a-z]+\/[a-z0-9.+-]+):'((?:[^'\\]|\\.)*)'\}\}/gi;
+        
+        return html.replace(pattern, function(match, mime, escapedPath) {
+            var path = unescapeMediaPath(escapedPath);
+            var url = '/api/media?path=' + encodeURIComponent(path);
+            var filename = path.split('/').pop();
+            
+            // Handle error states
+            if (mime.startsWith('error/')) {
+                var errorType = mime.split('/')[1];
+                return '<div class="chat-media-error"><i class="bi bi-exclamation-triangle"></i> ' +
+                    (errorType === 'not-found' ? 'File not found: ' : 'Invalid path: ') +
+                    '<code>' + escapeHtml(filename) + '</code></div>';
+            }
+            
+            // Render based on mimetype
+            if (mime.startsWith('image/')) {
+                return '<img src="' + url + '" class="chat-media chat-media-image" alt="' + escapeHtml(filename) + '" loading="lazy">';
+            } else if (mime.startsWith('video/')) {
+                return '<video src="' + url + '" controls class="chat-media chat-media-video"></video>';
+            } else if (mime.startsWith('audio/')) {
+                return '<audio src="' + url + '" controls class="chat-media-audio"></audio>';
+            } else {
+                // Document or unknown - show download link
+                return '<a href="' + url + '" download class="chat-media-link"><i class="bi bi-file-earmark-arrow-down"></i> ' +
+                    escapeHtml(filename) + '</a>';
+            }
+        });
+    }
+    
+    // Unescape media path (reverse of Go's EscapePath)
+    function unescapeMediaPath(s) {
+        return s.replace(/\\'/g, "'").replace(/\\\\/g, "\\");
+    }
+    
+    // Escape HTML for safe display
+    function escapeHtml(text) {
+        return $('<div>').text(text).html();
     }
 
     // Load chat history from localStorage
@@ -207,10 +255,12 @@ $(document).ready(function() {
         eventSource.addEventListener('done', function(e) {
             clearTypingTimeout();
             hideTypingIndicator();
-            // Render final markdown and store raw content
-            if ($currentBubble && currentRawText) {
-                $currentBubble.html(renderMarkdown(currentRawText));
-                $currentBubble.closest('.message').data('raw-content', currentRawText);
+            var data = JSON.parse(e.data);
+            // Use finalText from server (has media refs enriched) instead of accumulated deltas
+            var finalText = data.finalText || currentRawText;
+            if ($currentBubble && finalText) {
+                $currentBubble.html(renderMarkdown(finalText));
+                $currentBubble.closest('.message').data('raw-content', finalText);
             }
             currentRunId = null;
             currentRawText = '';
@@ -257,6 +307,82 @@ $(document).ready(function() {
                 $messages.scrollTop($messages[0].scrollHeight);
                 saveHistory();
             }
+        });
+        
+        // Handle preference updates
+        eventSource.addEventListener('preference', function(e) {
+            var data = JSON.parse(e.data);
+            if (data.key === 'thinking') {
+                showThinking = data.value;
+                updateThinkingButton(showThinking);
+            }
+        });
+        
+        // Handle system messages
+        eventSource.addEventListener('system', function(e) {
+            var data = JSON.parse(e.data);
+            appendMessage('system', data.message);
+        });
+        
+        // Handle tool start (only show if thinking mode is on)
+        eventSource.addEventListener('tool_start', function(e) {
+            if (!showThinking) return;
+            var data = JSON.parse(e.data);
+            var toolId = data.toolId;
+            var inputStr = typeof data.input === 'string' ? data.input : JSON.stringify(data.input, null, 2);
+            
+            var $toolCall = $('<div class="tool-call" data-tool-id="' + toolId + '">' +
+                '<div class="tool-call-header">' +
+                    '<span class="tool-call-icon"><i class="bi bi-gear-fill"></i></span>' +
+                    '<span class="tool-call-name">' + escapeHtml(data.toolName) + '</span>' +
+                    '<span class="tool-call-status running"><i class="bi bi-arrow-repeat spin"></i> Running</span>' +
+                '</div>' +
+                '<div class="tool-call-input">' + escapeHtml(inputStr) + '</div>' +
+            '</div>');
+            
+            $messages.append($toolCall);
+            $messages.scrollTop($messages[0].scrollHeight);
+            activeToolCalls[toolId] = $toolCall;
+        });
+        
+        // Handle tool end (only show if thinking mode is on)
+        eventSource.addEventListener('tool_end', function(e) {
+            if (!showThinking) return;
+            var data = JSON.parse(e.data);
+            var toolId = data.toolId;
+            var $toolCall = activeToolCalls[toolId];
+            
+            if ($toolCall) {
+                var statusClass = data.error ? 'error' : 'completed';
+                var statusIcon = data.error ? 'x-circle' : 'check-circle';
+                var statusText = data.error ? 'Error' : 'Completed';
+                var duration = data.durationMs ? ' (' + data.durationMs + 'ms)' : '';
+                
+                $toolCall.find('.tool-call-status')
+                    .removeClass('running')
+                    .addClass(statusClass)
+                    .html('<i class="bi bi-' + statusIcon + '"></i> ' + statusText + duration);
+                
+                // Add result/error
+                if (data.result || data.error) {
+                    var output = data.error || data.result;
+                    $toolCall.append('<div class="tool-call-output">' + escapeHtml(output) + '</div>');
+                }
+                
+                delete activeToolCalls[toolId];
+                $messages.scrollTop($messages[0].scrollHeight);
+            }
+        });
+        
+        // Handle thinking content
+        eventSource.addEventListener('thinking', function(e) {
+            if (!showThinking) return;
+            var data = JSON.parse(e.data);
+            var $thinking = $('<div class="thinking-content">' +
+                '<i class="bi bi-lightbulb"></i> ' + escapeHtml(data.content) +
+            '</div>');
+            $messages.append($thinking);
+            $messages.scrollTop($messages[0].scrollHeight);
         });
         
         eventSource.onerror = function(e) {
@@ -421,6 +547,77 @@ $(document).ready(function() {
         $('#image-preview').hide();
         $('#preview-img').attr('src', '');
         $input.focus();
+    });
+
+    // Media modal for enlarged view
+    var $modal = $('#media-modal');
+    var $modalContent = $('#media-modal-content');
+    
+    // Click on image or video to enlarge
+    $(document).on('click', '.chat-media-image, .chat-media-video', function(e) {
+        e.preventDefault();
+        var $el = $(this);
+        var src = $el.attr('src');
+        
+        if ($el.hasClass('chat-media-image')) {
+            $modalContent.html('<img src="' + src + '" alt="Enlarged view">');
+        } else if ($el.hasClass('chat-media-video')) {
+            $modalContent.html('<video src="' + src + '" controls autoplay></video>');
+        }
+        
+        $modal.addClass('active');
+    });
+    
+    // Close modal on click anywhere
+    $modal.on('click', function() {
+        $modal.removeClass('active');
+        // Stop video if playing
+        $modalContent.find('video').each(function() {
+            this.pause();
+        });
+        $modalContent.empty();
+    });
+    
+    // Prevent closing when clicking on the media itself
+    $modalContent.on('click', function(e) {
+        e.stopPropagation();
+    });
+    
+    // Close modal on Escape key
+    $(document).on('keydown', function(e) {
+        if (e.key === 'Escape' && $modal.hasClass('active')) {
+            $modal.removeClass('active');
+            $modalContent.find('video').each(function() {
+                this.pause();
+            });
+            $modalContent.empty();
+        }
+    });
+
+    // Update thinking button state
+    function updateThinkingButton(enabled) {
+        var $btn = $('#thinking-toggle');
+        $btn.toggleClass('active', enabled);
+        $btn.attr('title', 'Thinking ' + (enabled ? 'ON' : 'OFF') + ' (click to toggle)');
+    }
+    
+    // Thinking toggle button click - send /thinking command
+    $('#thinking-toggle').on('click', function() {
+        // Send /thinking toggle command
+        $.ajax({
+            url: '/api/send',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ message: '/thinking toggle' })
+        });
+    });
+    
+    // Show thinking toggle button on chat page
+    $('#thinking-toggle').removeClass('d-none');
+    
+    // Make tool input/output collapsible
+    $(document).on('click', '.tool-call-input, .tool-call-output', function() {
+        $(this).toggleClass('expanded');
     });
 
     // Load history and start connection

@@ -20,7 +20,7 @@ type SQLiteStore struct {
 }
 
 // Schema version for migrations
-const currentSchemaVersion = 2
+const currentSchemaVersion = 3
 
 // NewSQLiteStore creates a new SQLite store
 func NewSQLiteStore(cfg StoreConfig) (*SQLiteStore, error) {
@@ -83,6 +83,7 @@ func (s *SQLiteStore) Migrate() error {
 	migrations := []func(*sql.DB) error{
 		migrateV1,
 		migrateV2,
+		migrateV3,
 	}
 
 	for i := version; i < len(migrations); i++ {
@@ -231,10 +232,34 @@ func migrateV2(db *sql.DB) error {
 	return err
 }
 
+// migrateV3 adds transcript_indexed_at column for transcript search indexing
+func migrateV3(db *sql.DB) error {
+	schema := `
+	-- Add transcript_indexed_at column to messages for tracking which messages have been indexed
+	-- NULL = not indexed, timestamp = when indexed
+	ALTER TABLE messages ADD COLUMN transcript_indexed_at INTEGER DEFAULT NULL;
+	
+	-- Index for efficient lookup of unindexed messages
+	CREATE INDEX IF NOT EXISTS idx_messages_unindexed ON messages(transcript_indexed_at) WHERE transcript_indexed_at IS NULL;
+	
+	-- Update schema version
+	INSERT INTO schema_version (version, applied_at) VALUES (3, ?);
+	`
+
+	_, err := db.Exec(schema, time.Now().Unix())
+	return err
+}
+
 // Close closes the database connection
 func (s *SQLiteStore) Close() error {
 	L_debug("sqlite: closing store")
 	return s.db.Close()
+}
+
+// DB returns the underlying database connection for external use
+// (e.g., transcript indexing needs direct DB access)
+func (s *SQLiteStore) DB() *sql.DB {
+	return s.db
 }
 
 // GetSession retrieves a session by key

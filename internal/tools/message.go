@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/media"
+	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
 // MessageChannel defines the interface for sending messages to channels.
@@ -18,11 +20,12 @@ type MessageChannel interface {
 	React(chatID string, messageID string, emoji string) error
 }
 
-// SessionContext provides current session information for the message tool.
+// SessionContext provides current session information for tools.
 type SessionContext struct {
-	Channel     string // Current channel name (e.g., "telegram", "tui")
-	ChatID      string // Current chat ID
-	OwnerChatID string // Owner's telegram chat ID (fallback for cron/heartbeat)
+	Channel     string     // Current channel name (e.g., "telegram", "tui")
+	ChatID      string     // Current chat ID
+	OwnerChatID string     // Owner's telegram chat ID (fallback for cron/heartbeat)
+	User        *user.User // Current user (for permission checks in tools)
 }
 
 // sessionContextKey is used to store SessionContext in context.Context
@@ -43,7 +46,8 @@ func GetSessionContext(ctx context.Context) *SessionContext {
 
 // MessageTool allows the agent to send, edit, delete, and react to messages.
 type MessageTool struct {
-	channels map[string]MessageChannel // channel name -> implementation
+	channels  map[string]MessageChannel // channel name -> implementation
+	mediaRoot string                    // base directory for media files
 }
 
 // NewMessageTool creates a new message tool with the given channels.
@@ -53,12 +57,24 @@ func NewMessageTool(channels map[string]MessageChannel) *MessageTool {
 	}
 }
 
+// SetMediaRoot sets the media root directory for resolving content paths.
+func (t *MessageTool) SetMediaRoot(root string) {
+	t.mediaRoot = root
+}
+
+// ContentItem represents a single item in the content array.
+type ContentItem struct {
+	Type string `json:"type"` // "text" or "media"
+	Text string `json:"text"` // for type="text"
+	Path string `json:"path"` // for type="media", relative to media root
+}
+
 func (t *MessageTool) Name() string {
 	return "message"
 }
 
 func (t *MessageTool) Description() string {
-	return "Send, edit, delete, and react to messages. Use filePath to send local files (screenshots, images, etc.). For 'send' action: omit channel to broadcast to all channels (telegram, http web UI)."
+	return "Send, edit, delete, and react to messages. Use filePath for single media, or content array for mixed text/media. For 'send' action: omit channel to broadcast to all channels."
 }
 
 func (t *MessageTool) Schema() map[string]interface{} {
@@ -70,10 +86,10 @@ func (t *MessageTool) Schema() map[string]interface{} {
 				"enum":        []string{"send", "edit", "delete", "react"},
 				"description": "Action to perform",
 			},
-		"channel": map[string]interface{}{
-			"type":        "string",
-			"description": "Target channel (telegram, http). Defaults to current session's channel. If omitted for 'send' action, broadcasts to all channels.",
-		},
+			"channel": map[string]interface{}{
+				"type":        "string",
+				"description": "Target channel (telegram, http). Defaults to current session's channel. If omitted for 'send' action, broadcasts to all channels.",
+			},
 			"to": map[string]interface{}{
 				"type":        "string",
 				"description": "Chat ID to send to. Defaults to current chat.",
@@ -90,6 +106,28 @@ func (t *MessageTool) Schema() map[string]interface{} {
 				"type":        "string",
 				"description": "Caption for media files",
 			},
+			"content": map[string]interface{}{
+				"type":        "array",
+				"description": "Mixed content array for interleaved text/media (alternative to message/filePath)",
+				"items": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"type": map[string]interface{}{
+							"type":        "string",
+							"enum":        []string{"text", "media"},
+							"description": "Content type",
+						},
+						"text": map[string]interface{}{
+							"type":        "string",
+							"description": "Text content (for type=text)",
+						},
+						"path": map[string]interface{}{
+							"type":        "string",
+							"description": "Media path relative to media root (for type=media)",
+						},
+					},
+				},
+			},
 			"messageId": map[string]interface{}{
 				"type":        "string",
 				"description": "Message ID for edit/delete/react actions",
@@ -105,14 +143,15 @@ func (t *MessageTool) Schema() map[string]interface{} {
 
 func (t *MessageTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
 	var params struct {
-		Action    string `json:"action"`
-		Channel   string `json:"channel"`
-		To        string `json:"to"`
-		Message   string `json:"message"`
-		FilePath  string `json:"filePath"`
-		Caption   string `json:"caption"`
-		MessageID string `json:"messageId"`
-		Emoji     string `json:"emoji"`
+		Action    string        `json:"action"`
+		Channel   string        `json:"channel"`
+		To        string        `json:"to"`
+		Message   string        `json:"message"`
+		FilePath  string        `json:"filePath"`
+		Caption   string        `json:"caption"`
+		Content   []ContentItem `json:"content"`
+		MessageID string        `json:"messageId"`
+		Emoji     string        `json:"emoji"`
 	}
 
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -141,6 +180,10 @@ func (t *MessageTool) Execute(ctx context.Context, input json.RawMessage) (strin
 		_, hasChannel := t.channels[channel]
 		if channel == "" || !hasChannel {
 			L_debug("message: broadcasting (channel not available)", "requestedChannel", channel)
+			// Content array takes priority
+			if len(params.Content) > 0 {
+				return t.broadcastContent(sessionCtx, params.Content)
+			}
 			return t.broadcastSend(sessionCtx, params.Message, params.FilePath, params.Caption)
 		}
 	}
@@ -174,10 +217,15 @@ func (t *MessageTool) Execute(ctx context.Context, input json.RawMessage) (strin
 		"channel", channel,
 		"chatID", chatID,
 		"hasFilePath", params.FilePath != "",
+		"hasContent", len(params.Content) > 0,
 	)
 
 	switch params.Action {
 	case "send":
+		// Content array takes priority over message/filePath
+		if len(params.Content) > 0 {
+			return t.sendContent(ch, chatID, params.Content)
+		}
 		return t.send(ch, chatID, params.Message, params.FilePath, params.Caption)
 	case "edit":
 		return t.edit(ch, chatID, params.MessageID, params.Message)
@@ -225,11 +273,51 @@ func (t *MessageTool) broadcastSend(sessionCtx *SessionContext, message, filePat
 	return fmt.Sprintf("Broadcast sent to %d channels: %v", len(results), results), nil
 }
 
+// broadcastContent broadcasts content array to all available channels
+func (t *MessageTool) broadcastContent(sessionCtx *SessionContext, content []ContentItem) (string, error) {
+	if len(t.channels) == 0 {
+		return "", fmt.Errorf("no channels available")
+	}
+
+	var results []string
+	var lastErr error
+
+	for name, ch := range t.channels {
+		// Determine chatID for this channel
+		chatID := ""
+		if name == "telegram" && sessionCtx.OwnerChatID != "" {
+			chatID = sessionCtx.OwnerChatID
+		}
+		// HTTP channel doesn't need chatID
+
+		L_debug("message: broadcast content", "channel", name, "chatID", chatID, "items", len(content))
+
+		result, err := t.sendContent(ch, chatID, content)
+		if err != nil {
+			L_warn("message: broadcast content failed", "channel", name, "error", err)
+			lastErr = err
+			continue
+		}
+		results = append(results, fmt.Sprintf("%s: %s", name, result))
+	}
+
+	if len(results) == 0 {
+		return "", fmt.Errorf("broadcast content failed on all channels: %w", lastErr)
+	}
+
+	return fmt.Sprintf("Broadcast content to %d channels: %v", len(results), results), nil
+}
+
 // send sends a text or media message
 func (t *MessageTool) send(ch MessageChannel, chatID, message, filePath, caption string) (string, error) {
 	if filePath != "" {
+		// Use message as caption if caption is empty
+		effectiveCaption := caption
+		if effectiveCaption == "" && message != "" {
+			effectiveCaption = message
+		}
 		// Send media
-		msgID, err := ch.SendMedia(chatID, filePath, caption)
+		msgID, err := ch.SendMedia(chatID, filePath, effectiveCaption)
 		if err != nil {
 			return "", fmt.Errorf("failed to send media: %w", err)
 		}
@@ -237,7 +325,7 @@ func (t *MessageTool) send(ch MessageChannel, chatID, message, filePath, caption
 		if msgID != "" {
 			result = fmt.Sprintf("Media sent (messageId: %s)", msgID)
 		}
-		L_debug("message: media sent", "chatID", chatID, "filePath", filePath)
+		L_debug("message: media sent", "chatID", chatID, "filePath", filePath, "hasCaption", effectiveCaption != "")
 		return result, nil
 	}
 
@@ -257,6 +345,56 @@ func (t *MessageTool) send(ch MessageChannel, chatID, message, filePath, caption
 	}
 	L_debug("message: text sent", "chatID", chatID, "msgID", msgID)
 	return result, nil
+}
+
+// sendContent sends mixed content (text and media items in sequence)
+func (t *MessageTool) sendContent(ch MessageChannel, chatID string, content []ContentItem) (string, error) {
+	if len(content) == 0 {
+		return "", fmt.Errorf("content array is empty")
+	}
+
+	var sentCount int
+	for i, item := range content {
+		switch item.Type {
+		case "text":
+			if item.Text == "" {
+				continue
+			}
+			_, err := ch.SendText(chatID, item.Text)
+			if err != nil {
+				L_warn("message: failed to send text item", "index", i, "error", err)
+				continue
+			}
+			sentCount++
+
+		case "media":
+			if item.Path == "" {
+				continue
+			}
+			// Resolve path relative to media root
+			absPath, err := media.ResolveMediaPath(t.mediaRoot, item.Path)
+			if err != nil {
+				L_warn("message: failed to resolve media path", "path", item.Path, "error", err)
+				continue
+			}
+			_, err = ch.SendMedia(chatID, absPath, "")
+			if err != nil {
+				L_warn("message: failed to send media item", "index", i, "path", absPath, "error", err)
+				continue
+			}
+			sentCount++
+
+		default:
+			L_warn("message: unknown content type", "index", i, "type", item.Type)
+		}
+	}
+
+	if sentCount == 0 {
+		return "", fmt.Errorf("failed to send any content items")
+	}
+
+	L_debug("message: content sent", "chatID", chatID, "items", sentCount)
+	return fmt.Sprintf("Sent %d content items", sentCount), nil
 }
 
 // edit edits an existing message

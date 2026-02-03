@@ -33,6 +33,9 @@ type Server struct {
 	// Channel for gateway integration
 	channel *HTTPChannel
 
+	// Media root for serving inline media
+	mediaRoot string
+
 	// Dev mode: reload templates from disk on each request
 	devMode      bool
 	templatesDir string
@@ -40,23 +43,32 @@ type Server struct {
 
 // ServerConfig holds HTTP server configuration
 type ServerConfig struct {
-	Listen  string // Address to listen on (e.g., ":1337")
-	DevMode bool   // Reload templates from disk on each request
+	Listen    string // Address to listen on (e.g., ":1337")
+	DevMode   bool   // Reload templates from disk on each request
+	MediaRoot string // Base directory for media files
 }
 
 // NewServer creates a new HTTP server instance
 func NewServer(cfg *ServerConfig, users *user.Registry) (*Server, error) {
+	L_debug("http: NewServer starting", "listen", cfg.Listen, "devMode", cfg.DevMode, "mediaRoot", cfg.MediaRoot)
+	
 	// Validate that at least one user has HTTP credentials
 	hasHTTPUsers := false
-	for _, u := range users.List() {
-		if u.HasHTTPAuth() {
+	userList := users.List()
+	L_debug("http: checking users for HTTP auth", "userCount", len(userList))
+	for _, u := range userList {
+		hasAuth := u.HasHTTPAuth()
+		L_debug("http: user auth check", "userID", u.ID, "hasHTTPAuth", hasAuth)
+		if hasAuth {
 			hasHTTPUsers = true
 			break
 		}
 	}
 	if !hasHTTPUsers {
+		L_error("http: no users with HTTP credentials found")
 		return nil, fmt.Errorf("HTTP server requires at least one user with HTTP credentials (use 'goclaw user set-http')")
 	}
+	L_debug("http: user validation passed")
 
 	listen := cfg.Listen
 	if listen == "" {
@@ -68,6 +80,7 @@ func NewServer(cfg *ServerConfig, users *user.Registry) (*Server, error) {
 		rateLimiter:  NewRateLimiter(10 * time.Second),
 		shutdownChan: make(chan struct{}),
 		devMode:      cfg.DevMode,
+		mediaRoot:    cfg.MediaRoot,
 	}
 
 	// Create HTTP channel
@@ -87,9 +100,12 @@ func NewServer(cfg *ServerConfig, users *user.Registry) (*Server, error) {
 	}
 
 	// Load templates (embedded or from disk)
+	L_debug("http: loading templates", "devMode", s.devMode, "templatesDir", s.templatesDir)
 	if err := s.loadTemplates(); err != nil {
+		L_error("http: template loading failed", "error", err, "devMode", s.devMode, "templatesDir", s.templatesDir)
 		return nil, fmt.Errorf("failed to load templates: %w", err)
 	}
+	L_debug("http: templates loaded successfully")
 
 	// Create HTTP server
 	s.server = &http.Server{

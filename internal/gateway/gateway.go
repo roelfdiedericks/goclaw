@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"regexp"
 	"strings"
@@ -819,6 +820,9 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		SkillsPrompt:   skillsPrompt,
 	})
 
+	// Append media storage instructions
+	systemPrompt += g.buildMediaInstructions()
+
 	// Check if compaction is needed before proceeding
 	if g.compactor != nil && g.compactor.ShouldCompact(sess) {
 		L_info("compaction needed, running compaction", "runID", runID,
@@ -990,6 +994,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			}
 
 			// Execute tool with session context
+			toolStartTime := time.Now()
 			ownerChatID := ""
 			if owner := g.users.Owner(); owner != nil {
 				ownerChatID = owner.TelegramID
@@ -998,8 +1003,10 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				Channel:     req.Source,
 				ChatID:      req.ChatID,
 				OwnerChatID: ownerChatID,
+				User:        req.User,
 			})
 			result, err := g.tools.Execute(toolCtx, response.ToolName, response.ToolInput)
+			toolDuration := time.Since(toolStartTime)
 
 			errStr := ""
 			if err != nil {
@@ -1019,11 +1026,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			}
 
 			events <- EventToolEnd{
-				RunID:    runID,
-				ToolName: response.ToolName,
-				ToolID:   response.ToolUseID,
-				Result:   result,
-				Error:    errStr,
+				RunID:      runID,
+				ToolName:   response.ToolName,
+				ToolID:     response.ToolUseID,
+				Result:     result,
+				Error:      errStr,
+				DurationMs: toolDuration.Milliseconds(),
 			}
 
 			// Add to session and continue loop
@@ -1051,6 +1059,9 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		L_warn("agent run completed with empty response", "runID", runID, "messages", sess.MessageCount())
 	}
 	L_info("agent run completed", "runID", runID, "responseLen", len(finalText))
+
+	// Enrich media references: {{media:path}} -> {{media:mime:'path'}}
+	finalText = g.enrichMediaRefs(finalText)
 
 	// For heartbeat: rollback in-memory session to before the run (ephemeral)
 	if req.IsHeartbeat && messageCountBefore > 0 {
@@ -1300,6 +1311,22 @@ func (g *Gateway) SessionManager() *session.Manager {
 	return g.sessions
 }
 
+// SessionDB returns the SQLite database for the session store, or nil if not using SQLite
+func (g *Gateway) SessionDB() *sql.DB {
+	if g.sessions == nil {
+		return nil
+	}
+	store := g.sessions.GetStore()
+	if store == nil {
+		return nil
+	}
+	// Type assert to SQLiteStore to get DB
+	if sqliteStore, ok := store.(*session.SQLiteStore); ok {
+		return sqliteStore.DB()
+	}
+	return nil
+}
+
 // persistMessage writes a message to SQLite storage for audit trail
 func (g *Gateway) persistMessage(ctx context.Context, sessionKey, role, content, source, toolCallID, toolName string, toolInput []byte, toolError string) {
 	store := g.sessions.GetStore()
@@ -1333,4 +1360,101 @@ func (g *Gateway) persistMessage(ctx context.Context, sessionKey, role, content,
 	} else {
 		L_trace("message persisted to SQLite", "role", role, "toolName", toolName)
 	}
+}
+
+// buildMediaInstructions returns media storage instructions for the system prompt.
+func (g *Gateway) buildMediaInstructions() string {
+	if g.mediaStore == nil {
+		return ""
+	}
+
+	return fmt.Sprintf(`
+
+## Media Storage
+
+Media root: %s
+
+Subdirectory conventions:
+- browser/     - browser screenshots (BrowserTool uses this)
+- screenshots/ - general screenshots, screen captures
+- camera/      - camera/security captures
+- inbound/     - user-uploaded media (Telegram photos, HTTP paste)
+- generated/   - AI-generated images
+- downloads/   - downloaded files
+
+When saving media, use appropriate subdirectory.
+
+## Media References
+
+Two ways to send media:
+
+1. **Inline (conversational):** Write {{media:path}} in your response
+   - Goes to whoever you're talking to
+   - Gateway enriches with mimetype, channels render appropriately
+   - Example: Here's the screenshot: {{media:screenshots/desktop.png}}
+
+2. **Message tool (explicit):** Two options:
+   - Simple: {"action":"send", "filePath":"screenshots/file.png", "caption":"optional"}
+   - Mixed content: {"action":"send", "content":[{"type":"text","text":"Before"},{"type":"media","path":"screenshots/file.png"},{"type":"text","text":"After"}]}
+   - Use for specific channel/chat targeting, programmatic sends, delivery confirmation
+
+Prefer inline {{media:}} for conversational flow. Use message tool for explicit sends.
+`, g.mediaStore.BaseDir())
+}
+
+// enrichMediaRefs finds {{media:path}} in text and enriches to {{media:mime:'path'}}
+// Also validates that files exist and marks missing files with error mime type.
+func (g *Gateway) enrichMediaRefs(text string) string {
+	if g.mediaStore == nil {
+		L_debug("media: enrichMediaRefs skipped - no media store")
+		return text
+	}
+
+	// Pattern: {{media:path}} where path doesn't contain }, ', or :
+	// This is the simple form the agent writes
+	pattern := regexp.MustCompile(`\{\{media:([^}'":]+)\}\}`)
+	
+	if !pattern.MatchString(text) {
+		return text
+	}
+	L_debug("media: enriching refs in text")
+
+	return pattern.ReplaceAllStringFunc(text, func(match string) string {
+		// Extract path from match
+		submatch := pattern.FindStringSubmatch(match)
+		if len(submatch) < 2 {
+			return match
+		}
+		path := strings.TrimSpace(submatch[1])
+
+		// Skip conversational/example uses - require path to look like a file
+		// Must contain '/' (subdirectory) or '.' (file extension)
+		if !strings.Contains(path, "/") && !strings.Contains(path, ".") {
+			L_trace("media: skipping non-file-like path (conversational)", "path", path)
+			return match // leave unchanged
+		}
+
+		// Resolve to absolute path
+		absPath, err := media.ResolveMediaPath(g.mediaStore.BaseDir(), path)
+		if err != nil {
+			L_trace("media: skipping invalid path", "path", path, "error", err)
+			return match // leave unchanged for conversational use
+		}
+
+		// Check if file exists - if not, leave unchanged (might be conversational)
+		if !media.FileExists(absPath) {
+			L_trace("media: file not found, leaving unchanged", "path", path)
+			return match
+		}
+
+		// Detect mimetype
+		mimeType, err := media.DetectMimeType(absPath)
+		if err != nil {
+			L_warn("media: failed to detect mimetype", "path", path, "error", err)
+			mimeType = "application/octet-stream"
+		}
+
+		L_debug("media: enriched ref", "path", path, "mime", mimeType)
+		return fmt.Sprintf("{{media:%s:'%s'}}", mimeType, media.EscapePath(path))
+	})
 }

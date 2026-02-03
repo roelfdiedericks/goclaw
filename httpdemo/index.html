@@ -1,0 +1,1465 @@
+cat index.html
+{{template "header" .}}
+
+        <div class="row">
+            <div class="col-md-12">
+                <div class="alert alert-success" role="alert">
+                    <h4 class="alert-heading">PPPoE Control Plane Status</h4>
+                    <p>System is operational. Currently managing <strong>{{.SessionCount}}</strong> active sessions.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <div class="col-md-8">
+                <div class="card stats-card">
+                    <div class="card-body">
+                        <h5 class="card-title">
+                            <i class="bi bi-speedometer2 text-primary"></i> Quick Actions
+                        </h5>
+                        <p class="card-text">Monitor and manage PPPoE sessions in real-time.</p>
+
+                        <!-- Primary Actions Row -->
+                        <div class="mb-2">
+                        <a href="/sessions.html" class="btn btn-primary">
+                            <i class="bi bi-people-fill"></i> View Sessions
+                        </a>
+                        <a href="/radius.html" class="btn btn-success ms-2">
+                            <i class="bi bi-shield-lock"></i> RADIUS Stats
+                        </a>
+                        <a href="/vlan.html" class="btn btn-warning ms-2">
+                            <i class="bi bi-diagram-3"></i> VLAN Discovery
+                        </a>
+                            <a href="/tunnels.html" class="btn btn-info ms-2">
+                                <i class="bi bi-diagram-2"></i> LNS Tunnels
+                            </a>
+                            <a href="/relays.html" class="btn btn-info ms-2">
+                                <i class="bi bi-arrow-right-circle"></i> LAC Tunnels
+                            </a>
+                        </div>
+
+                        <!-- Secondary Actions Row -->
+                        <div>
+                            <a href="/metrics.html" class="btn btn-outline-info">
+                            <i class="bi bi-speedometer2"></i> View Metrics
+                        </a>
+                            <a href="/vpp_performance.html" class="btn btn-outline-info ms-2">
+                                <i class="bi bi-cpu"></i> VPP Performance
+                            </a>
+                            <a href="/vpp_advisor.html" class="btn btn-outline-primary ms-2">
+                                <i class="bi bi-shield-check"></i> VPP Advisor
+                            </a>
+                            <button class="btn btn-outline-secondary ms-2" onclick="fetchStats()">
+                            <i class="bi bi-bar-chart"></i> Refresh Stats
+                        </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-4">
+                <div class="card stats-card">
+                    <div class="card-body">
+                        <h5 class="card-title">
+                            <i class="bi bi-graph-up text-success"></i> System Statistics
+                        </h5>
+                        <div id="stats-container">
+                            <p class="text-muted">Loading statistics...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">
+                            <i class="bi bi-layers text-warning"></i> Resource Pools
+                        </h5>
+                        <p class="card-text">Monitor IP address and prefix allocation pools.</p>
+
+                        <div class="row mb-3" id="pool-stats">
+                            <div class="col-md-3">
+                                <div class="alert alert-light mb-2 p-2">
+                                    <h6 class="alert-heading mb-1 small">
+                                        <i class="bi bi-hdd-network text-primary"></i> IPv4 Pool
+                                    </h6>
+                                    <div id="ipv4-pool-stats" style="font-size: 0.75rem;">
+                                        <span class="text-muted">Loading...</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="alert alert-light mb-2 p-2">
+                                    <h6 class="alert-heading mb-1 small">
+                                        <i class="bi bi-globe text-success"></i> IPv6 NA Pool
+                                    </h6>
+                                    <div id="ipv6-na-pool-stats" style="font-size: 0.75rem;">
+                                        <span class="text-muted">Loading...</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="alert alert-light mb-2 p-2">
+                                    <h6 class="alert-heading mb-1 small">
+                                        <i class="bi bi-diagram-3 text-info"></i> IPv6 PD Pool
+                                        <i class="bi bi-info-circle text-muted" style="font-size: 0.7rem;" title="F=Fresh (never used), R=Recycled (previously used)"></i>
+                                    </h6>
+                                    <div id="ipv6-pd-pool-stats" style="font-size: 0.75rem;">
+                                        <span class="text-muted">Loading...</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="alert alert-light mb-2 p-2">
+                                    <h6 class="alert-heading mb-1 small">
+                                        <i class="bi bi-broadcast text-warning"></i> IPv6 SLAAC Pool
+                                        <i class="bi bi-info-circle text-muted" style="font-size: 0.7rem;" title="SLAAC /64 prefix allocation for Router Advertisements"></i>
+                                    </h6>
+                                    <div id="ipv6-slaac-pool-stats" style="font-size: 0.75rem;">
+                                        <span class="text-muted">Loading...</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-3 mb-2">
+                                <a href="/pool_ipv4.html" class="btn btn-sm btn-outline-primary w-100">
+                                <i class="bi bi-hdd-network"></i> IPv4 Details
+                            </a>
+                            </div>
+                            <div class="col-md-3 mb-2">
+                                <a href="/pool_ipv6_na.html" class="btn btn-sm btn-outline-success w-100">
+                                <i class="bi bi-globe"></i> IPv6 NA Details
+                            </a>
+                            </div>
+                            <div class="col-md-3 mb-2">
+                                <a href="/pool_ipv6_pd.html" class="btn btn-sm btn-outline-info w-100">
+                                <i class="bi bi-diagram-3"></i> IPv6 PD Details
+                            </a>
+                            </div>
+                            <div class="col-md-3 mb-2">
+                                <a href="/pool_ipv6_slaac.html" class="btn btn-sm btn-outline-warning w-100">
+                                <i class="bi bi-broadcast"></i> IPv6 SLAAC Details
+                            </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PPPoE Session Statistics (Primary) -->
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="card border-success">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0">
+                            <i class="bi bi-diagram-3"></i> PPPoE Session Statistics
+                            <small class="ms-2 opacity-75">(PPPoE Traffic by Interface)</small>
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="interface-stats-container">
+                            <p class="text-muted">Loading PPPoE session statistics...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- LNS Session Statistics -->
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="card border-info">
+                    <div class="card-header bg-info text-white">
+                        <h5 class="mb-0">
+                            <i class="bi bi-diagram-2"></i> LNS Session Statistics
+                            <small class="ms-2 opacity-75">(L2TP Traffic by Tunnel)</small>
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="l2tp-stats-container">
+                            <p class="text-muted">Loading L2TP session statistics...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Physical Interface Statistics (Secondary) -->
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="card border-secondary">
+                    <div class="card-header bg-secondary text-white">
+                        <h5 class="mb-0">
+                            <i class="bi bi-ethernet"></i> Physical Interface Statistics
+                            <small class="ms-2 opacity-75">(All Traffic from VPP)</small>
+                        </h5>
+                        </div>
+                    <div class="card-body">
+                        <div id="physical-interface-stats-container">
+                            <p class="text-muted">Loading physical interface statistics...</p>
+                    </div>
+                </div>
+            </div>
+            </div>
+        </div>
+
+        <!-- VPP Performance Summary -->
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="card border-info">
+                    <div class="card-header bg-info text-white">
+                        <h5 class="mb-0">
+                            <i class="bi bi-cpu"></i> VPP Performance Summary
+                        </h5>
+                        </div>
+                    <div class="card-body">
+                        <div id="vpp-performance-summary">
+                            <div class="row">
+                                <div class="col-md-3 text-center">
+                                    <div id="vpp-status-icon">
+                                        <i class="bi bi-hourglass-split text-muted" style="font-size: 2rem;"></i>
+                                        <p class="mt-2 mb-0"><strong>Loading...</strong></p>
+                                    </div>
+                                    <div class="mt-2">
+                                        <a href="/vpp_performance.html" class="btn btn-sm btn-info">
+                                            <i class="bi bi-graph-up"></i> Performance
+                                        </a>
+                                        <a href="/vpp_advisor.html" class="btn btn-sm btn-primary ms-1">
+                                            <i class="bi bi-shield-check"></i> Advisor
+                                        </a>
+                                    </div>
+                                    <div id="vpp-error-action" style="display: none;" class="mt-2">
+                                        <span class="badge bg-danger">Issues detected - check advisor</span>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <h6 class="mb-2"><i class="bi bi-cpu"></i> Worker Balance</h6>
+                                    <div class="progress mb-1" style="height: 26px; position: relative;">
+                                        <div class="progress-bar bg-secondary" id="vpp-worker-balance"
+                                             role="progressbar" style="width: 0%; min-width: 40px; font-size: 14px; line-height: 26px; font-weight: bold; overflow: visible;">0%</div>
+                                    </div>
+                                    <small class="text-muted">Load distribution</small>
+                                </div>
+                                <div class="col-md-3">
+                                    <h6 class="mb-2"><i class="bi bi-memory"></i> Buffer Usage</h6>
+                                    <div class="progress mb-1" style="height: 26px; position: relative;">
+                                        <div class="progress-bar bg-secondary" id="vpp-buffer-usage"
+                                             role="progressbar" style="width: 0%; min-width: 45px; font-size: 14px; line-height: 26px; font-weight: bold; overflow: visible;">0%</div>
+                                    </div>
+                                    <small class="text-muted">Memory utilization</small>
+                                </div>
+                                <div class="col-md-3">
+                                    <h6><i class="bi bi-activity"></i> Key Metrics</h6>
+                                    <small>
+                                        <div>HW Errors: <span id="vpp-hw-errors" class="text-danger fw-bold">-</span> (<span id="vpp-hw-error-rate">-</span>/s)</div>
+                                        <div>Protocol Drops: <span id="vpp-rx-drops">-</span> (<span id="vpp-rx-drop-rate">-</span>/s)</div>
+                                        <div>TX Errors: <span id="vpp-tx-errors">-</span> (<span id="vpp-tx-error-rate">-</span>/s)</div>
+                                        <div>Vector Rate: <span id="vpp-vector-rate">-</span>/s</div>
+                                    </small>
+                                </div>
+                            </div>
+
+                            <!-- Interface Counters Table -->
+                            <div class="row mt-3" id="interface-counters-section" style="display: none;">
+                                <div class="col-12">
+                                    <h6 class="mb-2"><i class="bi bi-ethernet"></i> Interface Counters</h6>
+                                    <div class="table-responsive">
+                                        <table class="table table-sm table-striped" style="font-size: 0.85rem;">
+                                            <thead>
+                                                <tr>
+                                                    <th>Interface</th>
+                                                    <th class="text-center">State</th>
+                                                    <th class="text-end" title="Normal packet drops for unhandled protocols (ARP, multicast, etc.) - not hardware errors">Protocol Drops</th>
+                                                    <th class="text-end" title="Transmission errors (DPDK TX failures, buffer exhaustion, etc.)">TX Errors</th>
+                                                    <th class="text-end" title="Real hardware errors (MAC errors, missed packets, illegal bytes)">HW Errors</th>
+                                                    <th class="text-end">Punts</th>
+                                                    <th class="text-end">IPv4</th>
+                                                    <th class="text-end">IPv6</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="interface-counters-tbody">
+                                                <tr>
+                                                    <td colspan="8" class="text-center text-muted">No data available</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <div class="col-md-12">
+               Copyright &copy; 2025 Roelf Diedericks / Cool Ideas Service Provider (Pty) Ltd
+               <br/>
+               &nbsp;
+        </div>
+    </div>
+
+    <!-- Bootstrap JS Bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        // Function to fetch and display statistics
+        async function fetchStats() {
+            try {
+                const response = await fetch('/api/stats.json');
+                const stats = await response.json();
+
+                const statsHtml = `
+                    <ul class="list-unstyled mb-0">
+                        <li><strong>Active Sessions:</strong> ${stats.active_sessions}</li>
+                        <li><strong>Total Sessions:</strong> ${stats.total_sessions}</li>
+                        <li><strong>Auth Success:</strong> ${stats.auth_success}</li>
+                        <li><strong>Auth Failures:</strong> ${stats.auth_failures}</li>
+                        <li><strong>Uptime:</strong> ${stats.uptime}</li>
+                    </ul>
+                `;
+
+                document.getElementById('stats-container').innerHTML = statsHtml;
+            } catch (error) {
+                console.error('Error fetching stats:', error);
+                document.getElementById('stats-container').innerHTML =
+                    '<p class="text-danger">Failed to load statistics</p>';
+            }
+        }
+
+        // Function to fetch and display pool statistics
+        async function fetchPoolStats() {
+            // Fetch IPv4 pool stats (brief mode for dashboard)
+            try {
+                const response = await fetch('/api/pools/ipv4.json?brief=1');
+                const pools = await response.json();
+
+                // Build HTML for each pool
+                let poolsHtml = '';
+                pools.forEach(pool => {
+                    const usageClass = pool.usage_percent > 90 ? 'text-danger fw-bold' :
+                                      pool.usage_percent > 75 ? 'text-warning' : 'text-success';
+                    poolsHtml += `
+                        <div class="small">
+                            <strong>${pool.name}:</strong> ${pool.allocated.toLocaleString()}/${pool.total_capacity.toLocaleString()}
+                            <span class="${usageClass}">(${pool.usage_percent.toFixed(1)}%)</span>
+                        </div>
+                    `;
+                });
+
+                // Calculate totals
+                let totalCapacity = 0, totalAllocated = 0;
+                pools.forEach(pool => {
+                    totalCapacity += pool.total_capacity;
+                    totalAllocated += pool.allocated;
+                });
+
+                const totalUsagePercent = totalCapacity > 0 ? (totalAllocated / totalCapacity * 100) : 0;
+                const totalUsageClass = totalUsagePercent > 90 ? 'text-danger fw-bold' :
+                                       totalUsagePercent > 75 ? 'text-warning' : 'text-success';
+
+                document.getElementById('ipv4-pool-stats').innerHTML = `
+                    ${poolsHtml}
+                    <div class="mt-1 pt-1 border-top small">
+                        <strong>Total:</strong> ${totalAllocated.toLocaleString()}/${totalCapacity.toLocaleString()}
+                        <span class="${totalUsageClass}">(${totalUsagePercent.toFixed(1)}%)</span>
+                    </div>
+                `;
+            } catch (error) {
+                document.getElementById('ipv4-pool-stats').innerHTML =
+                    '<span class="text-danger">Failed to load</span>';
+            }
+
+            // Fetch IPv6 NA pool stats (brief mode for dashboard)
+            try {
+                const response = await fetch('/api/pools/ipv6_na.json?brief=1');
+                const pools = await response.json();
+
+                // Build HTML for each pool
+                let poolsHtml = '';
+                pools.forEach(pool => {
+                    const usageClass = pool.usage_percent > 90 ? 'text-danger fw-bold' :
+                                      pool.usage_percent > 75 ? 'text-warning' : 'text-success';
+                    poolsHtml += `
+                        <div class="small">
+                            <strong>${pool.name}:</strong> ${pool.allocated.toLocaleString()}/${pool.total_capacity.toLocaleString()}
+                            <span class="${usageClass}">(${pool.usage_percent.toFixed(1)}%)</span>
+                        </div>
+                    `;
+                });
+
+                // Calculate totals
+                let totalCapacity = 0, totalAllocated = 0;
+                pools.forEach(pool => {
+                    totalCapacity += pool.total_capacity;
+                    totalAllocated += pool.allocated;
+                });
+
+                const totalUsagePercent = totalCapacity > 0 ? (totalAllocated / totalCapacity * 100) : 0;
+                const totalUsageClass = totalUsagePercent > 90 ? 'text-danger fw-bold' :
+                                       totalUsagePercent > 75 ? 'text-warning' : 'text-success';
+
+                document.getElementById('ipv6-na-pool-stats').innerHTML = `
+                    ${poolsHtml}
+                    <div class="mt-1 pt-1 border-top small">
+                        <strong>Total:</strong> ${totalAllocated.toLocaleString()}/${totalCapacity.toLocaleString()}
+                        <span class="${totalUsageClass}">(${totalUsagePercent.toFixed(1)}%)</span>
+                    </div>
+                `;
+            } catch (error) {
+                document.getElementById('ipv6-na-pool-stats').innerHTML =
+                    '<span class="text-danger">Failed to load</span>';
+            }
+
+            // Fetch IPv6 PD pool stats (brief mode for dashboard)
+            try {
+                const response = await fetch('/api/pools/ipv6_pd.json?brief=1');
+                const pools = await response.json();
+
+                // Build HTML for each pool
+                let poolsHtml = '';
+                pools.forEach(pool => {
+                    const usageClass = pool.usage_percent > 90 ? 'text-danger fw-bold' :
+                                      pool.usage_percent > 75 ? 'text-warning' : 'text-success';
+
+                    // Build availability details if we have the new stats
+                    let availDetails = '';
+                    if (pool.fresh_prefixes !== undefined && pool.released_prefixes !== undefined) {
+                        availDetails = ` (${pool.fresh_prefixes}F/${pool.released_prefixes}R)`;
+                    }
+
+                    poolsHtml += `
+                        <div class="small">
+                            <strong>${pool.name}:</strong> ${pool.allocated.toLocaleString()}/${pool.total_capacity.toLocaleString()}
+                            <span class="${usageClass}">(${pool.usage_percent.toFixed(1)}%)</span>
+                            <span class="text-muted">${availDetails}</span>
+                        </div>
+                    `;
+                });
+
+                // Calculate totals
+                let totalCapacity = 0, totalAllocated = 0;
+                pools.forEach(pool => {
+                    totalCapacity += pool.total_capacity;
+                    totalAllocated += pool.allocated;
+                });
+
+                const totalUsagePercent = totalCapacity > 0 ? (totalAllocated / totalCapacity * 100) : 0;
+                const totalUsageClass = totalUsagePercent > 90 ? 'text-danger fw-bold' :
+                                       totalUsagePercent > 75 ? 'text-warning' : 'text-success';
+
+                document.getElementById('ipv6-pd-pool-stats').innerHTML = `
+                    ${poolsHtml}
+                    <div class="mt-1 pt-1 border-top small">
+                        <strong>Total:</strong> ${totalAllocated.toLocaleString()}/${totalCapacity.toLocaleString()} prefixes
+                        <span class="${totalUsageClass}">(${totalUsagePercent.toFixed(1)}%)</span>
+                    </div>
+                `;
+            } catch (error) {
+                document.getElementById('ipv6-pd-pool-stats').innerHTML =
+                    '<span class="text-danger">Failed to load</span>';
+            }
+
+            // Fetch IPv6 SLAAC pool stats (brief mode for dashboard)
+            try {
+                const response = await fetch('/api/pools/ipv6_slaac.json?brief=1');
+                const pools = await response.json();
+
+                // Build HTML for each pool
+                let poolsHtml = '';
+                let totalAllocated = 0;
+                let totalCapacity = 0;
+
+                pools.forEach(pool => {
+                    const usageClass = pool.usage_percent > 90 ? 'text-danger fw-bold' :
+                                      pool.usage_percent > 75 ? 'text-warning' : 'text-success';
+
+                    poolsHtml += `
+                        <div class="small">
+                            <strong>${pool.name}:</strong> ${pool.allocated.toLocaleString()}/${pool.total_capacity.toLocaleString()}
+                            <span class="${usageClass}">(${pool.usage_percent.toFixed(1)}%)</span>
+                            <span class="text-muted">/64s</span>
+                        </div>
+                    `;
+
+                    totalAllocated += pool.allocated;
+                    totalCapacity += pool.total_capacity;
+                });
+
+                // Add total if multiple pools
+                if (pools.length > 1) {
+                    const totalUsagePercent = totalCapacity > 0 ? (totalAllocated / totalCapacity) * 100 : 0;
+                    const totalUsageClass = totalUsagePercent > 90 ? 'text-danger fw-bold' :
+                                           totalUsagePercent > 75 ? 'text-warning' : 'text-success';
+
+                    poolsHtml += `
+                        <div class="mt-1 pt-1 border-top small">
+                            <strong>Total:</strong> ${totalAllocated.toLocaleString()}/${totalCapacity.toLocaleString()} prefixes
+                            <span class="${totalUsageClass}">(${totalUsagePercent.toFixed(1)}%)</span>
+                        </div>
+                    `;
+                }
+
+                document.getElementById('ipv6-slaac-pool-stats').innerHTML = poolsHtml ||
+                    '<span class="text-muted">No SLAAC pools configured</span>';
+            } catch (error) {
+                document.getElementById('ipv6-slaac-pool-stats').innerHTML =
+                    '<span class="text-danger">Failed to load</span>';
+            }
+        }
+
+        // Storage for previous interface stats (for rate calculation)
+        let previousInterfaceStats = {};
+        let previousPhysicalStats = {};
+        let previousL2TPStats = {};
+        let previousDropRates = {
+            rxDropRate: 0,
+            txErrorRate: 0,
+            vectorRate: 0,
+            hwErrorRate: 0
+        };
+
+        // Helper function to format numbers with appropriate units
+        function formatNumber(num) {
+            if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
+            if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
+            if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
+            return num.toString();
+        }
+
+        // Helper function to get trend indicator with color
+        function getTrendIndicator(current, previous, isDropMetric = true) {
+            const threshold = 0.01; // 1% change threshold
+            const diff = current - previous;
+            const percentChange = previous > 0 ? Math.abs(diff / previous) : 0;
+
+            // Skip indicator for very small changes
+            if (percentChange < threshold) {
+                return ''; // No indicator for stable values
+            }
+
+            if (diff > 0) {
+                // Rate is increasing
+                const color = isDropMetric ? 'text-danger' : 'text-success';
+                return `<i class="bi bi-arrow-up-short ${color}"></i>`;
+            } else if (diff < 0) {
+                // Rate is decreasing
+                const color = isDropMetric ? 'text-success' : 'text-warning';
+                return `<i class="bi bi-arrow-down-short ${color}"></i>`;
+            }
+            return '';
+        }
+
+        // Helper function to format bytes
+        function formatBytes(bytes) {
+            if (bytes >= 1e12) return (bytes / 1e12).toFixed(2) + ' TB';
+            if (bytes >= 1e9) return (bytes / 1e9).toFixed(2) + ' GB';
+            if (bytes >= 1e6) return (bytes / 1e6).toFixed(2) + ' MB';
+            if (bytes >= 1e3) return (bytes / 1e3).toFixed(2) + ' KB';
+            return bytes + ' B';
+        }
+
+        // Function to fetch and display physical interface statistics (all VPP traffic)
+        async function fetchPhysicalInterfaceStats() {
+            try {
+                const response = await fetch('/api/physical_interfaces.json');
+                const interfaces = await response.json();
+
+                if (!interfaces || interfaces.length === 0) {
+                    document.getElementById('physical-interface-stats-container').innerHTML =
+                        '<p class="text-muted">No physical interfaces found</p>';
+                    return;
+                }
+
+                // Build HTML table for physical interfaces
+                let tableHtml = `
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover">
+                            <thead>
+                                <tr>
+                                    <th style="width: 25%;">Interface</th>
+                                    <th class="text-end" style="width: 10%;">Status</th>
+                                    <th class="text-end" style="width: 10%;">RX Mbps</th>
+                                    <th class="text-end" style="width: 10%;">TX Mbps</th>
+                                    <th class="text-end" style="width: 10%;">RX pps</th>
+                                    <th class="text-end" style="width: 10%;">TX pps</th>
+                                    <th class="text-end" style="width: 12.5%;">Total RX</th>
+                                    <th class="text-end" style="width: 12.5%;">Total TX</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                `;
+
+                const now = Date.now() / 1000;
+
+                interfaces.forEach(iface => {
+                    const prevStats = previousPhysicalStats[iface.interface_name] || {};
+                    const timeDelta = prevStats.timestamp ? (now - prevStats.timestamp) : 5;
+
+                    // Calculate rates
+                    let rxRateMbps = 0, txRateMbps = 0, rxRatePps = 0, txRatePps = 0;
+
+                    if (prevStats.rx_bytes !== undefined && timeDelta > 0) {
+                        rxRateMbps = ((iface.rx_bytes - prevStats.rx_bytes) * 8) / (timeDelta * 1000000);
+                        txRateMbps = ((iface.tx_bytes - prevStats.tx_bytes) * 8) / (timeDelta * 1000000);
+                        rxRatePps = (iface.rx_packets - prevStats.rx_packets) / timeDelta;
+                        txRatePps = (iface.tx_packets - prevStats.tx_packets) / timeDelta;
+                    }
+
+                    // Store current stats for next calculation
+                    previousPhysicalStats[iface.interface_name] = {
+                        rx_bytes: iface.rx_bytes,
+                        tx_bytes: iface.tx_bytes,
+                        rx_packets: iface.rx_packets,
+                        tx_packets: iface.tx_packets,
+                        timestamp: now
+                    };
+
+                    // Format interface role badge
+                    let roleBadge = '';
+                    if (iface.interface_role === 'pppoe') {
+                        roleBadge = ' <span class="badge bg-primary ms-1">PPPoE</span>';
+                    } else if (iface.interface_role === 'ip_uplink') {
+                        roleBadge = ' <span class="badge bg-info ms-1">IP Uplink</span>';
+                    }
+
+                    // Format the interface row
+                    tableHtml += `
+                        <tr>
+                            <td>
+                                <i class="bi bi-ethernet text-primary"></i>
+                                <strong>${iface.interface_name}</strong>${roleBadge}
+                            </td>
+                            <td class="text-end">
+                                <span class="badge bg-success">UP</span>
+                            </td>
+                            <td class="text-end">${rxRateMbps.toFixed(2)}</td>
+                            <td class="text-end">${txRateMbps.toFixed(2)}</td>
+                            <td class="text-end">${Math.round(rxRatePps).toLocaleString()}</td>
+                            <td class="text-end">${Math.round(txRatePps).toLocaleString()}</td>
+                            <td class="text-end">${formatBytes(iface.rx_bytes)} / ${formatNumber(iface.rx_packets)} pkts</td>
+                            <td class="text-end">${formatBytes(iface.tx_bytes)} / ${formatNumber(iface.tx_packets)} pkts</td>
+                        </tr>
+                    `;
+                });
+
+                tableHtml += `
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+
+                document.getElementById('physical-interface-stats-container').innerHTML = tableHtml;
+
+            } catch (error) {
+                console.error('Failed to fetch physical interface stats:', error);
+                document.getElementById('physical-interface-stats-container').innerHTML =
+                    '<div class="alert alert-danger">Failed to load physical interface statistics</div>';
+            }
+        }
+
+        // Function to fetch and display L2TP session statistics
+        async function fetchL2TPStats() {
+            try {
+                const response = await fetch('/api/l2tp/tunnels.json');
+                const data = await response.json();
+
+                // Extract tunnels and calculate totals
+                const tunnels = data.tunnels || [];
+
+                if (!tunnels || tunnels.length === 0) {
+                    document.getElementById('l2tp-stats-container').innerHTML =
+                        '<p class="text-muted">No L2TP tunnels active</p>';
+                    return;
+                }
+
+                // Build HTML table for L2TP session statistics
+                let tableHtml = `
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover">
+                            <thead>
+                                <tr>
+                                    <th style="width: 25%;">Tunnel</th>
+                                    <th class="text-end" style="width: 10%;">Sessions</th>
+                                    <th class="text-end" style="width: 10%;">RX Mbps</th>
+                                    <th class="text-end" style="width: 10%;">TX Mbps</th>
+                                    <th class="text-end" style="width: 10%;">RX pps</th>
+                                    <th class="text-end" style="width: 10%;">TX pps</th>
+                                    <th class="text-end" style="width: 12.5%;">Total RX</th>
+                                    <th class="text-end" style="width: 12.5%;">Total TX</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                `;
+
+                // Calculate totals
+                let totalSessions = 0;
+                let totalRxBytes = 0;
+                let totalTxBytes = 0;
+                let totalRxMbps = 0;
+                let totalTxMbps = 0;
+                let totalRxPps = 0;
+                let totalTxPps = 0;
+
+                tunnels.forEach(tunnel => {
+                    const tunnelKey = `${tunnel.peer_addr}:${tunnel.our_tunnel_id}`;
+                    const prev = previousL2TPStats[tunnelKey];
+                    let rxMbps = 0, txMbps = 0, rxPps = 0, txPps = 0;
+
+                    // Note: L2TP bytes_in/out are swapped compared to PPPoE rx/tx
+                    const rxBytes = tunnel.bytes_in || 0;
+                    const txBytes = tunnel.bytes_out || 0;
+
+                    // Calculate rates if we have previous stats
+                    if (prev && prev.timestamp) {
+                        const now = Date.now() / 1000;
+                        const timeDiff = now - prev.timestamp;
+
+                        if (timeDiff > 0 && (rxBytes !== prev.rx_bytes || txBytes !== prev.tx_bytes)) {
+                            // Calculate Mbps
+                            rxMbps = ((rxBytes - prev.rx_bytes) * 8) / (timeDiff * 1000000);
+                            txMbps = ((txBytes - prev.tx_bytes) * 8) / (timeDiff * 1000000);
+
+                            // For L2TP, we don't have packet counts readily available, so we'll estimate
+                            // based on average packet size of 500 bytes (rough estimate)
+                            const avgPacketSize = 500;
+                            rxPps = (rxBytes - prev.rx_bytes) / (timeDiff * avgPacketSize);
+                            txPps = (txBytes - prev.tx_bytes) / (timeDiff * avgPacketSize);
+
+                            prev.lastRxMbps = rxMbps;
+                            prev.lastTxMbps = txMbps;
+                            prev.lastRxPps = rxPps;
+                            prev.lastTxPps = txPps;
+                        } else if (prev.lastRxMbps !== undefined) {
+                            rxMbps = prev.lastRxMbps;
+                            txMbps = prev.lastTxMbps;
+                            rxPps = prev.lastRxPps;
+                            txPps = prev.lastTxPps;
+                        }
+                    }
+
+                    // Store current stats for next calculation
+                    previousL2TPStats[tunnelKey] = {
+                        rx_bytes: rxBytes,
+                        tx_bytes: txBytes,
+                        timestamp: Date.now() / 1000,
+                        lastRxMbps: rxMbps,
+                        lastTxMbps: txMbps,
+                        lastRxPps: rxPps,
+                        lastTxPps: txPps
+                    };
+
+                    // Update totals
+                    totalSessions += tunnel.session_count || 0;
+                    totalRxBytes += rxBytes;
+                    totalTxBytes += txBytes;
+                    totalRxMbps += rxMbps;
+                    totalTxMbps += txMbps;
+                    totalRxPps += rxPps;
+                    totalTxPps += txPps;
+
+                    // Format tunnel display name
+                    let tunnelName = `${tunnel.our_tunnel_id}`;
+                    if (tunnel.hostname) {
+                        tunnelName += ` (${tunnel.hostname})`;
+                    } else if (tunnel.peer_addr) {
+                        tunnelName += ` (${tunnel.peer_addr})`;
+                    }
+
+                    tableHtml += `
+                        <tr>
+                            <td>${tunnelName}</td>
+                            <td class="text-end">${tunnel.session_count || 0}</td>
+                            <td class="text-end">${rxMbps.toFixed(2)}</td>
+                            <td class="text-end">${txMbps.toFixed(2)}</td>
+                            <td class="text-end">${rxPps.toFixed(0)}</td>
+                            <td class="text-end">${txPps.toFixed(0)}</td>
+                            <td class="text-end">${formatBytes(rxBytes)}</td>
+                            <td class="text-end">${formatBytes(txBytes)}</td>
+                        </tr>
+                    `;
+                });
+
+                // Add total row if there are tunnels
+                if (tunnels.length > 0) {
+                    tableHtml += `
+                        <tr class="table-active fw-bold">
+                            <td>Total (${tunnels.length} tunnel${tunnels.length > 1 ? 's' : ''})</td>
+                            <td class="text-end">${totalSessions}</td>
+                            <td class="text-end">${totalRxMbps.toFixed(2)}</td>
+                            <td class="text-end">${totalTxMbps.toFixed(2)}</td>
+                            <td class="text-end">${totalRxPps.toFixed(0)}</td>
+                            <td class="text-end">${totalTxPps.toFixed(0)}</td>
+                            <td class="text-end">${formatBytes(totalRxBytes)}</td>
+                            <td class="text-end">${formatBytes(totalTxBytes)}</td>
+                        </tr>
+                    `;
+                }
+
+                tableHtml += `
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+
+                document.getElementById('l2tp-stats-container').innerHTML = tableHtml;
+
+            } catch (error) {
+                console.error('Failed to fetch L2TP stats:', error);
+                document.getElementById('l2tp-stats-container').innerHTML =
+                    '<div class="alert alert-danger">Failed to load L2TP statistics</div>';
+            }
+        }
+
+        // Function to fetch and display PPPoE session statistics
+        async function fetchInterfaceStats() {
+            try {
+                const response = await fetch('/api/pppoe_interfaces.json');
+                const data = await response.json();
+
+                // Extract interfaces and total from the response
+                const interfaces = data.interfaces || [];
+                const total = data.total || {};
+
+                if (!interfaces || interfaces.length === 0) {
+                    document.getElementById('interface-stats-container').innerHTML =
+                        '<p class="text-muted">No PPPoE interfaces configured</p>';
+                    return;
+                }
+
+                // Build HTML table for PPPoE session statistics
+                let tableHtml = `
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover">
+                            <thead>
+                                <tr>
+                                    <th style="width: 25%;">Interface</th>
+                                    <th class="text-end" style="width: 10%;">Sessions</th>
+                                    <th class="text-end" style="width: 10%;">RX Mbps</th>
+                                    <th class="text-end" style="width: 10%;">TX Mbps</th>
+                                    <th class="text-end" style="width: 10%;">RX pps</th>
+                                    <th class="text-end" style="width: 10%;">TX pps</th>
+                                    <th class="text-end" style="width: 12.5%;">Total RX</th>
+                                    <th class="text-end" style="width: 12.5%;">Total TX</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                `;
+
+                // Sort interfaces so parents come before subinterfaces
+                interfaces.sort((a, b) => {
+                    const partsA = a.interface_name.split('.');
+                    const partsB = b.interface_name.split('.');
+
+                    // Compare base interface name first
+                    const baseA = partsA[0];
+                    const baseB = partsB[0];
+                    if (baseA !== baseB) {
+                        return baseA.localeCompare(baseB);
+                    }
+
+                    // Then by number of VLAN levels (physical < single VLAN < QinQ)
+                    if (partsA.length !== partsB.length) {
+                        return partsA.length - partsB.length;
+                    }
+
+                    // Finally, compare VLAN IDs numerically at each level
+                    for (let i = 1; i < partsA.length; i++) {
+                        const vlanA = parseInt(partsA[i]) || 0;
+                        const vlanB = parseInt(partsB[i]) || 0;
+                        if (vlanA !== vlanB) {
+                            return vlanA - vlanB;
+                        }
+                    }
+
+                    return 0;
+                });
+
+                interfaces.forEach(iface => {
+                    const prev = previousInterfaceStats[iface.interface_name];
+                    let rxMbps = 0, txMbps = 0, rxPps = 0, txPps = 0;
+
+                    // Calculate rates if we have previous stats
+                    if (prev && prev.last_update < iface.last_update) {
+                        const timeDiff = iface.last_update - prev.last_update;
+
+                        // Check if counters actually changed (not just cached data)
+                        const countersChanged = (iface.rx_bytes !== prev.rx_bytes) ||
+                                               (iface.tx_bytes !== prev.tx_bytes) ||
+                                               (iface.rx_packets !== prev.rx_packets) ||
+                                               (iface.tx_packets !== prev.tx_packets);
+
+                        if (timeDiff > 0 && countersChanged) {
+                            // Calculate Mbps (megabits per second)
+                            rxMbps = ((iface.rx_bytes - prev.rx_bytes) * 8) / (timeDiff * 1000000);
+                            txMbps = ((iface.tx_bytes - prev.tx_bytes) * 8) / (timeDiff * 1000000);
+
+                            // Calculate packets per second
+                            rxPps = (iface.rx_packets - prev.rx_packets) / timeDiff;
+                            txPps = (iface.tx_packets - prev.tx_packets) / timeDiff;
+
+                            // Store the calculated rates for when counters don't change
+                            prev.lastRxMbps = rxMbps;
+                            prev.lastTxMbps = txMbps;
+                            prev.lastRxPps = rxPps;
+                            prev.lastTxPps = txPps;
+                        } else if (prev.lastRxMbps !== undefined) {
+                            // Counters haven't changed (cached data), use previous rates
+                            rxMbps = prev.lastRxMbps;
+                            txMbps = prev.lastTxMbps;
+                            rxPps = prev.lastRxPps;
+                            txPps = prev.lastTxPps;
+                        }
+                    }
+
+                    // Store current stats for next rate calculation
+                    previousInterfaceStats[iface.interface_name] = {
+                        rx_bytes: iface.rx_bytes,
+                        tx_bytes: iface.tx_bytes,
+                        rx_packets: iface.rx_packets,
+                        tx_packets: iface.tx_packets,
+                        last_update: iface.last_update,
+                        lastRxMbps: prev ? prev.lastRxMbps : undefined,
+                        lastTxMbps: prev ? prev.lastTxMbps : undefined,
+                        lastRxPps: prev ? prev.lastRxPps : undefined,
+                        lastTxPps: prev ? prev.lastTxPps : undefined
+                    };
+
+                    // Use the global formatBytes and formatNumber functions
+                    function formatPackets(packets) {
+                        return formatNumber(packets);
+                    }
+
+                    // Check if we have calculated rates (not on first load)
+                    const hasRates = prev && prev.lastRxMbps !== undefined;
+                    const rxMbpsDisplay = hasRates ? rxMbps.toFixed(2) : '-';
+                    const txMbpsDisplay = hasRates ? txMbps.toFixed(2) : '-';
+                    const rxPpsDisplay = hasRates ? rxPps.toFixed(0) : '-';
+                    const txPpsDisplay = hasRates ? txPps.toFixed(0) : '-';
+
+                    // Get session count (if available)
+                    const sessionCount = iface.session_count || 0;
+                    const sessionBadge = sessionCount > 0 ?
+                        `<span class="badge bg-success">${sessionCount}</span>` :
+                        '<span class="badge bg-secondary">0</span>';
+
+                    // Add interface type badges and indicators
+                    let interfaceDisplay = '';
+                    let txMbpsCell = `<td class="text-end">${txMbpsDisplay}</td>`;
+                    let txPpsCell = `<td class="text-end">${txPpsDisplay}</td>`;
+                    let txBytesCell = `<td class="text-end text-muted">${formatBytes(iface.tx_bytes)} / ${formatPackets(iface.tx_packets)} pkts</td>`;
+
+                    // Determine interface level by counting dots
+                    const dotCount = (iface.interface_name.match(/\./g) || []).length;
+                    let indent = '';
+
+                    // Add tree structure based on interface level
+                    if (dotCount === 1) {
+                        // First level subinterface (e.g., .69 or .100)
+                        indent = `<span class="text-muted" style="margin-left: 20px;">└─</span> `;
+                    } else if (dotCount === 2) {
+                        // Second level subinterface (e.g., .100.42)
+                        indent = `<span class="text-muted" style="margin-left: 40px;">└─</span> `;
+                    }
+
+                    // Handle different interface types with icons
+                    if (iface.interface_type === 'qinq_outer' || iface.interface_type === 'qinq') {
+                        // Use VLAN IDs from API response
+                        // Note: Interface names use x10000 multiplier without padding
+                        // e.g., 100.55 → GigabitEthernet9/0/0.1000055
+                        const qinqBadge = (iface.outer_vlan && iface.inner_vlan)
+                            ? `QinQ ${iface.outer_vlan}.${iface.inner_vlan}`
+                            : 'QinQ';
+
+                        interfaceDisplay = `
+                            ${indent}<span class="me-1" title="QinQ Interface">📋</span>
+                            <strong>${iface.interface_name}</strong>
+                            <span class="badge bg-info ms-2"
+                                  data-bs-toggle="tooltip"
+                                  data-bs-placement="right"
+                                  title="QinQ (802.1ad) double-tagged VLAN interface">
+                                ${qinqBadge}
+                            </span>`;
+                    } else if (iface.interface_type === 'vlan') {
+                        // Use VLAN ID from API response
+                        const vlanBadge = iface.vlan_id
+                            ? `<span class="badge bg-secondary ms-2"
+                                     data-bs-toggle="tooltip"
+                                     data-bs-placement="right"
+                                     title="802.1Q VLAN interface">
+                                   VLAN ${iface.vlan_id}
+                               </span>`
+                            : '';
+
+                        interfaceDisplay = `
+                            ${indent}<span class="me-1" title="VLAN Interface">📥</span>
+                            <strong>${iface.interface_name}</strong>${vlanBadge}`;
+                    } else {
+                        // Physical interface - add role badge if available
+                        let roleBadge = '';
+                        if (iface.interface_role === 'pppoe') {
+                            roleBadge = ' <span class="badge bg-primary ms-1">PPPoE</span>';
+                        } else if (iface.interface_role === 'ip_uplink') {
+                            roleBadge = ' <span class="badge bg-info ms-1">IP Uplink</span>';
+                        }
+
+                        interfaceDisplay = `
+                            ${indent}<span class="me-1" title="Physical Interface">📊</span>
+                            <strong>${iface.interface_name}</strong>${roleBadge}`;
+                    }
+
+                    tableHtml += `
+                        <tr>
+                            <td>${interfaceDisplay}</td>
+                            <td class="text-end">${sessionBadge}</td>
+                            <td class="text-end">${rxMbpsDisplay}</td>
+                            ${txMbpsCell}
+                            <td class="text-end">${rxPpsDisplay}</td>
+                            ${txPpsCell}
+                            <td class="text-end text-muted">${formatBytes(iface.rx_bytes)} / ${formatPackets(iface.rx_packets)} pkts</td>
+                            ${txBytesCell}
+                        </tr>
+                    `;
+                });
+
+                // Add total row if we have data
+                if (total && interfaces.length > 0) {
+                    // Calculate totals for display
+                    const totalPrev = previousInterfaceStats['__TOTAL__'];
+                    let totalRxMbps = 0, totalTxMbps = 0, totalRxPps = 0, totalTxPps = 0;
+
+                    // Calculate rates if we have previous totals
+                    if (totalPrev && totalPrev.last_update) {
+                        const timeDiff = (Date.now() / 1000) - totalPrev.last_update;
+
+                        if (timeDiff > 0) {
+                            // Calculate Mbps (megabits per second)
+                            totalRxMbps = ((total.rx_bytes - totalPrev.rx_bytes) * 8) / (timeDiff * 1000000);
+                            totalTxMbps = ((total.tx_bytes - totalPrev.tx_bytes) * 8) / (timeDiff * 1000000);
+
+                            // Calculate packets per second
+                            totalRxPps = (total.rx_packets - totalPrev.rx_packets) / timeDiff;
+                            totalTxPps = (total.tx_packets - totalPrev.tx_packets) / timeDiff;
+                        }
+                    }
+
+                    // Store current totals for next calculation
+                    previousInterfaceStats['__TOTAL__'] = {
+                        rx_bytes: total.rx_bytes,
+                        tx_bytes: total.tx_bytes,
+                        rx_packets: total.rx_packets,
+                        tx_packets: total.tx_packets,
+                        last_update: Date.now() / 1000
+                    };
+
+                    const hasRates = totalPrev && totalPrev.last_update;
+                    const rxMbpsDisplay = hasRates ? totalRxMbps.toFixed(2) : '-';
+                    const txMbpsDisplay = hasRates ? totalTxMbps.toFixed(2) : '-';
+                    const rxPpsDisplay = hasRates ? totalRxPps.toFixed(0) : '-';
+                    const txPpsDisplay = hasRates ? totalTxPps.toFixed(0) : '-';
+
+                    tableHtml += `
+                        <tr class="table-active fw-bold">
+                            <td><i class="bi bi-calculator me-2"></i>Total (${total.interface_count} interfaces)</td>
+                            <td class="text-end"><span class="badge bg-primary">${total.session_count || 0}</span></td>
+                            <td class="text-end">${rxMbpsDisplay}</td>
+                            <td class="text-end">${txMbpsDisplay}</td>
+                            <td class="text-end">${rxPpsDisplay}</td>
+                            <td class="text-end">${txPpsDisplay}</td>
+                            <td class="text-end">${formatBytes(total.rx_bytes)} / ${formatNumber(total.rx_packets)} pkts</td>
+                            <td class="text-end">${formatBytes(total.tx_bytes)} / ${formatNumber(total.tx_packets)} pkts</td>
+                        </tr>
+                    `;
+                }
+
+                tableHtml += `
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Legend explaining the display -->
+                    <div class="mt-2 p-2 bg-light rounded small">
+                        <span class="text-muted">Legend:</span>
+                        <span class="ms-3">📊 <strong>Physical:</strong> Physical interface</span>
+                        <span class="ms-3">📥 <strong>VLAN:</strong> 802.1Q tagged</span>
+                        <span class="ms-3">📋 <strong>QinQ:</strong> 802.1ad double-tagged</span>
+                    </div>
+                `;
+
+                document.getElementById('interface-stats-container').innerHTML = tableHtml;
+
+                // Initialize Bootstrap tooltips for QinQ badges
+                const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]');
+                const tooltipList = [...tooltipTriggerList].map(tooltipTriggerEl => new bootstrap.Tooltip(tooltipTriggerEl));
+            } catch (error) {
+                console.error('Error fetching interface stats:', error);
+                document.getElementById('interface-stats-container').innerHTML =
+                    '<p class="text-danger">Failed to load interface statistics</p>';
+            }
+        }
+
+        // Function to fetch and display VPP performance summary
+        async function fetchVPPPerformanceSummary() {
+            try {
+                const response = await fetch('/api/vpp_performance.json');
+                const data = await response.json();
+
+                if (!data || !data.timestamp) {
+                    document.getElementById('vpp-status-icon').innerHTML = `
+                        <i class="bi bi-question-circle text-muted" style="font-size: 2rem;"></i>
+                        <p class="mt-2 mb-0"><strong>No Data</strong></p>
+                    `;
+                    return;
+                }
+
+                // Check if performance monitoring is enabled
+                if (data.is_healthy === undefined && data.message) {
+                    document.getElementById('vpp-status-icon').innerHTML = `
+                        <i class="bi bi-pause-circle text-muted" style="font-size: 2rem;"></i>
+                        <p class="mt-2 mb-0"><strong>Disabled</strong></p>
+                        <small class="text-muted">${data.message || 'Monitoring not enabled'}</small>
+                    `;
+                    // Clear other metrics
+                    document.getElementById('vpp-worker-balance').style.width = '10%';
+                    document.getElementById('vpp-worker-balance').textContent = '-';
+                    document.getElementById('vpp-buffer-usage').style.width = '10%';
+                    document.getElementById('vpp-buffer-usage').textContent = '-';
+                    document.getElementById('vpp-rx-drops').textContent = '-';
+                    document.getElementById('vpp-tx-errors').textContent = '-';
+                    document.getElementById('vpp-tx-error-rate').textContent = '-';
+                    document.getElementById('vpp-hw-errors').textContent = '-';
+                    document.getElementById('vpp-hw-error-rate').textContent = '-';
+                    return;
+                }
+
+                // Determine status color and icon
+                let statusColor = 'success';
+                let statusIcon = 'check-circle-fill';
+                let statusText = 'Healthy';
+
+                if (data.overload_status === 'critical') {
+                    statusColor = 'danger';
+                    statusIcon = 'exclamation-triangle-fill';
+                    statusText = 'Critical';
+                } else if (data.overload_status === 'warning') {
+                    statusColor = 'warning';
+                    statusIcon = 'exclamation-circle-fill';
+                    statusText = 'Warning';
+                } else if (data.overload_status === 'none') {
+                    statusColor = 'success';
+                    statusIcon = 'check-circle-fill';
+                    statusText = 'Healthy';
+                }
+
+                // Update status icon
+                document.getElementById('vpp-status-icon').innerHTML = `
+                    <i class="bi bi-${statusIcon} text-${statusColor}" style="font-size: 2rem;"></i>
+                    <p class="mt-2 mb-0"><strong>${statusText}</strong></p>
+                `;
+
+                // Show/hide advisor button based on status
+                const errorActionBtn = document.getElementById('vpp-error-action');
+                if (errorActionBtn) {
+                    if (statusColor === 'danger' || data.overload_status === 'critical') {
+                        errorActionBtn.style.display = 'block';
+                    } else {
+                        errorActionBtn.style.display = 'none';
+                    }
+                }
+
+                // Update worker balance (100% = perfect balance, lower = worse imbalance)
+                const workerBalance = data.worker_balance || 0;
+                const workerBar = document.getElementById('vpp-worker-balance');
+                // Keep minimum width for text visibility, but use actual width if larger
+                workerBar.style.width = Math.max(workerBalance, 10) + '%';
+                workerBar.textContent = workerBalance.toFixed(0) + '%';
+                workerBar.className = 'progress-bar ' +
+                    (workerBalance >= 75 ? 'bg-success' :
+                     workerBalance >= 50 ? 'bg-warning' : 'bg-danger');
+
+                // Update buffer usage
+                const bufferUsage = data.buffer_usage || 0;
+                const bufferBar = document.getElementById('vpp-buffer-usage');
+                // Keep minimum width for text visibility, but use actual width if larger
+                bufferBar.style.width = Math.max(bufferUsage, 10) + '%';
+                bufferBar.textContent = bufferUsage.toFixed(1) + '%';
+                bufferBar.className = 'progress-bar ' +
+                    (bufferUsage <= 80 ? 'bg-success' :
+                     bufferUsage <= 90 ? 'bg-warning' : 'bg-danger');
+
+                // Update key metrics
+                // Hardware errors (REAL errors)
+                const hwErrorsEl = document.getElementById('vpp-hw-errors');
+                if (hwErrorsEl) {
+                    const hwErrors = data.hardware_errors || 0;
+                    hwErrorsEl.textContent = formatNumber(hwErrors);
+                    hwErrorsEl.className = hwErrors > 0 ? 'text-danger fw-bold' : '';
+                }
+
+                const hwErrorRateEl = document.getElementById('vpp-hw-error-rate');
+                if (hwErrorRateEl) {
+                    const hwErrorRate = data.hardware_error_rate || 0;
+                    const hwErrorRateText = hwErrorRate > 100 ? formatNumber(hwErrorRate) : hwErrorRate.toFixed(1);
+                    const hwTrend = getTrendIndicator(hwErrorRate, previousDropRates.hwErrorRate || 0, true);
+                    hwErrorRateEl.innerHTML = hwErrorRateText + hwTrend;
+                    previousDropRates.hwErrorRate = hwErrorRate;
+                }
+
+                // Protocol drops (normal behavior)
+                const rxDropsEl = document.getElementById('vpp-rx-drops');
+                if (rxDropsEl) {
+                    const rxDrops = data.rx_drops || 0;
+                    rxDropsEl.textContent = formatNumber(rxDrops);
+                    rxDropsEl.className = rxDrops > 10000 ? 'text-warning' : '';
+                }
+
+                // TX errors total
+                const txErrorsEl = document.getElementById('vpp-tx-errors');
+                if (txErrorsEl) {
+                    const txErrors = data.tx_drops || 0;
+                    txErrorsEl.textContent = formatNumber(txErrors);
+                    txErrorsEl.className = txErrors > 0 ? 'text-danger fw-bold' : '';
+                }
+
+                // Update vector rate with trend indicator (calculate from worker stats if global is 0)
+                const vectorRateEl = document.getElementById('vpp-vector-rate');
+                if (vectorRateEl) {
+                    let vectorRate = data.vector_rate || 0;
+
+                    // If global vector rate is 0 but we have worker stats, calculate the sum
+                    if (vectorRate === 0 && data.worker_stats && data.worker_stats.length > 0) {
+                        vectorRate = data.worker_stats.reduce((sum, worker) => {
+                            // Skip main thread (worker_id 0)
+                            if (worker.worker_id > 0) {
+                                return sum + (worker.vector_rate || 0);
+                            }
+                            return sum;
+                        }, 0);
+                    }
+
+                    // Format vector rate: use formatNumber for large values, otherwise round to 2 decimals
+                    const vectorRateText = vectorRate >= 1000 ? formatNumber(vectorRate) : vectorRate.toFixed(2);
+                    const vectorTrend = getTrendIndicator(vectorRate, previousDropRates.vectorRate, false);
+                    vectorRateEl.innerHTML = vectorRateText + vectorTrend;
+                    previousDropRates.vectorRate = vectorRate;
+                }
+
+                // Update RX drop rate with trend indicator
+                const rxDropRateEl = document.getElementById('vpp-rx-drop-rate');
+                if (rxDropRateEl) {
+                    const rxDropRate = data.rx_drop_rate || 0;
+                    const rxDropRateText = rxDropRate > 1000 ? formatNumber(rxDropRate) : rxDropRate.toFixed(1);
+                    const rxTrend = getTrendIndicator(rxDropRate, previousDropRates.rxDropRate, true);
+                    rxDropRateEl.innerHTML = rxDropRateText + rxTrend;
+                    previousDropRates.rxDropRate = rxDropRate;
+                }
+
+                // Update TX error rate with trend indicator
+                const txErrorRateEl = document.getElementById('vpp-tx-error-rate');
+                if (txErrorRateEl) {
+                    const txErrorRate = data.tx_error_rate || 0;
+                    const txErrorRateText = txErrorRate > 1000 ? formatNumber(txErrorRate) : txErrorRate.toFixed(1);
+                    const txTrend = getTrendIndicator(txErrorRate, previousDropRates.txErrorRate, true);
+                    txErrorRateEl.innerHTML = txErrorRateText + txTrend;
+                    previousDropRates.txErrorRate = txErrorRate;
+                }
+
+                // Display interface counters if available
+                if (data.interface_metrics && Object.keys(data.interface_metrics).length > 0) {
+                    const countersSection = document.getElementById('interface-counters-section');
+                    const countersTbody = document.getElementById('interface-counters-tbody');
+
+                    if (countersSection && countersTbody) {
+                        countersSection.style.display = 'block';
+
+                        let tableRows = '';
+                        for (const [ifaceName, metrics] of Object.entries(data.interface_metrics)) {
+                            const stateClass = metrics.state === 'up' ? 'success' : 'danger';
+                            const stateBadge = `<span class="badge bg-${stateClass}">${metrics.state || 'unknown'}</span>`;
+
+                            // Calculate total hardware errors
+                            const hwErrors = (metrics.mac_local_errors || 0) +
+                                            (metrics.mac_remote_errors || 0) +
+                                            (metrics.rx_illegal_byte_errors || 0) +
+                                            (metrics.rx_missed_errors || 0);
+
+                            // Format drops and errors with color coding
+                            const rxDropsClass = metrics.rx_drops > 0 ? 'text-danger fw-bold' : '';
+                            const txErrorsClass = metrics.tx_errors > 0 ? 'text-danger fw-bold' : '';
+                            const hwErrorsClass = hwErrors > 0 ? 'text-danger fw-bold' : '';
+
+                            tableRows += `
+                                <tr>
+                                    <td><strong>${ifaceName}</strong></td>
+                                    <td class="text-center">${stateBadge}</td>
+                                    <td class="text-end ${rxDropsClass}">${formatNumber(metrics.rx_drops || 0)}</td>
+                                    <td class="text-end ${txErrorsClass}">${formatNumber(metrics.tx_errors || 0)}</td>
+                                    <td class="text-end ${hwErrorsClass}">${formatNumber(hwErrors)}</td>
+                                    <td class="text-end">${formatNumber(metrics.punts || 0)}</td>
+                                    <td class="text-end">${formatNumber(metrics.ip4_packets || 0)}</td>
+                                    <td class="text-end">${formatNumber(metrics.ip6_packets || 0)}</td>
+                                </tr>
+                            `;
+                        }
+
+                        countersTbody.innerHTML = tableRows || '<tr><td colspan="8" class="text-center text-muted">No interface data</td></tr>';
+                    }
+                } else {
+                    // Hide the counters section if no data
+                    const countersSection = document.getElementById('interface-counters-section');
+                    if (countersSection) {
+                        countersSection.style.display = 'none';
+                    }
+                }
+
+                // Show worker error imbalance alert if detected
+                if (data.worker_errors && data.worker_errors.imbalance_detected) {
+                    // Create or update alert
+                    let alertDiv = document.getElementById('vpp-imbalance-alert');
+                    if (!alertDiv) {
+                        alertDiv = document.createElement('div');
+                        alertDiv.id = 'vpp-imbalance-alert';
+                        alertDiv.className = 'alert alert-danger mt-3 mb-0';
+                        const summaryDiv = document.getElementById('vpp-performance-summary');
+                        if (summaryDiv) {
+                            summaryDiv.appendChild(alertDiv);
+                        }
+                    }
+                    alertDiv.innerHTML = `
+                        <strong><i class="bi bi-exclamation-triangle"></i> Worker Imbalance Detected!</strong><br>
+                        <small>${data.worker_errors.imbalance_message || 'Check detailed performance page'}</small>
+                    `;
+                } else {
+                    // Remove alert if it exists and no imbalance
+                    const alertDiv = document.getElementById('vpp-imbalance-alert');
+                    if (alertDiv) {
+                        alertDiv.remove();
+                    }
+                }
+
+                // Show recommendations if any
+                if (data.recommendations && data.recommendations.length > 0) {
+                    // Show first recommendation as tooltip on status icon
+                    const statusDiv = document.getElementById('vpp-status-icon');
+                    if (statusDiv) {
+                        statusDiv.setAttribute('title', data.recommendations[0]);
+                        statusDiv.setAttribute('data-bs-toggle', 'tooltip');
+                        statusDiv.setAttribute('data-bs-placement', 'top');
+                    }
+                }
+            } catch (error) {
+                console.error('Error fetching VPP performance data:', error);
+                document.getElementById('vpp-status-icon').innerHTML = `
+                    <i class="bi bi-x-circle text-danger" style="font-size: 2rem;"></i>
+                    <p class="mt-2 mb-0"><strong>Error</strong></p>
+                `;
+                // Show advisor button on error
+                const errorActionBtn = document.getElementById('vpp-error-action');
+                if (errorActionBtn) {
+                    errorActionBtn.style.display = 'block';
+                }
+
+                // Clear metrics on error
+                document.getElementById('vpp-worker-balance').style.width = '10%';
+                document.getElementById('vpp-worker-balance').textContent = '-';
+                document.getElementById('vpp-buffer-usage').style.width = '10%';
+                document.getElementById('vpp-buffer-usage').textContent = '-';
+                document.getElementById('vpp-rx-drops').textContent = '-';
+                document.getElementById('vpp-tx-errors').textContent = '-';
+                document.getElementById('vpp-tx-error-rate').textContent = '-';
+                document.getElementById('vpp-hw-errors').textContent = '-';
+                document.getElementById('vpp-hw-error-rate').textContent = '-';
+            }
+        }
+
+        // Fetch VPP Advisor summary
+        async function fetchAdvisorSummary() {
+            try {
+                const response = await fetch('/api/advisor.json');
+                const data = await response.json();
+
+                if (!data) {
+                    return;
+                }
+
+                // Update counts
+                document.getElementById('advisor-critical').textContent = data.summary?.critical || 0;
+                document.getElementById('advisor-warning').textContent = data.summary?.warning || 0;
+                document.getElementById('advisor-info').textContent = data.summary?.info || 0;
+
+                // Update status icon
+                const statusDiv = document.getElementById('advisor-status-icon');
+                if (data.has_critical) {
+                    statusDiv.innerHTML = `
+                        <i class="bi bi-exclamation-triangle-fill text-danger" style="font-size: 2rem;"></i>
+                        <p class="mt-2 mb-0"><strong class="text-danger">Critical Issues</strong></p>
+                    `;
+                } else if ((data.summary?.warning || 0) > 0) {
+                    statusDiv.innerHTML = `
+                        <i class="bi bi-exclamation-circle-fill text-warning" style="font-size: 2rem;"></i>
+                        <p class="mt-2 mb-0"><strong class="text-warning">Warnings</strong></p>
+                    `;
+                } else if ((data.summary?.total || 0) > 0) {
+                    statusDiv.innerHTML = `
+                        <i class="bi bi-check-circle-fill text-success" style="font-size: 2rem;"></i>
+                        <p class="mt-2 mb-0"><strong class="text-success">Healthy</strong></p>
+                    `;
+                } else {
+                    statusDiv.innerHTML = `
+                        <i class="bi bi-check-circle-fill text-success" style="font-size: 2rem;"></i>
+                        <p class="mt-2 mb-0"><strong class="text-success">No Issues</strong></p>
+                    `;
+                }
+
+                // Update last run time
+                const now = new Date();
+                document.getElementById('advisor-last-run').textContent = now.toLocaleTimeString();
+
+            } catch (error) {
+                console.error('Error fetching advisor data:', error);
+                document.getElementById('advisor-status-icon').innerHTML = `
+                    <i class="bi bi-x-circle text-muted" style="font-size: 2rem;"></i>
+                    <p class="mt-2 mb-0"><strong>Error</strong></p>
+                `;
+            }
+        }
+
+        // Run quick advisor analysis
+        function runQuickAdvisorAnalysis() {
+            const btn = event.target;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Analyzing...';
+
+            fetchAdvisorSummary().finally(() => {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-play-circle"></i> Run Quick Analysis';
+            });
+        }
+
+        // Load stats on page load (PPPoE first as it's more important)
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchStats();
+            fetchPoolStats();
+            fetchInterfaceStats();  // PPPoE stats first
+            fetchL2TPStats();  // L2TP stats
+            fetchVPPPerformanceSummary();  // VPP performance summary
+            fetchPhysicalInterfaceStats();  // Physical stats last
+        });
+
+        // Auto-refresh stats at appropriate intervals
+        setInterval(fetchStats, 5000);
+        setInterval(fetchPoolStats, 10000);
+        setInterval(fetchInterfaceStats, 5000); // Update PPPoE session stats
+        setInterval(fetchL2TPStats, 5000); // Update L2TP session stats
+        setInterval(fetchVPPPerformanceSummary, 10000); // Update VPP performance summary every 10 seconds
+        setInterval(fetchPhysicalInterfaceStats, 5000); // Update physical interface stats
+    </script>
+</body>
+</html>

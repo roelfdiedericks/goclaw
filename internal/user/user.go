@@ -9,6 +9,7 @@ type Role string
 const (
 	RoleOwner Role = "owner" // full access to everything
 	RoleUser  Role = "user"  // chat + limited tools
+	RoleGuest Role = "guest" // unauthenticated, minimal access
 )
 
 // User represents an authenticated user who can interact with the agent
@@ -41,8 +42,9 @@ func (u *User) HasTelegramAuth() bool {
 
 // Default tool permissions by role
 var defaultPermissions = map[Role][]string{
-	RoleOwner: {"*"}, // everything
-	RoleUser:  {"read", "web_search", "web_fetch"}, // safe tools only
+	RoleOwner: {"*"},                                          // everything
+	RoleUser:  {"read", "web_search", "web_fetch", "transcript"}, // safe tools + own transcript
+	RoleGuest: {"read"},                                       // minimal - read only
 }
 
 // CanUseTool checks if the user has permission to use a specific tool
@@ -69,6 +71,11 @@ func (u *User) CanUseTool(toolName string) bool {
 // IsOwner returns true if the user has owner role
 func (u *User) IsOwner() bool {
 	return u != nil && u.Role == RoleOwner
+}
+
+// IsGuest returns true if the user has guest role
+func (u *User) IsGuest() bool {
+	return u != nil && u.Role == RoleGuest
 }
 
 // HasIdentity checks if the user has a specific identity
