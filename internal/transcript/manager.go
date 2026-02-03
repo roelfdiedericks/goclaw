@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
 )
@@ -14,25 +15,28 @@ import (
 type Manager struct {
 	db       *sql.DB
 	provider memory.EmbeddingProvider
+	config   config.TranscriptConfig
 	indexer  *Indexer
 	searcher *Searcher
 }
 
 // NewManager creates a new transcript manager
-func NewManager(db *sql.DB, provider memory.EmbeddingProvider) (*Manager, error) {
+func NewManager(db *sql.DB, provider memory.EmbeddingProvider, cfg config.TranscriptConfig) (*Manager, error) {
 	// Initialize schema
 	if err := initSchema(db); err != nil {
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 
-	m := &Manager{
+	indexer := NewIndexer(db, provider, cfg)
+	searcher := NewSearcher(db, provider)
+
+	return &Manager{
 		db:       db,
 		provider: provider,
-		indexer:  NewIndexer(db, provider),
-		searcher: NewSearcher(db, provider),
-	}
-
-	return m, nil
+		config:   cfg,
+		indexer:  indexer,
+		searcher: searcher,
+	}, nil
 }
 
 // Start begins background indexing

@@ -294,11 +294,11 @@ func (s *Searcher) fetchChunks(ctx context.Context, scores map[string]float64, m
 
 	// Fetch chunk data
 	var results []SearchResult
-	for _, s := range sorted {
+	for _, sc := range sorted {
 		row := s.db.QueryRowContext(ctx, `
 			SELECT id, session_key, user_id, content, timestamp_start, timestamp_end
 			FROM transcript_chunks WHERE id = ?
-		`, s.id)
+		`, sc.id)
 
 		var chunk SearchResult
 		var userID sql.NullString
@@ -312,7 +312,7 @@ func (s *Searcher) fetchChunks(ctx context.Context, scores map[string]float64, m
 		}
 		chunk.TimestampStart = time.Unix(tsStart, 0)
 		chunk.TimestampEnd = time.Unix(tsEnd, 0)
-		chunk.Score = s.score
+		chunk.Score = sc.score
 
 		// Determine match type
 		if s.provider != nil && s.provider.Available() {

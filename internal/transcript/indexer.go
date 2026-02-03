@@ -12,25 +12,16 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
-)
-
-const (
-	// indexInterval is how often to check for new messages to index
-	indexInterval = 30 * time.Second
-
-	// batchSize is the maximum number of messages to process in one batch
-	batchSize = 100
-
-	// maxGroupGapSeconds is the maximum time gap between messages to group them
-	maxGroupGapSeconds = 300 // 5 minutes
 )
 
 // Indexer manages background indexing of session messages
 type Indexer struct {
 	db       *sql.DB
 	provider memory.EmbeddingProvider
+	config   config.TranscriptConfig
 
 	syncing  atomic.Bool
 	stopChan chan struct{}
@@ -44,10 +35,28 @@ type Indexer struct {
 }
 
 // NewIndexer creates a new transcript indexer
-func NewIndexer(db *sql.DB, provider memory.EmbeddingProvider) *Indexer {
+func NewIndexer(db *sql.DB, provider memory.EmbeddingProvider, cfg config.TranscriptConfig) *Indexer {
+	// Apply defaults for zero values
+	if cfg.IndexIntervalSeconds <= 0 {
+		cfg.IndexIntervalSeconds = 30
+	}
+	if cfg.BatchSize <= 0 {
+		cfg.BatchSize = 100
+	}
+	if cfg.MaxGroupGapSeconds <= 0 {
+		cfg.MaxGroupGapSeconds = 300
+	}
+	if cfg.MaxMessagesPerChunk <= 0 {
+		cfg.MaxMessagesPerChunk = 8
+	}
+	if cfg.MaxEmbeddingContentLen <= 0 {
+		cfg.MaxEmbeddingContentLen = 16000
+	}
+
 	return &Indexer{
 		db:       db,
 		provider: provider,
+		config:   cfg,
 		stopChan: make(chan struct{}),
 		syncChan: make(chan struct{}, 1),
 	}
@@ -88,7 +97,8 @@ func (idx *Indexer) IsSyncing() bool {
 func (idx *Indexer) loop() {
 	defer idx.wg.Done()
 
-	ticker := time.NewTicker(indexInterval)
+	interval := time.Duration(idx.config.IndexIntervalSeconds) * time.Second
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	// Initial sync after a short delay
@@ -143,25 +153,39 @@ func (idx *Indexer) runSync() {
 	L_debug("transcript: grouped into chunks", "chunks", len(chunks))
 
 	// Generate embeddings and store chunks
-	chunksProcessed := 0
+	chunksCreated := 0
+	chunksDeferred := 0
 	for _, chunk := range chunks {
 		if err := idx.indexChunk(ctx, chunk); err != nil {
 			L_warn("transcript: failed to index chunk", "error", err)
+			chunksDeferred++
 			continue
 		}
-		chunksProcessed++
+		chunksCreated++
 	}
 
 	// Update stats
 	idx.mu.Lock()
 	idx.lastSync = time.Now()
-	idx.chunksIndexed += chunksProcessed
+	idx.chunksIndexed += chunksCreated
 	idx.mu.Unlock()
+
+	// Get remaining count for progress
+	remaining := idx.PendingCount()
+	totalIndexable := idx.TotalIndexableCount()
+	indexed := totalIndexable - remaining
+	progress := "0%"
+	if totalIndexable > 0 {
+		progress = fmt.Sprintf("%d/%d (%.0f%%)", indexed, totalIndexable, float64(indexed)/float64(totalIndexable)*100)
+	}
 
 	elapsed := time.Since(startTime)
 	L_info("transcript: sync completed",
 		"messagesProcessed", len(messages),
-		"chunksCreated", chunksProcessed,
+		"chunksCreated", chunksCreated,
+		"chunksDeferred", chunksDeferred,
+		"progress", progress,
+		"remaining", remaining,
 		"elapsed", elapsed.String(),
 	)
 }
@@ -175,7 +199,7 @@ func (idx *Indexer) getUnindexedMessages(ctx context.Context) ([]*Message, error
 		  AND role IN ('user', 'assistant')
 		ORDER BY session_key, timestamp
 		LIMIT ?
-	`, batchSize)
+	`, idx.config.BatchSize)
 	if err != nil {
 		return nil, fmt.Errorf("query messages: %w", err)
 	}
@@ -224,12 +248,20 @@ func (idx *Indexer) groupMessages(messages []*Message) []*ConversationChunk {
 			continue
 		}
 
-		// Start new chunk if needed
-		if currentChunk == nil ||
+		// Start new chunk if needed:
+		// - First message
+		// - Different session
+		// - Different user
+		// - Time gap too large
+		// - Current chunk at message limit
+		maxGap := int64(idx.config.MaxGroupGapSeconds)
+		needNewChunk := currentChunk == nil ||
 			currentChunk.SessionKey != msg.SessionKey ||
 			currentChunk.UserID != msg.UserID ||
-			msg.Timestamp-currentChunk.TimestampEnd > maxGroupGapSeconds {
+			msg.Timestamp-currentChunk.TimestampEnd > maxGap ||
+			len(currentChunk.Messages) >= idx.config.MaxMessagesPerChunk
 
+		if needNewChunk {
 			// Save current chunk
 			if currentChunk != nil && len(currentChunk.Messages) > 0 {
 				currentChunk.Content = idx.buildChunkContent(currentChunk.Messages)
@@ -286,18 +318,49 @@ func (idx *Indexer) indexChunk(ctx context.Context, chunk *ConversationChunk) er
 	}
 	messageIDsJSON, _ := json.Marshal(messageIDs)
 
+	contentLen := len(chunk.Content)
+
 	// Generate embedding if provider available
 	var embeddingBlob []byte
 	var embeddingModel string
+	var embeddingFailed bool
+
 	if idx.provider != nil && idx.provider.Available() {
-		embedding, err := idx.provider.EmbedQuery(ctx, chunk.Content)
+		// Truncate content if too long for embedding model
+		contentToEmbed := chunk.Content
+		maxLen := idx.config.MaxEmbeddingContentLen
+		if contentLen > maxLen {
+			contentToEmbed = chunk.Content[:maxLen]
+			L_debug("transcript: truncating content for embedding",
+				"originalLength", contentLen,
+				"truncatedLength", maxLen,
+				"chunkID", chunkID,
+			)
+		}
+
+		embedding, err := idx.provider.EmbedQuery(ctx, contentToEmbed)
 		if err != nil {
-			L_warn("transcript: failed to generate embedding", "error", err)
-			// Continue without embedding
-		} else {
+			L_warn("transcript: failed to generate embedding",
+				"error", err,
+				"contentLength", contentLen,
+				"chunkID", chunkID,
+				"messageCount", len(chunk.Messages),
+			)
+			embeddingFailed = true
+		} else if embedding != nil {
 			embeddingBlob, _ = json.Marshal(embedding)
 			embeddingModel = idx.provider.Model()
 		}
+	}
+
+	// If embedding provider is available but embedding failed, don't store the chunk
+	// Messages will remain unindexed and be retried on next sync
+	if embeddingFailed {
+		L_debug("transcript: skipping chunk storage due to embedding failure, will retry",
+			"chunkID", chunkID,
+			"messageCount", len(chunk.Messages),
+		)
+		return fmt.Errorf("embedding failed, will retry")
 	}
 
 	// Insert chunk
@@ -313,10 +376,17 @@ func (idx *Indexer) indexChunk(ctx context.Context, chunk *ConversationChunk) er
 		return fmt.Errorf("insert chunk: %w", err)
 	}
 
-	// Mark source messages as indexed
+	// Mark source messages as indexed only after successful storage
 	for _, msg := range chunk.Messages {
 		idx.markAsIndexed(msg.ID)
 	}
+
+	L_trace("transcript: chunk indexed",
+		"chunkID", chunkID,
+		"contentLength", contentLen,
+		"messageCount", len(chunk.Messages),
+		"hasEmbedding", embeddingBlob != nil,
+	)
 
 	return nil
 }
@@ -349,6 +419,20 @@ func (idx *Indexer) PendingCount() int {
 	`).Scan(&count)
 	if err != nil {
 		L_warn("transcript: failed to count pending", "error", err)
+		return 0
+	}
+	return count
+}
+
+// TotalIndexableCount returns the total number of indexable messages
+func (idx *Indexer) TotalIndexableCount() int {
+	var count int
+	err := idx.db.QueryRow(`
+		SELECT COUNT(*) FROM messages
+		WHERE role IN ('user', 'assistant')
+	`).Scan(&count)
+	if err != nil {
+		L_warn("transcript: failed to count total", "error", err)
 		return 0
 	}
 	return count

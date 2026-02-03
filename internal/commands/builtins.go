@@ -186,24 +186,39 @@ func handleCompact(ctx context.Context, args *CommandArgs) *CommandResult {
 		}
 	}
 
+	// Determine source type for display
+	sourceType := "LLM"
+	if result.FromCheckpoint {
+		sourceType = "checkpoint"
+	} else if result.EmergencyTruncation {
+		sourceType = "emergency truncation"
+	} else if result.UsedFallback {
+		sourceType = "fallback"
+	}
+
+	// Build model display string
+	modelDisplay := result.Model
+	if modelDisplay == "" {
+		modelDisplay = "unknown"
+	}
+
+	// Calculate reduction percentage
+	reduction := 0.0
+	if result.TokensBefore > 0 {
+		reduction = float64(result.TokensBefore-result.TokensAfter) / float64(result.TokensBefore) * 100
+	}
+
 	var text strings.Builder
 	text.WriteString("Compaction completed!\n")
-	text.WriteString(fmt.Sprintf("  Tokens before: %d\n", result.TokensBefore))
-
-	source := "LLM"
-	if result.FromCheckpoint {
-		source = "checkpoint"
-	} else if result.EmergencyTruncation {
-		source = "emergency truncation"
-	} else if result.UsedFallback {
-		source = "fallback model"
-	}
-	text.WriteString(fmt.Sprintf("  Summary source: %s\n", source))
+	text.WriteString(fmt.Sprintf("  Tokens: %d → %d (%.0f%% reduction)\n", result.TokensBefore, result.TokensAfter, reduction))
+	text.WriteString(fmt.Sprintf("  Messages after: %d\n", result.MessagesAfter))
+	text.WriteString(fmt.Sprintf("  Summary: %s (%s)\n", sourceType, modelDisplay))
 
 	var md strings.Builder
 	md.WriteString("*Compaction completed!*\n")
-	md.WriteString(fmt.Sprintf("Tokens before: %d\n", result.TokensBefore))
-	md.WriteString(fmt.Sprintf("Summary source: _%s_\n", source))
+	md.WriteString(fmt.Sprintf("Tokens: %d → %d (%.0f%% reduction)\n", result.TokensBefore, result.TokensAfter, reduction))
+	md.WriteString(fmt.Sprintf("Messages after: %d\n", result.MessagesAfter))
+	md.WriteString(fmt.Sprintf("Summary: _%s_ (`%s`)\n", sourceType, modelDisplay))
 
 	return &CommandResult{
 		Text:     text.String(),
