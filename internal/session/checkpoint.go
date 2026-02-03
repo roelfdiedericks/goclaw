@@ -145,22 +145,42 @@ func (g *CheckpointGenerator) Generate(ctx context.Context, sess *Session, sessi
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	// Get the appropriate LLM client
-	client := g.getClient()
-	if client == nil {
-		return fmt.Errorf("no LLM client available for checkpoint generation")
+	messages := sess.GetMessages()
+	var checkpoint *CheckpointData
+	var err error
+	var usedModel string
+
+	// Try primary client first
+	if g.llmClient != nil && g.llmClient.IsAvailable() {
+		usedModel = g.llmClient.Model()
+		L_info("generating checkpoint",
+			"model", usedModel,
+			"tokens", sess.GetTotalTokens(),
+			"messages", len(sess.Messages))
+
+		checkpoint, err = g.llmClient.GenerateCheckpoint(ctx, messages, sess.GetTotalTokens())
+		if err != nil {
+			L_warn("checkpoint: primary model failed, trying fallback",
+				"model", usedModel,
+				"error", err)
+		}
 	}
 
-	L_info("generating checkpoint",
-		"model", client.Model(),
-		"tokens", sess.GetTotalTokens(),
-		"messages", len(sess.Messages))
+	// Try fallback if primary failed or unavailable
+	if checkpoint == nil && g.config.FallbackToMain && g.mainClient != nil && g.mainClient.IsAvailable() {
+		usedModel = g.mainClient.Model()
+		L_info("checkpoint: using fallback model",
+			"model", usedModel,
+			"tokens", sess.GetTotalTokens())
 
-	// Generate the checkpoint
-	messages := sess.GetMessages()
-	checkpoint, err := client.GenerateCheckpoint(ctx, messages, sess.GetTotalTokens())
-	if err != nil {
-		return fmt.Errorf("failed to generate checkpoint: %w", err)
+		checkpoint, err = g.mainClient.GenerateCheckpoint(ctx, messages, sess.GetTotalTokens())
+		if err != nil {
+			return fmt.Errorf("failed to generate checkpoint (fallback also failed): %w", err)
+		}
+	}
+
+	if checkpoint == nil {
+		return fmt.Errorf("no LLM client available for checkpoint generation")
 	}
 
 	// Set metadata
@@ -178,7 +198,7 @@ func (g *CheckpointGenerator) Generate(ctx context.Context, sess *Session, sessi
 			OpenQuestions:            checkpoint.OpenQuestions,
 			TokensAtCheckpoint:       checkpoint.TokensAtCheckpoint,
 			MessageCountAtCheckpoint: checkpoint.MessageCountAtCheckpoint,
-			GeneratedBy:              client.Model(),
+			GeneratedBy:              usedModel,
 		}
 		if parentID := sess.GetLastRecordID(); parentID != nil {
 			storedCP.ParentID = *parentID

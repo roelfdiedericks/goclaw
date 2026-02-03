@@ -11,6 +11,7 @@ import (
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 )
 
@@ -148,6 +149,12 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	L_info("http: message received", "user", u.ID, "session", sessionID[:8]+"...", "length", len(req.Message), "images", len(images))
 
+	// Handle /thinking command locally (channel-specific preference)
+	if strings.HasPrefix(strings.TrimSpace(req.Message), "/thinking") {
+		s.handleThinkingCommand(w, sessionID, req.Message)
+		return
+	}
+
 	// Run agent request (will stream via SSE)
 	msgID := fmt.Sprintf("msg_%d", time.Now().UnixNano())
 	err := s.channel.RunAgentRequest(r.Context(), sessionID, u, req.Message, images)
@@ -169,6 +176,71 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// handleThinkingCommand handles the /thinking command for toggling tool visibility
+func (s *Server) handleThinkingCommand(w http.ResponseWriter, sessionID string, message string) {
+	sess := s.channel.GetSession(sessionID)
+	if sess == nil {
+		http.Error(w, "Session not found", http.StatusInternalServerError)
+		return
+	}
+
+	// Parse subcommand
+	parts := strings.Fields(message)
+	arg := ""
+	if len(parts) > 1 {
+		arg = strings.ToLower(parts[1])
+	}
+
+	var resultMsg string
+	switch arg {
+	case "on":
+		sess.ShowThinking = true
+		resultMsg = "Thinking output enabled. You'll now see tool calls and working output."
+	case "off":
+		sess.ShowThinking = false
+		resultMsg = "Thinking output disabled. You'll only see final responses."
+	case "toggle", "":
+		sess.ShowThinking = !sess.ShowThinking
+		if sess.ShowThinking {
+			resultMsg = "Thinking output enabled."
+		} else {
+			resultMsg = "Thinking output disabled."
+		}
+	case "status":
+		if sess.ShowThinking {
+			resultMsg = "Thinking output is currently ON."
+		} else {
+			resultMsg = "Thinking output is currently OFF."
+		}
+	default:
+		resultMsg = "Usage: /thinking [on|off|toggle|status]"
+	}
+
+	// Send preference event to client
+	sess.SendEvent(SSEEvent{
+		Event: "preference",
+		Data: map[string]interface{}{
+			"key":   "thinking",
+			"value": sess.ShowThinking,
+		},
+	})
+
+	// Send response as system message
+	sess.SendEvent(SSEEvent{
+		Event: "system",
+		Data: map[string]string{
+			"message": resultMsg,
+		},
+	})
+
+	// Respond to HTTP request
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "ok",
+		"message": resultMsg,
+	})
 }
 
 // handleEvents handles GET /api/events - SSE stream
@@ -231,6 +303,14 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	currentEventID := sess.nextEventID - 1
 	sess.bufferMu.Unlock()
 	fmt.Fprintf(w, "event: connected\nid: %d\ndata: {\"user\":\"%s\",\"lastEventId\":%d}\n\n", currentEventID, u.ID, currentEventID)
+	flusher.Flush()
+
+	// Send current preferences
+	prefData, _ := json.Marshal(map[string]interface{}{
+		"key":   "thinking",
+		"value": sess.ShowThinking,
+	})
+	fmt.Fprintf(w, "event: preference\ndata: %s\n\n", prefData)
 	flusher.Flush()
 
 	// Replay missed events
@@ -318,7 +398,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(status)
 }
 
-// handleMedia serves media files from allowed paths
+// handleMedia serves media files from media root or allowed paths
 func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 	u := getUserFromContext(r)
 	if u == nil {
@@ -334,43 +414,47 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Security: only allow absolute paths and validate they exist
-	if !filepath.IsAbs(filePath) {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
+	// Use media.ResolveMediaPath for path resolution and security
+	var absPath string
+	var err error
 
-	// Clean the path to prevent traversal
-	cleanPath := filepath.Clean(filePath)
-
-	// Additional security: only allow certain directories
-	// Allow: workspace media, tmp, common screenshot locations
-	allowed := false
-	allowedPrefixes := []string{
-		"/tmp/",
-		"/home/",
-		"/var/tmp/",
-	}
-	for _, prefix := range allowedPrefixes {
-		if strings.HasPrefix(cleanPath, prefix) {
-			allowed = true
-			break
+	if s.mediaRoot != "" {
+		// Try to resolve via media root first
+		absPath, err = media.ResolveMediaPath(s.mediaRoot, filePath)
+	} else {
+		// Fallback: only allow absolute paths in allowed directories
+		if !filepath.IsAbs(filePath) {
+			http.Error(w, "Invalid path (no media root configured)", http.StatusBadRequest)
+			return
+		}
+		absPath = filepath.Clean(filePath)
+		// Security: only allow certain directories
+		allowed := false
+		for _, prefix := range []string{"/tmp/", "/home/", "/var/tmp/"} {
+			if strings.HasPrefix(absPath, prefix) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			err = fmt.Errorf("path outside allowed directories")
 		}
 	}
-	if !allowed {
-		L_warn("http: media access denied", "path", cleanPath, "user", u.ID)
+
+	if err != nil {
+		L_warn("http: media access denied", "path", filePath, "user", u.ID, "error", err)
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
 
 	// Check file exists
-	info, err := os.Stat(cleanPath)
+	info, err := os.Stat(absPath)
 	if os.IsNotExist(err) {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
 	if err != nil {
-		L_error("http: media stat error", "path", cleanPath, "error", err)
+		L_error("http: media stat error", "path", absPath, "error", err)
 		http.Error(w, "Server error", http.StatusInternalServerError)
 		return
 	}
@@ -379,8 +463,8 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	L_debug("http: serving media", "path", cleanPath, "user", u.ID, "size", info.Size())
+	L_debug("http: serving media", "path", absPath, "user", u.ID, "size", info.Size())
 
 	// Serve the file with proper content type detection
-	http.ServeFile(w, r, cleanPath)
+	http.ServeFile(w, r, absPath)
 }

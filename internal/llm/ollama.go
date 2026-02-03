@@ -324,7 +324,11 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		L_error("ollama: request failed", "error", err)
+		// Mark unavailable on connection failures so fallback kicks in
+		c.mu.Lock()
+		c.available = false
+		c.mu.Unlock()
+		L_error("ollama: request failed, marking unavailable", "error", err)
 		return "", fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()

@@ -155,9 +155,197 @@
         .btn-close-preview:hover {
             background: #c82333;
         }
+        
+        /* Inline media */
+        .chat-media {
+            max-width: 100%;
+            max-height: 400px;
+            border-radius: 0.5rem;
+            margin: 0.5rem 0;
+            display: block;
+            cursor: pointer;
+        }
+        .chat-media-image:hover {
+            opacity: 0.9;
+        }
+        .chat-media-video {
+            background: #000;
+        }
+        .chat-media-audio {
+            width: 100%;
+            margin: 0.5rem 0;
+        }
+        .chat-media-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: #e9ecef;
+            border-radius: 0.5rem;
+            text-decoration: none;
+            color: #333;
+            margin: 0.5rem 0;
+        }
+        .chat-media-link:hover {
+            background: #dee2e6;
+            color: #000;
+        }
+        .chat-media-error {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: #f8d7da;
+            color: #721c24;
+            border-radius: 0.5rem;
+            margin: 0.5rem 0;
+        }
+        .chat-media-error i {
+            color: #dc3545;
+        }
+        
+        /* Media modal for enlarged view */
+        #media-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 9999;
+            cursor: pointer;
+            align-items: center;
+            justify-content: center;
+        }
+        #media-modal.active {
+            display: flex;
+        }
+        #media-modal img,
+        #media-modal video {
+            max-width: 95%;
+            max-height: 95%;
+            border-radius: 0.5rem;
+        }
+        #media-modal video {
+            background: #000;
+        }
+        #media-modal .close-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            color: white;
+            font-size: 2rem;
+            cursor: pointer;
+            opacity: 0.8;
+            transition: opacity 0.2s;
+        }
+        #media-modal .close-btn:hover {
+            opacity: 1;
+        }
+        
+        /* Tool call display (thinking mode) */
+        .tool-call {
+            background: #f8f9fa;
+            border-left: 3px solid #6c757d;
+            border-radius: 0 0.5rem 0.5rem 0;
+            padding: 0.5rem 0.75rem;
+            margin: 0.5rem 0;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            font-size: 0.85em;
+        }
+        .tool-call-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.25rem;
+        }
+        .tool-call-icon { color: #6c757d; }
+        .tool-call-name { font-weight: 600; color: #495057; }
+        .tool-call-status { margin-left: auto; }
+        .tool-call-status.running { color: #0d6efd; }
+        .tool-call-status.completed { color: #198754; }
+        .tool-call-status.error { color: #dc3545; }
+        .tool-call-input, .tool-call-output {
+            background: #e9ecef;
+            border-radius: 0.25rem;
+            padding: 0.25rem 0.5rem;
+            margin: 0.25rem 0;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 100px;
+            overflow: hidden;
+            cursor: pointer;
+            position: relative;
+        }
+        .tool-call-input.expanded, .tool-call-output.expanded {
+            max-height: none;
+        }
+        .tool-call-input::after, .tool-call-output::after {
+            content: '▼ Click to expand';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(transparent, #e9ecef 50%);
+            text-align: center;
+            padding: 0.5rem;
+            font-size: 0.75em;
+            color: #6c757d;
+        }
+        .tool-call-input.expanded::after, .tool-call-output.expanded::after {
+            display: none;
+        }
+        .tool-call-duration {
+            font-size: 0.8em;
+            color: #6c757d;
+        }
+        
+        /* Thinking content */
+        .thinking-content {
+            background: #fff3cd;
+            border-left: 3px solid #ffc107;
+            border-radius: 0 0.5rem 0.5rem 0;
+            padding: 0.5rem 0.75rem;
+            margin: 0.5rem 0;
+            font-style: italic;
+            color: #856404;
+        }
+        
+        /* System messages */
+        .message.system .bubble {
+            background: #d1ecf1;
+            color: #0c5460;
+            font-size: 0.9em;
+        }
+        
+        /* Thinking toggle button */
+        #thinking-toggle {
+            margin-right: 1rem;
+        }
+        #thinking-toggle.active {
+            background: #0d6efd !important;
+            border-color: #0d6efd !important;
+            color: white !important;
+        }
+        
+        /* Spin animation for running status */
+        .spin {
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body>
+    <!-- Media modal for enlarged view -->
+    <div id="media-modal">
+        <span class="close-btn"><i class="bi bi-x-lg"></i></span>
+        <div id="media-modal-content"></div>
+    </div>
+    
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
         <div class="container">
             <a class="navbar-brand" href="/"><i class="bi bi-robot"></i> GoClaw</a>
@@ -173,6 +361,10 @@
                         <a class="nav-link" href="/chat"><i class="bi bi-chat"></i> Chat</a>
                     </li>
                 </ul>
+                <button id="thinking-toggle" class="btn btn-outline-secondary btn-sm d-none" 
+                        title="Thinking OFF (click to toggle)">
+                    <i class="bi bi-lightbulb"></i> Thinking
+                </button>
                 <span class="navbar-text">
                     <i class="bi bi-person-circle"></i> {{.User.Name}}
                     {{if .User.IsOwner}}<span class="badge bg-warning text-dark">Owner</span>{{end}}

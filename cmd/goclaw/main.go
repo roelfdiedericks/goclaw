@@ -718,6 +718,29 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		L_debug("skills tool registered")
 	}
 
+	// Initialize transcript manager (needs SQLite DB from session store)
+	var transcriptMgr *transcript.Manager
+	if db := gw.SessionDB(); db != nil {
+		// Get embedding provider from memory manager if available
+		var embeddingProvider memory.EmbeddingProvider
+		if memMgr := gw.MemoryManager(); memMgr != nil {
+			embeddingProvider = memMgr.Provider()
+		}
+
+		var err error
+		transcriptMgr, err = transcript.NewManager(db, embeddingProvider)
+		if err != nil {
+			L_warn("transcript: failed to initialize manager", "error", err)
+		} else {
+			transcriptMgr.Start()
+			defer transcriptMgr.Stop()
+			toolsReg.Register(tools.NewTranscriptTool(transcriptMgr))
+			L_info("transcript: manager started and tool registered")
+		}
+	} else {
+		L_debug("transcript: skipped (no SQLite store)")
+	}
+
 	// Setup context with cancellation for graceful shutdown
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -817,15 +840,26 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		if listen == "" {
 			listen = ":1337"
 		}
-		httpCfg := &goclawhttp.ServerConfig{
-			Listen:  listen,
-			DevMode: devMode,
+		// Get media root from gateway's media store
+		var mediaRoot string
+		if mediaStore := gw.MediaStore(); mediaStore != nil {
+			mediaRoot = mediaStore.BaseDir()
+			L_debug("http: media root configured", "mediaRoot", mediaRoot)
+		} else {
+			L_warn("http: no media store available")
 		}
+		httpCfg := &goclawhttp.ServerConfig{
+			Listen:    listen,
+			DevMode:   devMode,
+			MediaRoot: mediaRoot,
+		}
+		L_debug("http: creating server", "listen", listen, "devMode", devMode, "mediaRoot", mediaRoot)
 		var err error
 		httpServer, err = goclawhttp.NewServer(httpCfg, users)
 		if err != nil {
-			// Warn so it's obvious why HTTP isn't available
-			L_warn("http: not starting (use 'goclaw user set-password <username>' to enable)")
+			// Log the actual error so we can debug
+			L_error("http: server creation failed", "error", err, "listen", listen, "devMode", devMode, "users", users.Count())
+			L_warn("http: not starting - check error above for details")
 		} else {
 			httpServer.SetGateway(gw)
 			gw.RegisterChannel(httpServer.Channel())
@@ -850,6 +884,10 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	// Register message tool with available channels (after all channels are set up)
 	if len(messageChannels) > 0 {
 		messageTool := tools.NewMessageTool(messageChannels)
+		// Set media root for content array path resolution
+		if mediaStore := gw.MediaStore(); mediaStore != nil {
+			messageTool.SetMediaRoot(mediaStore.BaseDir())
+		}
 		toolsReg.Register(messageTool)
 		L_debug("message tool registered", "channels", len(messageChannels))
 	}

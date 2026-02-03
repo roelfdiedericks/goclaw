@@ -2,7 +2,6 @@ package http
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,6 +44,9 @@ type SSESession struct {
 	// Active connection (nil if disconnected)
 	activeConn *SSEConnection
 	connMu     sync.Mutex
+
+	// Preferences
+	ShowThinking bool // Show tool calls and thinking output (default: false)
 }
 
 // SSEConnection represents an active SSE connection
@@ -373,19 +375,31 @@ func (c *HTTPChannel) convertEvent(event gateway.AgentEvent) *SSEEvent {
 		}}
 
 	case gateway.EventToolStart:
-		return &SSEEvent{Event: "tool_use", Data: map[string]interface{}{
+		// Truncate input for display (1024 chars max)
+		inputStr := string(e.Input)
+		if len(inputStr) > 1024 {
+			inputStr = inputStr[:1024] + "..."
+		}
+		return &SSEEvent{Event: "tool_start", Data: map[string]interface{}{
 			"runId":    e.RunID,
 			"toolName": e.ToolName,
 			"toolId":   e.ToolID,
-			"input":    json.RawMessage(e.Input),
+			"input":    inputStr,
 		}}
 
 	case gateway.EventToolEnd:
-		return &SSEEvent{Event: "tool_result", Data: map[string]string{
-			"runId":    e.RunID,
-			"toolName": e.ToolName,
-			"toolId":   e.ToolID,
-			"result":   e.Result,
+		// Truncate result for display (1024 chars max)
+		result := e.Result
+		if len(result) > 1024 {
+			result = result[:1024] + "..."
+		}
+		return &SSEEvent{Event: "tool_end", Data: map[string]interface{}{
+			"runId":      e.RunID,
+			"toolName":   e.ToolName,
+			"toolId":     e.ToolID,
+			"result":     result,
+			"error":      e.Error,
+			"durationMs": e.DurationMs,
 		}}
 
 	case gateway.EventAgentEnd:

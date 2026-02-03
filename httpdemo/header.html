@@ -1,0 +1,101 @@
+cat header.html
+{{define "header"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} - GoPPP</title>
+    <!-- Bootstrap CSS from CDN -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+    <style>
+        .navbar-brand {
+            font-weight: bold;
+        }
+        .stats-card {
+            transition: transform 0.2s;
+        }
+        .stats-card:hover {
+            transform: translateY(-5px);
+        }
+        .session-table {
+            font-size: 0.9rem;
+        }
+        /* Trend indicator styling */
+        .bi-arrow-up-short, .bi-arrow-down-short {
+            font-size: 1.2em;
+            vertical-align: middle;
+            margin-left: 2px;
+        }
+        .bi-arrow-up-short.text-danger {
+            animation: pulse-danger 1s infinite;
+        }
+        .bi-arrow-down-short.text-success {
+            animation: pulse-success 1s infinite;
+        }
+        @keyframes pulse-danger {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        @keyframes pulse-success {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-pci-card-network"></i> GoPPP Control Panel
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/">
+                            <i class="bi bi-house"></i> Home
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/sessions.html">
+                            <i class="bi bi-people"></i> Sessions
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/radius.html">
+                            <i class="bi bi-shield-lock"></i> RADIUS
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/vlan.html">
+                            <i class="bi bi-diagram-3"></i> VLANs
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/tunnels.html">
+                            <i class="bi bi-diagram-2"></i> LNS Tunnels
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/relays.html">
+                            <i class="bi bi-arrow-right-circle"></i> LAC Tunnels
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <span class="nav-link text-light">
+                            <i class="bi bi-clock"></i> {{.Timestamp.Format "15:04:05"}}
+                        </span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-3">
+        <h5 class="mb-4">GoPPP - BRAS for VPP</h5>
+{{end}}

@@ -5,17 +5,19 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
+	"github.com/roelfdiedericks/goclaw/internal/transcript"
 )
 
 // ToolsConfig holds configuration for tools
 type ToolsConfig struct {
-	WorkingDir     string
-	BraveAPIKey    string
-	BrowserPool    *BrowserPool
-	BrowserEnabled bool
-	MemoryManager  *memory.Manager
-	MediaStore     *media.MediaStore
-	SkillsManager  *skills.Manager
+	WorkingDir        string
+	BraveAPIKey       string
+	BrowserPool       *BrowserPool
+	BrowserEnabled    bool
+	MemoryManager     *memory.Manager
+	MediaStore        *media.MediaStore
+	SkillsManager     *skills.Manager
+	TranscriptManager *transcript.Manager
 }
 
 // RegisterDefaults registers the default set of tools
@@ -68,4 +70,12 @@ func RegisterDefaults(reg *Registry, cfg ToolsConfig) {
 	// Cron tool (always register - it handles nil service gracefully via singleton)
 	reg.Register(NewCronTool())
 	L_debug("tools: cron registered")
+
+	// Transcript search tool
+	if cfg.TranscriptManager != nil {
+		reg.Register(NewTranscriptTool(cfg.TranscriptManager))
+		L_debug("tools: transcript registered")
+	} else {
+		L_debug("tools: transcript skipped (no manager)")
+	}
 }
