@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
@@ -269,4 +271,122 @@ func (c *HTTPChannel) convertEvent(event gateway.AgentEvent) *SSEEvent {
 	default:
 		return nil
 	}
+}
+
+// MessageChannelAdapter implements the tools.MessageChannel interface for HTTP.
+// It sends messages/media to all connected owner sessions via SSE.
+type MessageChannelAdapter struct {
+	channel   *HTTPChannel
+	mediaBase string // Base URL path for media (e.g., "/api/media")
+}
+
+// NewMessageChannelAdapter creates a new HTTP message channel adapter.
+func NewMessageChannelAdapter(channel *HTTPChannel, mediaBase string) *MessageChannelAdapter {
+	return &MessageChannelAdapter{
+		channel:   channel,
+		mediaBase: mediaBase,
+	}
+}
+
+// SendText sends a text message to all connected owner sessions.
+func (a *MessageChannelAdapter) SendText(chatID string, text string) (string, error) {
+	a.channel.clientsMu.RLock()
+	defer a.channel.clientsMu.RUnlock()
+
+	sent := 0
+	for _, client := range a.channel.clients {
+		if client.User == nil || !client.User.IsOwner() {
+			continue
+		}
+		select {
+		case client.Events <- SSEEvent{
+			Event: "agent_message",
+			Data: map[string]string{
+				"type": "text",
+				"text": text,
+			},
+		}:
+			sent++
+		default:
+			L_warn("http: message dropped (buffer full)", "session", client.SessionID)
+		}
+	}
+
+	if sent == 0 {
+		L_debug("http: no connected owner sessions for text message")
+		return "http-0 (no sessions)", nil // Don't fail - best effort delivery
+	}
+
+	L_debug("http: sent text message", "sessions", sent)
+	return fmt.Sprintf("http-%d", sent), nil
+}
+
+// SendMedia sends a media file to all connected owner sessions.
+// The file is served via /api/media and the URL is sent via SSE.
+func (a *MessageChannelAdapter) SendMedia(chatID string, filePath string, caption string) (string, error) {
+	// Verify file exists
+	absPath := filePath
+	if !filepath.IsAbs(filePath) {
+		// Resolve relative paths
+		var err error
+		absPath, err = filepath.Abs(filePath)
+		if err != nil {
+			return "", fmt.Errorf("invalid path: %w", err)
+		}
+	}
+
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("file not found: %s", filePath)
+	}
+
+	// Generate media URL - the server will serve files from allowed paths
+	// We pass the absolute path as a query param (server validates it)
+	mediaURL := fmt.Sprintf("%s?path=%s", a.mediaBase, absPath)
+
+	a.channel.clientsMu.RLock()
+	defer a.channel.clientsMu.RUnlock()
+
+	sent := 0
+	for _, client := range a.channel.clients {
+		if client.User == nil || !client.User.IsOwner() {
+			continue
+		}
+		select {
+		case client.Events <- SSEEvent{
+			Event: "agent_message",
+			Data: map[string]interface{}{
+				"type":     "media",
+				"url":      mediaURL,
+				"caption":  caption,
+				"filename": filepath.Base(absPath),
+			},
+		}:
+			sent++
+		default:
+			L_warn("http: media dropped (buffer full)", "session", client.SessionID)
+		}
+	}
+
+	if sent == 0 {
+		L_debug("http: no connected owner sessions for media", "path", absPath)
+		return "http-0 (no sessions)", nil // Don't fail - best effort delivery
+	}
+
+	L_debug("http: sent media", "path", absPath, "sessions", sent)
+	return fmt.Sprintf("http-%d", sent), nil
+}
+
+// EditMessage is not supported for HTTP (messages are ephemeral SSE events).
+func (a *MessageChannelAdapter) EditMessage(chatID string, messageID string, text string) error {
+	return fmt.Errorf("edit not supported for HTTP channel (SSE messages are ephemeral)")
+}
+
+// DeleteMessage is not supported for HTTP (messages are ephemeral SSE events).
+func (a *MessageChannelAdapter) DeleteMessage(chatID string, messageID string) error {
+	return fmt.Errorf("delete not supported for HTTP channel (SSE messages are ephemeral)")
+}
+
+// React is not supported for HTTP channel.
+func (a *MessageChannelAdapter) React(chatID string, messageID string, emoji string) error {
+	return fmt.Errorf("reactions not supported for HTTP channel")
 }

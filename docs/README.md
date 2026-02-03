@@ -28,6 +28,7 @@ It was entirely written by Claude/Cursor.
 ### Features
 
 - [Telegram Integration](./telegram.md) - Bot setup and commands
+- [Cron & Heartbeat](./cron.md) - Scheduled tasks and periodic checks
 - [Memory Search](./memory-search.md) - Semantic search over memory files
 - [Tools](./tools.md) - Available agent tools
 

@@ -809,13 +809,6 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		L_debug("telegram not enabled or no token configured")
 	}
 
-	// Register message tool with available channels
-	if len(messageChannels) > 0 {
-		messageTool := tools.NewMessageTool(messageChannels)
-		toolsReg.Register(messageTool)
-		L_debug("message tool registered", "channels", len(messageChannels))
-	}
-
 	// Start HTTP server if configured (enabled by default if users have HTTP credentials)
 	var httpServer *goclawhttp.Server
 	httpEnabled := cfg.HTTP.Enabled == nil || *cfg.HTTP.Enabled // default true
@@ -845,10 +838,20 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 				} else {
 					L_info("http: server started", "listen", listen)
 				}
+				// Register HTTP message channel adapter for message tool
+				httpAdapter := goclawhttp.NewMessageChannelAdapter(httpServer.Channel(), "/api/media")
+				messageChannels["http"] = httpAdapter
 			}
 		}
 	} else {
 		L_info("http: disabled in config")
+	}
+
+	// Register message tool with available channels (after all channels are set up)
+	if len(messageChannels) > 0 {
+		messageTool := tools.NewMessageTool(messageChannels)
+		toolsReg.Register(messageTool)
+		L_debug("message tool registered", "channels", len(messageChannels))
 	}
 
 	// Start cron service AFTER channels are registered

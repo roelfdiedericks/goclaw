@@ -128,11 +128,12 @@ func (s *Service) SetHeartbeatConfig(cfg *HeartbeatConfig) {
 }
 
 // TriggerHeartbeatNow manually triggers a heartbeat check (for /heartbeat command)
-func (s *Service) TriggerHeartbeatNow(ctx context.Context) error {
+// Uses background context since heartbeat runs independently of the caller
+func (s *Service) TriggerHeartbeatNow(_ context.Context) error {
 	if s.heartbeatConfig == nil || !s.heartbeatConfig.Enabled {
 		return fmt.Errorf("heartbeat not enabled")
 	}
-	go s.runHeartbeat(ctx)
+	go s.runHeartbeat(context.Background())
 	return nil
 }
 

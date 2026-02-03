@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -259,4 +262,71 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(status)
+}
+
+// handleMedia serves media files from allowed paths
+func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
+	u := getUserFromContext(r)
+	if u == nil {
+		L_error("http: media failed - no user in context")
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+
+	// Get file path from query param
+	filePath := r.URL.Query().Get("path")
+	if filePath == "" {
+		http.Error(w, "Missing path parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Security: only allow absolute paths and validate they exist
+	if !filepath.IsAbs(filePath) {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	// Clean the path to prevent traversal
+	cleanPath := filepath.Clean(filePath)
+
+	// Additional security: only allow certain directories
+	// Allow: workspace media, tmp, common screenshot locations
+	allowed := false
+	allowedPrefixes := []string{
+		"/tmp/",
+		"/home/",
+		"/var/tmp/",
+	}
+	for _, prefix := range allowedPrefixes {
+		if strings.HasPrefix(cleanPath, prefix) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		L_warn("http: media access denied", "path", cleanPath, "user", u.ID)
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	// Check file exists
+	info, err := os.Stat(cleanPath)
+	if os.IsNotExist(err) {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		L_error("http: media stat error", "path", cleanPath, "error", err)
+		http.Error(w, "Server error", http.StatusInternalServerError)
+		return
+	}
+	if info.IsDir() {
+		http.Error(w, "Cannot serve directory", http.StatusBadRequest)
+		return
+	}
+
+	L_debug("http: serving media", "path", cleanPath, "user", u.ID, "size", info.Size())
+
+	// Serve the file with proper content type detection
+	http.ServeFile(w, r, cleanPath)
 }
