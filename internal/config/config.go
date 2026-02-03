@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"dario.cat/mergo"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -19,6 +20,7 @@ type Config struct {
 	HTTP         HTTPConfig            `json:"http"`
 	Session      SessionConfig         `json:"session"`
 	MemorySearch MemorySearchConfig    `json:"memorySearch"`
+	Transcript   TranscriptConfig      `json:"transcript"`
 	PromptCache  PromptCacheConfig     `json:"promptCache"`
 	Media        MediaConfig           `json:"media"`
 	TUI          TUIConfig             `json:"tui"`
@@ -122,6 +124,7 @@ type FlushThresholdConfig struct {
 // CompactionConfig configures context compaction
 type CompactionConfig struct {
 	ReserveTokens          int             `json:"reserveTokens"`          // Tokens to reserve before compaction (default: 30000)
+	MaxMessages            int             `json:"maxMessages"`            // Trigger compaction if messages exceed this (default: 500, 0 = disabled)
 	PreferCheckpoint       bool            `json:"preferCheckpoint"`       // Use checkpoint for summary if available
 	Ollama                 OllamaLLMConfig `json:"ollama"`                 // Optional Ollama model for compaction summaries
 	RetryIntervalSeconds   int             `json:"retryIntervalSeconds"`   // Background retry interval (default: 60, 0 = disabled)
@@ -167,6 +170,32 @@ type MemorySearchQueryConfig struct {
 	MinScore      float64 `json:"minScore"`      // Minimum score threshold (default: 0.35)
 	VectorWeight  float64 `json:"vectorWeight"`  // Weight for vector/semantic search (default: 0.7)
 	KeywordWeight float64 `json:"keywordWeight"` // Weight for keyword/FTS search (default: 0.3)
+}
+
+// TranscriptConfig configures transcript indexing and search
+type TranscriptConfig struct {
+	Enabled bool `json:"enabled"` // Enable transcript indexing (default: true)
+
+	// Embedding provider (optional - if not set, inherits from memorySearch.ollama)
+	Ollama OllamaConfig `json:"ollama"`
+
+	// Indexing settings
+	IndexIntervalSeconds   int `json:"indexIntervalSeconds"`   // How often to check for new messages (default: 30)
+	BatchSize              int `json:"batchSize"`              // Max messages to process per batch (default: 100)
+	MaxGroupGapSeconds     int `json:"maxGroupGapSeconds"`     // Max time gap between messages in a chunk (default: 300 = 5 min)
+	MaxMessagesPerChunk    int `json:"maxMessagesPerChunk"`    // Max messages per conversation chunk (default: 8)
+	MaxEmbeddingContentLen int `json:"maxEmbeddingContentLen"` // Max chars to embed per chunk (default: 16000)
+
+	// Search settings (similar to memory search)
+	Query TranscriptQueryConfig `json:"query"`
+}
+
+// TranscriptQueryConfig configures transcript search behavior
+type TranscriptQueryConfig struct {
+	MaxResults    int     `json:"maxResults"`    // Maximum results to return (default: 10)
+	MinScore      float64 `json:"minScore"`      // Minimum score threshold (default: 0.3)
+	VectorWeight  float64 `json:"vectorWeight"`  // Weight for vector search (default: 0.7)
+	KeywordWeight float64 `json:"keywordWeight"` // Weight for keyword search (default: 0.3)
 }
 
 // GatewayConfig contains gateway server settings
@@ -300,6 +329,7 @@ func Load() (*Config, error) {
 			},
 			Compaction: CompactionConfig{
 				ReserveTokens:    4000,
+				MaxMessages:      500, // Trigger compaction if > 500 messages
 				PreferCheckpoint: true,
 			},
 		},
@@ -316,6 +346,20 @@ func Load() (*Config, error) {
 				KeywordWeight: 0.3,
 			},
 			Paths: []string{}, // Only memory/ and MEMORY.md by default
+		},
+		Transcript: TranscriptConfig{
+			Enabled:                true,  // Transcript indexing enabled by default
+			IndexIntervalSeconds:   30,    // Check every 30 seconds
+			BatchSize:              100,   // Process up to 100 messages per batch
+			MaxGroupGapSeconds:     300,   // 5 minute gap = new conversation chunk
+			MaxMessagesPerChunk:    8,     // Keep chunks focused
+			MaxEmbeddingContentLen: 16000, // Conservative for nomic-embed-text
+			Query: TranscriptQueryConfig{
+				MaxResults:    10,
+				MinScore:      0.3,
+				VectorWeight:  0.7,
+				KeywordWeight: 0.3,
+			},
 		},
 		PromptCache: PromptCacheConfig{
 			PollInterval: 60, // Check file hashes every 60 seconds as fallback
@@ -365,11 +409,11 @@ func Load() (*Config, error) {
 	// Override with goclaw.json from ~/.openclaw if it exists
 	if data, err := os.ReadFile(goclawGlobalPath); err == nil {
 		logging.L_debug("config: loading global goclaw.json", "path", goclawGlobalPath, "size", len(data))
-		if err := json.Unmarshal(data, cfg); err != nil {
-			logging.L_error("config: failed to parse global goclaw.json", "error", err)
+		if err := mergeJSONConfig(cfg, data); err != nil {
+			logging.L_error("config: failed to merge global goclaw.json", "error", err)
 			return nil, err
 		}
-		logging.L_debug("config: global goclaw.json merged")
+		logging.L_debug("config: global goclaw.json deep-merged")
 	} else {
 		logging.L_debug("config: global goclaw.json not found", "path", goclawGlobalPath)
 	}
@@ -378,11 +422,11 @@ func Load() (*Config, error) {
 	if data, err := os.ReadFile(goclawLocalPath); err == nil {
 		absPath, _ := filepath.Abs(goclawLocalPath)
 		logging.L_debug("config: loading local goclaw.json", "path", absPath, "size", len(data))
-		if err := json.Unmarshal(data, cfg); err != nil {
-			logging.L_error("config: failed to parse local goclaw.json", "error", err)
+		if err := mergeJSONConfig(cfg, data); err != nil {
+			logging.L_error("config: failed to merge local goclaw.json", "error", err)
 			return nil, err
 		}
-		logging.L_debug("config: local goclaw.json merged")
+		logging.L_debug("config: local goclaw.json deep-merged")
 	} else {
 		logging.L_trace("config: local goclaw.json not found", "path", goclawLocalPath)
 	}
@@ -606,4 +650,146 @@ func mustGetwd() string {
 		return cwd
 	}
 	return "unknown"
+}
+
+// mergeJSONConfig deep-merges JSON data into an existing config.
+// Only fields actually present in the JSON override the existing config.
+// This prevents partial configs from wiping out defaults for unspecified fields.
+func mergeJSONConfig(dst *Config, jsonData []byte) error {
+	// First, parse JSON to a map to see what fields are actually specified
+	var rawMap map[string]interface{}
+	if err := json.Unmarshal(jsonData, &rawMap); err != nil {
+		return fmt.Errorf("parse JSON: %w", err)
+	}
+
+	// Re-marshal only the specified fields, then unmarshal to a Config
+	// This preserves only what was explicitly in the JSON
+	specifiedJSON, err := json.Marshal(rawMap)
+	if err != nil {
+		return fmt.Errorf("re-marshal specified fields: %w", err)
+	}
+
+	var src Config
+	if err := json.Unmarshal(specifiedJSON, &src); err != nil {
+		return fmt.Errorf("parse to config: %w", err)
+	}
+
+	// Use custom merge that only overwrites if the source struct was actually
+	// present in the JSON (non-empty in the raw map)
+	return mergeConfigSelective(dst, &src, rawMap)
+}
+
+// mergeConfigSelective merges src into dst, but only for top-level fields
+// that were present in the raw JSON map. This prevents zero-value structs
+// from overwriting defaults.
+func mergeConfigSelective(dst, src *Config, rawMap map[string]interface{}) error {
+	// For each top-level field, only merge if it was in the JSON
+	if _, ok := rawMap["gateway"]; ok {
+		if err := mergo.Merge(&dst.Gateway, src.Gateway, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if _, ok := rawMap["llm"]; ok {
+		if err := mergo.Merge(&dst.LLM, src.LLM, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if _, ok := rawMap["users"]; ok {
+		// Maps need special handling - just overwrite
+		if src.Users != nil {
+			if dst.Users == nil {
+				dst.Users = make(map[string]UserConfig)
+			}
+			for k, v := range src.Users {
+				dst.Users[k] = v
+			}
+		}
+	}
+	if _, ok := rawMap["tools"]; ok {
+		if err := mergo.Merge(&dst.Tools, src.Tools, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if _, ok := rawMap["telegram"]; ok {
+		if err := mergo.Merge(&dst.Telegram, src.Telegram, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if _, ok := rawMap["http"]; ok {
+		if err := mergo.Merge(&dst.HTTP, src.HTTP, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if sessionMap, ok := rawMap["session"].(map[string]interface{}); ok {
+		// Session needs nested selective merge
+		mergeSessionSelective(&dst.Session, &src.Session, sessionMap)
+	}
+	if _, ok := rawMap["memorySearch"]; ok {
+		if err := mergo.Merge(&dst.MemorySearch, src.MemorySearch, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if _, ok := rawMap["transcript"]; ok {
+		if err := mergo.Merge(&dst.Transcript, src.Transcript, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if _, ok := rawMap["promptCache"]; ok {
+		if err := mergo.Merge(&dst.PromptCache, src.PromptCache, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if _, ok := rawMap["skills"]; ok {
+		if err := mergo.Merge(&dst.Skills, src.Skills, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if _, ok := rawMap["media"]; ok {
+		if err := mergo.Merge(&dst.Media, src.Media, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if _, ok := rawMap["tui"]; ok {
+		if err := mergo.Merge(&dst.TUI, src.TUI, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if _, ok := rawMap["cron"]; ok {
+		if err := mergo.Merge(&dst.Cron, src.Cron, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// mergeSessionSelective handles the session config which has multiple sub-structs
+// that need individual presence checking
+func mergeSessionSelective(dst, src *SessionConfig, rawMap map[string]interface{}) {
+	// Simple fields - always merge if session was specified
+	if src.Store != "" {
+		dst.Store = src.Store
+	}
+	if src.StorePath != "" {
+		dst.StorePath = src.StorePath
+	}
+	if src.Storage != "" {
+		dst.Storage = src.Storage
+	}
+	if src.Path != "" {
+		dst.Path = src.Path
+	}
+	// Inherit is a bool, tricky - only set if explicitly in JSON
+	// We can't easily detect this without more work, so skip for now
+
+	// Sub-structs - only merge if present in JSON
+	if _, ok := rawMap["checkpoint"]; ok {
+		mergo.Merge(&dst.Checkpoint, src.Checkpoint, mergo.WithOverride)
+	}
+	if _, ok := rawMap["memoryFlush"]; ok {
+		mergo.Merge(&dst.MemoryFlush, src.MemoryFlush, mergo.WithOverride)
+	}
+	if _, ok := rawMap["compaction"]; ok {
+		mergo.Merge(&dst.Compaction, src.Compaction, mergo.WithOverride)
+	}
 }

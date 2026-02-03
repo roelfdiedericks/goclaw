@@ -93,6 +93,11 @@ func NewManager(cfg config.MemorySearchConfig, workspaceDir string) (*Manager, e
 	return m, nil
 }
 
+// Provider returns the embedding provider (for sharing with transcript indexer)
+func (m *Manager) Provider() EmbeddingProvider {
+	return m.provider
+}
+
 // Start begins background indexing
 func (m *Manager) Start() error {
 	m.mu.Lock()

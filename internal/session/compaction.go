@@ -37,6 +37,7 @@ type CompactionManager struct {
 type CompactionManagerConfig struct {
 	// Core settings
 	ReserveTokens    int  // Tokens to reserve before compaction (default: 30000)
+	MaxMessages      int  // Trigger compaction if messages exceed this (default: 500, 0 = disabled)
 	PreferCheckpoint bool // Use checkpoint for summary if available
 
 	// Retry settings
@@ -61,10 +62,13 @@ type CompactionLLMClient interface {
 type CompactionResult struct {
 	Summary             string
 	TokensBefore        int
+	TokensAfter         int
+	MessagesAfter       int
 	FirstKeptEntryID    string
 	FromCheckpoint      bool
-	EmergencyTruncation bool // True if both LLMs failed
-	UsedFallback        bool // True if main model was used instead of Ollama
+	EmergencyTruncation bool   // True if both LLMs failed
+	UsedFallback        bool   // True if main model was used instead of Ollama
+	Model               string // Model used for summary generation
 	Details             *CompactionDetails
 }
 
@@ -188,6 +192,17 @@ func (m *CompactionManager) ShouldCompact(sess *Session) bool {
 		return false
 	}
 
+	messageCount := len(sess.Messages)
+
+	// Check message count threshold first (if configured)
+	if m.config.MaxMessages > 0 && messageCount > m.config.MaxMessages {
+		L_info("compaction threshold reached (message count)",
+			"messages", messageCount,
+			"maxMessages", m.config.MaxMessages)
+		return true
+	}
+
+	// Check token threshold
 	maxTokens := sess.GetMaxTokens()
 	if maxTokens == 0 {
 		return false
@@ -198,11 +213,12 @@ func (m *CompactionManager) ShouldCompact(sess *Session) bool {
 
 	shouldCompact := totalTokens >= threshold
 	if shouldCompact {
-		L_info("compaction threshold reached",
+		L_info("compaction threshold reached (tokens)",
 			"totalTokens", totalTokens,
 			"maxTokens", maxTokens,
 			"threshold", threshold,
-			"reserve", m.config.ReserveTokens)
+			"reserve", m.config.ReserveTokens,
+			"messages", messageCount)
 	}
 
 	return shouldCompact
@@ -227,6 +243,7 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 	var fromCheckpoint bool
 	var emergencyTruncation bool
 	var usedFallback bool
+	var summaryModel string
 	var details *CompactionDetails
 
 	// Try fast path: use recent checkpoint
@@ -235,6 +252,7 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 		if checkpointTokens >= tokensBefore/2 {
 			summary = m.buildSummaryFromCheckpoint(sess.LastCheckpoint)
 			fromCheckpoint = true
+			summaryModel = "checkpoint"
 			L_info("using checkpoint for compaction summary",
 				"checkpointTokens", checkpointTokens,
 				"tokensBefore", tokensBefore)
@@ -243,18 +261,21 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 
 	// Slow path: generate summary via LLM
 	if summary == "" {
+		L_info("compaction: generating summary via LLM", "messages", len(sess.Messages), "tokens", tokensBefore)
 		var err error
-		summary, usedFallback, err = m.generateSummaryWithFallback(ctx, sess.Messages)
+		summary, usedFallback, summaryModel, err = m.generateSummaryWithFallback(ctx, sess.Messages)
 		if err != nil {
 			// Fall back to checkpoint if available
 			if sess.LastCheckpoint != nil {
 				summary = m.buildSummaryFromCheckpoint(sess.LastCheckpoint)
 				fromCheckpoint = true
+				summaryModel = "checkpoint"
 				L_warn("LLM summary failed, falling back to checkpoint", "error", err)
 			} else {
 				// Emergency: no checkpoint, no LLM - aggressive truncation
 				summary = m.buildBasicSummary(sess)
 				emergencyTruncation = true
+				summaryModel = "truncation"
 				L_warn("all LLMs failed, using emergency truncation (keeping last 20%)", "error", err)
 			}
 		}
@@ -303,19 +324,25 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 	sess.CompactionCount++
 	sess.ResetFlushedThresholds()
 
+	tokensAfter := sess.GetTotalTokens()
 	result := &CompactionResult{
 		Summary:             summary,
 		TokensBefore:        tokensBefore,
+		TokensAfter:         tokensAfter,
+		MessagesAfter:       len(sess.Messages),
 		FirstKeptEntryID:    firstKeptID,
 		FromCheckpoint:      fromCheckpoint,
 		EmergencyTruncation: emergencyTruncation,
 		UsedFallback:        usedFallback,
+		Model:               summaryModel,
 		Details:             details,
 	}
 
 	L_info("compaction completed",
 		"tokensBefore", tokensBefore,
+		"tokensAfter", tokensAfter,
 		"messagesAfter", len(sess.Messages),
+		"model", summaryModel,
 		"fromCheckpoint", fromCheckpoint,
 		"emergencyTruncation", emergencyTruncation,
 		"usedFallback", usedFallback,
@@ -325,7 +352,8 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 }
 
 // generateSummaryWithFallback tries Ollama first, then falls back to main model
-func (m *CompactionManager) generateSummaryWithFallback(ctx context.Context, messages []Message) (string, bool, error) {
+// Returns: summary, usedFallback, modelName, error
+func (m *CompactionManager) generateSummaryWithFallback(ctx context.Context, messages []Message) (string, bool, string, error) {
 	m.mu.Lock()
 	// Check if we should reset Ollama failure count
 	if m.ollamaFailures > 0 && time.Since(m.lastOllamaAttempt) > time.Duration(m.config.OllamaResetMinutes)*time.Minute {
@@ -341,14 +369,18 @@ func (m *CompactionManager) generateSummaryWithFallback(ctx context.Context, mes
 		m.lastOllamaAttempt = time.Now()
 		m.mu.Unlock()
 
+		model := m.ollamaClient.Model()
+		L_info("compaction: calling ollama for summary", "model", model, "messages", len(messages))
+		startTime := time.Now()
 		summary, err := m.ollamaClient.GenerateSummary(ctx, messages, 4000)
+		elapsed := time.Since(startTime)
 		if err == nil {
 			// Success - reset failure count
 			m.mu.Lock()
 			m.ollamaFailures = 0
 			m.mu.Unlock()
-			L_debug("compaction: summary generated via ollama", "model", m.ollamaClient.Model())
-			return summary, false, nil
+			L_info("compaction: ollama summary completed", "model", model, "elapsed", elapsed.Round(time.Second))
+			return summary, false, model, nil
 		}
 
 		// Ollama failed - increment failure count
@@ -358,6 +390,7 @@ func (m *CompactionManager) generateSummaryWithFallback(ctx context.Context, mes
 		m.mu.Unlock()
 		L_warn("compaction: ollama failed, trying fallback",
 			"error", err,
+			"elapsed", elapsed.Round(time.Second),
 			"failures", failures,
 			"threshold", m.config.OllamaFailureThreshold)
 	} else if m.ollamaClient != nil && m.ollamaFailures >= m.config.OllamaFailureThreshold {
@@ -368,16 +401,20 @@ func (m *CompactionManager) generateSummaryWithFallback(ctx context.Context, mes
 
 	// Try main model as fallback
 	if m.mainClient != nil && m.mainClient.IsAvailable() {
+		model := m.mainClient.Model()
+		L_info("compaction: calling fallback model for summary", "model", model, "messages", len(messages))
+		startTime := time.Now()
 		summary, err := m.mainClient.GenerateSummary(ctx, messages, 4000)
+		elapsed := time.Since(startTime)
 		if err == nil {
-			L_info("compaction: summary generated via fallback model", "model", m.mainClient.Model())
-			return summary, true, nil
+			L_info("compaction: fallback model summary completed", "model", model, "elapsed", elapsed.Round(time.Second))
+			return summary, true, model, nil
 		}
-		L_warn("compaction: fallback model also failed", "error", err)
-		return "", false, fmt.Errorf("all LLM clients failed: %w", err)
+		L_warn("compaction: fallback model also failed", "error", err, "elapsed", elapsed.Round(time.Second))
+		return "", false, "", fmt.Errorf("all LLM clients failed: %w", err)
 	}
 
-	return "", false, fmt.Errorf("no LLM clients available for summary generation")
+	return "", false, "", fmt.Errorf("no LLM clients available for summary generation")
 }
 
 // runRetryLoop runs the background retry goroutine
@@ -477,13 +514,14 @@ func (m *CompactionManager) retryPendingSummary(ctx context.Context) {
 	}
 
 	// Try to generate summary
-	summary, usedFallback, err := m.generateSummaryWithFallback(ctx, sessionMessages)
+	summary, usedFallback, model, err := m.generateSummaryWithFallback(ctx, sessionMessages)
 	if err != nil {
 		L_warn("compaction: retry failed, will try again later",
 			"compactionID", pending.ID,
 			"error", err)
 		return // Don't clear the flag, try again next interval
 	}
+	_ = model // Model not stored in retry path (legacy compaction)
 
 	// Update compaction with better summary
 	if err := m.store.UpdateCompactionSummary(ctx, pending.ID, summary); err != nil {

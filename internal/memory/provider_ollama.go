@@ -129,11 +129,12 @@ func (p *OllamaProvider) EmbedQuery(ctx context.Context, text string) ([]float32
 		return nil, nil
 	}
 
-	L_trace("memory: embedding query", "textLength", len(text))
+	textLen := len(text)
+	L_trace("memory: embedding query", "textLength", textLen)
 
 	embedding, err := p.embedSingle(ctx, text)
 	if err != nil {
-		L_error("memory: failed to embed query", "error", err)
+		L_error("memory: failed to embed query", "error", err, "textLength", textLen)
 		return nil, err
 	}
 
@@ -160,7 +161,7 @@ func (p *OllamaProvider) EmbedBatch(ctx context.Context, texts []string) ([][]fl
 
 		embedding, err := p.embedSingle(ctx, text)
 		if err != nil {
-			L_warn("memory: failed to embed text in batch", "index", i, "error", err)
+			L_warn("memory: failed to embed text in batch", "index", i, "error", err, "textLength", len(text))
 			// Continue with nil embedding for this text
 			continue
 		}
@@ -173,6 +174,7 @@ func (p *OllamaProvider) EmbedBatch(ctx context.Context, texts []string) ([][]fl
 
 // embedSingle sends a single embedding request to Ollama
 func (p *OllamaProvider) embedSingle(ctx context.Context, text string) ([]float32, error) {
+	textLen := len(text)
 	reqBody := ollamaEmbedRequest{
 		Model:  p.model,
 		Prompt: text,
@@ -190,16 +192,18 @@ func (p *OllamaProvider) embedSingle(ctx context.Context, text string) ([]float3
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	L_trace("memory: sending ollama request", "url", url, "model", p.model)
+	L_trace("memory: sending ollama request", "url", url, "model", p.model, "textLength", textLen)
 
 	resp, err := p.client.Do(req)
 	if err != nil {
+		L_error("memory: ollama request failed", "error", err, "textLength", textLen)
 		return nil, fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		L_error("memory: ollama returned error", "status", resp.StatusCode, "textLength", textLen, "response", string(body))
 		return nil, fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, string(body))
 	}
 

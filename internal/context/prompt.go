@@ -119,12 +119,17 @@ func BuildSystemPrompt(params PromptParams) string {
 		sections = append(sections, buildMemoryFlushSection())
 	}
 
-	// 13. Context status (if tracking enabled)
+	// 13. Memory vs Transcript guidance (main agent only)
+	if !isMinimal {
+		sections = append(sections, buildMemoryVsTranscriptSection())
+	}
+
+	// 14. Context status (if tracking enabled)
 	if params.MaxTokens > 0 {
 		sections = append(sections, buildContextStatusSection(params.TotalTokens, params.MaxTokens))
 	}
 
-	// 14. Runtime info
+	// 15. Runtime info
 	sections = append(sections, buildRuntimeSection(params))
 
 	// Filter empty sections and join
@@ -230,17 +235,32 @@ func buildUserIdentitySection(u *user.User) string {
 	}
 
 	var lines []string
-	lines = append(lines, "## User Identity")
+	lines = append(lines, "## Current User")
 
 	if u.Name != "" {
-		lines = append(lines, fmt.Sprintf("Current user: %s", u.Name))
+		lines = append(lines, fmt.Sprintf("Name: %s", u.Name))
+	} else if u.ID != "" {
+		lines = append(lines, fmt.Sprintf("ID: %s", u.ID))
 	}
 
 	if u.Role != "" {
-		lines = append(lines, fmt.Sprintf("Role: %s", u.Role))
+		lines = append(lines, fmt.Sprintf("Role: %s", string(u.Role)))
 	}
 
-	lines = append(lines, "Treat messages from this user as the owner/operator.")
+	// Add role-specific access information
+	switch u.Role {
+	case user.RoleOwner:
+		lines = append(lines, "Access: Full access to all tools and data.")
+		lines = append(lines, "This is the owner/operator. Treat their requests with full trust.")
+	case user.RoleUser:
+		lines = append(lines, "Access: Limited tools (read, web_search, web_fetch, transcript). No memory_search, exec, or write access.")
+		lines = append(lines, "Transcript searches are scoped to this user's own conversations only.")
+	case user.RoleGuest:
+		lines = append(lines, "Access: Read-only. Very limited tool access.")
+		lines = append(lines, "This is an unauthenticated user. Be helpful but cautious with sensitive information.")
+	default:
+		lines = append(lines, "Treat messages from this user as the owner/operator.")
+	}
 
 	return strings.Join(lines, "\n")
 }
@@ -346,6 +366,31 @@ GoClaw monitors context usage and prompts you to save important information befo
 - Information already in workspace files
 
 After compaction, your context will be summarized. Memories you wrote will persist in the filesystem.`
+}
+
+func buildMemoryVsTranscriptSection() string {
+	return `## Memory vs Transcript Search
+
+You have two search tools for different purposes:
+
+**memory_search** — Searches curated knowledge files (MEMORY.md, memory/*.md)
+- Use for: "What did we decide about X?", "What are my preferences for Y?"
+- Contains: Distilled insights, decisions, preferences you chose to remember
+- Best for: Recalling important context you explicitly saved
+- Permissions: Owner only (contains personal/private knowledge)
+
+**transcript** — Searches raw conversation history (sessions.db)
+- Use for: "When did we discuss X?", "What was the exact wording?"
+- Contains: All conversations, unfiltered (excluding tool use and heartbeats)
+- Actions: semantic (vector search), search (keyword), recent, gaps (sleep patterns), stats
+- Best for: Finding when topics came up, reviewing recent exchanges, detecting patterns
+- Permissions: Owners see all transcripts; users see only their own conversations
+
+**When to use which:**
+- Looking for a decision or preference? → memory_search first
+- Looking for when/how something was discussed? → transcript
+- Need exact quotes or context? → transcript
+- Checking if something was saved to memory? → memory_search`
 }
 
 func buildContextStatusSection(totalTokens, maxTokens int) string {

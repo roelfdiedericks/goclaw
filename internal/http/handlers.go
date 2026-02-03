@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/commands"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/session"
@@ -155,6 +157,18 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle built-in commands (/status, /compact, /clear, /help, etc.)
+	trimmedMsg := strings.TrimSpace(req.Message)
+	if strings.HasPrefix(trimmedMsg, "/") {
+		cmdMgr := commands.GetManager()
+		// Parse command name (first word)
+		cmdName := strings.Fields(trimmedMsg)[0]
+		if cmd := cmdMgr.Get(cmdName); cmd != nil {
+			s.handleBuiltinCommand(w, r.Context(), sessionID, trimmedMsg, cmd)
+			return
+		}
+	}
+
 	// Run agent request (will stream via SSE)
 	msgID := fmt.Sprintf("msg_%d", time.Now().UnixNano())
 	err := s.channel.RunAgentRequest(r.Context(), sessionID, u, req.Message, images)
@@ -241,6 +255,58 @@ func (s *Server) handleThinkingCommand(w http.ResponseWriter, sessionID string, 
 		"status":  "ok",
 		"message": resultMsg,
 	})
+}
+
+// handleBuiltinCommand handles built-in slash commands (/status, /compact, /clear, etc.)
+func (s *Server) handleBuiltinCommand(w http.ResponseWriter, ctx context.Context, sessionID string, message string, cmd *commands.Command) {
+	sess := s.channel.GetSession(sessionID)
+	if sess == nil {
+		http.Error(w, "Session not found", http.StatusInternalServerError)
+		return
+	}
+
+	L_info("http: handling command", "command", cmd.Name, "session", sessionID[:8]+"...")
+
+	// For long-running commands like /compact, send a "working" message first
+	if cmd.Name == "/compact" {
+		sess.SendEvent(SSEEvent{
+			Event: "system",
+			Data: map[string]string{
+				"message": "Compacting session... (this may take a minute)",
+			},
+		})
+	}
+
+	// Execute command via manager (which has the provider wired up)
+	mgr := commands.GetManager()
+	result := mgr.Execute(ctx, message, sessionID)
+
+	// Determine message to show
+	responseText := result.Text
+	if responseText == "" {
+		responseText = "Command executed."
+	}
+
+	// Send as system message via SSE
+	sess.SendEvent(SSEEvent{
+		Event: "system",
+		Data: map[string]string{
+			"message": responseText,
+		},
+	})
+
+	// Respond to HTTP request
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	resp := map[string]interface{}{
+		"status":  "ok",
+		"command": cmd.Name,
+		"message": responseText,
+	}
+	if result.Error != nil {
+		resp["status"] = "error"
+		resp["error"] = result.Error.Error()
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 // handleEvents handles GET /api/events - SSE stream

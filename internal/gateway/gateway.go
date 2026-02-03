@@ -147,6 +147,7 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 	// Handles all sessions - uses sess.Key for multi-user support
 	compactorCfg := &session.CompactionManagerConfig{
 		ReserveTokens:          cfg.Session.Compaction.ReserveTokens,
+		MaxMessages:            cfg.Session.Compaction.MaxMessages,
 		PreferCheckpoint:       cfg.Session.Compaction.PreferCheckpoint,
 		RetryIntervalSeconds:   cfg.Session.Compaction.RetryIntervalSeconds,
 		OllamaFailureThreshold: cfg.Session.Compaction.OllamaFailureThreshold,
@@ -156,6 +157,7 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 	g.compactor.SetStore(g.sessions.GetStore())
 	L_debug("session: compaction manager configured",
 		"reserveTokens", cfg.Session.Compaction.ReserveTokens,
+		"maxMessages", cfg.Session.Compaction.MaxMessages,
 		"preferCheckpoint", cfg.Session.Compaction.PreferCheckpoint,
 		"retryInterval", cfg.Session.Compaction.RetryIntervalSeconds,
 		"ollamaFailureThreshold", cfg.Session.Compaction.OllamaFailureThreshold,

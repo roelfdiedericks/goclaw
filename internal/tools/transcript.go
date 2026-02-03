@@ -276,9 +276,4 @@ func truncateContent(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-func truncateQuery(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
+// truncateQuery is defined in memory_search.go

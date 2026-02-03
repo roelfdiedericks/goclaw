@@ -21,8 +21,10 @@ import (
 	goclawhttp "github.com/roelfdiedericks/goclaw/internal/http"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/memory"
 	"github.com/roelfdiedericks/goclaw/internal/telegram"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
+	"github.com/roelfdiedericks/goclaw/internal/transcript"
 	"github.com/roelfdiedericks/goclaw/internal/tui"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -728,7 +730,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		}
 
 		var err error
-		transcriptMgr, err = transcript.NewManager(db, embeddingProvider)
+		transcriptMgr, err = transcript.NewManager(db, embeddingProvider, cfg.Transcript)
 		if err != nil {
 			L_warn("transcript: failed to initialize manager", "error", err)
 		} else {
