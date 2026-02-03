@@ -71,6 +71,31 @@ func NewClient(cfg *config.LLMConfig) (*Client, error) {
 	}, nil
 }
 
+// NewClientWithModel creates a client using explicit API key and model.
+// Useful for creating fallback clients with different models.
+func NewClientWithModel(apiKey, model string, maxTokens int) (*Client, error) {
+	if apiKey == "" {
+		return nil, fmt.Errorf("anthropic API key not provided")
+	}
+	if model == "" {
+		return nil, fmt.Errorf("model not specified")
+	}
+	if maxTokens == 0 {
+		maxTokens = 4096 // Conservative default for summarization
+	}
+
+	client := anthropic.NewClient(option.WithAPIKey(apiKey))
+
+	L_debug("anthropic fallback client created", "model", model, "maxTokens", maxTokens)
+
+	return &Client{
+		client:        &client,
+		model:         model,
+		maxTokens:     maxTokens,
+		promptCaching: false, // Fallback doesn't need caching
+	}, nil
+}
+
 // Model returns the configured model name
 func (c *Client) Model() string {
 	return c.model

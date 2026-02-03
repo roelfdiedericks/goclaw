@@ -107,19 +107,41 @@ type SessionConfig struct {
 	InheritFrom string `json:"inheritFrom"` // Session key to inherit from
 
 	// Features
-	Checkpoint  CheckpointConfig  `json:"checkpoint"`
-	MemoryFlush MemoryFlushConfig `json:"memoryFlush"`
-	Compaction  CompactionConfig  `json:"compaction"`
+	Summarization SummarizationConfig `json:"summarization"`
+	MemoryFlush   MemoryFlushConfig   `json:"memoryFlush"`
 }
 
-// CheckpointConfig configures rolling checkpoint generation
-type CheckpointConfig struct {
-	Enabled               bool   `json:"enabled"`
-	Model                 string `json:"model"`                 // Cheaper model for checkpoints
-	FallbackToMain        bool   `json:"fallbackToMain"`        // Use main model if checkpoint model unavailable
-	TokenThresholdPercents []int  `json:"tokenThresholdPercents"` // e.g., [25, 50, 75]
-	TurnThreshold         int    `json:"turnThreshold"`         // Generate every N user messages
-	MinTokensForGen       int    `json:"minTokensForGen"`       // Don't checkpoint if < N tokens
+// SummarizationConfig configures LLM-based summarization for checkpoints and compaction
+type SummarizationConfig struct {
+	// LLM Configuration
+	Ollama        OllamaLLMConfig `json:"ollama"`        // Primary: local Ollama model
+	FallbackModel string          `json:"fallbackModel"` // Fallback: Anthropic model (e.g., "claude-3-haiku-20240307")
+
+	// Failover settings
+	FailureThreshold int `json:"failureThreshold"` // Fall back after N consecutive Ollama failures (default: 3)
+	ResetMinutes     int `json:"resetMinutes"`     // Reset failure count after N minutes (default: 30)
+
+	// Retry settings
+	RetryIntervalSeconds int `json:"retryIntervalSeconds"` // Background retry interval for pending summaries (default: 60)
+
+	// Sub-features
+	Checkpoint CheckpointSubConfig `json:"checkpoint"`
+	Compaction CompactionSubConfig `json:"compaction"`
+}
+
+// CheckpointSubConfig configures rolling checkpoint generation
+type CheckpointSubConfig struct {
+	Enabled         bool  `json:"enabled"`
+	Thresholds      []int `json:"thresholds"`      // Token usage percents to trigger checkpoint (e.g., [25, 50, 75])
+	TurnThreshold   int   `json:"turnThreshold"`   // Generate every N user messages
+	MinTokensForGen int   `json:"minTokensForGen"` // Don't checkpoint if < N tokens
+}
+
+// CompactionSubConfig configures context compaction
+type CompactionSubConfig struct {
+	ReserveTokens    int  `json:"reserveTokens"`    // Tokens to reserve before compaction (default: 4000)
+	MaxMessages      int  `json:"maxMessages"`      // Trigger compaction if messages exceed this (default: 500, 0 = disabled)
+	PreferCheckpoint bool `json:"preferCheckpoint"` // Use existing checkpoint for summary if available
 }
 
 // MemoryFlushConfig configures memory flush prompting
@@ -135,17 +157,6 @@ type FlushThresholdConfig struct {
 	Prompt       string `json:"prompt"`
 	InjectAs     string `json:"injectAs"`     // "system" or "user"
 	OncePerCycle bool   `json:"oncePerCycle"`
-}
-
-// CompactionConfig configures context compaction
-type CompactionConfig struct {
-	ReserveTokens          int             `json:"reserveTokens"`          // Tokens to reserve before compaction (default: 30000)
-	MaxMessages            int             `json:"maxMessages"`            // Trigger compaction if messages exceed this (default: 500, 0 = disabled)
-	PreferCheckpoint       bool            `json:"preferCheckpoint"`       // Use checkpoint for summary if available
-	Ollama                 OllamaLLMConfig `json:"ollama"`                 // Optional Ollama model for compaction summaries
-	RetryIntervalSeconds   int             `json:"retryIntervalSeconds"`   // Background retry interval (default: 60, 0 = disabled)
-	OllamaFailureThreshold int             `json:"ollamaFailureThreshold"` // Fall back to main model after N consecutive Ollama failures (default: 3)
-	OllamaResetMinutes     int             `json:"ollamaResetMinutes"`     // Try Ollama again after N minutes (default: 30)
 }
 
 // OllamaLLMConfig configures an Ollama model for LLM tasks (compaction, checkpoints)
@@ -350,13 +361,28 @@ func Load() (*LoadResult, error) {
 			InheritPath: filepath.Join(openclawDir, "agents", "main", "sessions"), // OpenClaw sessions directory
 			Inherit:     true,
 			InheritFrom: "agent:main:main",
-			Checkpoint: CheckpointConfig{
-				Enabled:               true,
-				Model:                 "claude-3-haiku-20240307",
-				FallbackToMain:        true,
-				TokenThresholdPercents: []int{25, 50, 75},
-				TurnThreshold:         15,
-				MinTokensForGen:       10000,
+			Summarization: SummarizationConfig{
+				Ollama: OllamaLLMConfig{
+					URL:            "", // Empty = use fallback model only
+					Model:          "",
+					TimeoutSeconds: 120,
+					ContextTokens:  0, // Auto-detect
+				},
+				FallbackModel:        "claude-3-haiku-20240307",
+				FailureThreshold:     3,
+				ResetMinutes:         30,
+				RetryIntervalSeconds: 60,
+				Checkpoint: CheckpointSubConfig{
+					Enabled:         true,
+					Thresholds:      []int{25, 50, 75},
+					TurnThreshold:   15,
+					MinTokensForGen: 10000,
+				},
+				Compaction: CompactionSubConfig{
+					ReserveTokens:    4000,
+					MaxMessages:      500, // Trigger compaction if > 500 messages
+					PreferCheckpoint: true,
+				},
 			},
 			MemoryFlush: MemoryFlushConfig{
 				Enabled:            true,
@@ -382,11 +408,6 @@ func Load() (*LoadResult, error) {
 					},
 				},
 			},
-			Compaction: CompactionConfig{
-				ReserveTokens:    4000,
-				MaxMessages:      500, // Trigger compaction if > 500 messages
-				PreferCheckpoint: true,
-			},
 		},
 		MemorySearch: MemorySearchConfig{
 			Enabled: true, // Memory search enabled by default
@@ -403,7 +424,11 @@ func Load() (*LoadResult, error) {
 			Paths: []string{}, // Only memory/ and MEMORY.md by default
 		},
 		Transcript: TranscriptConfig{
-			Enabled:                true,  // Transcript indexing enabled by default
+			Enabled: true, // Transcript indexing enabled by default
+			Ollama: OllamaConfig{
+				URL:   "", // Empty = keyword-only mode (no embeddings)
+				Model: "nomic-embed-text",
+			},
 			IndexIntervalSeconds:   30,    // Check every 30 seconds
 			BatchSize:              100,   // Process up to 100 messages per batch
 			MaxGroupGapSeconds:     300,   // 5 minute gap = new conversation chunk
@@ -867,13 +892,10 @@ func mergeSessionSelective(dst, src *SessionConfig, rawMap map[string]interface{
 	// We can't easily detect this without more work, so skip for now
 
 	// Sub-structs - only merge if present in JSON
-	if _, ok := rawMap["checkpoint"]; ok {
-		mergo.Merge(&dst.Checkpoint, src.Checkpoint, mergo.WithOverride)
+	if _, ok := rawMap["summarization"]; ok {
+		mergo.Merge(&dst.Summarization, src.Summarization, mergo.WithOverride)
 	}
 	if _, ok := rawMap["memoryFlush"]; ok {
 		mergo.Merge(&dst.MemoryFlush, src.MemoryFlush, mergo.WithOverride)
-	}
-	if _, ok := rawMap["compaction"]; ok {
-		mergo.Merge(&dst.Compaction, src.Compaction, mergo.WithOverride)
 	}
 }

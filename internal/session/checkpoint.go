@@ -12,24 +12,23 @@ import (
 
 // CheckpointGenerator generates rolling checkpoints asynchronously
 type CheckpointGenerator struct {
-	config       *CheckpointGeneratorConfig
-	store        Store
-	sessionKey   string
-	llmClient    CheckpointLLMClient
-	mainClient   CheckpointLLMClient // Fallback client
-	mu           sync.Mutex
-	lastGenTime  time.Time
-	lastGenTurns int
+	config         *CheckpointGeneratorConfig
+	store          Store
+	sessionKey     string
+	ollamaClient   CheckpointLLMClient        // Primary: Ollama (can be nil)
+	fallbackClient CheckpointLLMClient        // Fallback: Anthropic model
+	failover       *OllamaFailoverManager     // Shared failover state
+	mu             sync.Mutex
+	lastGenTime    time.Time
+	lastGenTurns   int
 }
 
 // CheckpointGeneratorConfig holds checkpoint generation settings
 type CheckpointGeneratorConfig struct {
-	Enabled                bool
-	Model                  string
-	FallbackToMain         bool
-	TokenThresholdPercents []int // e.g., [25, 50, 75]
-	TurnThreshold          int   // Generate every N user messages
-	MinTokensForGen        int   // Don't checkpoint if < N tokens
+	Enabled         bool
+	Thresholds      []int // Token usage percents to trigger checkpoint (e.g., [25, 50, 75])
+	TurnThreshold   int   // Generate every N user messages
+	MinTokensForGen int   // Don't checkpoint if < N tokens
 }
 
 // CheckpointLLMClient interface for LLM calls
@@ -55,11 +54,12 @@ func (g *CheckpointGenerator) SetStore(store Store, sessionKey string) {
 }
 
 // SetLLMClients sets the LLM clients for checkpoint generation
-func (g *CheckpointGenerator) SetLLMClients(checkpointClient, mainClient CheckpointLLMClient) {
+func (g *CheckpointGenerator) SetLLMClients(ollamaClient, fallbackClient CheckpointLLMClient, failover *OllamaFailoverManager) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.llmClient = checkpointClient
-	g.mainClient = mainClient
+	g.ollamaClient = ollamaClient
+	g.fallbackClient = fallbackClient
+	g.failover = failover
 }
 
 // ShouldCheckpoint determines if a checkpoint should be generated
@@ -75,7 +75,7 @@ func (g *CheckpointGenerator) ShouldCheckpoint(sess *Session) bool {
 
 	// Check token thresholds
 	usage := sess.GetContextUsage()
-	for _, threshold := range g.config.TokenThresholdPercents {
+	for _, threshold := range g.config.Thresholds {
 		thresholdPercent := float64(threshold) / 100.0
 		if usage >= thresholdPercent {
 			// Check if we already have a checkpoint at this threshold
@@ -150,30 +150,46 @@ func (g *CheckpointGenerator) Generate(ctx context.Context, sess *Session, sessi
 	var err error
 	var usedModel string
 
-	// Try primary client first
-	if g.llmClient != nil && g.llmClient.IsAvailable() {
-		usedModel = g.llmClient.Model()
+	// Try Ollama first (if available and failover allows)
+	shouldTryOllama := g.ollamaClient != nil && g.ollamaClient.IsAvailable() &&
+		(g.failover == nil || g.failover.ShouldTryOllama())
+
+	if shouldTryOllama {
+		if g.failover != nil {
+			g.failover.RecordAttempt()
+		}
+		usedModel = g.ollamaClient.Model()
 		L_info("generating checkpoint",
 			"model", usedModel,
 			"tokens", sess.GetTotalTokens(),
 			"messages", len(sess.Messages))
 
-		checkpoint, err = g.llmClient.GenerateCheckpoint(ctx, messages, sess.GetTotalTokens())
+		checkpoint, err = g.ollamaClient.GenerateCheckpoint(ctx, messages, sess.GetTotalTokens())
 		if err != nil {
-			L_warn("checkpoint: primary model failed, trying fallback",
-				"model", usedModel,
-				"error", err)
+			if g.failover != nil {
+				failures := g.failover.RecordFailure()
+				L_warn("checkpoint: ollama failed, trying fallback",
+					"model", usedModel,
+					"error", err,
+					"failures", failures)
+			} else {
+				L_warn("checkpoint: ollama failed, trying fallback",
+					"model", usedModel,
+					"error", err)
+			}
+		} else if g.failover != nil {
+			g.failover.RecordSuccess()
 		}
 	}
 
-	// Try fallback if primary failed or unavailable
-	if checkpoint == nil && g.config.FallbackToMain && g.mainClient != nil && g.mainClient.IsAvailable() {
-		usedModel = g.mainClient.Model()
+	// Try fallback if Ollama failed or unavailable
+	if checkpoint == nil && g.fallbackClient != nil && g.fallbackClient.IsAvailable() {
+		usedModel = g.fallbackClient.Model()
 		L_info("checkpoint: using fallback model",
 			"model", usedModel,
 			"tokens", sess.GetTotalTokens())
 
-		checkpoint, err = g.mainClient.GenerateCheckpoint(ctx, messages, sess.GetTotalTokens())
+		checkpoint, err = g.fallbackClient.GenerateCheckpoint(ctx, messages, sess.GetTotalTokens())
 		if err != nil {
 			return fmt.Errorf("failed to generate checkpoint (fallback also failed): %w", err)
 		}
@@ -226,15 +242,17 @@ func (g *CheckpointGenerator) Generate(ctx context.Context, sess *Session, sessi
 
 // getClient returns the best available LLM client
 func (g *CheckpointGenerator) getClient() CheckpointLLMClient {
-	// Try checkpoint-specific client first
-	if g.llmClient != nil && g.llmClient.IsAvailable() {
-		return g.llmClient
+	// Try Ollama first (if available and failover allows)
+	if g.ollamaClient != nil && g.ollamaClient.IsAvailable() {
+		if g.failover == nil || g.failover.ShouldTryOllama() {
+			return g.ollamaClient
+		}
 	}
 
-	// Fall back to main client if configured
-	if g.config.FallbackToMain && g.mainClient != nil && g.mainClient.IsAvailable() {
-		L_debug("falling back to main model for checkpoint")
-		return g.mainClient
+	// Fall back to fallback client
+	if g.fallbackClient != nil && g.fallbackClient.IsAvailable() {
+		L_debug("falling back to fallback model for checkpoint")
+		return g.fallbackClient
 	}
 
 	return nil
