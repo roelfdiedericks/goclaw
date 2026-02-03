@@ -1071,8 +1071,8 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	// Reset flush thresholds if context dropped (e.g., after compaction)
 	session.ResetThresholdsIfNeeded(sess)
 
-	// Mirror to other channels if enabled
-	if g.config.Mirroring.Enabled && !req.IsGroup {
+	// Mirror to other channels (not for group chats)
+	if !req.IsGroup {
 		g.mirrorToOthers(ctx, req, finalText)
 	}
 
@@ -1234,10 +1234,8 @@ func (g *Gateway) sessionKeyFor(req AgentRequest) string {
 }
 
 // mirrorToOthers sends a mirror of the conversation to other channels
-// Only mirrors for owner user - non-owners typically use one channel
 func (g *Gateway) mirrorToOthers(ctx context.Context, req AgentRequest, response string) {
-	// Skip mirroring for non-owner users
-	if req.User == nil || !req.User.IsOwner() {
+	if req.User == nil {
 		return
 	}
 
@@ -1246,16 +1244,11 @@ func (g *Gateway) mirrorToOthers(ctx context.Context, req AgentRequest, response
 			continue // don't mirror to source
 		}
 
-		mirrorCfg, ok := g.config.Mirroring.Channels[name]
-		if !ok || !mirrorCfg.Mirror {
-			continue
-		}
-
-		// Only mirror to channels where this user is connected
 		if !ch.HasUser(req.User) {
-			continue
+			continue // skip channels user isn't connected to
 		}
 
+		L_debug("mirror: sending", "from", req.Source, "to", name)
 		ch.SendMirror(ctx, req.Source, req.UserMsg, response)
 	}
 }

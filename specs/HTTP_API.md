@@ -247,12 +247,23 @@ HTTP config in `goclaw.json` (no credentials here):
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `enabled` | No | Default: false |
-| `listen` | Yes | Address to bind (e.g., `127.0.0.1:1337`, `:1337`) |
+| `enabled` | No | Default: `true` if any user has HTTP credentials, `false` otherwise |
+| `listen` | No | Address to bind. Default: `:1337` |
 
 **Validation on startup:**
-- If `enabled: true` but no users have HTTP credentials → error, refuse to start
+- HTTP server starts automatically if any user has HTTP credentials
+- Set `enabled: false` explicitly to disable HTTP even when credentials exist
 - If `users.json` doesn't exist → create empty, warn
+
+### Development Mode
+
+Run with `--dev` flag to enable template hot-reloading:
+
+```bash
+goclaw gateway --dev
+```
+
+In dev mode, HTML templates are loaded from disk on each request, allowing rapid iteration without restarting the server.
 
 ## Endpoints
 
@@ -370,7 +381,7 @@ Agent status as JSON. Session key depends on user role.
 
 - **Bootstrap 5.3** — CDN (`cdn.jsdelivr.net`)
 - **Bootstrap Icons** — CDN
-- **Vanilla JS** — No jQuery needed for SSE
+- **jQuery 3.7** — CDN (`cdn.jsdelivr.net`) for SSE handling and DOM manipulation
 - **html/template** — Go standard library
 
 No build step. No npm. No webpack. Single binary with embedded templates.

@@ -119,11 +119,18 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	L_info("http: message received", "user", u.ID, "length", len(req.Message))
+	sessionID := getSessionFromContext(r)
+	if sessionID == "" {
+		L_error("http: send failed - no session in context", "user", u.ID)
+		http.Error(w, "No session", http.StatusInternalServerError)
+		return
+	}
+
+	L_info("http: message received", "user", u.ID, "session", sessionID[:8]+"...", "length", len(req.Message))
 
 	// Run agent request (will stream via SSE)
 	msgID := fmt.Sprintf("msg_%d", time.Now().UnixNano())
-	err := s.channel.RunAgentRequest(r.Context(), u, req.Message)
+	err := s.channel.RunAgentRequest(r.Context(), sessionID, u, req.Message)
 	if err != nil {
 		L_error("http: failed to run agent", "user", u.ID, "error", err)
 		http.Error(w, fmt.Sprintf("Failed to process: %v", err), http.StatusInternalServerError)
@@ -140,7 +147,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		Message: "Message sent to agent",
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(resp)
 }
 
@@ -154,7 +161,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set SSE headers
-	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
@@ -172,16 +179,23 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	L_info("http: SSE connection opened", "user", u.ID)
+	sessionID := getSessionFromContext(r)
+	if sessionID == "" {
+		L_error("http: SSE failed - no session in context", "user", u.ID)
+		http.Error(w, "No session", http.StatusInternalServerError)
+		return
+	}
+
+	L_info("http: SSE connection opened", "user", u.ID, "session", sessionID[:8]+"...")
 
 	// Register SSE client
-	client := s.channel.RegisterClient(u.ID)
+	client := s.channel.RegisterClient(sessionID, u)
 	if client == nil {
 		L_error("http: SSE failed - client registration returned nil", "user", u.ID)
 		http.Error(w, "Failed to register client", http.StatusInternalServerError)
 		return
 	}
-	defer s.channel.UnregisterClient(u.ID, client)
+	defer s.channel.UnregisterClient(sessionID, client)
 
 	// Send initial connected event
 	fmt.Fprintf(w, "event: connected\ndata: {\"user\":\"%s\"}\n\n", u.ID)
@@ -243,6 +257,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		IsOwner: u.IsOwner(),
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(status)
 }

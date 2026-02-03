@@ -12,10 +12,9 @@ import (
 // Config represents the merged goclaw configuration
 type Config struct {
 	Gateway      GatewayConfig         `json:"gateway"`
-	LLM          LLMConfig             `json:"llm"`
-	Users        map[string]UserConfig `json:"users"`
-	Mirroring    MirroringConfig       `json:"mirroring"`
-	Tools        ToolsConfig           `json:"tools"`
+	LLM   LLMConfig             `json:"llm"`
+	Users map[string]UserConfig `json:"users"`
+	Tools ToolsConfig           `json:"tools"`
 	Telegram     TelegramConfig        `json:"telegram"`
 	HTTP         HTTPConfig            `json:"http"`
 	Session      SessionConfig         `json:"session"`
@@ -215,17 +214,6 @@ type CredentialConfig struct {
 	Label string `json:"label"` // "laptop-key", etc.
 }
 
-// MirroringConfig controls cross-channel mirroring
-type MirroringConfig struct {
-	Enabled  bool                     `json:"enabled"`
-	Channels map[string]ChannelMirror `json:"channels"`
-}
-
-// ChannelMirror controls mirroring for a specific channel
-type ChannelMirror struct {
-	Mirror bool `json:"mirror"` // receives mirrors from other channels
-}
-
 // ToolsConfig contains tool-specific settings
 type ToolsConfig struct {
 	Web     WebToolsConfig     `json:"web"`
@@ -263,11 +251,7 @@ func Load() (*Config, error) {
 			MaxTokens:     8192,
 			PromptCaching: true, // Enabled by default - saves up to 90% on system prompt tokens
 		},
-		Users:     make(map[string]UserConfig),
-		Mirroring: MirroringConfig{
-			Enabled:  true, // mirroring on by default
-			Channels: make(map[string]ChannelMirror),
-		},
+		Users: make(map[string]UserConfig),
 		Tools: ToolsConfig{
 			Browser: BrowserToolsConfig{
 				Headless: true,           // default headless
@@ -576,9 +560,6 @@ func (c *Config) mergeOpenclawConfig(base map[string]interface{}, openclawDir st
 		logging.L_trace("config: auth-profiles.json not found", "path", authProfilesPath)
 	}
 
-	// Set up mirroring channels
-	c.Mirroring.Channels["telegram"] = ChannelMirror{Mirror: true}
-	c.Mirroring.Channels["tui"] = ChannelMirror{Mirror: true}
 }
 
 // GetStoreType returns the effective store type ("jsonl" or "sqlite")

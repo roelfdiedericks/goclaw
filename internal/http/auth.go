@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/google/uuid"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -12,8 +13,10 @@ import (
 type contextKey string
 
 const userContextKey contextKey = "user"
+const sessionContextKey contextKey = "session"
+const sessionCookieName = "goclaw_session"
 
-// basicAuth middleware enforces HTTP Basic Authentication
+// basicAuth middleware enforces HTTP Basic Authentication and manages session cookies
 func (s *Server) basicAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Get client IP for rate limiting
@@ -57,11 +60,27 @@ func (s *Server) basicAuth(handler http.HandlerFunc) http.HandlerFunc {
 		// Success - clear any rate limit
 		s.rateLimiter.ClearFailure(clientIP)
 
-		L_debug("http: auth success", "username", username, "ip", clientIP)
+		// Get or create session ID from cookie
+		sessionID := getSessionID(r)
+		if sessionID == "" {
+			sessionID = uuid.New().String()
+			http.SetCookie(w, &http.Cookie{
+				Name:     sessionCookieName,
+				Value:    sessionID,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
+				MaxAge:   86400 * 30, // 30 days
+			})
+			L_debug("http: new session created", "session", sessionID, "user", username)
+		}
 
-		// Store user in request context
+		L_debug("http: auth success", "username", username, "session", sessionID[:8]+"...", "ip", clientIP)
+
+		// Store user and session in request context
 		ctx := r.Context()
 		ctx = setUserInContext(ctx, u)
+		ctx = setSessionInContext(ctx, sessionID)
 		r = r.WithContext(ctx)
 
 		handler(w, r)
@@ -94,4 +113,26 @@ func getUserFromContext(r *http.Request) *user.User {
 // setUserInContext stores the user in the context
 func setUserInContext(ctx context.Context, u *user.User) context.Context {
 	return context.WithValue(ctx, userContextKey, u)
+}
+
+// getSessionFromContext retrieves the session ID from request context
+func getSessionFromContext(r *http.Request) string {
+	if s, ok := r.Context().Value(sessionContextKey).(string); ok {
+		return s
+	}
+	return ""
+}
+
+// setSessionInContext stores the session ID in the context
+func setSessionInContext(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, sessionContextKey, sessionID)
+}
+
+// getSessionID extracts session ID from cookie
+func getSessionID(r *http.Request) string {
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return ""
+	}
+	return cookie.Value
 }
