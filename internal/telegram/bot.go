@@ -538,14 +538,7 @@ func (b *Bot) SendMirror(ctx context.Context, source, userMsg, response string) 
 	}
 
 	// Get owner's Telegram ID
-	var telegramID string
-	for _, identity := range owner.Identities {
-		if identity.Provider == "telegram" {
-			telegramID = identity.Value
-			break
-		}
-	}
-
+	telegramID := owner.TelegramID
 	if telegramID == "" {
 		return nil
 	}
@@ -602,12 +595,7 @@ func (b *Bot) SendMirror(ctx context.Context, source, userMsg, response string) 
 
 // HasUser returns true if the user has a Telegram identity
 func (b *Bot) HasUser(u *user.User) bool {
-	for _, identity := range u.Identities {
-		if identity.Provider == "telegram" {
-			return true
-		}
-	}
-	return false
+	return u.HasTelegramAuth()
 }
 
 // SendText sends a text message to a chat.

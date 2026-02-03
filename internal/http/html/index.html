@@ -1,0 +1,43 @@
+{{template "header" .}}
+
+<h1>Dashboard</h1>
+
+<div class="row mt-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-activity"></i> Status
+            </div>
+            <div class="card-body">
+                <p class="mb-0"><strong>Agent:</strong> <span id="status-agent" class="badge bg-secondary">Loading...</span></p>
+                <p class="mb-0 mt-2"><strong>User:</strong> {{.User.Name}} ({{.User.Username}})</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-chat-dots"></i> Quick Actions
+            </div>
+            <div class="card-body">
+                <a href="/chat" class="btn btn-primary"><i class="bi bi-chat"></i> Open Chat</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+$(document).ready(function() {
+    // Fetch status on load
+    $.getJSON('/api/status', function(data) {
+        $('#status-agent')
+            .text(data.status)
+            .removeClass('bg-secondary')
+            .addClass(data.status === 'ready' ? 'bg-success' : 'bg-warning');
+    }).fail(function() {
+        $('#status-agent').text('Error').removeClass('bg-secondary').addClass('bg-danger');
+    });
+});
+</script>
+
+{{template "footer" .}}

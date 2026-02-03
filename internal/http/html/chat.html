@@ -1,0 +1,126 @@
+{{template "header" .}}
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-chat"></i> Chat</span>
+                <span id="connection-status" class="badge bg-secondary">Connecting...</span>
+            </div>
+            <div class="card-body chat-container" id="chat-messages">
+                <!-- Messages will be inserted here -->
+            </div>
+            <div class="card-footer">
+                <form id="chat-form" class="d-flex gap-2">
+                    <input type="text" id="message-input" class="form-control" placeholder="Type a message..." autocomplete="off">
+                    <button type="submit" class="btn btn-primary" id="send-btn">
+                        <i class="bi bi-send"></i> Send
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+$(document).ready(function() {
+    var eventSource = null;
+    var $messages = $('#chat-messages');
+    var $input = $('#message-input');
+    var $sendBtn = $('#send-btn');
+    var $status = $('#connection-status');
+
+    // Connect to SSE
+    function connect() {
+        $status.text('Connecting...').removeClass('bg-success bg-danger').addClass('bg-secondary');
+        
+        eventSource = new EventSource('/api/events');
+        
+        eventSource.addEventListener('connected', function(e) {
+            $status.text('Connected').removeClass('bg-secondary bg-danger').addClass('bg-success');
+            console.log('SSE connected:', JSON.parse(e.data));
+        });
+        
+        eventSource.addEventListener('message', function(e) {
+            var data = JSON.parse(e.data);
+            appendMessage('assistant', data.content);
+        });
+        
+        eventSource.addEventListener('typing', function(e) {
+            showTypingIndicator();
+        });
+        
+        eventSource.addEventListener('done', function(e) {
+            hideTypingIndicator();
+        });
+        
+        eventSource.addEventListener('error', function(e) {
+            var data = JSON.parse(e.data);
+            appendMessage('error', 'Error: ' + data.message);
+        });
+        
+        eventSource.onerror = function() {
+            $status.text('Disconnected').removeClass('bg-success bg-secondary').addClass('bg-danger');
+            setTimeout(connect, 5000); // Reconnect after 5s
+        };
+    }
+    
+    function appendMessage(role, content) {
+        var roleClass = role === 'user' ? 'user' : 'assistant';
+        var $msg = $('<div class="message ' + roleClass + '">' +
+            '<div class="bubble"></div>' +
+            '</div>');
+        $msg.find('.bubble').text(content);
+        $messages.append($msg);
+        $messages.scrollTop($messages[0].scrollHeight);
+    }
+    
+    function showTypingIndicator() {
+        if ($('#typing-indicator').length === 0) {
+            $messages.append('<div id="typing-indicator" class="typing-indicator">' +
+                '<i class="bi bi-three-dots"></i> Agent is typing...</div>');
+            $messages.scrollTop($messages[0].scrollHeight);
+        }
+    }
+    
+    function hideTypingIndicator() {
+        $('#typing-indicator').remove();
+    }
+    
+    // Send message
+    $('#chat-form').on('submit', function(e) {
+        e.preventDefault();
+        var message = $input.val().trim();
+        if (!message) return;
+        
+        // Show user message immediately
+        appendMessage('user', message);
+        $input.val('');
+        $sendBtn.prop('disabled', true);
+        
+        // Send to API
+        $.ajax({
+            url: '/api/send',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ message: message }),
+            success: function(data) {
+                console.log('Message sent:', data);
+            },
+            error: function(xhr) {
+                appendMessage('error', 'Failed to send message: ' + xhr.responseText);
+            },
+            complete: function() {
+                $sendBtn.prop('disabled', false);
+                $input.focus();
+            }
+        });
+    });
+    
+    // Start connection
+    connect();
+    $input.focus();
+});
+</script>
+
+{{template "footer" .}}

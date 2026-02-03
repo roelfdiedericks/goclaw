@@ -62,10 +62,12 @@ type Session struct {
 }
 
 // NewSession creates a new session with the given ID
+// The ID is also used as the session Key for storage operations
 func NewSession(id string) *Session {
 	now := time.Now()
 	return &Session{
 		ID:        id,
+		Key:       id, // Key = ID for storage operations (multi-user support)
 		Messages:  make([]Message, 0),
 		CreatedAt: now,
 		UpdatedAt: now,

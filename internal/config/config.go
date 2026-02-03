@@ -17,6 +17,7 @@ type Config struct {
 	Mirroring    MirroringConfig       `json:"mirroring"`
 	Tools        ToolsConfig           `json:"tools"`
 	Telegram     TelegramConfig        `json:"telegram"`
+	HTTP         HTTPConfig            `json:"http"`
 	Session      SessionConfig         `json:"session"`
 	MemorySearch MemorySearchConfig    `json:"memorySearch"`
 	PromptCache  PromptCacheConfig     `json:"promptCache"`
@@ -24,6 +25,13 @@ type Config struct {
 	TUI          TUIConfig             `json:"tui"`
 	Skills       SkillsConfig          `json:"skills"`
 	Cron         CronConfig            `json:"cron"`
+}
+
+// HTTPConfig configures the HTTP server
+// HTTP is enabled by default if any user has HTTP credentials configured
+type HTTPConfig struct {
+	Enabled *bool  `json:"enabled,omitempty"` // Enable HTTP server (default: true if users have passwords)
+	Listen  string `json:"listen"`            // Address to listen on (default: ":1337")
 }
 
 // CronConfig configures the cron scheduler
@@ -164,7 +172,6 @@ type MemorySearchQueryConfig struct {
 
 // GatewayConfig contains gateway server settings
 type GatewayConfig struct {
-	Port       int    `json:"port"`
 	LogFile    string `json:"logFile"`
 	PIDFile    string `json:"pidFile"`
 	WorkingDir string `json:"workingDir"`
@@ -246,7 +253,6 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		Gateway: GatewayConfig{
-			Port:       1337, // different from openclaw (18789) to allow coexistence
 			LogFile:    filepath.Join(openclawDir, "goclaw.log"),
 			PIDFile:    filepath.Join(openclawDir, "goclaw.pid"),
 			WorkingDir: filepath.Join(openclawDir, "workspace"),
