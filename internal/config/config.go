@@ -35,7 +35,6 @@ func isMinimalJSON(data []byte) bool {
 type Config struct {
 	Gateway      GatewayConfig         `json:"gateway"`
 	LLM   LLMConfig             `json:"llm"`
-	Users map[string]UserConfig `json:"users"`
 	Tools ToolsConfig           `json:"tools"`
 	Telegram     TelegramConfig        `json:"telegram"`
 	HTTP         HTTPConfig            `json:"http"`
@@ -98,18 +97,14 @@ type MediaConfig struct {
 
 // SessionConfig contains session persistence and context management settings
 type SessionConfig struct {
-	// Storage backend: "jsonl" (default) or "sqlite"
+	// Storage backend: "sqlite" (default) or "jsonl"
 	Store     string `json:"store"`
 	StorePath string `json:"storePath"` // SQLite DB path (when store="sqlite")
 
-	// Legacy field (use Store instead)
-	Storage string `json:"storage"` // Deprecated: use "store"
-
-	// JSONL settings
-	Path        string `json:"path"`        // Sessions directory path (JSONL)
+	// OpenClaw session inheritance
+	InheritPath string `json:"inheritPath"` // Path to OpenClaw sessions directory
 	Inherit     bool   `json:"inherit"`     // Inherit from OpenClaw session
 	InheritFrom string `json:"inheritFrom"` // Session key to inherit from
-	WriteToKey  string `json:"writeToKey"`  // Session key to write to
 
 	// Features
 	Checkpoint  CheckpointConfig  `json:"checkpoint"`
@@ -343,7 +338,6 @@ func Load() (*LoadResult, error) {
 			MaxTokens:     8192,
 			PromptCaching: true, // Enabled by default - saves up to 90% on system prompt tokens
 		},
-		Users: make(map[string]UserConfig),
 		Tools: ToolsConfig{
 			Browser: BrowserToolsConfig{
 				Headless: true,           // default headless
@@ -353,11 +347,9 @@ func Load() (*LoadResult, error) {
 		Session: SessionConfig{
 			Store:       "sqlite", // Default to SQLite
 			StorePath:   filepath.Join(openclawDir, "goclaw", "sessions.db"),
-			Storage:     "jsonl", // Legacy field (ignored when Store is set)
-			Path:        filepath.Join(openclawDir, "agents", "main", "sessions"),
+			InheritPath: filepath.Join(openclawDir, "agents", "main", "sessions"), // OpenClaw sessions directory
 			Inherit:     true,
 			InheritFrom: "agent:main:main",
-			WriteToKey:  "goclaw:main:main",
 			Checkpoint: CheckpointConfig{
 				Enabled:               true,
 				Model:                 "claude-3-haiku-20240307",
@@ -504,7 +496,6 @@ func Load() (*LoadResult, error) {
 
 	// Log final config summary
 	logging.L_debug("config: loaded",
-		"users", len(cfg.Users),
 		"model", cfg.LLM.Model,
 		"telegramEnabled", cfg.Telegram.Enabled,
 		"workingDir", cfg.Gateway.WorkingDir,
@@ -578,57 +569,6 @@ func (c *Config) mergeOpenclawConfig(base map[string]interface{}, openclawDir st
 				logging.L_debug("config: telegram botToken found", "length", len(token))
 				c.Telegram.BotToken = token
 			}
-			// Extract allowed users and create user configs
-			if allowFrom, ok := telegram["allowFrom"].([]interface{}); ok {
-				logging.L_debug("config: found telegram allowFrom list", "count", len(allowFrom))
-				for i, u := range allowFrom {
-					var userID string
-					switch v := u.(type) {
-					case float64:
-						userID = fmt.Sprintf("%.0f", v)
-					case string:
-						userID = v
-					}
-					if userID == "" {
-						continue
-					}
-
-					// First user is owner, rest are regular users
-					role := "user"
-					if i == 0 {
-						role = "owner"
-					}
-
-					// Create user config if not exists
-					configKey := "telegram_" + userID
-					if _, exists := c.Users[configKey]; !exists {
-						logging.L_debug("config: creating user from telegram allowFrom",
-							"configKey", configKey,
-							"telegramID", userID,
-							"role", role,
-							"index", i,
-						)
-						c.Users[configKey] = UserConfig{
-							Name: "User " + userID,
-							Role: role,
-							Identities: []IdentityConfig{
-								{Provider: "telegram", ID: userID},
-							},
-						}
-
-						// Owner also gets local identity
-						if role == "owner" {
-							user := c.Users[configKey]
-							user.Identities = append(user.Identities, IdentityConfig{
-								Provider: "local",
-								ID:       "owner",
-							})
-							c.Users[configKey] = user
-							logging.L_debug("config: owner also gets local identity", "configKey", configKey)
-						}
-					}
-				}
-			}
 		} else {
 			logging.L_trace("config: no channels.telegram section found")
 		}
@@ -692,37 +632,17 @@ func (s *SessionConfig) GetStoreType() string {
 	if s.Store != "" {
 		return s.Store
 	}
-	// Legacy: check Storage field
-	if s.Storage == "memory" {
-		return "jsonl" // memory mode not supported, fall back to jsonl
-	}
-	return "jsonl" // default
+	return "sqlite" // default
 }
 
 // GetStorePath returns the path for the storage backend
 func (s *SessionConfig) GetStorePath() string {
-	switch s.GetStoreType() {
-	case "sqlite":
-		if s.StorePath != "" {
-			return s.StorePath
-		}
-		// Default SQLite path
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, ".openclaw", "goclaw", "sessions.db")
-	default:
-		// JSONL uses the sessions directory Path
-		return s.Path
+	if s.StorePath != "" {
+		return s.StorePath
 	}
-}
-
-// GetOwnerID returns the owner user's ID (first user configured)
-func (c *Config) GetOwnerID() string {
-	for id, user := range c.Users {
-		if user.Role == "owner" {
-			return id
-		}
-	}
-	return ""
+	// Default SQLite path
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".openclaw", "goclaw", "sessions.db")
 }
 
 // mustGetwd returns the current working directory or "unknown" on error
@@ -872,17 +792,6 @@ func mergeConfigSelective(dst, src *Config, rawMap map[string]interface{}) error
 			return err
 		}
 	}
-	if _, ok := rawMap["users"]; ok {
-		// Maps need special handling - just overwrite
-		if src.Users != nil {
-			if dst.Users == nil {
-				dst.Users = make(map[string]UserConfig)
-			}
-			for k, v := range src.Users {
-				dst.Users[k] = v
-			}
-		}
-	}
 	if _, ok := rawMap["tools"]; ok {
 		if err := mergo.Merge(&dst.Tools, src.Tools, mergo.WithOverride); err != nil {
 			return err
@@ -951,11 +860,8 @@ func mergeSessionSelective(dst, src *SessionConfig, rawMap map[string]interface{
 	if src.StorePath != "" {
 		dst.StorePath = src.StorePath
 	}
-	if src.Storage != "" {
-		dst.Storage = src.Storage
-	}
-	if src.Path != "" {
-		dst.Path = src.Path
+	if src.InheritPath != "" {
+		dst.InheritPath = src.InheritPath
 	}
 	// Inherit is a bool, tricky - only set if explicitly in JSON
 	// We can't easily detect this without more work, so skip for now

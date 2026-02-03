@@ -80,23 +80,14 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 	// Determine store type
 	storeType := cfg.Session.Store
 	if storeType == "" {
-		storeType = cfg.Session.Storage // Legacy field
-	}
-	if storeType == "" {
 		storeType = "sqlite" // Default
-	}
-
-	// Determine store path
-	storePath := cfg.Session.StorePath
-	if storePath == "" {
-		storePath = cfg.Session.Path
 	}
 
 	// Initialize session manager with config
 	managerCfg := &session.ManagerConfig{
 		StoreType:   storeType,
-		StorePath:   storePath,
-		SessionsDir: cfg.Session.Path, // For JSONL sessions
+		StorePath:   cfg.Session.StorePath,
+		SessionsDir: cfg.Session.InheritPath, // For OpenClaw inheritance
 		InheritFrom: cfg.Session.InheritFrom,
 		WorkingDir:  cfg.Gateway.WorkingDir,
 	}
@@ -108,11 +99,11 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 	}
 	L_info("session: storage backend ready",
 		"store", storeType,
-		"path", storePath)
+		"path", cfg.Session.StorePath)
 
 	// Inherit from OpenClaw session if configured
-	if cfg.Session.Inherit && cfg.Session.InheritFrom != "" && cfg.Session.Path != "" {
-		if err := g.sessions.InheritOpenClawSession(cfg.Session.Path, cfg.Session.InheritFrom); err != nil {
+	if cfg.Session.Inherit && cfg.Session.InheritFrom != "" && cfg.Session.InheritPath != "" {
+		if err := g.sessions.InheritOpenClawSession(cfg.Session.InheritPath, cfg.Session.InheritFrom); err != nil {
 			L_warn("session: failed to inherit OpenClaw session (starting fresh)",
 				"inheritFrom", cfg.Session.InheritFrom,
 				"error", err)

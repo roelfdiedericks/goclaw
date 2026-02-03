@@ -212,7 +212,7 @@ func (l *Loader) loadFromDirectory(dir string, source Source, skills map[string]
 				"new_source", skill.Source)
 		}
 		skills[skill.Name] = skill
-		L_debug("skills: loaded",
+		L_trace("skills: loaded",
 			"name", skill.Name,
 			"source", skill.Source)
 	}
