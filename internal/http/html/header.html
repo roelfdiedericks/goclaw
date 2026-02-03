@@ -7,7 +7,12 @@
     <title>{{.Title}}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js"></script>
     <style>
         body { 
             padding-top: 56px;
@@ -29,9 +34,127 @@
         .message.error .bubble { background: #f8d7da; color: #721c24; }
         .message.mirror .bubble { background: #fff3cd; color: #856404; font-size: 0.9em; }
         .message.mirror-user .bubble { background: #d4edda; color: #155724; font-size: 0.9em; }
-        .typing-indicator { color: #6c757d; font-style: italic; }
+        .typing-indicator { 
+            color: #6c757d; 
+            font-style: italic; 
+            padding: 0.5rem 0;
+        }
+        .typing-indicator .dots {
+            display: inline-block;
+        }
+        .typing-indicator .dots span {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            margin: 0 2px;
+            background: #6c757d;
+            border-radius: 50%;
+            animation: typing-bounce 1.4s infinite ease-in-out both;
+        }
+        .typing-indicator .dots span:nth-child(1) { animation-delay: -0.32s; }
+        .typing-indicator .dots span:nth-child(2) { animation-delay: -0.16s; }
+        .typing-indicator .dots span:nth-child(3) { animation-delay: 0s; }
+        @keyframes typing-bounce {
+            0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
+        }
         .media-bubble img { max-width: 100%; max-height: 400px; border-radius: 0.5rem; display: block; }
         .media-caption { margin-top: 0.5rem; font-size: 0.9em; color: #666; }
+        
+        /* Markdown content styling */
+        .bubble p { margin: 0 0 0.5rem 0; }
+        .bubble p:last-child { margin-bottom: 0; }
+        .bubble pre { 
+            background: #1e1e1e; 
+            border-radius: 0.5rem; 
+            padding: 0.75rem; 
+            margin: 0.5rem 0;
+            overflow-x: auto;
+        }
+        .bubble code { 
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            font-size: 0.85em;
+        }
+        .bubble pre code { 
+            color: #d4d4d4; 
+            background: transparent;
+            padding: 0;
+        }
+        .bubble :not(pre) > code {
+            background: rgba(0,0,0,0.1);
+            padding: 0.15rem 0.3rem;
+            border-radius: 0.25rem;
+        }
+        .message.user .bubble :not(pre) > code {
+            background: rgba(255,255,255,0.2);
+        }
+        .bubble ul, .bubble ol { 
+            margin: 0.5rem 0; 
+            padding-left: 1.5rem; 
+        }
+        .bubble li { margin: 0.25rem 0; }
+        .bubble blockquote {
+            border-left: 3px solid #dee2e6;
+            margin: 0.5rem 0;
+            padding-left: 0.75rem;
+            color: #6c757d;
+        }
+        .bubble h1, .bubble h2, .bubble h3, .bubble h4 {
+            margin: 0.75rem 0 0.5rem 0;
+            font-size: 1em;
+            font-weight: 600;
+        }
+        .bubble h1 { font-size: 1.2em; }
+        .bubble h2 { font-size: 1.1em; }
+        .bubble a { color: inherit; text-decoration: underline; }
+        .bubble table {
+            border-collapse: collapse;
+            margin: 0.5rem 0;
+            font-size: 0.9em;
+        }
+        .bubble th, .bubble td {
+            border: 1px solid #dee2e6;
+            padding: 0.3rem 0.5rem;
+        }
+        .bubble th { background: rgba(0,0,0,0.05); }
+        
+        /* Image preview */
+        .image-preview-container {
+            padding: 0.5rem 0;
+            margin-bottom: 0.5rem;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .image-preview-item {
+            display: inline-block;
+            position: relative;
+            max-width: 150px;
+        }
+        .image-preview-item img {
+            max-width: 150px;
+            max-height: 100px;
+            border-radius: 0.5rem;
+            border: 2px solid #007bff;
+        }
+        .btn-close-preview {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: #dc3545;
+            color: white;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            padding: 0;
+        }
+        .btn-close-preview:hover {
+            background: #c82333;
+        }
     </style>
 </head>
 <body>
@@ -57,5 +180,5 @@
             </div>
         </div>
     </nav>
-    <main class="container mt-4">
+    <main class="container mt-3 mb-2">
 {{end}}

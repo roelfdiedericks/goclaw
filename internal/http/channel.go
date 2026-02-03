@@ -10,6 +10,7 @@ import (
 
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
@@ -18,9 +19,9 @@ type HTTPChannel struct {
 	server  *Server
 	gateway GatewayRunner
 
-	// SSE connections by session ID (from cookie)
-	clients   map[string]*SSEClient
-	clientsMu sync.RWMutex
+	// Sessions persist across SSE reconnects (keyed by cookie session ID)
+	sessions   map[string]*SSESession
+	sessionsMu sync.RWMutex
 }
 
 // GatewayRunner is the interface for running agent requests
@@ -28,13 +29,34 @@ type GatewayRunner interface {
 	RunAgent(ctx context.Context, req gateway.AgentRequest, events chan<- gateway.AgentEvent) error
 }
 
-// SSEClient represents a connected SSE client
-type SSEClient struct {
-	SessionID string          // Unique session ID from cookie
-	UserID    string          // User who owns this session
-	User      *user.User      // Full user object
-	Events    chan SSEEvent
-	Done      chan struct{}
+const maxEventBuffer = 200 // Keep last N events per session for replay
+
+// SSESession persists across SSE reconnects - tied to cookie session ID
+type SSESession struct {
+	SessionID string
+	UserID    string
+	User      *user.User
+
+	// Event buffer for replay on reconnect
+	eventBuffer []BufferedEvent
+	nextEventID int
+	bufferMu    sync.Mutex
+
+	// Active connection (nil if disconnected)
+	activeConn *SSEConnection
+	connMu     sync.Mutex
+}
+
+// SSEConnection represents an active SSE connection
+type SSEConnection struct {
+	Events chan SSEEvent
+	Done   chan struct{}
+}
+
+// BufferedEvent stores an event with its ID for replay
+type BufferedEvent struct {
+	ID    int
+	Event SSEEvent
 }
 
 // SSEEvent represents an event to send via SSE
@@ -46,8 +68,8 @@ type SSEEvent struct {
 // NewHTTPChannel creates a new HTTP channel
 func NewHTTPChannel(server *Server) *HTTPChannel {
 	return &HTTPChannel{
-		server:  server,
-		clients: make(map[string]*SSEClient),
+		server:   server,
+		sessions: make(map[string]*SSESession),
 	}
 }
 
@@ -68,13 +90,17 @@ func (c *HTTPChannel) Start(ctx context.Context) error {
 
 // Stop gracefully shuts down the channel
 func (c *HTTPChannel) Stop() error {
-	c.clientsMu.Lock()
-	defer c.clientsMu.Unlock()
+	c.sessionsMu.Lock()
+	defer c.sessionsMu.Unlock()
 
-	for _, client := range c.clients {
-		close(client.Done)
+	for _, sess := range c.sessions {
+		sess.connMu.Lock()
+		if sess.activeConn != nil {
+			close(sess.activeConn.Done)
+		}
+		sess.connMu.Unlock()
 	}
-	c.clients = make(map[string]*SSEClient)
+	c.sessions = make(map[string]*SSESession)
 	return nil
 }
 
@@ -85,27 +111,24 @@ func (c *HTTPChannel) Send(ctx context.Context, msg string) error {
 
 // SendMirror sends a mirrored conversation to all owner sessions
 func (c *HTTPChannel) SendMirror(ctx context.Context, source, userMsg, response string) error {
-	c.clientsMu.RLock()
-	defer c.clientsMu.RUnlock()
+	c.sessionsMu.RLock()
+	defer c.sessionsMu.RUnlock()
+
+	event := SSEEvent{
+		Event: "mirror",
+		Data: map[string]string{
+			"source":   source,
+			"userMsg":  userMsg,
+			"response": response,
+		},
+	}
 
 	// Send mirror event to all connected owner sessions
-	for _, client := range c.clients {
-		if client.User == nil || !client.User.IsOwner() {
+	for _, sess := range c.sessions {
+		if sess.User == nil || !sess.User.IsOwner() {
 			continue
 		}
-		select {
-		case client.Events <- SSEEvent{
-			Event: "mirror",
-			Data: map[string]string{
-				"source":   source,
-				"userMsg":  userMsg,
-				"response": response,
-			},
-		}:
-		default:
-			// Client buffer full, skip
-			L_warn("http: mirror event dropped (buffer full)", "session", client.SessionID)
-		}
+		sess.SendEvent(event)
 	}
 	return nil
 }
@@ -115,59 +138,188 @@ func (c *HTTPChannel) HasUser(u *user.User) bool {
 	return u != nil && u.HasHTTPAuth()
 }
 
-// RegisterClient registers an SSE client by session ID
-func (c *HTTPChannel) RegisterClient(sessionID string, u *user.User) *SSEClient {
-	c.clientsMu.Lock()
-	defer c.clientsMu.Unlock()
+// getOrCreateSession gets existing session or creates new one
+func (c *HTTPChannel) getOrCreateSession(sessionID string, u *user.User) *SSESession {
+	c.sessionsMu.Lock()
+	defer c.sessionsMu.Unlock()
 
-	// Close existing client for this session if any (page refresh)
-	if existing, ok := c.clients[sessionID]; ok {
-		close(existing.Done)
-		L_debug("http: SSE client replaced (same session)", "session", sessionID)
+	if sess, ok := c.sessions[sessionID]; ok {
+		// Update user in case it changed
+		sess.User = u
+		sess.UserID = u.ID
+		return sess
 	}
 
-	client := &SSEClient{
-		SessionID: sessionID,
-		UserID:    u.ID,
-		User:      u,
-		Events:    make(chan SSEEvent, 100), // Buffer for events
-		Done:      make(chan struct{}),
+	sess := &SSESession{
+		SessionID:   sessionID,
+		UserID:      u.ID,
+		User:        u,
+		eventBuffer: make([]BufferedEvent, 0, maxEventBuffer),
+		nextEventID: 1,
 	}
-	c.clients[sessionID] = client
-
-	L_debug("http: SSE client registered", "session", sessionID, "user", u.ID)
-	return client
+	c.sessions[sessionID] = sess
+	L_debug("http: session created", "session", sessionID, "user", u.ID)
+	return sess
 }
 
-// UnregisterClient removes an SSE client
-func (c *HTTPChannel) UnregisterClient(sessionID string, client *SSEClient) {
-	c.clientsMu.Lock()
-	defer c.clientsMu.Unlock()
+// GetSession returns the session for a session ID
+func (c *HTTPChannel) GetSession(sessionID string) *SSESession {
+	c.sessionsMu.RLock()
+	defer c.sessionsMu.RUnlock()
+	return c.sessions[sessionID]
+}
 
-	// Only remove if this is still the registered client
-	if current, ok := c.clients[sessionID]; ok && current == client {
-		delete(c.clients, sessionID)
-		L_debug("http: SSE client unregistered", "session", sessionID, "user", client.UserID)
+// RegisterConnection registers a new SSE connection for a session
+// Returns the connection and events to replay (if any)
+func (c *HTTPChannel) RegisterConnection(sessionID string, u *user.User, lastEventID int) (*SSESession, *SSEConnection, []BufferedEvent) {
+	sess := c.getOrCreateSession(sessionID, u)
+
+	sess.connMu.Lock()
+	defer sess.connMu.Unlock()
+
+	// Close existing connection if any (page refresh/reconnect)
+	if sess.activeConn != nil {
+		close(sess.activeConn.Done)
+		L_debug("http: SSE connection replaced", "session", sessionID)
+	}
+
+	conn := &SSEConnection{
+		Events: make(chan SSEEvent, 100),
+		Done:   make(chan struct{}),
+	}
+	sess.activeConn = conn
+
+	// Get events to replay
+	var replay []BufferedEvent
+	if lastEventID > 0 {
+		replay = sess.GetEventsSince(lastEventID)
+		L_debug("http: SSE replay events", "session", sessionID, "lastEventID", lastEventID, "replayCount", len(replay))
+	}
+
+	L_debug("http: SSE connection registered", "session", sessionID, "user", u.ID)
+	return sess, conn, replay
+}
+
+// UnregisterConnection removes an SSE connection (but keeps session)
+func (c *HTTPChannel) UnregisterConnection(sessionID string, conn *SSEConnection) {
+	sess := c.GetSession(sessionID)
+	if sess == nil {
+		return
+	}
+
+	sess.connMu.Lock()
+	defer sess.connMu.Unlock()
+
+	// Only clear if this is still the active connection
+	if sess.activeConn == conn {
+		sess.activeConn = nil
+		L_debug("http: SSE connection unregistered", "session", sessionID)
 	}
 }
 
-// GetClient returns the SSE client for a session
-func (c *HTTPChannel) GetClient(sessionID string) *SSEClient {
-	c.clientsMu.RLock()
-	defer c.clientsMu.RUnlock()
-	return c.clients[sessionID]
+// SendEvent sends an event to the session (buffers it and sends to active connection)
+func (s *SSESession) SendEvent(event SSEEvent) {
+	s.bufferMu.Lock()
+	eventID := s.nextEventID
+	s.nextEventID++
+
+	// Add to buffer
+	buffered := BufferedEvent{ID: eventID, Event: event}
+	s.eventBuffer = append(s.eventBuffer, buffered)
+
+	// Trim buffer if too large
+	if len(s.eventBuffer) > maxEventBuffer {
+		s.eventBuffer = s.eventBuffer[len(s.eventBuffer)-maxEventBuffer:]
+	}
+	s.bufferMu.Unlock()
+
+	// Send to active connection if any
+	s.connMu.Lock()
+	conn := s.activeConn
+	s.connMu.Unlock()
+
+	if conn != nil {
+		select {
+		case conn.Events <- event:
+		default:
+			L_warn("http: event dropped (buffer full)", "session", s.SessionID, "eventID", eventID)
+		}
+	}
 }
 
-// RunAgentRequest runs an agent request and streams events to the client
-func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *user.User, message string) error {
+// GetEventsSince returns buffered events since the given ID
+func (s *SSESession) GetEventsSince(lastEventID int) []BufferedEvent {
+	s.bufferMu.Lock()
+	defer s.bufferMu.Unlock()
+
+	var result []BufferedEvent
+	for _, ev := range s.eventBuffer {
+		if ev.ID > lastEventID {
+			result = append(result, ev)
+		}
+	}
+	return result
+}
+
+// GetActiveConnection returns the active connection (for compatibility)
+func (s *SSESession) GetActiveConnection() *SSEConnection {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	return s.activeConn
+}
+
+// SessionInfo contains information about an active session for display
+type SessionInfo struct {
+	SessionID   string `json:"sessionId"`
+	UserID      string `json:"userId"`
+	UserName    string `json:"userName"`
+	IsOwner     bool   `json:"isOwner"`
+	IsConnected bool   `json:"isConnected"`
+	EventCount  int    `json:"eventCount"`
+}
+
+// GetSessionsInfo returns info about all active sessions
+func (c *HTTPChannel) GetSessionsInfo() []SessionInfo {
+	c.sessionsMu.RLock()
+	defer c.sessionsMu.RUnlock()
+
+	var sessions []SessionInfo
+	for _, sess := range c.sessions {
+		sess.connMu.Lock()
+		isConnected := sess.activeConn != nil
+		sess.connMu.Unlock()
+
+		sess.bufferMu.Lock()
+		eventCount := sess.nextEventID - 1
+		sess.bufferMu.Unlock()
+
+		name := sess.UserID
+		if sess.User != nil && sess.User.Name != "" {
+			name = sess.User.Name
+		}
+
+		sessions = append(sessions, SessionInfo{
+			SessionID:   sess.SessionID[:8] + "...",
+			UserID:      sess.UserID,
+			UserName:    name,
+			IsOwner:     sess.User != nil && sess.User.IsOwner(),
+			IsConnected: isConnected,
+			EventCount:  eventCount,
+		})
+	}
+	return sessions
+}
+
+// RunAgentRequest runs an agent request and streams events to the session
+func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *user.User, message string, images []session.ImageAttachment) error {
 	if c.gateway == nil {
 		return fmt.Errorf("gateway not configured")
 	}
 
-	// Get the SSE client for this session
-	client := c.GetClient(sessionID)
-	if client == nil {
-		return fmt.Errorf("no SSE client for session %s", sessionID)
+	// Get the session (must exist - created during SSE connect)
+	sess := c.GetSession(sessionID)
+	if sess == nil {
+		return fmt.Errorf("no session for %s", sessionID)
 	}
 
 	// Create agent request
@@ -175,20 +327,15 @@ func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *
 		User:    u,
 		Source:  "http",
 		UserMsg: message,
+		Images:  images,
 	}
 
 	// Create events channel
 	events := make(chan gateway.AgentEvent, 100)
 
 	// Use background context - the POST request context will be canceled when it returns,
-	// but we want the agent to keep running until done or SSE client disconnects
+	// but we want the agent to keep running until done
 	agentCtx, agentCancel := context.WithCancel(context.Background())
-
-	// Cancel agent if SSE client disconnects
-	go func() {
-		<-client.Done
-		agentCancel()
-	}()
 
 	// Run agent in background
 	go func() {
@@ -199,24 +346,15 @@ func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *
 		}
 	}()
 
-	// Stream events to SSE client
+	// Stream events to session (buffers for replay on reconnect)
 	go func() {
 		for event := range events {
 			sseEvent := c.convertEvent(event)
 			if sseEvent != nil {
-				select {
-				case client.Events <- *sseEvent:
-					L_debug("http: SSE event sent", "event", sseEvent.Event, "session", sessionID[:8]+"...")
-				case <-client.Done:
-					L_debug("http: SSE event dropped (client done)", "session", sessionID[:8]+"...")
-					return
-				case <-agentCtx.Done():
-					L_debug("http: SSE event dropped (agent canceled)", "session", sessionID[:8]+"...")
-					return
-				}
+				sess.SendEvent(*sseEvent)
 			}
 		}
-		L_debug("http: SSE event stream ended", "session", sessionID[:8]+"...")
+		L_debug("http: event stream ended", "session", sessionID[:8]+"...")
 	}()
 
 	return nil
@@ -290,30 +428,28 @@ func NewMessageChannelAdapter(channel *HTTPChannel, mediaBase string) *MessageCh
 
 // SendText sends a text message to all connected owner sessions.
 func (a *MessageChannelAdapter) SendText(chatID string, text string) (string, error) {
-	a.channel.clientsMu.RLock()
-	defer a.channel.clientsMu.RUnlock()
+	a.channel.sessionsMu.RLock()
+	defer a.channel.sessionsMu.RUnlock()
+
+	event := SSEEvent{
+		Event: "agent_message",
+		Data: map[string]string{
+			"type": "text",
+			"text": text,
+		},
+	}
 
 	sent := 0
-	for _, client := range a.channel.clients {
-		if client.User == nil || !client.User.IsOwner() {
+	for _, sess := range a.channel.sessions {
+		if sess.User == nil || !sess.User.IsOwner() {
 			continue
 		}
-		select {
-		case client.Events <- SSEEvent{
-			Event: "agent_message",
-			Data: map[string]string{
-				"type": "text",
-				"text": text,
-			},
-		}:
-			sent++
-		default:
-			L_warn("http: message dropped (buffer full)", "session", client.SessionID)
-		}
+		sess.SendEvent(event)
+		sent++
 	}
 
 	if sent == 0 {
-		L_debug("http: no connected owner sessions for text message")
+		L_debug("http: no owner sessions for text message")
 		return "http-0 (no sessions)", nil // Don't fail - best effort delivery
 	}
 
@@ -343,32 +479,30 @@ func (a *MessageChannelAdapter) SendMedia(chatID string, filePath string, captio
 	// We pass the absolute path as a query param (server validates it)
 	mediaURL := fmt.Sprintf("%s?path=%s", a.mediaBase, absPath)
 
-	a.channel.clientsMu.RLock()
-	defer a.channel.clientsMu.RUnlock()
+	event := SSEEvent{
+		Event: "agent_message",
+		Data: map[string]interface{}{
+			"type":     "media",
+			"url":      mediaURL,
+			"caption":  caption,
+			"filename": filepath.Base(absPath),
+		},
+	}
+
+	a.channel.sessionsMu.RLock()
+	defer a.channel.sessionsMu.RUnlock()
 
 	sent := 0
-	for _, client := range a.channel.clients {
-		if client.User == nil || !client.User.IsOwner() {
+	for _, sess := range a.channel.sessions {
+		if sess.User == nil || !sess.User.IsOwner() {
 			continue
 		}
-		select {
-		case client.Events <- SSEEvent{
-			Event: "agent_message",
-			Data: map[string]interface{}{
-				"type":     "media",
-				"url":      mediaURL,
-				"caption":  caption,
-				"filename": filepath.Base(absPath),
-			},
-		}:
-			sent++
-		default:
-			L_warn("http: media dropped (buffer full)", "session", client.SessionID)
-		}
+		sess.SendEvent(event)
+		sent++
 	}
 
 	if sent == 0 {
-		L_debug("http: no connected owner sessions for media", "path", absPath)
+		L_debug("http: no owner sessions for media", "path", absPath)
 		return "http-0 (no sessions)", nil // Don't fail - best effort delivery
 	}
 

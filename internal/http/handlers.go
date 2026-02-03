@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/session"
 )
 
 // handleIndex serves the dashboard page
@@ -109,6 +111,10 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	// Parse request body
 	var req struct {
 		Message string `json:"message"`
+		Images  []struct {
+			Data     string `json:"data"`     // Base64-encoded image data
+			MimeType string `json:"mimeType"` // MIME type (e.g., "image/png")
+		} `json:"images"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		L_warn("http: send - invalid JSON", "user", u.ID, "error", err)
@@ -116,9 +122,10 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Message == "" {
-		L_warn("http: send - empty message", "user", u.ID)
-		http.Error(w, "Message required", http.StatusBadRequest)
+	// Need either message or images
+	if req.Message == "" && len(req.Images) == 0 {
+		L_warn("http: send - empty message and no images", "user", u.ID)
+		http.Error(w, "Message or image required", http.StatusBadRequest)
 		return
 	}
 
@@ -129,11 +136,21 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	L_info("http: message received", "user", u.ID, "session", sessionID[:8]+"...", "length", len(req.Message))
+	// Convert images to ImageAttachments
+	var images []session.ImageAttachment
+	for _, img := range req.Images {
+		images = append(images, session.ImageAttachment{
+			Data:     img.Data,
+			MimeType: img.MimeType,
+			Source:   "http",
+		})
+	}
+
+	L_info("http: message received", "user", u.ID, "session", sessionID[:8]+"...", "length", len(req.Message), "images", len(images))
 
 	// Run agent request (will stream via SSE)
 	msgID := fmt.Sprintf("msg_%d", time.Now().UnixNano())
-	err := s.channel.RunAgentRequest(r.Context(), sessionID, u, req.Message)
+	err := s.channel.RunAgentRequest(r.Context(), sessionID, u, req.Message, images)
 	if err != nil {
 		L_error("http: failed to run agent", "user", u.ID, "error", err)
 		http.Error(w, fmt.Sprintf("Failed to process: %v", err), http.StatusInternalServerError)
@@ -189,45 +206,75 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	L_info("http: SSE connection opened", "user", u.ID, "session", sessionID[:8]+"...")
+	// Parse Last-Event-ID for replay (SSE standard reconnection mechanism)
+	lastEventID := 0
+	if lastIDStr := r.Header.Get("Last-Event-ID"); lastIDStr != "" {
+		if parsed, err := strconv.Atoi(lastIDStr); err == nil {
+			lastEventID = parsed
+			L_info("http: SSE reconnect", "user", u.ID, "session", sessionID[:8]+"...", "lastEventID", lastEventID)
+		}
+	} else {
+		L_info("http: SSE connection opened", "user", u.ID, "session", sessionID[:8]+"...")
+	}
 
-	// Register SSE client
-	client := s.channel.RegisterClient(sessionID, u)
-	if client == nil {
-		L_error("http: SSE failed - client registration returned nil", "user", u.ID)
-		http.Error(w, "Failed to register client", http.StatusInternalServerError)
+	// Register connection and get events to replay
+	sess, conn, replay := s.channel.RegisterConnection(sessionID, u, lastEventID)
+	if conn == nil {
+		L_error("http: SSE failed - connection registration returned nil", "user", u.ID)
+		http.Error(w, "Failed to register connection", http.StatusInternalServerError)
 		return
 	}
-	defer s.channel.UnregisterClient(sessionID, client)
+	defer s.channel.UnregisterConnection(sessionID, conn)
 
-	// Send initial connected event
-	fmt.Fprintf(w, "event: connected\ndata: {\"user\":\"%s\"}\n\n", u.ID)
+	// Send initial connected event (with current event ID for client tracking)
+	sess.bufferMu.Lock()
+	currentEventID := sess.nextEventID - 1
+	sess.bufferMu.Unlock()
+	fmt.Fprintf(w, "event: connected\nid: %d\ndata: {\"user\":\"%s\",\"lastEventId\":%d}\n\n", currentEventID, u.ID, currentEventID)
 	flusher.Flush()
+
+	// Replay missed events
+	for _, buffered := range replay {
+		data, err := json.Marshal(buffered.Event.Data)
+		if err != nil {
+			L_error("http: failed to marshal replay event", "error", err)
+			continue
+		}
+		fmt.Fprintf(w, "event: %s\nid: %d\ndata: %s\n\n", buffered.Event.Event, buffered.ID, data)
+		flusher.Flush()
+	}
+	if len(replay) > 0 {
+		L_info("http: replayed events", "count", len(replay), "session", sessionID[:8]+"...")
+	}
 
 	// Keep connection open and forward events
 	ctx := r.Context()
-	ticker := time.NewTicker(30 * time.Second) // Heartbeat every 30s
+	ticker := time.NewTicker(15 * time.Second) // Heartbeat every 15s (more frequent for stability)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			L_info("http: SSE connection closed", "user", u.ID)
+			L_info("http: SSE connection closed", "user", u.ID, "session", sessionID[:8]+"...")
 			return
-		case <-client.Done:
-			L_info("http: SSE client disconnected", "user", u.ID)
+		case <-conn.Done:
+			L_info("http: SSE connection replaced", "user", u.ID, "session", sessionID[:8]+"...")
 			return
-		case event := <-client.Events:
-			// Send event to client
+		case event := <-conn.Events:
+			// Send event to client with ID
 			data, err := json.Marshal(event.Data)
 			if err != nil {
 				L_error("http: failed to marshal event", "error", err)
 				continue
 			}
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Event, data)
+			// Get current event ID from session
+			sess.bufferMu.Lock()
+			eventID := sess.nextEventID - 1 // Last assigned ID
+			sess.bufferMu.Unlock()
+			fmt.Fprintf(w, "event: %s\nid: %d\ndata: %s\n\n", event.Event, eventID, data)
 			flusher.Flush()
 		case <-ticker.C:
-			// Send heartbeat
+			// Send heartbeat comment (doesn't need ID)
 			fmt.Fprintf(w, ": heartbeat\n\n")
 			flusher.Flush()
 		}
@@ -249,15 +296,22 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Get actual status from gateway
+	// Get active sessions info
+	var sessions []SessionInfo
+	if s.channel != nil {
+		sessions = s.channel.GetSessionsInfo()
+	}
+
 	status := struct {
-		Status  string `json:"status"`
-		User    string `json:"user"`
-		IsOwner bool   `json:"isOwner"`
+		Status   string        `json:"status"`
+		User     string        `json:"user"`
+		IsOwner  bool          `json:"isOwner"`
+		Sessions []SessionInfo `json:"sessions"`
 	}{
-		Status:  "ready",
-		User:    u.ID,
-		IsOwner: u.IsOwner(),
+		Status:   "ready",
+		User:     u.ID,
+		IsOwner:  u.IsOwner(),
+		Sessions: sessions,
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

@@ -26,17 +26,69 @@
     </div>
 </div>
 
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-people"></i> Active Sessions
+            </div>
+            <div class="card-body">
+                <div id="sessions-container">
+                    <p class="text-muted mb-0">Loading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
 $(document).ready(function() {
-    // Fetch status on load
-    $.getJSON('/api/status', function(data) {
-        $('#status-agent')
-            .text(data.status)
-            .removeClass('bg-secondary')
-            .addClass(data.status === 'ready' ? 'bg-success' : 'bg-warning');
-    }).fail(function() {
-        $('#status-agent').text('Error').removeClass('bg-secondary').addClass('bg-danger');
-    });
+    function loadStatus() {
+        $.getJSON('/api/status', function(data) {
+            $('#status-agent')
+                .text(data.status)
+                .removeClass('bg-secondary')
+                .addClass(data.status === 'ready' ? 'bg-success' : 'bg-warning');
+            
+            // Render sessions
+            var $container = $('#sessions-container');
+            if (!data.sessions || data.sessions.length === 0) {
+                $container.html('<p class="text-muted mb-0">No active sessions</p>');
+                return;
+            }
+            
+            var html = '<table class="table table-sm table-hover mb-0">' +
+                '<thead><tr><th>User</th><th>Session</th><th>Status</th><th>Events</th></tr></thead><tbody>';
+            
+            data.sessions.forEach(function(sess) {
+                var statusBadge = sess.isConnected 
+                    ? '<span class="badge bg-success">Connected</span>'
+                    : '<span class="badge bg-secondary">Disconnected</span>';
+                var ownerBadge = sess.isOwner ? ' <span class="badge bg-warning text-dark">Owner</span>' : '';
+                
+                html += '<tr>' +
+                    '<td>' + escapeHtml(sess.userName) + ownerBadge + '</td>' +
+                    '<td><code>' + escapeHtml(sess.sessionId) + '</code></td>' +
+                    '<td>' + statusBadge + '</td>' +
+                    '<td>' + sess.eventCount + '</td>' +
+                    '</tr>';
+            });
+            
+            html += '</tbody></table>';
+            $container.html(html);
+        }).fail(function() {
+            $('#status-agent').text('Error').removeClass('bg-secondary').addClass('bg-danger');
+            $('#sessions-container').html('<p class="text-danger mb-0">Failed to load</p>');
+        });
+    }
+    
+    function escapeHtml(text) {
+        return $('<div>').text(text).html();
+    }
+    
+    // Load initially and refresh every 10s
+    loadStatus();
+    setInterval(loadStatus, 10000);
 });
 </script>
 
