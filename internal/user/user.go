@@ -13,25 +13,30 @@ const (
 
 // User represents an authenticated user who can interact with the agent
 type User struct {
-	ID          string            // unique identifier (config key)
-	Name        string            // display name
-	Role        Role              // owner or user
-	Identities  []Identity        // ways to authenticate this user
-	Credentials []StoredCredential // for challenge auth (passwords, API keys)
-	Permissions map[string]bool   // tool whitelist (nil = use role defaults)
+	ID               string          // unique identifier (username from users.json key)
+	Name             string          // display name
+	Role             Role            // owner or user
+	TelegramID       string          // Telegram user ID (for telegram auth)
+	HTTPPasswordHash string          // Argon2id hash of HTTP password
+	Permissions      map[string]bool // tool whitelist (nil = use role defaults)
 }
 
-// Identity maps an external identity to this user
-type Identity struct {
-	Provider string // "telegram", "local", "apikey", etc.
-	Value    string // telegram user ID, "owner" for local, etc.
+// VerifyHTTPPassword checks if the password matches the stored hash
+func (u *User) VerifyHTTPPassword(password string) bool {
+	if u == nil || u.HTTPPasswordHash == "" {
+		return false
+	}
+	return VerifyPassword(password, u.HTTPPasswordHash)
 }
 
-// StoredCredential holds a hashed credential for challenge auth
-type StoredCredential struct {
-	Type  string // "apikey", "password"
-	Hash  string // argon2/bcrypt hash (NEVER plaintext)
-	Label string // "laptop-key", "phone-key" - for management
+// HasHTTPAuth returns true if user has HTTP authentication configured
+func (u *User) HasHTTPAuth() bool {
+	return u != nil && u.HTTPPasswordHash != ""
+}
+
+// HasTelegramAuth returns true if user has Telegram authentication configured
+func (u *User) HasTelegramAuth() bool {
+	return u != nil && u.TelegramID != ""
 }
 
 // Default tool permissions by role
@@ -68,10 +73,15 @@ func (u *User) IsOwner() bool {
 
 // HasIdentity checks if the user has a specific identity
 func (u *User) HasIdentity(provider, value string) bool {
-	for _, id := range u.Identities {
-		if id.Provider == provider && id.Value == value {
-			return true
-		}
+	if u == nil {
+		return false
+	}
+	switch provider {
+	case "telegram":
+		return u.TelegramID == value
+	case "http":
+		// HTTP auth uses username (user ID), not a separate identity value
+		return u.ID == value && u.HTTPPasswordHash != ""
 	}
 	return false
 }

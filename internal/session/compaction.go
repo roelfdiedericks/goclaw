@@ -46,8 +46,8 @@ type CompactionManagerConfig struct {
 	OllamaFailureThreshold int // Fall back to main after N failures (default: 3)
 	OllamaResetMinutes     int // Try Ollama again after N minutes (default: 30)
 
-	// Session info
-	SessionKey string // For store operations
+	// Note: SessionKey removed - now uses sess.Key from the Session object
+	// This allows one CompactionManager to handle multiple user sessions
 }
 
 // CompactionLLMClient interface for LLM calls during compaction
@@ -271,8 +271,12 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 	}
 	firstKeptID := m.findFirstKeptID(sess, keepPercent)
 
-	// Write compaction record
-	if m.store != nil && m.config.SessionKey != "" {
+	// Write compaction record (use sess.Key for multi-user support)
+	sessionKey := sess.Key
+	if sessionKey == "" {
+		sessionKey = PrimarySession // fallback for legacy sessions without Key set
+	}
+	if m.store != nil {
 		storedComp := &StoredCompaction{
 			ID:                GenerateRecordID(),
 			Timestamp:         time.Now(),
@@ -285,7 +289,7 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 			storedComp.ParentID = *parentID
 		}
 
-		if err := m.store.AppendCompaction(ctx, m.config.SessionKey, storedComp); err != nil {
+		if err := m.store.AppendCompaction(ctx, sessionKey, storedComp); err != nil {
 			return nil, fmt.Errorf("failed to write compaction to store: %w", err)
 		}
 

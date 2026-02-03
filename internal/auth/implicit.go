@@ -6,15 +6,15 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
-// ImplicitAuth provides authentication for trusted local access (TUI, localhost)
-// It always returns the owner identity without verification
+// ImplicitAuth provides authentication for trusted local access (TUI)
+// It always returns the owner user without verification
 type ImplicitAuth struct {
-	ownerID string
+	users *user.Registry
 }
 
 // NewImplicitAuth creates an authenticator for local/trusted access
-func NewImplicitAuth(ownerID string) *ImplicitAuth {
-	return &ImplicitAuth{ownerID: ownerID}
+func NewImplicitAuth(users *user.Registry) *ImplicitAuth {
+	return &ImplicitAuth{users: users}
 }
 
 // AuthType returns AuthImplicit
@@ -22,12 +22,11 @@ func (a *ImplicitAuth) AuthType() AuthType {
 	return AuthImplicit
 }
 
-// Authenticate returns the owner identity (localhost is trusted)
+// Authenticate returns the owner user (TUI is trusted, owner-only)
 func (a *ImplicitAuth) Authenticate(ctx context.Context, req *AuthRequest) (*AuthResult, error) {
-	return &AuthResult{
-		Identity: user.Identity{
-			Provider: "local",
-			Value:    a.ownerID,
-		},
-	}, nil
+	owner := a.users.Owner()
+	if owner == nil {
+		return nil, ErrUserNotFound
+	}
+	return &AuthResult{User: owner}, nil
 }

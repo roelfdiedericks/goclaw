@@ -143,14 +143,13 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 		"turnThreshold", cfg.Session.Checkpoint.TurnThreshold)
 
 	// Initialize compaction manager
-	// Always use PrimarySession for owner's session
+	// Handles all sessions - uses sess.Key for multi-user support
 	compactorCfg := &session.CompactionManagerConfig{
 		ReserveTokens:          cfg.Session.Compaction.ReserveTokens,
 		PreferCheckpoint:       cfg.Session.Compaction.PreferCheckpoint,
 		RetryIntervalSeconds:   cfg.Session.Compaction.RetryIntervalSeconds,
 		OllamaFailureThreshold: cfg.Session.Compaction.OllamaFailureThreshold,
 		OllamaResetMinutes:     cfg.Session.Compaction.OllamaResetMinutes,
-		SessionKey:             session.PrimarySession,
 	}
 	g.compactor = session.NewCompactionManager(compactorCfg)
 	g.compactor.SetStore(g.sessions.GetStore())
@@ -1222,12 +1221,26 @@ func (g *Gateway) sessionKeyFor(req AgentRequest) string {
 	if req.IsGroup {
 		return fmt.Sprintf("group:%s", req.ChatID)
 	}
-	// Use primary session for direct messages
+	// Owner uses "primary" session (shared across all channels)
+	if req.User != nil && req.User.IsOwner() {
+		return session.PrimarySession
+	}
+	// Non-owner users get their own session keyed by username
+	if req.User != nil {
+		return fmt.Sprintf("user:%s", req.User.ID)
+	}
+	// Fallback (shouldn't happen - requests without user should be rejected earlier)
 	return session.PrimarySession
 }
 
 // mirrorToOthers sends a mirror of the conversation to other channels
+// Only mirrors for owner user - non-owners typically use one channel
 func (g *Gateway) mirrorToOthers(ctx context.Context, req AgentRequest, response string) {
+	// Skip mirroring for non-owner users
+	if req.User == nil || !req.User.IsOwner() {
+		return
+	}
+
 	for name, ch := range g.channels {
 		if name == req.Source {
 			continue // don't mirror to source

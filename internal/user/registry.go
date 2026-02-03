@@ -1,7 +1,6 @@
 package user
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/roelfdiedericks/goclaw/internal/config"
@@ -9,48 +8,72 @@ import (
 
 // Registry maintains the set of known users and provides lookup by identity
 type Registry struct {
-	users    map[string]*User  // by user ID
-	identity map[string]string // "telegram:123456" -> user ID
-	ownerID  string            // cached owner user ID
-	mu       sync.RWMutex
+	users      map[string]*User  // by username (user ID)
+	telegramID map[string]string // telegram user ID -> username
+	ownerID    string            // cached owner username
+	mu         sync.RWMutex
 }
 
-// NewRegistry creates a user registry from config
+// NewRegistryFromUsers creates a user registry from UsersConfig (new format)
+func NewRegistryFromUsers(users config.UsersConfig) *Registry {
+	r := &Registry{
+		users:      make(map[string]*User),
+		telegramID: make(map[string]string),
+	}
+
+	for username, entry := range users {
+		user := &User{
+			ID:               username,
+			Name:             entry.Name,
+			Role:             Role(entry.Role),
+			TelegramID:       entry.TelegramID,
+			HTTPPasswordHash: entry.HTTPPasswordHash,
+		}
+
+		r.users[username] = user
+
+		// Build telegram lookup map
+		if entry.TelegramID != "" {
+			r.telegramID[entry.TelegramID] = username
+		}
+
+		// Track owner
+		if user.Role == RoleOwner {
+			r.ownerID = username
+		}
+	}
+
+	return r
+}
+
+// NewRegistry creates a user registry from legacy config (deprecated, for compatibility)
 func NewRegistry(cfg *config.Config) *Registry {
 	r := &Registry{
-		users:    make(map[string]*User),
-		identity: make(map[string]string),
+		users:      make(map[string]*User),
+		telegramID: make(map[string]string),
 	}
 
 	for id, userCfg := range cfg.Users {
 		user := &User{
-			ID:          id,
-			Name:        userCfg.Name,
-			Role:        Role(userCfg.Role),
-			Identities:  make([]Identity, 0, len(userCfg.Identities)),
-			Credentials: make([]StoredCredential, 0, len(userCfg.Credentials)),
+			ID:   id,
+			Name: userCfg.Name,
+			Role: Role(userCfg.Role),
 		}
 
-		// Convert identities
+		// Convert identities to find telegram ID
 		for _, idCfg := range userCfg.Identities {
-			identity := Identity{
-				Provider: idCfg.Provider,
-				Value:    idCfg.ID,
+			if idCfg.Provider == "telegram" {
+				user.TelegramID = idCfg.ID
+				r.telegramID[idCfg.ID] = id
 			}
-			user.Identities = append(user.Identities, identity)
-
-			// Build identity lookup map
-			key := fmt.Sprintf("%s:%s", idCfg.Provider, idCfg.ID)
-			r.identity[key] = id
 		}
 
-		// Convert credentials
+		// Convert credentials to find HTTP password
 		for _, credCfg := range userCfg.Credentials {
-			user.Credentials = append(user.Credentials, StoredCredential{
-				Type:  credCfg.Type,
-				Hash:  credCfg.Hash,
-				Label: credCfg.Label,
-			})
+			if credCfg.Type == "password" {
+				user.HTTPPasswordHash = credCfg.Hash
+				break
+			}
 		}
 
 		// Convert permissions to map
@@ -73,17 +96,25 @@ func NewRegistry(cfg *config.Config) *Registry {
 }
 
 // FromIdentity looks up a user by their external identity
+// Supported providers: "telegram"
 // Returns nil if no user is found with that identity
 func (r *Registry) FromIdentity(provider, value string) *User {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	key := fmt.Sprintf("%s:%s", provider, value)
-	userID, ok := r.identity[key]
-	if !ok {
-		return nil
+	switch provider {
+	case "telegram":
+		if username, ok := r.telegramID[value]; ok {
+			return r.users[username]
+		}
 	}
-	return r.users[userID]
+
+	return nil
+}
+
+// FromTelegramID looks up a user by their Telegram user ID
+func (r *Registry) FromTelegramID(telegramID string) *User {
+	return r.FromIdentity("telegram", telegramID)
 }
 
 // Owner returns the owner user (first user with owner role)
