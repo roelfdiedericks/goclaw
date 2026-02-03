@@ -68,6 +68,11 @@ func (t *EditTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 
 	L_debug("edit tool: editing file", "path", params.Path, "oldLen", len(params.OldString), "newLen", len(params.NewString))
 
+	// Validate path is not empty
+	if params.Path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+
 	// Validate old_string is not empty
 	if params.OldString == "" {
 		L_warn("edit tool: empty old_string")

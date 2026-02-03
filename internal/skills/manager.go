@@ -197,7 +197,7 @@ func (m *Manager) Reload() error {
 			} else if skill.Metadata == nil {
 				reason = "no metadata (should be eligible?)"
 			}
-			L_debug("skills: ineligible", "skill", skill.Name, "reason", reason)
+			L_trace("skills: ineligible", "skill", skill.Name, "reason", reason)
 		}
 	}
 

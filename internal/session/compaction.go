@@ -371,7 +371,8 @@ func (m *CompactionManager) generateSummaryWithFallback(ctx context.Context, mes
 		if m.failover != nil {
 			failures = m.failover.RecordFailure()
 		}
-		L_warn("compaction: ollama failed, trying fallback",
+		L_warn("compaction: ollama failed",
+			"ollamaModel", model,
 			"error", err,
 			"elapsed", elapsed.Round(time.Second),
 			"failures", failures)

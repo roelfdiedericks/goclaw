@@ -168,13 +168,13 @@ func (g *CheckpointGenerator) Generate(ctx context.Context, sess *Session, sessi
 		if err != nil {
 			if g.failover != nil {
 				failures := g.failover.RecordFailure()
-				L_warn("checkpoint: ollama failed, trying fallback",
-					"model", usedModel,
+				L_warn("checkpoint: ollama failed",
+					"ollamaModel", usedModel,
 					"error", err,
 					"failures", failures)
 			} else {
-				L_warn("checkpoint: ollama failed, trying fallback",
-					"model", usedModel,
+				L_warn("checkpoint: ollama failed",
+					"ollamaModel", usedModel,
 					"error", err)
 			}
 		} else if g.failover != nil {
