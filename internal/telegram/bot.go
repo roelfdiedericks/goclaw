@@ -70,11 +70,12 @@ func New(cfg *config.TelegramConfig, gw *gateway.Gateway, users *user.Registry) 
 		return nil, fmt.Errorf("failed to create telegram bot: %w", err)
 	}
 
-	// Log bot info
-	L_debug("telegram: bot created",
-		"username", bot.Me.Username,
+	// Log bot info - confirm connection worked and show identity
+	L_info("telegram: connected",
+		"bot", "@"+bot.Me.Username,
+		"name", bot.Me.FirstName,
 		"id", bot.Me.ID,
-		"firstName", bot.Me.FirstName,
+		"canJoinGroups", bot.Me.CanJoinGroups,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -544,7 +545,7 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 
 // Start starts the bot polling
 func (b *Bot) Start() {
-	L_info("starting telegram bot")
+	L_info("telegram: starting polling", "bot", "@"+b.bot.Me.Username)
 	go b.bot.Start()
 }
 

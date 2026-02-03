@@ -307,7 +307,7 @@ func (s *Service) runLoop(ctx context.Context) {
 	for {
 		// Calculate when to wake up next
 		sleepDuration := s.computeNextWake()
-		L_debug("cron: scheduler sleeping", "duration", sleepDuration)
+		L_trace("cron: scheduler sleeping", "duration", sleepDuration)
 
 		if s.timer == nil {
 			s.timer = time.NewTimer(sleepDuration)
@@ -332,7 +332,7 @@ func (s *Service) runLoop(ctx context.Context) {
 		case <-s.rescheduleCh:
 			// In-process job add, just recalculate wake time
 			s.timer.Stop()
-			L_debug("cron: rescheduling due to job add")
+			L_trace("cron: rescheduling due to job add")
 			continue
 
 		case <-heartbeatC:
@@ -350,7 +350,7 @@ func (s *Service) runLoop(ctx context.Context) {
 			if filepath.Base(event.Name) == jobsFile && (event.Op&fsnotify.Write != 0 || event.Op&fsnotify.Create != 0) {
 				// Ignore events caused by our own writes
 				if time.Now().Before(s.ignoreWatchUntil) {
-					L_debug("cron: ignoring own file write")
+					L_trace("cron: ignoring own file write")
 					continue
 				}
 				// Start/reset debounce timer - wait for writes to settle

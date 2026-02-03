@@ -79,12 +79,15 @@ func (t *ExecTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 		workDir = params.WorkingDir
 	}
 
-	// Truncate command for logging (avoid huge commands in logs)
-	cmdPreview := params.Command
-	if len(cmdPreview) > 100 {
-		cmdPreview = cmdPreview[:100] + "..."
+	// Create command preview for INFO: first linebreak or 30 chars, newlines stripped
+	cmdPreview := strings.ReplaceAll(params.Command, "\n", " ")
+	cmdPreview = strings.ReplaceAll(cmdPreview, "\r", "")
+	if len(cmdPreview) > 30 {
+		cmdPreview = cmdPreview[:30] + "..."
 	}
-	L_info("exec tool: running command", "cmd", cmdPreview, "workDir", workDir, "timeout", timeout)
+
+	L_info("exec tool: running", "cmd", cmdPreview, "workDir", workDir)
+	L_trace("exec tool: full command", "cmd", params.Command, "timeout", timeout)
 
 	// Create context with timeout
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -122,16 +125,16 @@ func (t *ExecTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			L_warn("exec tool: command timed out", "cmd", cmdPreview, "timeout", timeout)
+			L_warn("exec tool: timed out", "cmd", cmdPreview, "timeout", timeout)
 			return result.String(), fmt.Errorf("command timed out after %v", timeout)
 		}
 		if result.Len() > 0 {
 			result.WriteString("\n")
 		}
 		result.WriteString(fmt.Sprintf("Exit error: %v", err))
-		L_warn("exec tool: command failed", "cmd", cmdPreview, "error", err, "elapsed", elapsed)
+		L_warn("exec tool: failed", "cmd", cmdPreview, "error", err, "elapsed", elapsed)
 	} else {
-		L_info("exec tool: command completed", "cmd", cmdPreview, "elapsed", elapsed, "stdoutLen", stdout.Len(), "stderrLen", stderr.Len())
+		L_debug("exec tool: completed", "cmd", cmdPreview, "elapsed", elapsed, "stdoutLen", stdout.Len(), "stderrLen", stderr.Len())
 	}
 
 	if result.Len() == 0 {

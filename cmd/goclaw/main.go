@@ -784,7 +784,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		if err == nil {
 			telegramBot.Start()
 			gw.RegisterChannel(telegramBot)
-			L_info("telegram bot started")
+			L_info("telegram: bot ready and listening")
 
 			// Create Telegram message channel adapter for message tool
 			if mediaStore := gw.MediaStore(); mediaStore != nil {
@@ -824,7 +824,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 					// Success!
 					bot.Start()
 					gw.RegisterChannel(bot)
-					L_info("telegram bot started after retry", "attempts", attempt)
+					L_info("telegram: bot ready after retry", "attempts", attempt)
 
 					telegramBotMu.Lock()
 					telegramBot = bot

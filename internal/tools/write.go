@@ -60,6 +60,10 @@ func (t *WriteTool) Execute(ctx context.Context, input json.RawMessage) (string,
 		return "", fmt.Errorf("invalid input: %w", err)
 	}
 
+	if params.Path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+
 	L_debug("write tool: writing file", "path", params.Path, "bytes", len(params.Content))
 
 	// Validate path and write atomically (sandbox validation + atomic write)
