@@ -16,7 +16,7 @@ type HTTPChannel struct {
 	server  *Server
 	gateway GatewayRunner
 
-	// SSE connections by user ID
+	// SSE connections by session ID (from cookie)
 	clients   map[string]*SSEClient
 	clientsMu sync.RWMutex
 }
@@ -28,9 +28,11 @@ type GatewayRunner interface {
 
 // SSEClient represents a connected SSE client
 type SSEClient struct {
-	UserID string
-	Events chan SSEEvent
-	Done   chan struct{}
+	SessionID string          // Unique session ID from cookie
+	UserID    string          // User who owns this session
+	User      *user.User      // Full user object
+	Events    chan SSEEvent
+	Done      chan struct{}
 }
 
 // SSEEvent represents an event to send via SSE
@@ -79,13 +81,16 @@ func (c *HTTPChannel) Send(ctx context.Context, msg string) error {
 	return nil
 }
 
-// SendMirror sends a mirrored conversation (for owner)
+// SendMirror sends a mirrored conversation to all owner sessions
 func (c *HTTPChannel) SendMirror(ctx context.Context, source, userMsg, response string) error {
 	c.clientsMu.RLock()
 	defer c.clientsMu.RUnlock()
 
-	// Send mirror event to all connected clients (owner only uses HTTP for now)
+	// Send mirror event to all connected owner sessions
 	for _, client := range c.clients {
+		if client.User == nil || !client.User.IsOwner() {
+			continue
+		}
 		select {
 		case client.Events <- SSEEvent{
 			Event: "mirror",
@@ -97,6 +102,7 @@ func (c *HTTPChannel) SendMirror(ctx context.Context, source, userMsg, response 
 		}:
 		default:
 			// Client buffer full, skip
+			L_warn("http: mirror event dropped (buffer full)", "session", client.SessionID)
 		}
 	}
 	return nil
@@ -107,53 +113,59 @@ func (c *HTTPChannel) HasUser(u *user.User) bool {
 	return u != nil && u.HasHTTPAuth()
 }
 
-// RegisterClient registers an SSE client
-func (c *HTTPChannel) RegisterClient(userID string) *SSEClient {
+// RegisterClient registers an SSE client by session ID
+func (c *HTTPChannel) RegisterClient(sessionID string, u *user.User) *SSEClient {
 	c.clientsMu.Lock()
 	defer c.clientsMu.Unlock()
 
-	// Close existing client if any (new connection supersedes old)
-	if existing, ok := c.clients[userID]; ok {
+	// Close existing client for this session if any (page refresh)
+	if existing, ok := c.clients[sessionID]; ok {
 		close(existing.Done)
-		L_debug("http: SSE client superseded", "user", userID)
+		L_debug("http: SSE client replaced (same session)", "session", sessionID)
 	}
 
 	client := &SSEClient{
-		UserID: userID,
-		Events: make(chan SSEEvent, 100), // Buffer for events
-		Done:   make(chan struct{}),
+		SessionID: sessionID,
+		UserID:    u.ID,
+		User:      u,
+		Events:    make(chan SSEEvent, 100), // Buffer for events
+		Done:      make(chan struct{}),
 	}
-	c.clients[userID] = client
+	c.clients[sessionID] = client
 
-	L_debug("http: SSE client registered", "user", userID)
+	L_debug("http: SSE client registered", "session", sessionID, "user", u.ID)
 	return client
 }
 
-// UnregisterClient removes an SSE client (only if it's the same instance)
-func (c *HTTPChannel) UnregisterClient(userID string, client *SSEClient) {
+// UnregisterClient removes an SSE client
+func (c *HTTPChannel) UnregisterClient(sessionID string, client *SSEClient) {
 	c.clientsMu.Lock()
 	defer c.clientsMu.Unlock()
 
-	// Only remove if this is still the registered client (not superseded by a new one)
-	if current, ok := c.clients[userID]; ok && current == client {
-		delete(c.clients, userID)
-		L_debug("http: SSE client unregistered", "user", userID)
+	// Only remove if this is still the registered client
+	if current, ok := c.clients[sessionID]; ok && current == client {
+		delete(c.clients, sessionID)
+		L_debug("http: SSE client unregistered", "session", sessionID, "user", client.UserID)
 	}
 }
 
+// GetClient returns the SSE client for a session
+func (c *HTTPChannel) GetClient(sessionID string) *SSEClient {
+	c.clientsMu.RLock()
+	defer c.clientsMu.RUnlock()
+	return c.clients[sessionID]
+}
+
 // RunAgentRequest runs an agent request and streams events to the client
-func (c *HTTPChannel) RunAgentRequest(ctx context.Context, u *user.User, message string) error {
+func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *user.User, message string) error {
 	if c.gateway == nil {
 		return fmt.Errorf("gateway not configured")
 	}
 
-	// Get the SSE client for this user
-	c.clientsMu.RLock()
-	client, ok := c.clients[u.ID]
-	c.clientsMu.RUnlock()
-
-	if !ok {
-		return fmt.Errorf("no SSE client for user %s", u.ID)
+	// Get the SSE client for this session
+	client := c.GetClient(sessionID)
+	if client == nil {
+		return fmt.Errorf("no SSE client for session %s", sessionID)
 	}
 
 	// Create agent request
@@ -192,13 +204,17 @@ func (c *HTTPChannel) RunAgentRequest(ctx context.Context, u *user.User, message
 			if sseEvent != nil {
 				select {
 				case client.Events <- *sseEvent:
+					L_debug("http: SSE event sent", "event", sseEvent.Event, "session", sessionID[:8]+"...")
 				case <-client.Done:
+					L_debug("http: SSE event dropped (client done)", "session", sessionID[:8]+"...")
 					return
-				case <-ctx.Done():
+				case <-agentCtx.Done():
+					L_debug("http: SSE event dropped (agent canceled)", "session", sessionID[:8]+"...")
 					return
 				}
 			}
 		}
+		L_debug("http: SSE event stream ended", "session", sessionID[:8]+"...")
 	}()
 
 	return nil
@@ -239,7 +255,7 @@ func (c *HTTPChannel) convertEvent(event gateway.AgentEvent) *SSEEvent {
 		}}
 
 	case gateway.EventAgentError:
-		return &SSEEvent{Event: "error", Data: map[string]string{
+		return &SSEEvent{Event: "agent_error", Data: map[string]string{
 			"runId": e.RunID,
 			"error": e.Error,
 		}}

@@ -25,6 +25,9 @@
 <script>
 $(document).ready(function() {
     var eventSource = null;
+    var reconnectTimer = null;
+    var currentRunId = null;
+    var $currentBubble = null;
     var $messages = $('#chat-messages');
     var $input = $('#message-input');
     var $sendBtn = $('#send-btn');
@@ -32,41 +35,79 @@ $(document).ready(function() {
 
     // Connect to SSE
     function connect() {
+        // Close existing connection if any
+        if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+        }
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+        
         $status.text('Connecting...').removeClass('bg-success bg-danger').addClass('bg-secondary');
         
         eventSource = new EventSource('/api/events');
         
         eventSource.addEventListener('connected', function(e) {
             $status.text('Connected').removeClass('bg-secondary bg-danger').addClass('bg-success');
-            console.log('SSE connected:', JSON.parse(e.data));
+        });
+        
+        eventSource.addEventListener('start', function(e) {
+            var data = JSON.parse(e.data);
+            currentRunId = data.RunID;
+            // Create new bubble for this response
+            var $msg = $('<div class="message assistant"><div class="bubble"></div></div>');
+            $currentBubble = $msg.find('.bubble');
+            $messages.append($msg);
+            showTypingIndicator();
         });
         
         eventSource.addEventListener('message', function(e) {
             var data = JSON.parse(e.data);
-            appendMessage('assistant', data.content);
-        });
-        
-        eventSource.addEventListener('typing', function(e) {
-            showTypingIndicator();
+            hideTypingIndicator();
+            // Append delta to current bubble
+            if ($currentBubble) {
+                $currentBubble.text($currentBubble.text() + data.content);
+                $messages.scrollTop($messages[0].scrollHeight);
+            }
         });
         
         eventSource.addEventListener('done', function(e) {
             hideTypingIndicator();
+            currentRunId = null;
+            $currentBubble = null;
         });
         
-        eventSource.addEventListener('error', function(e) {
+        eventSource.addEventListener('mirror', function(e) {
             var data = JSON.parse(e.data);
-            appendMessage('error', 'Error: ' + data.message);
+            // Show mirrored conversation
+            appendMessage('mirror-user', '[' + data.source + '] ' + data.userMsg);
+            appendMessage('mirror-assistant', data.response);
+        });
+        
+        eventSource.addEventListener('agent_error', function(e) {
+            hideTypingIndicator();
+            var data = JSON.parse(e.data);
+            appendMessage('error', 'Error: ' + data.error);
+            currentRunId = null;
+            $currentBubble = null;
         });
         
         eventSource.onerror = function() {
             $status.text('Disconnected').removeClass('bg-success bg-secondary').addClass('bg-danger');
-            setTimeout(connect, 5000); // Reconnect after 5s
+            eventSource.close();
+            eventSource = null;
+            reconnectTimer = setTimeout(connect, 5000); // Reconnect after 5s
         };
     }
     
     function appendMessage(role, content) {
-        var roleClass = role === 'user' ? 'user' : 'assistant';
+        var roleClass = 'assistant';
+        if (role === 'user') roleClass = 'user';
+        else if (role === 'error') roleClass = 'error';
+        else if (role.startsWith('mirror-')) roleClass = 'mirror ' + role;
+        
         var $msg = $('<div class="message ' + roleClass + '">' +
             '<div class="bubble"></div>' +
             '</div>');

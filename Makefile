@@ -25,7 +25,7 @@ tui: build
 
 
 debug: build
-	./$(BINARY) -d gateway
+	./$(BINARY) -d gateway --dev
 
 trace: build
 	./$(BINARY) -t gateway

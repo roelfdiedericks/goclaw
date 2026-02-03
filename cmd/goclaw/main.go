@@ -13,10 +13,12 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/sevlyar/go-daemon"
+	"golang.org/x/term"
 
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
+	goclawhttp "github.com/roelfdiedericks/goclaw/internal/http"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/telegram"
@@ -50,15 +52,17 @@ type CLI struct {
 	Status  StatusCmd  `cmd:"" help:"Show gateway status"`
 	Version VersionCmd `cmd:"" help:"Show version"`
 	Cron    CronCmd    `cmd:"" help:"Manage cron jobs"`
+	User    UserCmd    `cmd:"" help:"Manage users"`
 }
 
 // GatewayCmd runs gateway in foreground
 type GatewayCmd struct {
 	TUI bool `help:"Run with interactive TUI" short:"i"`
+	Dev bool `help:"Development mode: reload HTML templates from disk on each request"`
 }
 
 func (g *GatewayCmd) Run(ctx *Context) error {
-	return runGateway(ctx, g.TUI)
+	return runGateway(ctx, g.TUI, g.Dev)
 }
 
 // StartCmd daemonizes the gateway
@@ -93,7 +97,7 @@ func (s *StartCmd) Run(ctx *Context) error {
 	defer cntxt.Release()
 
 	L_info("daemon started", "pid", os.Getpid())
-	return runGateway(ctx, false)
+	return runGateway(ctx, false, false) // daemon never uses TUI or dev mode
 }
 
 // StopCmd stops the daemon
@@ -404,6 +408,223 @@ func formatCronSchedule(s *cron.Schedule) string {
 	}
 }
 
+// UserCmd manages users
+type UserCmd struct {
+	Add         UserAddCmd         `cmd:"" help:"Add a new user"`
+	List        UserListCmd        `cmd:"" help:"List all users"`
+	Delete      UserDeleteCmd      `cmd:"" help:"Delete a user"`
+	SetTelegram UserTelegramCmd    `cmd:"set-telegram" help:"Set Telegram ID"`
+	SetPassword UserPasswordCmd    `cmd:"set-password" help:"Set HTTP password"`
+}
+
+// UserAddCmd adds a new user
+type UserAddCmd struct {
+	Username string `arg:"" help:"Username (lowercase, alphanumeric + underscore, starts with letter)"`
+	Name     string `help:"Display name" required:""`
+	Role     string `help:"Role: 'owner' (full access) or 'user' (limited)" default:"user" enum:"owner,user"`
+}
+
+func (u *UserAddCmd) Run(ctx *Context) error {
+	// Validate username
+	if err := config.ValidateUsername(u.Username); err != nil {
+		return err
+	}
+
+	// Load existing users
+	users, err := config.LoadUsers()
+	if err != nil {
+		return fmt.Errorf("failed to load users: %w", err)
+	}
+
+	// Check if user already exists
+	if _, exists := users[u.Username]; exists {
+		return fmt.Errorf("user %q already exists", u.Username)
+	}
+
+	// Add new user
+	users[u.Username] = &config.UserEntry{
+		Name: u.Name,
+		Role: u.Role,
+	}
+
+	// Save
+	path := config.GetUsersFilePath()
+	if err := config.SaveUsers(users, path); err != nil {
+		return err
+	}
+
+	fmt.Printf("User %q added. Use 'goclaw user set-telegram' or 'goclaw user set-http' to add credentials.\n", u.Username)
+	return nil
+}
+
+// UserListCmd lists all users
+type UserListCmd struct{}
+
+func (u *UserListCmd) Run(ctx *Context) error {
+	users, err := config.LoadUsers()
+	if err != nil {
+		return fmt.Errorf("failed to load users: %w", err)
+	}
+
+	if len(users) == 0 {
+		fmt.Println("No users configured.")
+		return nil
+	}
+
+	fmt.Printf("Found %d user(s):\n\n", len(users))
+	for username, entry := range users {
+		fmt.Printf("%s (%s)\n", username, entry.Role)
+		fmt.Printf("  Name: %s\n", entry.Name)
+		if entry.TelegramID != "" {
+			fmt.Printf("  Telegram: %s\n", entry.TelegramID)
+		}
+		if entry.HTTPPasswordHash != "" {
+			fmt.Printf("  HTTP: configured\n")
+		}
+		fmt.Println()
+	}
+	return nil
+}
+
+// UserTelegramCmd sets a user's Telegram ID
+type UserTelegramCmd struct {
+	Username   string `arg:"" help:"Username"`
+	TelegramID string `arg:"" help:"Telegram user ID (numeric)"`
+}
+
+func (u *UserTelegramCmd) Run(ctx *Context) error {
+	users, err := config.LoadUsers()
+	if err != nil {
+		return fmt.Errorf("failed to load users: %w", err)
+	}
+
+	entry, exists := users[u.Username]
+	if !exists {
+		return fmt.Errorf("user %q not found", u.Username)
+	}
+
+	entry.TelegramID = u.TelegramID
+
+	path := config.GetUsersFilePath()
+	if err := config.SaveUsers(users, path); err != nil {
+		return err
+	}
+
+	fmt.Printf("Telegram ID set for user %q.\n", u.Username)
+	return nil
+}
+
+// UserPasswordCmd sets a user's HTTP password
+type UserPasswordCmd struct {
+	Username string `arg:"" help:"Username"`
+	Password string `arg:"" optional:"" help:"Password (omit to prompt interactively)"`
+}
+
+func (u *UserPasswordCmd) Run(ctx *Context) error {
+	users, err := config.LoadUsers()
+	if err != nil {
+		return fmt.Errorf("failed to load users: %w", err)
+	}
+
+	entry, exists := users[u.Username]
+	if !exists {
+		return fmt.Errorf("user %q not found", u.Username)
+	}
+
+	password := u.Password
+	if password == "" {
+		// Prompt for password interactively (hidden input)
+		fmt.Print("Enter HTTP password: ")
+		pwBytes, err := readPassword()
+		if err != nil {
+			return fmt.Errorf("failed to read password: %w", err)
+		}
+		fmt.Println() // newline after hidden input
+		password = string(pwBytes)
+		if password == "" {
+			return fmt.Errorf("password cannot be empty")
+		}
+
+		fmt.Print("Confirm password: ")
+		confirmBytes, err := readPassword()
+		if err != nil {
+			return fmt.Errorf("failed to read password: %w", err)
+		}
+		fmt.Println() // newline after hidden input
+		if password != string(confirmBytes) {
+			return fmt.Errorf("passwords do not match")
+		}
+	}
+
+	// Hash password
+	hash, err := user.HashPassword(password)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	entry.HTTPPasswordHash = hash
+
+	path := config.GetUsersFilePath()
+	if err := config.SaveUsers(users, path); err != nil {
+		return err
+	}
+
+	fmt.Printf("HTTP password set for user %q.\n", u.Username)
+	return nil
+}
+
+// UserDeleteCmd deletes a user
+type UserDeleteCmd struct {
+	Username string `arg:"" help:"Username to delete"`
+	Force    bool   `help:"Force deletion even if user is owner"`
+	Purge    bool   `help:"Also delete user's session data (irreversible)"`
+}
+
+func (u *UserDeleteCmd) Run(ctx *Context) error {
+	users, err := config.LoadUsers()
+	if err != nil {
+		return fmt.Errorf("failed to load users: %w", err)
+	}
+
+	entry, exists := users[u.Username]
+	if !exists {
+		return fmt.Errorf("user %q not found", u.Username)
+	}
+
+	// Check if owner
+	if entry.Role == "owner" && !u.Force {
+		return fmt.Errorf("cannot delete owner without --force flag")
+	}
+
+	// Confirm deletion
+	fmt.Printf("Delete user %q? [y/N]: ", u.Username)
+	var confirm string
+	fmt.Scanln(&confirm)
+	if confirm != "y" && confirm != "Y" {
+		fmt.Println("Cancelled.")
+		return nil
+	}
+
+	// Delete user
+	delete(users, u.Username)
+
+	path := config.GetUsersFilePath()
+	if err := config.SaveUsers(users, path); err != nil {
+		return err
+	}
+
+	fmt.Printf("User %q deleted.\n", u.Username)
+
+	if u.Purge {
+		// TODO: Delete session data from SQLite
+		fmt.Println("Note: Session data purging not yet implemented.")
+	} else {
+		fmt.Println("Session data preserved. Use --purge to delete (irreversible).")
+	}
+
+	return nil
+}
+
 // Context passed to all commands
 type Context struct {
 	Debug  bool
@@ -412,7 +633,7 @@ type Context struct {
 }
 
 // runGateway is the actual gateway logic
-func runGateway(ctx *Context, useTUI bool) error {
+func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	L_info("starting gateway", "version", version)
 
 	// Load config
@@ -421,10 +642,17 @@ func runGateway(ctx *Context, useTUI bool) error {
 		L_error("failed to load config", "error", err)
 		return err
 	}
-	L_debug("config loaded", "users", len(cfg.Users))
+	L_debug("config loaded")
 
-	// Create user registry
-	users := user.NewRegistry(cfg)
+	// Load users from users.json (new format)
+	usersConfig, err := config.LoadUsers()
+	if err != nil {
+		L_error("failed to load users", "error", err)
+		return err
+	}
+
+	// Create user registry from users.json
+	users := user.NewRegistryFromUsers(usersConfig)
 	L_debug("user registry created", "users", users.Count())
 
 	// Create LLM client
@@ -588,6 +816,41 @@ func runGateway(ctx *Context, useTUI bool) error {
 		L_debug("message tool registered", "channels", len(messageChannels))
 	}
 
+	// Start HTTP server if configured (enabled by default if users have HTTP credentials)
+	var httpServer *goclawhttp.Server
+	httpEnabled := cfg.HTTP.Enabled == nil || *cfg.HTTP.Enabled // default true
+	if httpEnabled {
+		listen := cfg.HTTP.Listen
+		if listen == "" {
+			listen = ":1337"
+		}
+		httpCfg := &goclawhttp.ServerConfig{
+			Listen:  listen,
+			DevMode: devMode,
+		}
+		var err error
+		httpServer, err = goclawhttp.NewServer(httpCfg, users)
+		if err != nil {
+			// Warn so it's obvious why HTTP isn't available
+			L_warn("http: not starting (use 'goclaw user set-password <username>' to enable)")
+		} else {
+			httpServer.SetGateway(gw)
+			gw.RegisterChannel(httpServer.Channel())
+			if err := httpServer.Start(); err != nil {
+				L_error("http: server start failed", "error", err)
+				httpServer = nil
+			} else {
+				if devMode {
+					L_info("http: server started (dev mode)", "listen", listen)
+				} else {
+					L_info("http: server started", "listen", listen)
+				}
+			}
+		}
+	} else {
+		L_info("http: disabled in config")
+	}
+
 	// Start cron service AFTER channels are registered
 	if cfg.Cron.Enabled {
 		if err := gw.StartCron(runCtx); err != nil {
@@ -602,7 +865,7 @@ func runGateway(ctx *Context, useTUI bool) error {
 	}
 
 	// Non-TUI mode: just wait for signals
-	L_info("gateway ready", "port", cfg.Gateway.Port)
+	L_info("gateway ready")
 	L_info("press Ctrl+C to stop")
 
 	<-runCtx.Done()
@@ -614,6 +877,13 @@ func runGateway(ctx *Context, useTUI bool) error {
 		telegramBot.Stop()
 	}
 	telegramBotMu.Unlock()
+
+	// Stop HTTP server if running
+	if httpServer != nil {
+		if err := httpServer.Stop(); err != nil {
+			L_error("http: shutdown error", "error", err)
+		}
+	}
 
 	return nil
 }
@@ -690,4 +960,16 @@ func main() {
 	if err != nil {
 		L_fatal("command failed", "error", err)
 	}
+}
+
+// readPassword reads a password from stdin without echoing
+func readPassword() ([]byte, error) {
+	fd := int(os.Stdin.Fd())
+	if term.IsTerminal(fd) {
+		return term.ReadPassword(fd)
+	}
+	// Fallback for non-terminal (piped input)
+	var password string
+	fmt.Scanln(&password)
+	return []byte(password), nil
 }
