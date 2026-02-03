@@ -16,10 +16,18 @@
                 <!-- Messages will be inserted here -->
             </div>
             <div class="card-footer">
-                <form id="chat-form" class="d-flex gap-2">
-                    <input type="text" id="message-input" class="form-control" placeholder="Type a message..." autocomplete="off">
+                <div id="image-preview" class="image-preview-container" style="display: none;">
+                    <div class="image-preview-item">
+                        <img id="preview-img" src="" alt="Preview">
+                        <button type="button" class="btn-close-preview" id="remove-image" title="Remove image">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </div>
+                </div>
+                <form id="chat-form" class="d-flex gap-2 align-items-end">
+                    <textarea id="message-input" class="form-control" placeholder="Type a message... (Shift+Enter for newline)" autocomplete="off" rows="1" style="resize: none; max-height: 150px; overflow-y: auto;"></textarea>
                     <button type="submit" class="btn btn-primary" id="send-btn">
-                        <i class="bi bi-send"></i> Send
+                        <i class="bi bi-send"></i>
                     </button>
                 </form>
             </div>
@@ -33,12 +41,37 @@ $(document).ready(function() {
     var reconnectTimer = null;
     var currentRunId = null;
     var $currentBubble = null;
+    var currentRawText = ''; // Accumulate raw text for markdown rendering
     var $messages = $('#chat-messages');
     var $input = $('#message-input');
     var $sendBtn = $('#send-btn');
     var $status = $('#connection-status');
     var STORAGE_KEY = 'goclaw_chat_history';
     var MAX_MESSAGES = 100; // Keep last 100 messages
+    var pendingImage = null; // { data: base64, mimeType: string, dataUrl: string }
+    var typingTimeout = null; // For hiding typing indicator after inactivity
+    var TYPING_TIMEOUT_MS = 5000; // Hide typing after 5s of no stream data
+    
+    // Configure marked.js with highlight.js
+    marked.setOptions({
+        highlight: function(code, lang) {
+            if (lang && hljs.getLanguage(lang)) {
+                try {
+                    return hljs.highlight(code, { language: lang }).value;
+                } catch (e) {}
+            }
+            return code; // Use plain text if language not found
+        },
+        breaks: true, // Convert \n to <br>
+        gfm: true // GitHub Flavored Markdown
+    });
+    
+    // Render markdown safely
+    function renderMarkdown(text) {
+        if (!text) return '';
+        var html = marked.parse(text);
+        return DOMPurify.sanitize(html);
+    }
 
     // Load chat history from localStorage
     function loadHistory() {
@@ -64,9 +97,13 @@ $(document).ready(function() {
                 else if ($msg.hasClass('error')) role = 'error';
                 else if ($msg.hasClass('mirror-user')) role = 'mirror-user';
                 else if ($msg.hasClass('mirror-assistant')) role = 'mirror-assistant';
+                // Get raw text content (strip HTML for storage)
+                var content = $msg.find('.bubble').text();
+                // Also store raw content in data attribute for markdown messages
+                var rawContent = $msg.data('raw-content');
                 messages.push({
                     role: role,
-                    content: $msg.find('.bubble').text()
+                    content: rawContent || content
                 });
             });
             // Keep only last MAX_MESSAGES
@@ -86,7 +123,7 @@ $(document).ready(function() {
     }
 
     // Render a message (without saving - used for loading history)
-    function renderMessage(role, content, save) {
+    function renderMessage(role, content, save, imageUrl) {
         var roleClass = 'assistant';
         if (role === 'user') roleClass = 'user';
         else if (role === 'error') roleClass = 'error';
@@ -95,7 +132,25 @@ $(document).ready(function() {
         var $msg = $('<div class="message ' + roleClass + '">' +
             '<div class="bubble"></div>' +
             '</div>');
-        $msg.find('.bubble').text(content);
+        
+        // Store raw content for history saving
+        $msg.data('raw-content', content);
+        
+        var $bubble = $msg.find('.bubble');
+        
+        // Add inline image if provided
+        if (imageUrl) {
+            $bubble.append('<img src="' + imageUrl + '" class="inline-image" style="max-width: 300px; max-height: 200px; border-radius: 0.5rem; display: block; margin-bottom: 0.5rem;">');
+        }
+        
+        // Render markdown for all messages (users can send code snippets too)
+        if (content) {
+            if (role === 'error') {
+                $bubble.append($('<span>').text(content));
+            } else {
+                $bubble.append(renderMarkdown(content));
+            }
+        }
         $messages.append($msg);
         
         if (save !== false) {
@@ -127,6 +182,7 @@ $(document).ready(function() {
         eventSource.addEventListener('start', function(e) {
             var data = JSON.parse(e.data);
             currentRunId = data.RunID;
+            currentRawText = ''; // Reset raw text accumulator
             // Create new bubble for this response
             var $msg = $('<div class="message assistant"><div class="bubble"></div></div>');
             $currentBubble = $msg.find('.bubble');
@@ -136,17 +192,28 @@ $(document).ready(function() {
         
         eventSource.addEventListener('message', function(e) {
             var data = JSON.parse(e.data);
-            hideTypingIndicator();
-            // Append delta to current bubble
+            // Show typing indicator and reset timeout on each stream chunk
+            showTypingIndicator();
+            resetTypingTimeout();
+            // Accumulate raw text and show as plain text while streaming
             if ($currentBubble) {
-                $currentBubble.text($currentBubble.text() + data.content);
+                currentRawText += data.content;
+                // Show plain text while streaming (faster, no re-parsing)
+                $currentBubble.text(currentRawText);
                 $messages.scrollTop($messages[0].scrollHeight);
             }
         });
         
         eventSource.addEventListener('done', function(e) {
+            clearTypingTimeout();
             hideTypingIndicator();
+            // Render final markdown and store raw content
+            if ($currentBubble && currentRawText) {
+                $currentBubble.html(renderMarkdown(currentRawText));
+                $currentBubble.closest('.message').data('raw-content', currentRawText);
+            }
             currentRunId = null;
+            currentRawText = '';
             $currentBubble = null;
             saveHistory(); // Save after response complete
         });
@@ -159,6 +226,7 @@ $(document).ready(function() {
         });
         
         eventSource.addEventListener('agent_error', function(e) {
+            clearTypingTimeout();
             hideTypingIndicator();
             var data = JSON.parse(e.data);
             appendMessage('error', 'Error: ' + data.error);
@@ -191,23 +259,30 @@ $(document).ready(function() {
             }
         });
         
-        eventSource.onerror = function() {
-            $status.text('Disconnected').removeClass('bg-success bg-secondary').addClass('bg-danger');
-            eventSource.close();
-            eventSource = null;
-            reconnectTimer = setTimeout(connect, 5000); // Reconnect after 5s
+        eventSource.onerror = function(e) {
+            // EventSource has built-in reconnection - don't fight it
+            // readyState: 0=CONNECTING, 1=OPEN, 2=CLOSED
+            if (eventSource.readyState === EventSource.CONNECTING) {
+                // Auto-reconnecting - just show status
+                $status.text('Reconnecting...').removeClass('bg-success').addClass('bg-warning');
+            } else if (eventSource.readyState === EventSource.CLOSED) {
+                // Fully closed - need manual reconnect
+                $status.text('Disconnected').removeClass('bg-success bg-warning').addClass('bg-danger');
+                eventSource = null;
+                reconnectTimer = setTimeout(connect, 3000);
+            }
         };
     }
     
-    function appendMessage(role, content) {
-        renderMessage(role, content, true);
+    function appendMessage(role, content, imageUrl) {
+        renderMessage(role, content, true, imageUrl);
         $messages.scrollTop($messages[0].scrollHeight);
     }
     
     function showTypingIndicator() {
         if ($('#typing-indicator').length === 0) {
             $messages.append('<div id="typing-indicator" class="typing-indicator">' +
-                '<i class="bi bi-three-dots"></i> Agent is typing...</div>');
+                '<span class="dots"><span></span><span></span><span></span></span> Agent is typing...</div>');
             $messages.scrollTop($messages[0].scrollHeight);
         }
     }
@@ -216,15 +291,62 @@ $(document).ready(function() {
         $('#typing-indicator').remove();
     }
     
+    function resetTypingTimeout() {
+        clearTypingTimeout();
+        typingTimeout = setTimeout(function() {
+            hideTypingIndicator();
+        }, TYPING_TIMEOUT_MS);
+    }
+    
+    function clearTypingTimeout() {
+        if (typingTimeout) {
+            clearTimeout(typingTimeout);
+            typingTimeout = null;
+        }
+    }
+    
+    // Keyboard handling for textarea
+    $input.on('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            // Enter without Shift = submit
+            e.preventDefault();
+            $('#chat-form').submit();
+        }
+        // Shift+Enter = default behavior (newline)
+    });
+    
+    // Auto-resize textarea
+    $input.on('input', function() {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+    });
+    
     // Send message
     $('#chat-form').on('submit', function(e) {
         e.preventDefault();
         var message = $input.val().trim();
-        if (!message) return;
         
-        // Show user message immediately
-        appendMessage('user', message);
+        // Need either message or image
+        if (!message && !pendingImage) return;
+        
+        // Show user message immediately with inline image if present
+        var imageUrl = pendingImage ? pendingImage.dataUrl : null;
+        appendMessage('user', message, imageUrl);
+        
+        // Build request payload
+        var payload = { message: message || '' };
+        if (pendingImage) {
+            payload.images = [{
+                data: pendingImage.data,
+                mimeType: pendingImage.mimeType
+            }];
+        }
+        
+        // Clear input and image, reset height
         $input.val('');
+        $input.css('height', 'auto');
+        pendingImage = null;
+        $('#image-preview').hide();
         $sendBtn.prop('disabled', true);
         
         // Send to API
@@ -232,7 +354,7 @@ $(document).ready(function() {
             url: '/api/send',
             method: 'POST',
             contentType: 'application/json',
-            data: JSON.stringify({ message: message }),
+            data: JSON.stringify(payload),
             success: function(data) {
                 console.log('Message sent:', data);
             },
@@ -251,6 +373,54 @@ $(document).ready(function() {
         if (confirm('Clear chat history?')) {
             clearHistory();
         }
+    });
+    
+    // Paste handler for images
+    $(document).on('paste', function(e) {
+        var clipboardData = e.originalEvent.clipboardData;
+        if (!clipboardData || !clipboardData.items) return;
+        
+        for (var i = 0; i < clipboardData.items.length; i++) {
+            var item = clipboardData.items[i];
+            if (item.type.indexOf('image') !== -1) {
+                e.preventDefault();
+                var file = item.getAsFile();
+                if (file) {
+                    handleImageFile(file);
+                }
+                return;
+            }
+        }
+    });
+    
+    // Handle dropped/pasted image file
+    function handleImageFile(file) {
+        var reader = new FileReader();
+        reader.onload = function(e) {
+            var dataUrl = e.target.result;
+            // Extract base64 and mime type
+            var matches = dataUrl.match(/^data:(.+);base64,(.+)$/);
+            if (matches) {
+                pendingImage = {
+                    data: matches[2],
+                    mimeType: matches[1],
+                    dataUrl: dataUrl
+                };
+                // Show preview
+                $('#preview-img').attr('src', dataUrl);
+                $('#image-preview').show();
+                $input.focus();
+            }
+        };
+        reader.readAsDataURL(file);
+    }
+    
+    // Remove pending image
+    $('#remove-image').on('click', function() {
+        pendingImage = null;
+        $('#image-preview').hide();
+        $('#preview-img').attr('src', '');
+        $input.focus();
     });
 
     // Load history and start connection
