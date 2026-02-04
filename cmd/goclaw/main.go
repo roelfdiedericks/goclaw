@@ -708,6 +708,8 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		} else {
 			defer browserPool.Close()
 		}
+	} else {
+		L_info("browser: disabled by configuration")
 	}
 
 	// Create tool registry and register base defaults (no media-dependent tools yet)
@@ -751,29 +753,33 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 
 	// Initialize transcript manager (needs SQLite DB from session store)
 	var transcriptMgr *transcript.Manager
-	if db := gw.SessionDB(); db != nil {
-		// Get embedding provider from memory manager if available
-		var embeddingProvider memory.EmbeddingProvider
-		if memMgr := gw.MemoryManager(); memMgr != nil {
-			embeddingProvider = memMgr.Provider()
-		}
-
-		var err error
-		transcriptMgr, err = transcript.NewManager(db, embeddingProvider, cfg.Transcript)
-		if err != nil {
-			L_warn("transcript: failed to initialize manager", "error", err)
-		} else {
-			// Set agent name for transcript labels
-			if cfg.Agent.Name != "" {
-				transcriptMgr.SetAgentName(cfg.Agent.Name)
+	if cfg.Transcript.Enabled {
+		if db := gw.SessionDB(); db != nil {
+			// Get embedding provider from memory manager if available
+			var embeddingProvider memory.EmbeddingProvider
+			if memMgr := gw.MemoryManager(); memMgr != nil {
+				embeddingProvider = memMgr.Provider()
 			}
-			transcriptMgr.Start()
-			defer transcriptMgr.Stop()
-			toolsReg.Register(tools.NewTranscriptTool(transcriptMgr))
-			L_info("transcript: manager started and tool registered")
+
+			var err error
+			transcriptMgr, err = transcript.NewManager(db, embeddingProvider, cfg.Transcript)
+			if err != nil {
+				L_warn("transcript: failed to initialize manager", "error", err)
+			} else {
+				// Set agent name for transcript labels
+				if cfg.Agent.Name != "" {
+					transcriptMgr.SetAgentName(cfg.Agent.Name)
+				}
+				transcriptMgr.Start()
+				defer transcriptMgr.Stop()
+				toolsReg.Register(tools.NewTranscriptTool(transcriptMgr))
+				L_info("transcript: manager started and tool registered")
+			}
+		} else {
+			L_debug("transcript: skipped (no SQLite store)")
 		}
 	} else {
-		L_debug("transcript: skipped (no SQLite store)")
+		L_info("transcript: disabled by configuration")
 	}
 
 	// Setup context with cancellation for graceful shutdown
@@ -864,7 +870,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 			}()
 		}
 	} else {
-		L_debug("telegram not enabled or no token configured")
+		L_info("telegram: disabled by configuration")
 	}
 
 	// Start HTTP server if configured (enabled by default if users have HTTP credentials)
@@ -932,6 +938,8 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		if err := gw.StartCron(runCtx); err != nil {
 			L_error("cron: failed to start service", "error", err)
 		}
+	} else {
+		L_info("cron: disabled by configuration")
 	}
 
 	if useTUI {

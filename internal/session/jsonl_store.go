@@ -454,6 +454,11 @@ func (s *JSONLStore) GetPreviousCompaction(ctx context.Context, sessionKey strin
 	return nil, fmt.Errorf("GetPreviousCompaction not supported by JSONL store")
 }
 
+// DeleteOrphanedToolMessages is not supported by JSONL store
+func (s *JSONLStore) DeleteOrphanedToolMessages(ctx context.Context, sessionKey string) (int, error) {
+	return 0, fmt.Errorf("DeleteOrphanedToolMessages not supported by JSONL store")
+}
+
 // Close is a no-op for JSONL store (no persistent connections)
 func (s *JSONLStore) Close() error {
 	L_debug("jsonl_store: closed")

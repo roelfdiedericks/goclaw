@@ -11,6 +11,7 @@ type SessionProvider interface {
 	GetSessionInfoForCommands(ctx context.Context, sessionKey string) (*SessionInfo, error)
 	ForceCompact(ctx context.Context, sessionKey string) (*session.CompactionResult, error)
 	ResetSession(sessionKey string) error
+	CleanOrphanedToolMessages(ctx context.Context, sessionKey string) (int, error)
 	GetCompactionStatus(ctx context.Context) session.CompactionStatus
 	GetSkillsStatusSection() string
 	GetSkillsListForCommand() *SkillsListResult
