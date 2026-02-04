@@ -163,6 +163,10 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to load cron jobs: %w", err)
 	}
 
+	// Clear stale running state from previous process
+	// Any jobs marked as "running" are orphaned - the previous process died
+	s.clearOrphanedRunningState()
+
 	// Set up file watcher on jobs.json
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -235,6 +239,30 @@ func (s *Service) IsRunning() bool {
 	return s.running
 }
 
+// clearOrphanedRunningState clears running state from jobs that were "running"
+// in a previous process. At startup, no jobs can actually be running.
+func (s *Service) clearOrphanedRunningState() {
+	jobs := s.store.GetAllJobs()
+	cleared := 0
+
+	for _, job := range jobs {
+		if job.IsRunning() {
+			L_warn("cron: clearing orphaned running state", "job", job.Name, "id", job.ID)
+			job.ClearRunning()
+			// Also clear NextRunAtMs - it will be recalculated by initializeNextRuns
+			job.SetNextRun(nil)
+			if err := s.store.UpdateJob(job); err != nil {
+				L_error("cron: failed to clear orphaned state", "job", job.Name, "error", err)
+			}
+			cleared++
+		}
+	}
+
+	if cleared > 0 {
+		L_info("cron: cleared orphaned running state", "count", cleared)
+	}
+}
+
 // initializeNextRuns calculates initial next run times for all enabled jobs.
 func (s *Service) initializeNextRuns() {
 	now := time.Now()
@@ -246,6 +274,13 @@ func (s *Service) initializeNextRuns() {
 	s.ignoreWatchUntil = time.Now().Add(500 * time.Millisecond)
 
 	for _, job := range jobs {
+		// Skip jobs that are currently running - don't reset their NextRunAtMs
+		// Otherwise we'd create a tight loop (job overdue but running)
+		if job.IsRunning() {
+			L_debug("cron: skipping running job during init", "job", job.Name)
+			continue
+		}
+
 		next, err := NextRunTime(job, now)
 		if err != nil {
 			L_error("cron: failed to calculate next run", "job", job.Name, "id", job.ID, "error", err)

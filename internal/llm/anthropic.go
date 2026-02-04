@@ -11,7 +11,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/roelfdiedericks/goclaw/internal/tools"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
@@ -184,7 +183,7 @@ func (c *AnthropicProvider) SimpleMessage(ctx context.Context, userMessage, syst
 func (c *AnthropicProvider) StreamMessage(
 	ctx context.Context,
 	messages []types.Message,
-	toolDefs []tools.ToolDefinition,
+	toolDefs []types.ToolDefinition,
 	systemPrompt string,
 	onDelta func(delta string),
 ) (*Response, error) {
@@ -447,7 +446,7 @@ func convertMessages(messages []types.Message) []anthropic.MessageParam {
 }
 
 // convertTools converts our tool definitions to Anthropic format
-func convertTools(defs []tools.ToolDefinition) []anthropic.ToolUnionParam {
+func convertTools(defs []types.ToolDefinition) []anthropic.ToolUnionParam {
 	result := make([]anthropic.ToolUnionParam, 0, len(defs))
 
 	for _, def := range defs {

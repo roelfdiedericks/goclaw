@@ -4,7 +4,13 @@ package tools
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
+
+// ToolDefinition is an alias to types.ToolDefinition for convenience.
+// The actual type lives in types package to break import cycles.
+type ToolDefinition = types.ToolDefinition
 
 // Tool is the interface that all tools must implement
 type Tool interface {
@@ -19,13 +25,6 @@ type Tool interface {
 
 	// Execute runs the tool with the given input
 	Execute(ctx context.Context, input json.RawMessage) (string, error)
-}
-
-// ToolDefinition is the format required by Anthropic's API
-type ToolDefinition struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"input_schema"`
 }
 
 // ToDefinition converts a Tool to the API format
