@@ -14,27 +14,25 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
-// EmbeddingProviderResolver is a function that returns the current best embedding provider.
-// Used for lazy resolution - called when embeddings are needed, not at startup.
-type EmbeddingProviderResolver func() EmbeddingProvider
+// Global embedding provider getter - set once at startup.
+// Can't use llm.GetRegistry() directly due to import cycle (memory→llm→tools→memory)
+var GetEmbeddingProvider func() EmbeddingProvider
 
 // Manager coordinates memory indexing and search
 type Manager struct {
-	db               *sql.DB
-	indexer          *Indexer
-	provider         EmbeddingProvider
-	providerResolver EmbeddingProviderResolver
-	workspaceDir     string
-	config           config.MemorySearchConfig
+	db           *sql.DB
+	indexer      *Indexer
+	provider     EmbeddingProvider
+	workspaceDir string
+	config       config.MemorySearchConfig
 
 	mu     sync.RWMutex
 	closed bool
 }
 
 // NewManager creates a new memory manager
-// resolver is called lazily to get the embedding provider when needed.
-// If resolver is nil or returns nil, keyword-only search is used.
-func NewManager(cfg config.MemorySearchConfig, workspaceDir string, resolver EmbeddingProviderResolver) (*Manager, error) {
+// Uses the global GetEmbeddingProvider function for lazy provider resolution.
+func NewManager(cfg config.MemorySearchConfig, workspaceDir string) (*Manager, error) {
 	if !cfg.Enabled {
 		L_info("memory: disabled by configuration")
 		return nil, nil
@@ -63,24 +61,19 @@ func NewManager(cfg config.MemorySearchConfig, workspaceDir string, resolver Emb
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 
-	// Get initial provider (may be nil if not ready yet)
-	var provider EmbeddingProvider = &NoopProvider{}
-	if resolver != nil {
-		if p := resolver(); p != nil {
-			provider = p
-		}
-	}
+	// Start with NoopProvider - real provider will be resolved lazily
+	// when Provider() is called (via refreshProvider)
+	provider := &NoopProvider{}
 
 	// Create indexer with initial provider
 	indexer := NewIndexer(db, provider, workspaceDir, cfg.Paths)
 
 	m := &Manager{
-		db:               db,
-		indexer:          indexer,
-		provider:         provider,
-		providerResolver: resolver,
-		workspaceDir:     workspaceDir,
-		config:           cfg,
+		db:           db,
+		indexer:      indexer,
+		provider:     provider,
+		workspaceDir: workspaceDir,
+		config:       cfg,
 	}
 
 	L_info("memory: manager created", "dbPath", dbPath, "provider", provider.ID())
@@ -97,11 +90,11 @@ func (m *Manager) Provider() EmbeddingProvider {
 
 // refreshProvider checks if a better provider is available and updates if so.
 func (m *Manager) refreshProvider() {
-	if m.providerResolver == nil {
+	if GetEmbeddingProvider == nil {
 		return
 	}
 
-	newProvider := m.providerResolver()
+	newProvider := GetEmbeddingProvider()
 	if newProvider == nil {
 		return
 	}

@@ -1,6 +1,5 @@
 ---
-description: Ground rules for GoClaw development
-globs:
+description: 
 alwaysApply: true
 ---
 

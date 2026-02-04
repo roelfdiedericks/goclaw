@@ -151,8 +151,8 @@ func handleCompact(ctx context.Context, args *CommandArgs) *CommandResult {
 	sourceType := "LLM"
 	if result.FromCheckpoint {
 		sourceType = "checkpoint"
-	} else if result.EmergencyTruncation {
-		sourceType = "emergency truncation"
+	} else if result.Model == "pending" {
+		sourceType = "async (generating)"
 	} else if result.UsedFallback {
 		sourceType = "fallback"
 	}

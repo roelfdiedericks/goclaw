@@ -1,3 +1,8 @@
+---
+description: 
+alwaysApply: true
+---
+
 # GoClaw Development Guidelines
 
 ## Logging Standards

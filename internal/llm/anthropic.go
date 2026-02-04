@@ -11,8 +11,8 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
 // AnthropicProvider implements the Provider interface for Anthropic's Claude API.
@@ -151,7 +151,7 @@ func getModelContextWindow(_ string) int {
 // SimpleMessage sends a simple user message and returns the response text.
 // This is used for checkpoint/compaction summaries where we don't need tools.
 func (c *AnthropicProvider) SimpleMessage(ctx context.Context, userMessage, systemPrompt string) (string, error) {
-	messages := []session.Message{
+	messages := []types.Message{
 		{Role: "user", Content: userMessage},
 	}
 	
@@ -170,7 +170,7 @@ func (c *AnthropicProvider) SimpleMessage(ctx context.Context, userMessage, syst
 // onDelta is called for each text chunk received
 func (c *AnthropicProvider) StreamMessage(
 	ctx context.Context,
-	messages []session.Message,
+	messages []types.Message,
 	toolDefs []tools.ToolDefinition,
 	systemPrompt string,
 	onDelta func(delta string),
@@ -310,7 +310,7 @@ func (c *AnthropicProvider) StreamMessage(
 }
 
 // convertMessages converts session messages to Anthropic format
-func convertMessages(messages []session.Message) []anthropic.MessageParam {
+func convertMessages(messages []types.Message) []anthropic.MessageParam {
 	// First pass: collect tool_use and tool_result IDs
 	toolUseIDs := make(map[string]bool)
 	toolResultIDs := make(map[string]bool)
