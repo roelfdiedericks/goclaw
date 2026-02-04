@@ -61,6 +61,13 @@ func NewIndexer(db *sql.DB, provider EmbeddingProvider, workspaceDir string, ext
 	}
 }
 
+// SetProvider updates the embedding provider (e.g., when a better one becomes available)
+func (idx *Indexer) SetProvider(provider EmbeddingProvider) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	idx.provider = provider
+}
+
 // Start begins the background indexer goroutine
 func (idx *Indexer) Start() error {
 	L_info("memory: starting indexer", "workspace", idx.workspaceDir)

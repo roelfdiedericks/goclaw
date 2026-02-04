@@ -10,18 +10,20 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
 )
 
-// Client wraps the Anthropic API client
-type Client struct {
+// AnthropicProvider implements the Provider interface for Anthropic's Claude API.
+// Supports streaming, native tool calling, and prompt caching.
+type AnthropicProvider struct {
+	name          string // Provider instance name (e.g., "anthropic")
 	client        *anthropic.Client
 	model         string
 	maxTokens     int
 	promptCaching bool
+	apiKey        string // Stored for cloning
 }
 
 // Response represents the LLM response
@@ -43,72 +45,99 @@ func (r *Response) HasToolUse() bool {
 	return r.ToolName != ""
 }
 
-// NewClient creates a new Anthropic client
-func NewClient(cfg *config.LLMConfig) (*Client, error) {
+// Note: AnthropicProvider does not yet fully implement Provider interface.
+// StreamMessage signature needs to be updated. Legacy callers still work.
+// TODO: Complete Provider implementation by updating StreamMessage signature.
+
+// NewAnthropicProvider creates a new Anthropic provider from ProviderConfig.
+// This is the preferred constructor for the unified provider system.
+func NewAnthropicProvider(name string, cfg ProviderConfig) (*AnthropicProvider, error) {
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("anthropic API key not configured")
 	}
 
 	client := anthropic.NewClient(option.WithAPIKey(cfg.APIKey))
 
-	model := cfg.Model
-	if model == "" {
-		model = "claude-sonnet-4-20250514"
-	}
-
 	maxTokens := cfg.MaxTokens
 	if maxTokens == 0 {
 		maxTokens = 8192
 	}
 
-	L_debug("anthropic client created", "model", model, "maxTokens", maxTokens, "promptCaching", cfg.PromptCaching)
+	L_debug("anthropic provider created", "name", name, "maxTokens", maxTokens, "promptCaching", cfg.PromptCaching)
 
-	return &Client{
+	return &AnthropicProvider{
+		name:          name,
 		client:        &client,
-		model:         model,
+		model:         "", // Model set via WithModel()
 		maxTokens:     maxTokens,
 		promptCaching: cfg.PromptCaching,
+		apiKey:        cfg.APIKey,
 	}, nil
 }
 
-// NewClientWithModel creates a client using explicit API key and model.
-// Useful for creating fallback clients with different models.
-func NewClientWithModel(apiKey, model string, maxTokens int) (*Client, error) {
-	if apiKey == "" {
-		return nil, fmt.Errorf("anthropic API key not provided")
-	}
-	if model == "" {
-		return nil, fmt.Errorf("model not specified")
-	}
-	if maxTokens == 0 {
-		maxTokens = 4096 // Conservative default for summarization
-	}
+// Name returns the provider instance name
+func (p *AnthropicProvider) Name() string {
+	return p.name
+}
 
-	client := anthropic.NewClient(option.WithAPIKey(apiKey))
-
-	L_debug("anthropic fallback client created", "model", model, "maxTokens", maxTokens)
-
-	return &Client{
-		client:        &client,
-		model:         model,
-		maxTokens:     maxTokens,
-		promptCaching: false, // Fallback doesn't need caching
-	}, nil
+// Type returns the provider type
+func (p *AnthropicProvider) Type() string {
+	return "anthropic"
 }
 
 // Model returns the configured model name
-func (c *Client) Model() string {
-	return c.model
+func (p *AnthropicProvider) Model() string {
+	return p.model
 }
 
-// IsAvailable returns true if the client is configured and ready
-func (c *Client) IsAvailable() bool {
-	return c != nil && c.client != nil
+// WithModel returns a clone of the provider configured with a specific model
+// Note: Returns *AnthropicProvider until StreamMessage signature is updated to match Provider interface
+func (p *AnthropicProvider) WithModel(model string) *AnthropicProvider {
+	clone := *p
+	clone.model = model
+	return &clone
+}
+
+// WithMaxTokens returns a clone of the provider with a different output limit
+func (p *AnthropicProvider) WithMaxTokens(max int) *AnthropicProvider {
+	clone := *p
+	clone.maxTokens = max
+	return &clone
+}
+
+// IsAvailable returns true if the provider is configured and ready
+func (p *AnthropicProvider) IsAvailable() bool {
+	return p != nil && p.client != nil && p.model != ""
 }
 
 // ContextTokens returns the model's context window size in tokens
-func (c *Client) ContextTokens() int {
-	return getModelContextWindow(c.model)
+func (p *AnthropicProvider) ContextTokens() int {
+	return getModelContextWindow(p.model)
+}
+
+// MaxTokens returns the current output limit
+func (p *AnthropicProvider) MaxTokens() int {
+	return p.maxTokens
+}
+
+// Embed is not supported by Anthropic - returns error
+func (p *AnthropicProvider) Embed(ctx context.Context, text string) ([]float32, error) {
+	return nil, ErrNotSupported{Provider: "anthropic", Operation: "embeddings"}
+}
+
+// EmbedBatch is not supported by Anthropic - returns error
+func (p *AnthropicProvider) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	return nil, ErrNotSupported{Provider: "anthropic", Operation: "embeddings"}
+}
+
+// EmbeddingDimensions returns 0 - Anthropic doesn't support embeddings
+func (p *AnthropicProvider) EmbeddingDimensions() int {
+	return 0
+}
+
+// SupportsEmbeddings returns false - Anthropic doesn't support embeddings
+func (p *AnthropicProvider) SupportsEmbeddings() bool {
+	return false
 }
 
 // getModelContextWindow returns the context window size for a given model
@@ -121,7 +150,7 @@ func getModelContextWindow(_ string) int {
 
 // SimpleMessage sends a simple user message and returns the response text.
 // This is used for checkpoint/compaction summaries where we don't need tools.
-func (c *Client) SimpleMessage(ctx context.Context, userMessage, systemPrompt string) (string, error) {
+func (c *AnthropicProvider) SimpleMessage(ctx context.Context, userMessage, systemPrompt string) (string, error) {
 	messages := []session.Message{
 		{Role: "user", Content: userMessage},
 	}
@@ -139,13 +168,15 @@ func (c *Client) SimpleMessage(ctx context.Context, userMessage, systemPrompt st
 
 // StreamMessage sends a message to the LLM and streams the response
 // onDelta is called for each text chunk received
-func (c *Client) StreamMessage(
+func (c *AnthropicProvider) StreamMessage(
 	ctx context.Context,
 	messages []session.Message,
 	toolDefs []tools.ToolDefinition,
 	systemPrompt string,
 	onDelta func(delta string),
 ) (*Response, error) {
+	startTime := time.Now()
+	L_info("llm: request started", "provider", c.name, "model", c.model, "messages", len(messages), "tools", len(toolDefs))
 	L_debug("preparing LLM request", "messages", len(messages), "tools", len(toolDefs))
 
 	// Convert session messages to Anthropic format
@@ -260,8 +291,19 @@ func (c *Client) StreamMessage(
 			// Marshal the input back to JSON
 			inputBytes, _ := json.Marshal(variant.Input)
 			response.ToolInput = inputBytes
-			L_debug("tool use requested", "tool", variant.Name, "id", variant.ID)
+			L_info("llm: tool use", "tool", variant.Name, "id", variant.ID)
 		}
+	}
+
+	// Log request completion with timing and token stats
+	duration := time.Since(startTime)
+	if response.CacheReadTokens > 0 || response.CacheCreationTokens > 0 {
+		L_info("llm: request completed", "provider", c.name, "duration", duration.Round(time.Millisecond),
+			"inputTokens", response.InputTokens, "outputTokens", response.OutputTokens,
+			"cacheRead", response.CacheReadTokens, "cacheCreated", response.CacheCreationTokens)
+	} else {
+		L_info("llm: request completed", "provider", c.name, "duration", duration.Round(time.Millisecond),
+			"inputTokens", response.InputTokens, "outputTokens", response.OutputTokens)
 	}
 
 	return response, nil

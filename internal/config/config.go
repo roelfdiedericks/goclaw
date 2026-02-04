@@ -203,16 +203,9 @@ type TUIConfig struct {
 
 // MemorySearchConfig configures the memory search tool
 type MemorySearchConfig struct {
-	Enabled bool                     `json:"enabled"` // Enable memory search tools
-	Ollama  OllamaConfig             `json:"ollama"`  // Ollama embedding provider settings
-	Query   MemorySearchQueryConfig  `json:"query"`   // Search query settings
-	Paths   []string                 `json:"paths"`   // Additional paths to index (besides memory/ and MEMORY.md)
-}
-
-// OllamaConfig configures the Ollama embedding provider
-type OllamaConfig struct {
-	URL   string `json:"url"`   // Ollama API URL (e.g., "http://localhost:11434")
-	Model string `json:"model"` // Embedding model (e.g., "nomic-embed-text")
+	Enabled bool                    `json:"enabled"` // Enable memory search tools
+	Query   MemorySearchQueryConfig `json:"query"`   // Search query settings
+	Paths   []string                `json:"paths"`   // Additional paths to index (besides memory/ and MEMORY.md)
 }
 
 // MemorySearchQueryConfig configures search query behavior
@@ -226,9 +219,6 @@ type MemorySearchQueryConfig struct {
 // TranscriptConfig configures transcript indexing and search
 type TranscriptConfig struct {
 	Enabled bool `json:"enabled"` // Enable transcript indexing (default: true)
-
-	// Embedding provider (optional - if not set, inherits from memorySearch.ollama)
-	Ollama OllamaConfig `json:"ollama"`
 
 	// Indexing settings
 	IndexIntervalSeconds   int `json:"indexIntervalSeconds"`   // How often to check for new messages (default: 30)
@@ -257,13 +247,33 @@ type GatewayConfig struct {
 }
 
 // LLMConfig contains LLM provider settings
+// LLMConfig configures LLM providers and model selection.
+// Providers are aliased instances; models reference them via "alias/model" format.
+// LLMConfig configures LLM providers and model selection.
+// Providers are aliased instances; models reference them via "alias/model" format.
 type LLMConfig struct {
-	Provider      string `json:"provider"` // "anthropic"
-	Model         string `json:"model"`
-	APIKey        string `json:"apiKey"`
-	SystemPrompt  string `json:"systemPrompt"`
-	MaxTokens     int    `json:"maxTokens"`
-	PromptCaching bool   `json:"promptCaching"` // Enable prompt caching (reduces costs by up to 90%)
+	Providers     map[string]LLMProviderConfig `json:"providers"`
+	Agent         LLMPurposeConfig             `json:"agent"`         // Main chat
+	Summarization LLMPurposeConfig             `json:"summarization"` // Checkpoint/compaction
+	Embeddings    LLMPurposeConfig             `json:"embeddings"`    // Memory/transcript
+	SystemPrompt  string                       `json:"systemPrompt"`  // System prompt for agent
+}
+
+// LLMProviderConfig is the configuration for a single provider instance
+type LLMProviderConfig struct {
+	Type           string `json:"type"`                     // "anthropic", "openai", "ollama"
+	APIKey         string `json:"apiKey,omitempty"`         // For cloud providers
+	BaseURL        string `json:"baseURL,omitempty"`        // For OpenAI-compatible endpoints
+	URL            string `json:"url,omitempty"`            // For Ollama
+	MaxTokens      int    `json:"maxTokens,omitempty"`      // Default output limit
+	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"` // Request timeout
+	PromptCaching  bool   `json:"promptCaching,omitempty"`  // Anthropic-specific
+}
+
+// LLMPurposeConfig defines the model chain for a specific purpose
+type LLMPurposeConfig struct {
+	Models    []string `json:"models"`              // First = primary, rest = fallbacks
+	MaxTokens int      `json:"maxTokens,omitempty"` // Output limit override (0 = use model default)
 }
 
 // TelegramConfig contains Telegram channel settings
@@ -372,10 +382,23 @@ func Load() (*LoadResult, error) {
 			Emoji: "",
 		},
 		LLM: LLMConfig{
-			Provider:      "anthropic",
-			Model:         "claude-sonnet-4-20250514",
-			MaxTokens:     8192,
-			PromptCaching: true, // Enabled by default - saves up to 90% on system prompt tokens
+			Providers: map[string]LLMProviderConfig{
+				"anthropic": {
+					Type:          "anthropic",
+					PromptCaching: true,
+				},
+			},
+			Agent: LLMPurposeConfig{
+				Models:    []string{"anthropic/claude-sonnet-4-20250514"},
+				MaxTokens: 8192,
+			},
+			Summarization: LLMPurposeConfig{
+				Models:    []string{}, // Empty = use agent fallback
+				MaxTokens: 4096,
+			},
+			Embeddings: LLMPurposeConfig{
+				Models: []string{}, // Empty = disabled
+			},
 		},
 		Tools: ToolsConfig{
 			Browser: BrowserToolsConfig{
@@ -439,10 +462,6 @@ func Load() (*LoadResult, error) {
 		},
 		MemorySearch: MemorySearchConfig{
 			Enabled: true, // Memory search enabled by default
-			Ollama: OllamaConfig{
-				URL:   "", // Empty = keyword-only mode (no embeddings)
-				Model: "nomic-embed-text",
-			},
 			Query: MemorySearchQueryConfig{
 				MaxResults:    6,
 				MinScore:      0.35,
@@ -452,11 +471,7 @@ func Load() (*LoadResult, error) {
 			Paths: []string{}, // Only memory/ and MEMORY.md by default
 		},
 		Transcript: TranscriptConfig{
-			Enabled: true, // Transcript indexing enabled by default
-			Ollama: OllamaConfig{
-				URL:   "", // Empty = keyword-only mode (no embeddings)
-				Model: "nomic-embed-text",
-			},
+			Enabled:                true,  // Transcript indexing enabled by default
 			IndexIntervalSeconds:   30,    // Check every 30 seconds
 			BatchSize:              100,   // Process up to 100 messages per batch
 			MaxGroupGapSeconds:     300,   // 5 minute gap = new conversation chunk
@@ -548,8 +563,13 @@ func Load() (*LoadResult, error) {
 	applyEnvFallbacks(cfg)
 
 	// Log final config summary
+	agentModel := ""
+	if len(cfg.LLM.Agent.Models) > 0 {
+		agentModel = cfg.LLM.Agent.Models[0]
+	}
 	logging.L_debug("config: loaded",
-		"model", cfg.LLM.Model,
+		"agentModel", agentModel,
+		"providers", len(cfg.LLM.Providers),
 		"telegramEnabled", cfg.Telegram.Enabled,
 		"workingDir", cfg.Gateway.WorkingDir,
 	)
@@ -563,10 +583,12 @@ func Load() (*LoadResult, error) {
 
 // applyEnvFallbacks applies environment variable fallbacks for secrets
 func applyEnvFallbacks(cfg *Config) {
-	if cfg.LLM.APIKey == "" {
-		if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
+	// Apply ANTHROPIC_API_KEY to anthropic provider if not already set
+	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
+		if prov, ok := cfg.LLM.Providers["anthropic"]; ok && prov.APIKey == "" {
 			logging.L_debug("config: using ANTHROPIC_API_KEY from environment")
-			cfg.LLM.APIKey = key
+			prov.APIKey = key
+			cfg.LLM.Providers["anthropic"] = prov
 		}
 	}
 	if cfg.Tools.Web.BraveAPIKey == "" {
@@ -594,17 +616,12 @@ func (c *Config) mergeOpenclawConfig(base map[string]interface{}, openclawDir st
 				logging.L_debug("config: extracted workspace from agents.defaults.workspace", "workspace", workspace)
 				c.Gateway.WorkingDir = workspace
 			}
-			// Extract model
+			// Extract model - use as first agent model
 			if model, ok := defaults["model"].(map[string]interface{}); ok {
 				if primary, ok := model["primary"].(string); ok {
-					// Convert "anthropic/claude-opus-4-5" to "claude-opus-4-5"
-					originalModel := primary
-					if len(primary) > 10 && primary[:10] == "anthropic/" {
-						c.LLM.Model = primary[10:]
-					} else {
-						c.LLM.Model = primary
-					}
-					logging.L_debug("config: extracted model from agents.defaults.model.primary", "original", originalModel, "model", c.LLM.Model)
+					// Keep full "provider/model" format for new config
+					c.LLM.Agent.Models = []string{primary}
+					logging.L_debug("config: extracted model from agents.defaults.model.primary", "model", primary)
 				}
 			}
 		}
@@ -669,7 +686,11 @@ func (c *Config) mergeOpenclawConfig(base map[string]interface{}, openclawDir st
 				if anthropic, ok := profiles["anthropic:default"].(map[string]interface{}); ok {
 					if key, ok := anthropic["key"].(string); ok {
 						logging.L_debug("config: extracted API key from auth-profiles.json", "keyLength", len(key))
-						c.LLM.APIKey = key
+						// Apply to anthropic provider
+						if prov, ok := c.LLM.Providers["anthropic"]; ok {
+							prov.APIKey = key
+							c.LLM.Providers["anthropic"] = prov
+						}
 					}
 				}
 			}

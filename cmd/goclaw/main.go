@@ -662,13 +662,37 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	users := user.NewRegistryFromUsers(usersConfig)
 	L_debug("user registry created", "users", users.Count())
 
-	// Create LLM client
-	llmClient, err := llm.NewClient(&cfg.LLM)
+	// Create LLM registry from config
+	if len(cfg.LLM.Providers) == 0 {
+		L_error("no LLM providers configured")
+		return fmt.Errorf("llm.providers must be configured in goclaw.json")
+	}
+
+	regCfg := llm.RegistryConfig{
+		Providers:     make(map[string]llm.ProviderConfig),
+		Agent:         llm.PurposeConfig{Models: cfg.LLM.Agent.Models, MaxTokens: cfg.LLM.Agent.MaxTokens},
+		Summarization: llm.PurposeConfig{Models: cfg.LLM.Summarization.Models, MaxTokens: cfg.LLM.Summarization.MaxTokens},
+		Embeddings:    llm.PurposeConfig{Models: cfg.LLM.Embeddings.Models, MaxTokens: cfg.LLM.Embeddings.MaxTokens},
+	}
+	// Convert provider configs
+	for name, pCfg := range cfg.LLM.Providers {
+		regCfg.Providers[name] = llm.ProviderConfig{
+			Type:           pCfg.Type,
+			APIKey:         pCfg.APIKey,
+			BaseURL:        pCfg.BaseURL,
+			URL:            pCfg.URL,
+			MaxTokens:      pCfg.MaxTokens,
+			TimeoutSeconds: pCfg.TimeoutSeconds,
+			PromptCaching:  pCfg.PromptCaching,
+		}
+	}
+	llmRegistry, err := llm.NewRegistry(regCfg)
 	if err != nil {
-		L_error("failed to create LLM client", "error", err)
+		L_error("failed to create LLM registry", "error", err)
 		return err
 	}
-	L_debug("LLM client created", "model", cfg.LLM.Model)
+	llm.SetGlobalRegistry(llmRegistry)
+	L_info("LLM registry created", "providers", len(cfg.LLM.Providers))
 
 	// Create browser pool if enabled
 	var browserPool *tools.BrowserPool
@@ -697,7 +721,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	L_debug("base tools registered", "count", toolsReg.Count())
 
 	// Create gateway (creates MediaStore internally)
-	gw, err := gateway.New(cfg, users, llmClient, toolsReg)
+	gw, err := gateway.New(cfg, users, llmRegistry, toolsReg)
 	if err != nil {
 		L_error("failed to create gateway", "error", err)
 		os.Exit(1)

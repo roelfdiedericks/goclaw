@@ -12,16 +12,15 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
-// CompactionManager handles session compaction with background retry and fallback logic
+// Global provider getter - set once at startup from main.go
+// This avoids import cycles (llm imports session, so session can't import llm)
+var GetSummarizationClient func() SummarizationClient
+
+// CompactionManager handles session compaction with background retry
 type CompactionManager struct {
 	// Configuration
 	config *CompactionManagerConfig
-
-	// Clients
-	ollamaClient   CompactionLLMClient    // Primary: Ollama (can be nil)
-	fallbackClient CompactionLLMClient    // Fallback: Anthropic model
-	failover       *OllamaFailoverManager // Shared failover state
-	store          Store                  // Storage backend
+	store  Store // Storage backend
 
 	// State (in-memory, transient)
 	inProgress atomic.Bool
@@ -43,12 +42,6 @@ type CompactionManagerConfig struct {
 	RetryIntervalSeconds int // Background retry interval (default: 60, 0 = disabled)
 }
 
-// CompactionLLMClient interface for LLM calls during compaction
-type CompactionLLMClient interface {
-	GenerateSummary(ctx context.Context, messages []Message, maxTokens int) (string, error)
-	IsAvailable() bool
-	Model() string
-}
 
 // CompactionResult contains the result of a compaction operation
 type CompactionResult struct {
@@ -66,16 +59,9 @@ type CompactionResult struct {
 
 // CompactionStatus contains the current health state of the compaction manager
 type CompactionStatus struct {
-	OllamaFailures    int       // Current consecutive failure count
-	OllamaThreshold   int       // Threshold before fallback
-	UsingFallback     bool      // True if currently using main model due to failures
-	LastOllamaAttempt time.Time // Time of last Ollama attempt
-	ResetMinutes      int       // Minutes until Ollama retry reset
-	MinutesUntilReset int       // Remaining minutes until Ollama is tried again
-	RetryInProgress   bool      // True if compaction is currently running
-	PendingRetries    int       // Number of pending summary retries in SQLite
-	OllamaConfigured  bool      // True if Ollama client is configured
-	OllamaAvailable   bool      // True if Ollama is currently available
+	RetryInProgress bool // True if compaction is currently running
+	PendingRetries  int  // Number of pending summary retries in SQLite
+	ClientAvailable bool // True if LLM client is available
 }
 
 // NewCompactionManager creates a new compaction manager
@@ -94,19 +80,12 @@ func NewCompactionManager(cfg *CompactionManagerConfig) *CompactionManager {
 	}
 }
 
-// SetOllamaClient sets the primary (Ollama) LLM client
-func (m *CompactionManager) SetOllamaClient(client CompactionLLMClient) {
-	m.ollamaClient = client
-}
-
-// SetFallbackClient sets the fallback (Anthropic) LLM client
-func (m *CompactionManager) SetFallbackClient(client CompactionLLMClient) {
-	m.fallbackClient = client
-}
-
-// SetFailover sets the shared failover manager
-func (m *CompactionManager) SetFailover(failover *OllamaFailoverManager) {
-	m.failover = failover
+// getClient returns the current summarization client from the global getter.
+func (m *CompactionManager) getClient() SummarizationClient {
+	if GetSummarizationClient == nil {
+		return nil
+	}
+	return GetSummarizationClient()
 }
 
 // SetStore sets the store for persistence
@@ -120,28 +99,10 @@ func (m *CompactionManager) GetStatus(ctx context.Context) CompactionStatus {
 		return CompactionStatus{}
 	}
 
+	client := m.getClient()
 	status := CompactionStatus{
-		RetryInProgress:  m.inProgress.Load(),
-		OllamaConfigured: m.ollamaClient != nil,
-	}
-
-	// Get failover status if available
-	if m.failover != nil {
-		failoverStatus := m.failover.GetStatus()
-		status.OllamaFailures = failoverStatus.Failures
-		status.OllamaThreshold = failoverStatus.Threshold
-		status.UsingFallback = failoverStatus.UsingFallback
-		status.LastOllamaAttempt = failoverStatus.LastAttempt
-		status.ResetMinutes = failoverStatus.ResetMinutes
-		status.MinutesUntilReset = failoverStatus.ResetMinutes - failoverStatus.MinutesSince
-		if status.MinutesUntilReset < 0 {
-			status.MinutesUntilReset = 0
-		}
-	}
-
-	// Check Ollama availability
-	if m.ollamaClient != nil {
-		status.OllamaAvailable = m.ollamaClient.IsAvailable()
+		RetryInProgress: m.inProgress.Load(),
+		ClientAvailable: client != nil && client.IsAvailable(),
 	}
 
 	// Get pending retries from store
@@ -251,7 +212,7 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 	if summary == "" {
 		L_info("compaction: generating summary via LLM", "messages", len(sess.Messages), "tokens", tokensBefore)
 		var err error
-		summary, usedFallback, summaryModel, err = m.generateSummaryWithFallback(ctx, sess.Messages)
+		summary, usedFallback, summaryModel, err = m.generateSummary(ctx, sess.Messages)
 		if err != nil {
 			// Fall back to checkpoint if available
 			if sess.LastCheckpoint != nil {
@@ -308,6 +269,10 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 	// Truncate messages in session
 	m.truncateMessages(sess, firstKeptID)
 
+	// Recalculate token count after truncation
+	estimator := GetTokenEstimator()
+	sess.SetTotalTokens(estimator.EstimateSessionTokens(sess))
+
 	// Update session metadata
 	sess.CompactionCount++
 	sess.ResetFlushedThresholds()
@@ -339,66 +304,28 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 	return result, nil
 }
 
-// generateSummaryWithFallback tries Ollama first, then falls back to fallback model
-// Returns: summary, usedFallback, modelName, error
-func (m *CompactionManager) generateSummaryWithFallback(ctx context.Context, messages []Message) (string, bool, string, error) {
-	// Check if we should try Ollama (failover manager handles reset logic)
-	shouldTryOllama := m.ollamaClient != nil && m.ollamaClient.IsAvailable() &&
-		(m.failover == nil || m.failover.ShouldTryOllama())
-
-	// Try Ollama first (if available and failover allows)
-	if shouldTryOllama {
-		if m.failover != nil {
-			m.failover.RecordAttempt()
-		}
-
-		model := m.ollamaClient.Model()
-		L_info("compaction: calling ollama for summary", "model", model, "messages", len(messages))
-		startTime := time.Now()
-		summary, err := m.ollamaClient.GenerateSummary(ctx, messages, 4000)
-		elapsed := time.Since(startTime)
-		if err == nil {
-			// Success - reset failure count
-			if m.failover != nil {
-				m.failover.RecordSuccess()
-			}
-			L_info("compaction: ollama summary completed", "model", model, "elapsed", elapsed.Round(time.Second))
-			return summary, false, model, nil
-		}
-
-		// Ollama failed - record failure
-		var failures int
-		if m.failover != nil {
-			failures = m.failover.RecordFailure()
-		}
-		L_warn("compaction: ollama failed",
-			"ollamaModel", model,
-			"error", err,
-			"elapsed", elapsed.Round(time.Second),
-			"failures", failures)
-	} else if m.ollamaClient != nil && m.failover != nil && m.failover.IsUsingFallback() {
-		status := m.failover.GetStatus()
-		L_debug("compaction: skipping ollama (too many failures)",
-			"failures", status.Failures,
-			"threshold", status.Threshold)
+// generateSummary generates a summary using the configured client
+// Returns: summary, usedFallback (always false now), modelName, error
+func (m *CompactionManager) generateSummary(ctx context.Context, messages []Message) (string, bool, string, error) {
+	client := m.getClient()
+	if client == nil || !client.IsAvailable() {
+		return "", false, "", fmt.Errorf("no LLM client available for summary generation")
 	}
 
-	// Try fallback model
-	if m.fallbackClient != nil && m.fallbackClient.IsAvailable() {
-		model := m.fallbackClient.Model()
-		L_info("compaction: calling fallback model for summary", "model", model, "messages", len(messages))
-		startTime := time.Now()
-		summary, err := m.fallbackClient.GenerateSummary(ctx, messages, 4000)
-		elapsed := time.Since(startTime)
-		if err == nil {
-			L_info("compaction: fallback model summary completed", "model", model, "elapsed", elapsed.Round(time.Second))
-			return summary, true, model, nil
-		}
-		L_warn("compaction: fallback model also failed", "error", err, "elapsed", elapsed.Round(time.Second))
-		return "", false, "", fmt.Errorf("all LLM clients failed: %w", err)
+	model := client.Model()
+	L_info("compaction: generating summary", "model", model, "messages", len(messages))
+	startTime := time.Now()
+
+	summary, err := GenerateSummaryWithClient(ctx, client, messages, 4000)
+	elapsed := time.Since(startTime)
+
+	if err != nil {
+		L_warn("compaction: summary generation failed", "model", model, "error", err, "elapsed", elapsed.Round(time.Second))
+		return "", false, "", fmt.Errorf("summary generation failed: %w", err)
 	}
 
-	return "", false, "", fmt.Errorf("no LLM clients available for summary generation")
+	L_info("compaction: summary completed", "model", model, "elapsed", elapsed.Round(time.Second))
+	return summary, false, model, nil
 }
 
 // runRetryLoop runs the background retry goroutine
@@ -434,8 +361,6 @@ func (m *CompactionManager) retryPendingSummary(ctx context.Context) {
 		L_trace("compaction: retry skipped (compaction in progress)")
 		return
 	}
-
-	// Note: Ollama failure reset is handled by failover manager's ShouldTryOllama()
 
 	// Get pending retry
 	pending, err := m.store.GetPendingSummaryRetry(ctx)
@@ -492,7 +417,7 @@ func (m *CompactionManager) retryPendingSummary(ctx context.Context) {
 	}
 
 	// Try to generate summary
-	summary, usedFallback, model, err := m.generateSummaryWithFallback(ctx, sessionMessages)
+	summary, usedFallback, model, err := m.generateSummary(ctx, sessionMessages)
 	if err != nil {
 		L_warn("compaction: retry failed, will try again later",
 			"compactionID", pending.ID,
@@ -667,10 +592,4 @@ type CompactorConfig = CompactionManagerConfig
 // NewCompactor creates a CompactionManager (backwards compatibility)
 func NewCompactor(cfg *CompactorConfig) *CompactionManager {
 	return NewCompactionManager(cfg)
-}
-
-// SetLLMClient sets both Ollama and fallback client to the same client (backwards compatibility)
-func (m *CompactionManager) SetLLMClient(client CompactionLLMClient) {
-	m.SetOllamaClient(client)
-	m.SetFallbackClient(client)
 }

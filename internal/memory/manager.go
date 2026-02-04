@@ -14,20 +14,27 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
+// EmbeddingProviderResolver is a function that returns the current best embedding provider.
+// Used for lazy resolution - called when embeddings are needed, not at startup.
+type EmbeddingProviderResolver func() EmbeddingProvider
+
 // Manager coordinates memory indexing and search
 type Manager struct {
-	db           *sql.DB
-	indexer      *Indexer
-	provider     EmbeddingProvider
-	workspaceDir string
-	config       config.MemorySearchConfig
+	db               *sql.DB
+	indexer          *Indexer
+	provider         EmbeddingProvider
+	providerResolver EmbeddingProviderResolver
+	workspaceDir     string
+	config           config.MemorySearchConfig
 
 	mu     sync.RWMutex
 	closed bool
 }
 
 // NewManager creates a new memory manager
-func NewManager(cfg config.MemorySearchConfig, workspaceDir string) (*Manager, error) {
+// resolver is called lazily to get the embedding provider when needed.
+// If resolver is nil or returns nil, keyword-only search is used.
+func NewManager(cfg config.MemorySearchConfig, workspaceDir string, resolver EmbeddingProviderResolver) (*Manager, error) {
 	if !cfg.Enabled {
 		L_info("memory: disabled by configuration")
 		return nil, nil
@@ -56,36 +63,24 @@ func NewManager(cfg config.MemorySearchConfig, workspaceDir string) (*Manager, e
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 
-	// Create embedding provider
-	var provider EmbeddingProvider
-	var ollamaProvider *OllamaProvider
-	if cfg.Ollama.URL != "" {
-		ollamaProvider = NewOllamaProvider(cfg.Ollama.URL, cfg.Ollama.Model)
-		provider = ollamaProvider
-		L_info("memory: using ollama provider", "url", cfg.Ollama.URL, "model", cfg.Ollama.Model)
-	} else {
-		provider = &NoopProvider{}
-		L_info("memory: using keyword-only search (no embedding provider configured)")
+	// Get initial provider (may be nil if not ready yet)
+	var provider EmbeddingProvider = &NoopProvider{}
+	if resolver != nil {
+		if p := resolver(); p != nil {
+			provider = p
+		}
 	}
 
-	// Create indexer
+	// Create indexer with initial provider
 	indexer := NewIndexer(db, provider, workspaceDir, cfg.Paths)
 
-	// Wire up Ollama ready callback to trigger re-index with embeddings
-	if ollamaProvider != nil {
-		ollamaProvider.OnReady(func() {
-			L_info("memory: ollama ready, triggering re-index for embeddings")
-			indexer.MarkDirty()
-			indexer.TriggerSync()
-		})
-	}
-
 	m := &Manager{
-		db:           db,
-		indexer:      indexer,
-		provider:     provider,
-		workspaceDir: workspaceDir,
-		config:       cfg,
+		db:               db,
+		indexer:          indexer,
+		provider:         provider,
+		providerResolver: resolver,
+		workspaceDir:     workspaceDir,
+		config:           cfg,
 	}
 
 	L_info("memory: manager created", "dbPath", dbPath, "provider", provider.ID())
@@ -94,8 +89,35 @@ func NewManager(cfg config.MemorySearchConfig, workspaceDir string) (*Manager, e
 }
 
 // Provider returns the embedding provider (for sharing with transcript indexer)
+// This also checks if a better provider has become available since startup.
 func (m *Manager) Provider() EmbeddingProvider {
+	m.refreshProvider()
 	return m.provider
+}
+
+// refreshProvider checks if a better provider is available and updates if so.
+func (m *Manager) refreshProvider() {
+	if m.providerResolver == nil {
+		return
+	}
+
+	newProvider := m.providerResolver()
+	if newProvider == nil {
+		return
+	}
+
+	// Check if provider changed (from noop to real, or model changed)
+	currentID := m.provider.ID()
+	newID := newProvider.ID()
+
+	if currentID != newID || (currentID == "none" && newID != "none") {
+		L_info("memory: provider upgraded", "from", currentID, "to", newID, "model", newProvider.Model())
+		m.provider = newProvider
+		m.indexer.SetProvider(newProvider)
+		// Trigger re-index to add embeddings to files that only had keywords
+		m.indexer.MarkDirty()
+		m.indexer.TriggerSync()
+	}
 }
 
 // Start begins background indexing
