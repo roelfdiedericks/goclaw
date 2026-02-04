@@ -67,32 +67,10 @@ func handleStatus(ctx context.Context, args *CommandArgs) *CommandResult {
 	text.WriteString(fmt.Sprintf("  Compactions: %d\n", info.CompactionCount))
 
 	text.WriteString("\nCompaction Health\n")
-	if compStatus.OllamaConfigured {
-		ollamaHealth := "healthy"
-		if compStatus.UsingFallback {
-			ollamaHealth = "degraded"
-		} else if !compStatus.OllamaAvailable {
-			ollamaHealth = "unavailable"
-		}
-		text.WriteString(fmt.Sprintf("  Ollama: %s (%d/%d failures)\n",
-			ollamaHealth, compStatus.OllamaFailures, compStatus.OllamaThreshold))
-
-		if compStatus.UsingFallback {
-			text.WriteString("  Mode: fallback to main model\n")
-			if compStatus.MinutesUntilReset > 0 {
-				text.WriteString(fmt.Sprintf("  Reset in: %d min\n", compStatus.MinutesUntilReset))
-			}
-		} else {
-			text.WriteString("  Mode: normal\n")
-		}
-
-		if !compStatus.LastOllamaAttempt.IsZero() {
-			ago := time.Since(compStatus.LastOllamaAttempt)
-			text.WriteString(fmt.Sprintf("  Last attempt: %s ago\n", formatDuration(ago)))
-		}
+	if compStatus.ClientAvailable {
+		text.WriteString("  LLM: available\n")
 	} else {
-		text.WriteString("  Ollama: not configured\n")
-		text.WriteString("  Mode: main model only\n")
+		text.WriteString("  LLM: unavailable\n")
 	}
 
 	if compStatus.PendingRetries > 0 {
@@ -111,27 +89,10 @@ func handleStatus(ctx context.Context, args *CommandArgs) *CommandResult {
 	md.WriteString(fmt.Sprintf("Compactions: %d\n", info.CompactionCount))
 
 	md.WriteString("\n*Compaction Health*\n")
-	if compStatus.OllamaConfigured {
-		ollamaHealth := "healthy"
-		if compStatus.UsingFallback {
-			ollamaHealth = "degraded"
-		} else if !compStatus.OllamaAvailable {
-			ollamaHealth = "unavailable"
-		}
-		md.WriteString(fmt.Sprintf("Ollama: %s (%d/%d failures)\n",
-			ollamaHealth, compStatus.OllamaFailures, compStatus.OllamaThreshold))
-
-		if compStatus.UsingFallback {
-			md.WriteString("Mode: _fallback to main model_\n")
-			if compStatus.MinutesUntilReset > 0 {
-				md.WriteString(fmt.Sprintf("Reset in: %d min\n", compStatus.MinutesUntilReset))
-			}
-		} else {
-			md.WriteString("Mode: normal\n")
-		}
+	if compStatus.ClientAvailable {
+		md.WriteString("LLM: available\n")
 	} else {
-		md.WriteString("Ollama: _not configured_\n")
-		md.WriteString("Mode: main model only\n")
+		md.WriteString("LLM: _unavailable_\n")
 	}
 
 	if compStatus.PendingRetries > 0 {

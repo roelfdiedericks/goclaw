@@ -43,7 +43,8 @@ type Channel interface {
 type Gateway struct {
 	sessions            *session.Manager
 	users               *user.Registry
-	llm                 *llm.Client
+	llm                 *llm.AnthropicProvider // Primary LLM provider for agent
+	registry            *llm.Registry          // Unified provider registry
 	tools               *tools.Registry
 	channels            map[string]Channel
 	config              *config.Config
@@ -67,10 +68,17 @@ var (
 )
 
 // New creates a new Gateway instance
-func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsReg *tools.Registry) (*Gateway, error) {
+func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, toolsReg *tools.Registry) (*Gateway, error) {
+	// Get agent provider from registry
+	agentProvider, err := registry.GetAnthropicProvider("agent")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get agent provider: %w", err)
+	}
+
 	g := &Gateway{
 		users:     users,
-		llm:       llmClient,
+		llm:       agentProvider,
+		registry:  registry,
 		tools:     toolsReg,
 		channels:  make(map[string]Channel),
 		config:    cfg,
@@ -92,7 +100,6 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 		WorkingDir:  cfg.Gateway.WorkingDir,
 	}
 
-	var err error
 	g.sessions, err = session.NewManagerWithConfig(managerCfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create session manager: %w", err)
@@ -118,12 +125,7 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 		}
 	}
 
-	// Initialize shared failover manager for Ollama
 	sumCfg := cfg.Session.Summarization
-	failoverMgr := session.NewOllamaFailoverManager(session.FailoverConfig{
-		FailureThreshold: sumCfg.FailureThreshold,
-		ResetMinutes:     sumCfg.ResetMinutes,
-	})
 
 	// Initialize checkpoint generator
 	checkpointCfg := &session.CheckpointGeneratorConfig{
@@ -147,64 +149,52 @@ func New(cfg *config.Config, users *user.Registry, llmClient *llm.Client, toolsR
 	}
 	g.compactor = session.NewCompactionManager(compactorCfg)
 	g.compactor.SetStore(g.sessions.GetStore())
-	g.compactor.SetFailover(failoverMgr)
 	L_debug("session: compaction manager configured",
 		"reserveTokens", sumCfg.Compaction.ReserveTokens,
 		"maxMessages", sumCfg.Compaction.MaxMessages,
 		"preferCheckpoint", sumCfg.Compaction.PreferCheckpoint,
 		"retryInterval", sumCfg.RetryIntervalSeconds)
 
-	// Create fallback model client (Anthropic with cheaper model)
-	var fallbackAdapter *session.LLMAdapter
-	if sumCfg.FallbackModel != "" {
-		fallbackClient, err := llm.NewClientWithModel(cfg.LLM.APIKey, sumCfg.FallbackModel, 4096)
+	// Set up lazy provider resolution for summarization.
+	// The resolver is called when compaction/checkpoint actually needs the client,
+	// not at startup when providers may still be initializing.
+	sumResolver := func() session.SummarizationClient {
+		provider, err := registry.GetProvider("summarization")
 		if err != nil {
-			L_warn("summarization: failed to create fallback client", "model", sumCfg.FallbackModel, "error", err)
-			// Fall back to main model if fallback creation fails
-			fallbackAdapter = session.NewLLMAdapterFunc(llmClient.SimpleMessage, llmClient.Model())
-		} else {
-			fallbackAdapter = session.NewLLMAdapterFunc(fallbackClient.SimpleMessage, fallbackClient.Model())
-			L_info("summarization: fallback model configured", "model", sumCfg.FallbackModel)
+			L_debug("summarization: provider unavailable, using agent", "error", err)
+			return agentProvider
 		}
-	} else {
-		// No fallback model - use main model
-		fallbackAdapter = session.NewLLMAdapterFunc(llmClient.SimpleMessage, llmClient.Model())
-		L_debug("summarization: using main model as fallback (no fallbackModel configured)")
+		switch p := provider.(type) {
+		case *llm.OllamaProvider:
+			return p
+		case *llm.AnthropicProvider:
+			return p
+		default:
+			L_debug("summarization: unknown provider type, using agent")
+			return agentProvider
+		}
 	}
-	g.compactor.SetFallbackClient(fallbackAdapter)
-
-	// Initialize Ollama client for summarization if configured
-	if sumCfg.Ollama.URL != "" && sumCfg.Ollama.Model != "" {
-		L_info("summarization: using ollama as primary model",
-			"url", sumCfg.Ollama.URL,
-			"model", sumCfg.Ollama.Model)
-
-		ollamaClient := llm.NewOllamaClient(
-			sumCfg.Ollama.URL,
-			sumCfg.Ollama.Model,
-			sumCfg.Ollama.TimeoutSeconds,
-			sumCfg.Ollama.ContextTokens,
-		)
-		g.ollamaClient = ollamaClient
-
-		// Create adapter and set as primary for both checkpoint and compaction
-		ollamaAdapter := session.NewLLMAdapterFunc(ollamaClient.SimpleMessage, ollamaClient.Model())
-		g.compactor.SetOllamaClient(ollamaAdapter)
-		g.checkpointGenerator.SetLLMClients(ollamaAdapter, fallbackAdapter, failoverMgr)
-
-		L_info("summarization: failover configured",
-			"failureThreshold", sumCfg.FailureThreshold,
-			"resetMinutes", sumCfg.ResetMinutes)
-	} else {
-		// No Ollama - use fallback only
-		g.checkpointGenerator.SetLLMClients(nil, fallbackAdapter, failoverMgr)
-		L_debug("summarization: using fallback model only (ollama not configured)")
-	}
+	g.compactor.SetProviderResolver(sumResolver)
+	g.checkpointGenerator.SetProviderResolver(sumResolver)
+	L_info("summarization: lazy provider resolution configured")
 
 	// Initialize memory manager if enabled
 	if cfg.MemorySearch.Enabled {
 		L_info("memory: initializing manager", "workspace", cfg.Gateway.WorkingDir)
-		memMgr, err := memory.NewManager(cfg.MemorySearch, cfg.Gateway.WorkingDir)
+
+		// Set up lazy provider resolution for embeddings
+		embedResolver := func() memory.EmbeddingProvider {
+			provider, err := registry.GetProvider("embeddings")
+			if err != nil {
+				return nil
+			}
+			if embedder, ok := provider.(memory.LLMEmbedder); ok {
+				return memory.NewLLMProviderAdapter(embedder)
+			}
+			return nil
+		}
+
+		memMgr, err := memory.NewManager(cfg.MemorySearch, cfg.Gateway.WorkingDir, embedResolver)
 		if err != nil {
 			L_warn("failed to create memory manager", "error", err)
 		} else {
@@ -336,6 +326,16 @@ func (g *Gateway) MemoryManager() *memory.Manager {
 // AgentIdentity returns the agent identity configuration
 func (g *Gateway) AgentIdentity() *config.AgentIdentityConfig {
 	return &g.config.Agent
+}
+
+// SetRegistry sets the LLM provider registry
+func (g *Gateway) SetRegistry(r *llm.Registry) {
+	g.registry = r
+}
+
+// Registry returns the LLM provider registry
+func (g *Gateway) Registry() *llm.Registry {
+	return g.registry
 }
 
 // SkillManager returns the skill manager

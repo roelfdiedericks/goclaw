@@ -15,17 +15,24 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
-// OllamaClient provides LLM inference using Ollama's /api/chat endpoint.
-// Supports role-based messaging (system, user, assistant) for summarization tasks.
-// Used for compaction/checkpoint summarization to reduce main model costs.
-type OllamaClient struct {
-	url             string
-	model           string
-	contextTokens   int // Model's context window in tokens (queried from Ollama)
-	client          *http.Client
-	available       bool
-	mu              sync.RWMutex
+// OllamaProvider implements the Provider interface for Ollama.
+// Supports chat completion, embeddings, and summarization tasks.
+type OllamaProvider struct {
+	name          string // Provider instance name (e.g., "ollama-local")
+	url           string
+	model         string
+	maxTokens     int // Output limit (0 = use model default)
+	contextTokens int // Model's context window in tokens (queried from Ollama)
+	dimensions    int // Embedding dimensions (detected on first embed)
+	embeddingOnly bool // True if this is an embedding-only model (skip chat availability check)
+	client        *http.Client
+	available     bool
+	mu            sync.RWMutex
 }
+
+// OllamaClient is an alias for OllamaProvider for backward compatibility.
+// TODO: Remove after migration to unified provider system.
+type OllamaClient = OllamaProvider
 
 // ollamaShowRequest is the request body for /api/show
 type ollamaShowRequest struct {
@@ -62,9 +69,42 @@ type ollamaChatResponse struct {
 	Done    bool              `json:"done"`
 }
 
-// NewOllamaClient creates a new Ollama LLM client for chat completion
+// NewOllamaProvider creates a new Ollama provider from ProviderConfig.
+// This is the preferred constructor for the unified provider system.
+func NewOllamaProvider(name string, cfg ProviderConfig) (*OllamaProvider, error) {
+	if cfg.URL == "" {
+		return nil, fmt.Errorf("ollama URL not configured")
+	}
+
+	url := strings.TrimSuffix(cfg.URL, "/")
+
+	timeoutSeconds := cfg.TimeoutSeconds
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 300 // 5 minutes default
+	}
+
+	p := &OllamaProvider{
+		name:          name,
+		url:           url,
+		model:         "", // Model set via WithModel()
+		maxTokens:     cfg.MaxTokens,
+		contextTokens: 4096, // Conservative default, updated by queryModelInfo
+		embeddingOnly: cfg.EmbeddingOnly,
+		client: &http.Client{
+			Timeout: time.Duration(timeoutSeconds) * time.Second,
+		},
+		available: false,
+	}
+
+	L_debug("ollama provider created", "name", name, "url", url, "timeout", timeoutSeconds, "embeddingOnly", cfg.EmbeddingOnly)
+
+	return p, nil
+}
+
+// NewOllamaClient creates a new Ollama LLM client for chat completion (legacy constructor).
 // timeoutSeconds: request timeout (0 = use default 300s)
 // contextTokensOverride: explicit context window (0 = auto-detect from model)
+// TODO: Remove after migration to unified provider system.
 func NewOllamaClient(url, model string, timeoutSeconds, contextTokensOverride int) *OllamaClient {
 	// Normalize URL
 	url = strings.TrimSuffix(url, "/")
@@ -81,6 +121,7 @@ func NewOllamaClient(url, model string, timeoutSeconds, contextTokensOverride in
 	}
 
 	c := &OllamaClient{
+		name:          "ollama",
 		url:           url,
 		model:         model,
 		contextTokens: contextTokens,
@@ -105,10 +146,12 @@ func NewOllamaClient(url, model string, timeoutSeconds, contextTokensOverride in
 
 // initializeModel queries model info and checks availability
 func (c *OllamaClient) initializeModel() {
-	// First, query model info to get context window
-	c.queryModelInfo()
+	// Query model info to get context window (skip for embedding-only models)
+	if !c.embeddingOnly {
+		c.queryModelInfo()
+	}
 
-	// Then check availability with a simple message
+	// Then check availability
 	c.checkAvailability()
 }
 
@@ -197,10 +240,17 @@ func (c *OllamaClient) checkAvailability() {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	L_info("ollama: checking availability (model may need to load)", "url", c.url, "model", c.model, "timeout", timeout)
+	L_info("ollama: checking availability", "url", c.url, "model", c.model, "embeddingOnly", c.embeddingOnly, "timeout", timeout)
 
-	// Try a simple chat request to verify model is loaded
-	_, err := c.SimpleMessage(ctx, "hi", "respond with 'ok'")
+	var err error
+	if c.embeddingOnly {
+		// For embedding models, test with a simple embedding request
+		_, err = c.Embed(ctx, "test")
+	} else {
+		// For chat models, try a simple chat request
+		_, err = c.SimpleMessage(ctx, "hi", "respond with 'ok'")
+	}
+
 	if err != nil {
 		L_warn("ollama: not available", "error", err, "url", c.url, "model", c.model)
 		c.mu.Lock()
@@ -237,6 +287,8 @@ func (c *OllamaClient) Available() bool {
 // This is the interface used by compaction/checkpoint summarization.
 // If the message exceeds the model's context window, it will be truncated with a warning.
 func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPrompt string) (string, error) {
+	startTime := time.Now()
+	
 	// Estimate chars limit from tokens (rough: 1 token ≈ 3 chars for English)
 	// Reserve 20% for response generation
 	c.mu.RLock()
@@ -247,6 +299,7 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 	maxInputChars := maxInputTokens * 3                  // ~3 chars per token
 
 	totalChars := len(userMessage) + len(systemPrompt)
+	L_info("llm: request started", "provider", c.name, "model", c.model, "chars", totalChars)
 	L_debug("ollama: sending request",
 		"promptLength", len(userMessage),
 		"model", c.model,
@@ -347,6 +400,8 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 	}
 
 	responseText := result.Message.Content
+	duration := time.Since(startTime)
+	L_info("llm: request completed", "provider", c.name, "duration", duration.Round(time.Millisecond), "responseChars", len(responseText))
 	L_debug("ollama: request completed", "responseLength", len(responseText))
 
 	// Update availability on successful request
@@ -355,4 +410,171 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 	c.mu.Unlock()
 
 	return responseText, nil
+}
+
+// ============================================================================
+// Provider interface methods
+// ============================================================================
+
+// Name returns the provider instance name
+func (p *OllamaProvider) Name() string {
+	return p.name
+}
+
+// Type returns the provider type
+func (p *OllamaProvider) Type() string {
+	return "ollama"
+}
+
+// WithModel returns a clone of the provider configured with a specific model
+// Note: Returns *OllamaProvider until full Provider interface is implemented
+func (p *OllamaProvider) WithModel(model string) *OllamaProvider {
+	clone := *p
+	clone.model = model
+	// Initialize model in background
+	go clone.initializeModel()
+	return &clone
+}
+
+// WithModelForEmbedding returns a clone configured for embedding-only use.
+// This skips chat availability checks and uses embedding API instead.
+func (p *OllamaProvider) WithModelForEmbedding(model string) *OllamaProvider {
+	clone := *p
+	clone.model = model
+	clone.embeddingOnly = true
+	// Initialize model in background (will use embedding check)
+	go clone.initializeModel()
+	return &clone
+}
+
+// WithMaxTokens returns a clone of the provider with a different output limit
+func (p *OllamaProvider) WithMaxTokens(max int) *OllamaProvider {
+	clone := *p
+	clone.maxTokens = max
+	return &clone
+}
+
+// MaxTokens returns the current output limit
+func (p *OllamaProvider) MaxTokens() int {
+	return p.maxTokens
+}
+
+// ============================================================================
+// Embedding support
+// ============================================================================
+
+// ollamaEmbedRequest is the request body for Ollama embeddings
+type ollamaEmbedRequest struct {
+	Model  string `json:"model"`
+	Prompt string `json:"prompt"`
+}
+
+// ollamaEmbedResponse is the response from Ollama embeddings
+type ollamaEmbedResponse struct {
+	Embedding []float64 `json:"embedding"`
+}
+
+// SupportsEmbeddings returns true - Ollama supports embeddings with appropriate models
+func (p *OllamaProvider) SupportsEmbeddings() bool {
+	return true
+}
+
+// EmbeddingDimensions returns the embedding vector dimensions (detected on first embed)
+func (p *OllamaProvider) EmbeddingDimensions() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.dimensions
+}
+
+// Embed generates an embedding for a single text
+func (p *OllamaProvider) Embed(ctx context.Context, text string) ([]float32, error) {
+	if !p.IsAvailable() {
+		return nil, ErrUnavailable{Provider: p.name, Reason: "not connected"}
+	}
+	return p.embedSingle(ctx, text)
+}
+
+// EmbedBatch generates embeddings for multiple texts
+func (p *OllamaProvider) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if !p.IsAvailable() {
+		return nil, ErrUnavailable{Provider: p.name, Reason: "not connected"}
+	}
+
+	L_debug("ollama: embedding batch", "count", len(texts))
+
+	embeddings := make([][]float32, len(texts))
+	for i, text := range texts {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		embedding, err := p.embedSingle(ctx, text)
+		if err != nil {
+			L_warn("ollama: failed to embed text in batch", "index", i, "error", err, "textLength", len(text))
+			// Continue with nil embedding for this text
+			continue
+		}
+		embeddings[i] = embedding
+	}
+
+	L_debug("ollama: batch embedded", "count", len(texts))
+	return embeddings, nil
+}
+
+// embedSingle sends a single embedding request to Ollama
+func (p *OllamaProvider) embedSingle(ctx context.Context, text string) ([]float32, error) {
+	reqBody := ollamaEmbedRequest{
+		Model:  p.model,
+		Prompt: text,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	url := p.url + "/api/embeddings"
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	L_trace("ollama: sending embed request", "url", url, "model", p.model, "textLength", len(text))
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result ollamaEmbedResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	// Convert float64 to float32
+	embedding := make([]float32, len(result.Embedding))
+	for i, v := range result.Embedding {
+		embedding[i] = float32(v)
+	}
+
+	// Update dimensions if not set
+	if len(embedding) > 0 {
+		p.mu.Lock()
+		if p.dimensions == 0 {
+			p.dimensions = len(embedding)
+			L_debug("ollama: detected embedding dimensions", "dimensions", p.dimensions)
+		}
+		p.mu.Unlock()
+	}
+
+	return embedding, nil
 }
