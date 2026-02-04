@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/roelfdiedericks/goclaw/internal/tools"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
@@ -33,7 +32,7 @@ type Provider interface {
 	StreamMessage(
 		ctx context.Context,
 		messages []types.Message,
-		toolDefs []tools.ToolDefinition,
+		toolDefs []types.ToolDefinition,
 		systemPrompt string,
 		onDelta func(delta string),
 	) (*Response, error)
@@ -66,12 +65,8 @@ type Image struct {
 // Note: Response type is currently defined in anthropic.go
 // It will be moved here when anthropic.go is refactored to implement Provider
 
-// ToolDefinition describes a tool the model can use (provider-agnostic)
-type ToolDefinition struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"input_schema"` // JSON Schema for parameters
-}
+// ToolDefinition is an alias to types.ToolDefinition for convenience within llm package.
+type ToolDefinition = types.ToolDefinition
 
 // ToolUse represents a tool call from the model
 type ToolUse struct {

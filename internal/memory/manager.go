@@ -11,12 +11,9 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/roelfdiedericks/goclaw/internal/config"
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
-
-// Global embedding provider getter - set once at startup.
-// Can't use llm.GetRegistry() directly due to import cycle (memory→llm→tools→memory)
-var GetEmbeddingProvider func() EmbeddingProvider
 
 // Manager coordinates memory indexing and search
 type Manager struct {
@@ -30,8 +27,8 @@ type Manager struct {
 	closed bool
 }
 
-// NewManager creates a new memory manager
-// Uses the global GetEmbeddingProvider function for lazy provider resolution.
+// NewManager creates a new memory manager.
+// Uses llm.GetRegistry() for lazy embedding provider resolution.
 func NewManager(cfg config.MemorySearchConfig, workspaceDir string) (*Manager, error) {
 	if !cfg.Enabled {
 		L_info("memory: disabled by configuration")
@@ -89,15 +86,24 @@ func (m *Manager) Provider() EmbeddingProvider {
 }
 
 // refreshProvider checks if a better provider is available and updates if so.
+// Now calls llm.GetRegistry() directly (cycle broken by moving ToolDefinition to types).
 func (m *Manager) refreshProvider() {
-	if GetEmbeddingProvider == nil {
+	reg := llm.GetRegistry()
+	if reg == nil {
 		return
 	}
 
-	newProvider := GetEmbeddingProvider()
-	if newProvider == nil {
+	provider, err := reg.GetProvider("embeddings")
+	if err != nil {
 		return
 	}
+
+	// Adapt llm.Provider to EmbeddingProvider interface
+	embedder, ok := provider.(LLMEmbedder)
+	if !ok {
+		return
+	}
+	newProvider := NewLLMProviderAdapter(embedder)
 
 	// Check if provider changed (from noop to real, or model changed)
 	currentID := m.provider.ID()

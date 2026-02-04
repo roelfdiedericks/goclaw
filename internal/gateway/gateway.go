@@ -164,20 +164,9 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 	L_info("summarization: will use registry for lazy provider resolution")
 
 	// Initialize memory manager if enabled
+	// Memory manager now calls llm.GetRegistry() directly (cycle broken by types.ToolDefinition)
 	if cfg.MemorySearch.Enabled {
 		L_info("memory: initializing manager", "workspace", cfg.Gateway.WorkingDir)
-
-		// Set up global embedding provider getter (can't use llm directly in memory due to cycle)
-		memory.GetEmbeddingProvider = func() memory.EmbeddingProvider {
-			provider, err := registry.GetProvider("embeddings")
-			if err != nil {
-				return nil
-			}
-			if embedder, ok := provider.(memory.LLMEmbedder); ok {
-				return memory.NewLLMProviderAdapter(embedder)
-			}
-			return nil
-		}
 
 		memMgr, err := memory.NewManager(cfg.MemorySearch, cfg.Gateway.WorkingDir)
 		if err != nil {

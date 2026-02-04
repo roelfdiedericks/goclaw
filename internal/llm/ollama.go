@@ -13,7 +13,6 @@ import (
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/roelfdiedericks/goclaw/internal/tools"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
@@ -461,7 +460,7 @@ func (p *OllamaProvider) WithMaxTokens(max int) Provider {
 func (p *OllamaProvider) StreamMessage(
 	ctx context.Context,
 	messages []types.Message,
-	toolDefs []tools.ToolDefinition,
+	toolDefs []types.ToolDefinition,
 	systemPrompt string,
 	onDelta func(delta string),
 ) (*Response, error) {

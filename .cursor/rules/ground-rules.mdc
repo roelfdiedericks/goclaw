@@ -5,6 +5,10 @@ alwaysApply: true
 
 # Ground Rules for GoClaw Development
 
+**These rules are NON-NEGOTIABLE. Follow them at ALL times, without exception.**
+
+---
+
 ## DISCUSS BEFORE IMPLEMENTING
 
 **Always discuss proposed changes before making them.**
