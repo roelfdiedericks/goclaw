@@ -26,12 +26,13 @@ func (t *CronTool) Name() string {
 func (t *CronTool) Description() string {
 	return `Manage scheduled tasks (cron jobs). Actions:
 - status: Get cron service status
-- list: List all jobs
+- list: List all jobs (shows running state)
 - add: Create a new job
 - update: Modify an existing job
 - remove: Delete a job
 - run: Execute a job immediately
-- runs: View job execution history`
+- runs: View job execution history
+- kill: Clear stuck running state for a job`
 }
 
 func (t *CronTool) Schema() map[string]interface{} {
@@ -40,12 +41,12 @@ func (t *CronTool) Schema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{"status", "list", "add", "update", "remove", "run", "runs"},
+				"enum":        []string{"status", "list", "add", "update", "remove", "run", "runs", "kill"},
 				"description": "Action to perform",
 			},
 			"id": map[string]interface{}{
 				"type":        "string",
-				"description": "Job ID (for update/remove/run/runs actions)",
+				"description": "Job ID (for update/remove/run/runs/kill actions)",
 			},
 			"name": map[string]interface{}{
 				"type":        "string",
@@ -156,6 +157,8 @@ func (t *CronTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 		result, err = t.handleRun(ctx, service, in)
 	case "runs":
 		result, err = t.handleRuns(service, in)
+	case "kill":
+		result, err = t.handleKill(service, in)
 	default:
 		err = fmt.Errorf("unknown action: %s", in.Action)
 	}
@@ -204,6 +207,10 @@ func (t *CronTool) handleList(service *cron.Service) (string, error) {
 		sb.WriteString(fmt.Sprintf("  Session: %s\n", job.SessionTarget))
 		sb.WriteString(fmt.Sprintf("  Schedule: %s\n", formatSchedule(&job.Schedule)))
 
+		if job.IsRunning() {
+			runningFor := time.Since(time.UnixMilli(*job.State.RunningAtMs))
+			sb.WriteString(fmt.Sprintf("  ⚠️ RUNNING: for %s (use kill action to clear)\n", runningFor.Round(time.Second)))
+		}
 		if job.State.NextRunAtMs != nil {
 			next := time.UnixMilli(*job.State.NextRunAtMs)
 			sb.WriteString(fmt.Sprintf("  Next run: %s\n", next.Format(time.RFC3339)))
@@ -402,6 +409,36 @@ func (t *CronTool) handleRuns(service *cron.Service, in cronInput) (string, erro
 	sb.WriteString("\n(Full run history will be available in a future update)")
 
 	return sb.String(), nil
+}
+
+func (t *CronTool) handleKill(service *cron.Service, in cronInput) (string, error) {
+	if in.ID == "" {
+		return "", fmt.Errorf("id is required")
+	}
+
+	store := service.Store()
+	job := store.GetJob(in.ID)
+	if job == nil {
+		return "", fmt.Errorf("job not found: %s", in.ID)
+	}
+
+	if !job.IsRunning() {
+		return fmt.Sprintf("Job '%s' is not currently marked as running.", job.Name), nil
+	}
+
+	// Get running duration for info
+	runningFor := time.Since(time.UnixMilli(*job.State.RunningAtMs))
+
+	// Clear the running state
+	job.ClearRunning()
+	if err := store.UpdateJob(job); err != nil {
+		return "", fmt.Errorf("failed to update job: %w", err)
+	}
+
+	L_info("cron kill: cleared running state", "jobID", job.ID, "name", job.Name, "wasRunningFor", runningFor)
+
+	return fmt.Sprintf("Cleared running state for job '%s' (was running for %s).\nNote: If the job is actually still executing, it will continue until completion or timeout.",
+		job.Name, runningFor.Round(time.Second)), nil
 }
 
 func (t *CronTool) buildSchedule(in cronInput) (cron.Schedule, error) {

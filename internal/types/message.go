@@ -26,6 +26,7 @@ type Message struct {
 	ToolName  string            `json:"toolName,omitempty"`    // for tool_use
 	ToolInput json.RawMessage   `json:"toolInput,omitempty"`   // for tool_use
 	Images    []ImageAttachment `json:"images,omitempty"`      // Image attachments (for multimodal)
+	Thinking  string            `json:"thinking,omitempty"`    // Reasoning/thinking content (Kimi, Deepseek, etc.)
 }
 
 // HasImages returns true if the message contains any images

@@ -100,6 +100,9 @@ type Service struct {
 	ignoreWatchUntil time.Time         // Ignore watcher events until this time (debounce our own writes)
 	rescheduleCh     chan struct{}     // Signal to recalculate wake time (for in-process job adds)
 
+	// Job execution
+	jobTimeoutMinutes int // Timeout for job execution (0 = no timeout)
+
 	// Heartbeat
 	heartbeatConfig *HeartbeatConfig
 	heartbeatTimer  *time.Timer
@@ -125,6 +128,11 @@ func (s *Service) SetChannelProvider(cp ChannelProvider) {
 // SetHeartbeatConfig configures the heartbeat system.
 func (s *Service) SetHeartbeatConfig(cfg *HeartbeatConfig) {
 	s.heartbeatConfig = cfg
+}
+
+// SetJobTimeout sets the job execution timeout in minutes (0 = no timeout).
+func (s *Service) SetJobTimeout(minutes int) {
+	s.jobTimeoutMinutes = minutes
 }
 
 // TriggerHeartbeatNow manually triggers a heartbeat check (for /heartbeat command)
@@ -427,11 +435,11 @@ func (s *Service) runDueJobs(ctx context.Context) {
 		return
 	}
 
-	L_info("cron: checking due jobs", "count", len(dueJobs), "time", now.Format(time.RFC3339))
+	L_debug("cron: checking due jobs", "count", len(dueJobs))
 
 	for _, job := range dueJobs {
 		if job.IsRunning() {
-			L_warn("cron: job already running, skipping", "job", job.Name, "id", job.ID)
+			L_debug("cron: job already running, skipping", "job", job.Name)
 			continue
 		}
 
@@ -461,12 +469,20 @@ func truncateLog(s string, max int) string {
 // Note: job is already marked as running by runDueJobs before this is called.
 func (s *Service) executeJob(ctx context.Context, job *CronJob) {
 	startTime := time.Now()
+
+	// Apply job timeout if configured
+	if s.jobTimeoutMinutes > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(s.jobTimeoutMinutes)*time.Minute)
+		defer cancel()
+	}
 	
 	L_info("cron: === JOB START ===",
 		"job", job.Name,
 		"id", job.ID,
 		"session", job.SessionTarget,
 		"isolated", job.IsIsolated(),
+		"timeoutMinutes", s.jobTimeoutMinutes,
 		"prompt", truncateLog(job.Payload.GetPrompt(), 200))
 
 	// Build agent request

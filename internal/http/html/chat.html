@@ -231,11 +231,19 @@ $(document).ready(function() {
             var data = JSON.parse(e.data);
             currentRunId = data.RunID;
             currentRawText = ''; // Reset raw text accumulator
-            // Create new bubble for this response
-            var $msg = $('<div class="message assistant"><div class="bubble"></div></div>');
-            $currentBubble = $msg.find('.bubble');
-            $messages.append($msg);
-            showTypingIndicator();
+            
+            if (showThinking) {
+                // BUFFER MODE: Don't create bubble yet - tools will appear first
+                // Bubble will be created in 'done' handler after tools
+                $currentBubble = null;
+                showTypingIndicator();
+            } else {
+                // NORMAL MODE: Create bubble for streaming
+                var $msg = $('<div class="message assistant"><div class="bubble"></div></div>');
+                $currentBubble = $msg.find('.bubble');
+                $messages.append($msg);
+                showTypingIndicator();
+            }
         });
         
         eventSource.addEventListener('message', function(e) {
@@ -243,12 +251,19 @@ $(document).ready(function() {
             // Show typing indicator and reset timeout on each stream chunk
             showTypingIndicator();
             resetTypingTimeout();
-            // Accumulate raw text and show as plain text while streaming
-            if ($currentBubble) {
-                currentRawText += data.content;
-                // Show plain text while streaming (faster, no re-parsing)
-                $currentBubble.text(currentRawText);
-                $messages.scrollTop($messages[0].scrollHeight);
+            
+            // Always accumulate raw text
+            currentRawText += data.content;
+            
+            if (showThinking) {
+                // BUFFER MODE: Just accumulate, don't display yet
+                // Response will appear after tools in 'done' handler
+            } else {
+                // NORMAL MODE: Stream to bubble
+                if ($currentBubble) {
+                    $currentBubble.text(currentRawText);
+                    $messages.scrollTop($messages[0].scrollHeight);
+                }
             }
         });
         
@@ -258,6 +273,14 @@ $(document).ready(function() {
             var data = JSON.parse(e.data);
             // Use finalText from server (has media refs enriched) instead of accumulated deltas
             var finalText = data.finalText || currentRawText;
+            
+            if (showThinking && !$currentBubble && finalText) {
+                // BUFFER MODE: Create bubble NOW (after tools have been shown)
+                var $msg = $('<div class="message assistant"><div class="bubble"></div></div>');
+                $currentBubble = $msg.find('.bubble');
+                $messages.append($msg);
+            }
+            
             if ($currentBubble && finalText) {
                 $currentBubble.html(renderMarkdown(finalText));
                 $currentBubble.closest('.message').data('raw-content', finalText);
@@ -378,8 +401,14 @@ $(document).ready(function() {
         eventSource.addEventListener('thinking', function(e) {
             if (!showThinking) return;
             var data = JSON.parse(e.data);
+            var content = data.content || '';
+            
+            // Show reasoning content in collapsible element
             var $thinking = $('<div class="thinking-content">' +
-                '<i class="bi bi-lightbulb"></i> ' + escapeHtml(data.content) +
+                '<details>' +
+                    '<summary><i class="bi bi-lightbulb"></i> Reasoning</summary>' +
+                    '<div class="thinking-text">' + escapeHtml(content) + '</div>' +
+                '</details>' +
             '</div>');
             $messages.append($thinking);
             $messages.scrollTop($messages[0].scrollHeight);

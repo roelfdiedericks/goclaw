@@ -154,12 +154,19 @@ func (idx *Indexer) runSync() {
 		return
 	}
 
-	L_debug("transcript: processing unindexed messages", "count", len(messages))
+	// Only DEBUG log if processing more than a couple messages
+	if len(messages) > 2 {
+		L_debug("transcript: processing unindexed messages", "count", len(messages))
+	} else {
+		L_trace("transcript: processing unindexed messages", "count", len(messages))
+	}
 
 	// Group messages into conversation chunks
 	chunks := idx.groupMessages(messages)
 
-	L_debug("transcript: grouped into chunks", "chunks", len(chunks))
+	if len(chunks) > 0 {
+		L_debug("transcript: grouped into chunks", "chunks", len(chunks))
+	}
 
 	// Generate embeddings and store chunks
 	chunksCreated := 0
@@ -189,14 +196,23 @@ func (idx *Indexer) runSync() {
 	}
 
 	elapsed := time.Since(startTime)
-	L_info("transcript: sync completed",
-		"messagesProcessed", len(messages),
-		"chunksCreated", chunksCreated,
-		"chunksDeferred", chunksDeferred,
-		"progress", progress,
-		"remaining", remaining,
-		"elapsed", elapsed.String(),
-	)
+	
+	// Only log at INFO when actual chunks were created, otherwise TRACE
+	if chunksCreated > 0 || chunksDeferred > 0 {
+		L_info("transcript: sync completed",
+			"messagesProcessed", len(messages),
+			"chunksCreated", chunksCreated,
+			"chunksDeferred", chunksDeferred,
+			"progress", progress,
+			"remaining", remaining,
+			"elapsed", elapsed.String(),
+		)
+	} else {
+		L_trace("transcript: sync completed (no chunks)",
+			"messagesProcessed", len(messages),
+			"progress", progress,
+		)
+	}
 }
 
 // getUnindexedMessages fetches messages that haven't been indexed yet

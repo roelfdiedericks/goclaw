@@ -142,7 +142,7 @@ func (s *Session) AddAssistantMessage(content string) {
 }
 
 // AddToolUse adds a tool use message to the session
-func (s *Session) AddToolUse(toolUseID, toolName string, input json.RawMessage) {
+func (s *Session) AddToolUse(toolUseID, toolName string, input json.RawMessage, thinking string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -152,6 +152,7 @@ func (s *Session) AddToolUse(toolUseID, toolName string, input json.RawMessage) 
 		ToolUseID: toolUseID,
 		ToolName:  toolName,
 		ToolInput: input,
+		Thinking:  thinking,
 		Timestamp: time.Now(),
 	})
 	s.UpdatedAt = time.Now()

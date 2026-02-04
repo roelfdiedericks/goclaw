@@ -100,6 +100,9 @@ type StoredMessage struct {
 	ToolResult   string // Result text (for tool_result)
 	ToolIsError  bool   // Whether tool result is an error
 
+	// Reasoning/thinking content (Kimi, Deepseek, Claude, etc.)
+	Thinking string
+
 	// Source metadata
 	Source    string // "telegram", "tui", "api", etc.
 	ChannelID string // Channel-specific ID (e.g., telegram message ID)

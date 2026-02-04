@@ -4,6 +4,7 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"html"
 	"regexp"
 	"strings"
 	"sync"
@@ -373,13 +374,24 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 	var editCount int
 	updateInterval := 500 * time.Millisecond // Don't update too frequently
 
-	L_debug("telegram: starting response stream", "chatID", c.Chat().ID)
+	// Get thinking mode preference upfront
+	prefs := b.getChatPrefs(c.Chat().ID)
+	bufferMode := prefs.ShowThinking // When thinking is ON, buffer response until end
+
+	L_debug("telegram: starting response stream", "chatID", c.Chat().ID, "bufferMode", bufferMode)
 
 	for event := range events {
 		switch e := event.(type) {
 		case gateway.EventTextDelta:
 			response.WriteString(e.Delta)
 
+			// In buffer mode (thinking ON): just accumulate, don't stream
+			// This ensures tools appear before the response in the timeline
+			if bufferMode {
+				continue
+			}
+
+			// Normal streaming mode (thinking OFF)
 			// Update message periodically to show streaming
 			// During streaming, send plain text (HTML formatting only on final)
 			if time.Since(lastUpdate) > updateInterval {
@@ -413,7 +425,6 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 			_ = c.Notify(tele.Typing)
 			
 			// Show tool start if thinking mode is on
-			prefs := b.getChatPrefs(c.Chat().ID)
 			if prefs.ShowThinking {
 				inputStr := string(e.Input)
 				if len(inputStr) > 1024 {
@@ -428,7 +439,6 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 			L_debug("telegram: tool ended", "tool", e.ToolName, "hasError", e.Error != "")
 			
 			// Show tool result if thinking mode is on
-			prefs := b.getChatPrefs(c.Chat().ID)
 			if prefs.ShowThinking {
 				status := "✓"
 				duration := ""
@@ -457,15 +467,11 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 		case gateway.EventThinking:
 			L_debug("telegram: thinking", "contentLen", len(e.Content))
 			
-			// Show thinking content if thinking mode is on
-			prefs := b.getChatPrefs(c.Chat().ID)
-			if prefs.ShowThinking {
-				content := e.Content
-				if len(content) > 1024 {
-					content = content[:1024] + "..."
-				}
-				thinkMsg := fmt.Sprintf("💡 <i>%s</i>", escapeHTML(content))
-				_, _ = b.bot.Send(c.Chat(), thinkMsg, &tele.SendOptions{ParseMode: tele.ModeHTML})
+			// Show reasoning content if thinking mode is on
+			if prefs.ShowThinking && e.Content != "" {
+				// Format as italic with thinking emoji prefix
+				thinkingText := fmt.Sprintf("💭 <i>%s</i>", html.EscapeString(e.Content))
+				_, _ = b.bot.Send(c.Chat(), thinkingText, &tele.SendOptions{ParseMode: tele.ModeHTML})
 			}
 
 		case gateway.EventAgentEnd:

@@ -35,6 +35,7 @@ type Response struct {
 	ToolName   string
 	ToolInput  json.RawMessage
 	StopReason string          // "end_turn", "tool_use", etc.
+	Thinking   string          // reasoning/thinking content (Kimi, Deepseek, etc.)
 
 	InputTokens            int
 	OutputTokens           int
@@ -104,15 +105,14 @@ func (p *AnthropicProvider) Model() string {
 }
 
 // WithModel returns a clone of the provider configured with a specific model
-// Note: Returns *AnthropicProvider until StreamMessage signature is updated to match Provider interface
-func (p *AnthropicProvider) WithModel(model string) *AnthropicProvider {
+func (p *AnthropicProvider) WithModel(model string) Provider {
 	clone := *p
 	clone.model = model
 	return &clone
 }
 
 // WithMaxTokens returns a clone of the provider with a different output limit
-func (p *AnthropicProvider) WithMaxTokens(max int) *AnthropicProvider {
+func (p *AnthropicProvider) WithMaxTokens(max int) Provider {
 	clone := *p
 	clone.maxTokens = max
 	return &clone

@@ -95,8 +95,7 @@ func (r *Registry) initProvider(name string, cfg ProviderConfig) error {
 	case "ollama":
 		provider, err = NewOllamaProvider(name, cfg)
 	case "openai":
-		// TODO: Implement OpenAI provider
-		return fmt.Errorf("openai provider not yet implemented")
+		provider, err = NewOpenAIProvider(name, cfg)
 	default:
 		return fmt.Errorf("unknown provider type: %s", cfg.Type)
 	}
@@ -117,7 +116,7 @@ func (r *Registry) initProvider(name string, cfg ProviderConfig) error {
 // GetProvider returns the first available provider for a purpose.
 // Iterates through the model chain until one is available.
 // Also applies maxTokens override from PurposeConfig if set.
-func (r *Registry) GetProvider(purpose string) (interface{}, error) {
+func (r *Registry) GetProvider(purpose string) (Provider, error) {
 	r.mu.RLock()
 	cfg, ok := r.purposes[purpose]
 	r.mu.RUnlock()
@@ -137,36 +136,47 @@ func (r *Registry) GetProvider(purpose string) (interface{}, error) {
 			continue
 		}
 
-		// Check availability
-		available := false
+		// Check availability and apply maxTokens override
+		var result Provider
 		switch p := provider.(type) {
 		case *AnthropicProvider:
-			available = p.IsAvailable()
-			if available && cfg.MaxTokens > 0 {
-				provider = p.WithMaxTokens(cfg.MaxTokens)
+			if !p.IsAvailable() {
+				continue
+			}
+			if cfg.MaxTokens > 0 {
+				result = p.WithMaxTokens(cfg.MaxTokens)
+			} else {
+				result = p
 			}
 		case *OllamaProvider:
-			available = p.IsAvailable()
-			if available && cfg.MaxTokens > 0 {
-				provider = p.WithMaxTokens(cfg.MaxTokens)
+			if !p.IsAvailable() {
+				continue
 			}
+			if cfg.MaxTokens > 0 {
+				result = p.WithMaxTokens(cfg.MaxTokens)
+			} else {
+				result = p
+			}
+		case *OpenAIProvider:
+			if !p.IsAvailable() {
+				continue
+			}
+			if cfg.MaxTokens > 0 {
+				result = p.WithMaxTokens(cfg.MaxTokens)
+			} else {
+				result = p
+			}
+		default:
+			L_warn("llm: unknown provider type", "purpose", purpose, "ref", ref)
+			continue
 		}
 
-		if available {
-			if i > 0 {
-				// Log fallback event when not using primary
-				L_info("llm: using fallback", "purpose", purpose, "model", ref, "position", i+1)
-			}
-			L_debug("llm: provider selected", "purpose", purpose, "ref", ref)
-			return provider, nil
+		if i > 0 {
+			// Log fallback event when not using primary
+			L_info("llm: using fallback", "purpose", purpose, "model", ref, "position", i+1)
 		}
-
-		// Log when primary or subsequent providers are unavailable
-		if i == 0 {
-			L_warn("llm: primary provider unavailable", "purpose", purpose, "model", ref)
-		} else {
-			L_debug("llm: fallback provider unavailable", "purpose", purpose, "model", ref)
-		}
+		L_debug("llm: provider selected", "purpose", purpose, "ref", ref)
+		return result, nil
 	}
 
 	return nil, fmt.Errorf("no available provider for %s (tried: %v)", purpose, cfg.Models)
@@ -218,6 +228,8 @@ func (r *Registry) resolveForPurpose(ref, purpose string) (interface{}, error) {
 			return p.WithModelForEmbedding(modelName), nil
 		}
 		return p.WithModel(modelName), nil
+	case *OpenAIProvider:
+		return p.WithModel(modelName), nil
 	default:
 		return nil, fmt.Errorf("provider %s has unexpected type", providerName)
 	}
@@ -245,6 +257,19 @@ func (r *Registry) GetOllamaProvider(purpose string) (*OllamaProvider, error) {
 	p, ok := provider.(*OllamaProvider)
 	if !ok {
 		return nil, fmt.Errorf("provider for %s is not Ollama", purpose)
+	}
+	return p, nil
+}
+
+// GetOpenAIProvider returns an OpenAI provider for a purpose (typed helper)
+func (r *Registry) GetOpenAIProvider(purpose string) (*OpenAIProvider, error) {
+	provider, err := r.GetProvider(purpose)
+	if err != nil {
+		return nil, err
+	}
+	p, ok := provider.(*OpenAIProvider)
+	if !ok {
+		return nil, fmt.Errorf("provider for %s is not OpenAI", purpose)
 	}
 	return p, nil
 }
