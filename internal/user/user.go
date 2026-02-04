@@ -20,6 +20,8 @@ type User struct {
 	TelegramID       string          // Telegram user ID (for telegram auth)
 	HTTPPasswordHash string          // Argon2id hash of HTTP password
 	Permissions      map[string]bool // tool whitelist (nil = use role defaults)
+	Thinking         bool            // default /thinking toggle state
+	Sandbox          bool            // enable file sandboxing
 }
 
 // VerifyHTTPPassword checks if the password matches the stored hash

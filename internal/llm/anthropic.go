@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	. "github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
@@ -25,6 +28,7 @@ type AnthropicProvider struct {
 	promptCaching bool
 	apiKey        string // Stored for cloning
 	baseURL       string // Custom API base URL (for Kimi K2, etc.)
+	metricPrefix  string // e.g., "llm/anthropic/anthropic/claude-opus-4-5"
 }
 
 // Response represents the LLM response
@@ -107,6 +111,7 @@ func (p *AnthropicProvider) Model() string {
 func (p *AnthropicProvider) WithModel(model string) Provider {
 	clone := *p
 	clone.model = model
+	clone.metricPrefix = fmt.Sprintf("llm/%s/%s/%s", p.Type(), p.Name(), model)
 	return &clone
 }
 
@@ -196,12 +201,16 @@ func (c *AnthropicProvider) StreamMessage(
 
 	// Repair tool_use/tool_result pairing before sending to API
 	// This fixes orphaned results, duplicates, and missing results from merged history
+	repairStart := time.Now()
 	anthropicMessages, repairStats := repairToolPairing(anthropicMessages)
+	repairDuration := time.Since(repairStart)
 	if repairStats.modified {
 		L_debug("repaired tool pairing",
 			"droppedOrphans", repairStats.droppedOrphans,
 			"droppedDuplicates", repairStats.droppedDuplicates,
-			"insertedMissing", repairStats.insertedMissing)
+			"insertedMissing", repairStats.insertedMissing,
+			"sanitizedIDs", repairStats.sanitizedIDs,
+			"duration", repairDuration)
 	}
 
 	// Convert tool definitions
@@ -241,6 +250,7 @@ func (c *AnthropicProvider) StreamMessage(
 
 	response := &Response{}
 	message := anthropic.Message{}
+	var firstTokenTime time.Time
 
 	for stream.Next() {
 		event := stream.Current()
@@ -255,6 +265,10 @@ func (c *AnthropicProvider) StreamMessage(
 		case anthropic.ContentBlockDeltaEvent:
 			switch deltaVariant := eventVariant.Delta.AsAny().(type) {
 			case anthropic.TextDelta:
+				// Capture time to first token
+				if firstTokenTime.IsZero() {
+					firstTokenTime = time.Now()
+				}
 				if onDelta != nil {
 					onDelta(deltaVariant.Text)
 				}
@@ -267,6 +281,11 @@ func (c *AnthropicProvider) StreamMessage(
 		L_error("stream error", "error", err)
 		// Dump full error to file for debugging
 		dumpAPIError(err, c.model, len(anthropicMessages), len(anthropicTools))
+		// Record metrics for failed request
+		if c.metricPrefix != "" {
+			MetricDuration(c.metricPrefix, "request", time.Since(startTime))
+			MetricFailWithReason(c.metricPrefix, "request_status", "stream_error")
+		}
 		return nil, fmt.Errorf("stream error: %w", err)
 	}
 
@@ -316,6 +335,50 @@ func (c *AnthropicProvider) StreamMessage(
 	} else {
 		L_info("llm: request completed", "provider", c.name, "duration", duration.Round(time.Millisecond),
 			"inputTokens", response.InputTokens, "outputTokens", response.OutputTokens)
+	}
+
+	// Record metrics
+	if c.metricPrefix != "" {
+		MetricDuration(c.metricPrefix, "request", duration)
+		MetricAdd(c.metricPrefix, "input_tokens", int64(response.InputTokens))
+		MetricAdd(c.metricPrefix, "output_tokens", int64(response.OutputTokens))
+		if response.CacheReadTokens > 0 {
+			MetricAdd(c.metricPrefix, "cache_read_tokens", int64(response.CacheReadTokens))
+		}
+		if response.CacheCreationTokens > 0 {
+			MetricAdd(c.metricPrefix, "cache_creation_tokens", int64(response.CacheCreationTokens))
+		}
+		MetricOutcome(c.metricPrefix, "stop_reason", response.StopReason)
+		MetricSuccess(c.metricPrefix, "request_status")
+
+		// Time to first token (streaming latency)
+		if !firstTokenTime.IsZero() {
+			MetricDuration(c.metricPrefix, "time_to_first_token", firstTokenTime.Sub(startTime))
+		}
+
+		// Tool repair timing (always record, even if no repairs needed)
+		MetricDuration(c.metricPrefix, "tool_repair", repairDuration)
+
+		// Cache hit/miss tracking (only when caching is enabled)
+		if c.promptCaching {
+			if response.CacheReadTokens > 0 {
+				MetricHit(c.metricPrefix, "prompt_cache")
+			} else {
+				MetricMiss(c.metricPrefix, "prompt_cache")
+			}
+		}
+
+		// Tool use tracking
+		if response.ToolName != "" {
+			MetricOutcome(c.metricPrefix, "tool_requested", response.ToolName)
+		}
+
+		// Context usage as percentage of window (threshold at 80%)
+		contextWindow := c.ContextTokens()
+		if contextWindow > 0 && response.InputTokens > 0 {
+			usagePct := float64(response.InputTokens) / float64(contextWindow) * 100
+			MetricThreshold(c.metricPrefix, "context_usage_pct", usagePct, 80.0)
+		}
 	}
 
 	return response, nil
@@ -508,6 +571,37 @@ type repairStats struct {
 	droppedOrphans    int
 	droppedDuplicates int
 	insertedMissing   int
+	sanitizedIDs      int
+}
+
+// validToolIDPattern matches Anthropic's required format: ^[a-zA-Z0-9_-]+$
+var validToolIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// isValidToolID checks if the ID matches Anthropic's required pattern
+func isValidToolID(id string) bool {
+	return id != "" && validToolIDPattern.MatchString(id)
+}
+
+// sanitizeToolID ensures the ID matches Anthropic's pattern ^[a-zA-Z0-9_-]+$
+// Invalid characters are replaced with underscores
+func sanitizeToolID(id string) string {
+	if isValidToolID(id) {
+		return id
+	}
+	var result strings.Builder
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' || r == '-' {
+			result.WriteRune(r)
+		} else {
+			result.WriteRune('_')
+		}
+	}
+	// Ensure non-empty result
+	if result.Len() == 0 {
+		return "tool_" + fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return result.String()
 }
 
 // repairToolPairing fixes tool_use/tool_result pairing issues in the message stream.
@@ -521,37 +615,84 @@ type repairStats struct {
 func repairToolPairing(messages []anthropic.MessageParam) ([]anthropic.MessageParam, repairStats) {
 	var stats repairStats
 
-	// === PASS 1: Build complete inventory ===
-	// Map tool_use ID -> the tool_use block
+	// === PASS 1: Build complete inventory with sanitized IDs ===
+	// Map sanitized tool_use ID -> the tool_use block (with sanitized ID)
 	allToolUses := make(map[string]anthropic.ToolUseBlockParam)
-	// Map tool_result ID -> the tool_result block
+	// Map sanitized tool_result ID -> the tool_result block (with sanitized ID)
 	allToolResults := make(map[string]anthropic.ToolResultBlockParam)
+	// Map original ID -> sanitized ID (for cross-provider compatibility)
+	idMapping := make(map[string]string)
 
 	for _, msg := range messages {
 		for _, block := range msg.Content {
 			if block.OfToolUse != nil {
-				allToolUses[block.OfToolUse.ID] = *block.OfToolUse
+				originalID := block.OfToolUse.ID
+				sanitizedID := sanitizeToolID(originalID)
+				if sanitizedID != originalID {
+					stats.sanitizedIDs++
+					stats.modified = true
+				}
+				idMapping[originalID] = sanitizedID
+				// Store with sanitized ID
+				toolUse := *block.OfToolUse
+				toolUse.ID = sanitizedID
+				allToolUses[sanitizedID] = toolUse
 			}
 			if block.OfToolResult != nil {
+				originalID := block.OfToolResult.ToolUseID
+				sanitizedID := sanitizeToolID(originalID)
+				if sanitizedID != originalID {
+					stats.sanitizedIDs++
+					stats.modified = true
+				}
+				idMapping[originalID] = sanitizedID
 				// Keep the first occurrence (in case of duplicates)
-				if _, exists := allToolResults[block.OfToolResult.ToolUseID]; !exists {
-					allToolResults[block.OfToolResult.ToolUseID] = *block.OfToolResult
+				if _, exists := allToolResults[sanitizedID]; !exists {
+					toolResult := *block.OfToolResult
+					toolResult.ToolUseID = sanitizedID
+					allToolResults[sanitizedID] = toolResult
 				}
 			}
 		}
 	}
 
-	L_trace("repair pass 1 complete", "toolUses", len(allToolUses), "toolResults", len(allToolResults))
+	L_trace("repair pass 1 complete", "toolUses", len(allToolUses), "toolResults", len(allToolResults), "sanitizedIDs", stats.sanitizedIDs)
 
 	// === PASS 2: Reconstruct with proper pairing ===
 	var result []anthropic.MessageParam
-	usedToolResultIDs := make(map[string]bool) // Track which results we've already placed
+	usedToolResultIDs := make(map[string]bool) // Track which results we've already placed (uses sanitized IDs)
 
 	for _, msg := range messages {
 		// Handle assistant messages - ensure tool_uses have results immediately after
 		if msg.Role == anthropic.MessageParamRoleAssistant {
-			result = append(result, msg)
-			toolIDs := extractToolUseIDs(msg)
+			// Rebuild assistant message with sanitized tool IDs
+			var newContent []anthropic.ContentBlockParamUnion
+			for _, block := range msg.Content {
+				if block.OfToolUse != nil {
+					// Use sanitized ID
+					sanitizedID := sanitizeToolID(block.OfToolUse.ID)
+					toolUse := *block.OfToolUse
+					toolUse.ID = sanitizedID
+					newContent = append(newContent, anthropic.ContentBlockParamUnion{
+						OfToolUse: &toolUse,
+					})
+				} else {
+					newContent = append(newContent, block)
+				}
+			}
+			newMsg := anthropic.MessageParam{
+				Role:    msg.Role,
+				Content: newContent,
+			}
+			result = append(result, newMsg)
+
+			// Extract sanitized tool IDs
+			toolIDs := make(map[string]bool)
+			for _, block := range newContent {
+				if block.OfToolUse != nil {
+					toolIDs[block.OfToolUse.ID] = true
+				}
+			}
 
 			if len(toolIDs) == 0 {
 				continue
@@ -559,27 +700,25 @@ func repairToolPairing(messages []anthropic.MessageParam) ([]anthropic.MessagePa
 
 			// Build the tool_result message that must follow
 			var toolResults []anthropic.ContentBlockParamUnion
-			for toolID := range toolIDs {
-				if usedToolResultIDs[toolID] {
+			for sanitizedID := range toolIDs {
+				if usedToolResultIDs[sanitizedID] {
 					// Already placed this result (shouldn't happen, but safety check)
 					continue
 				}
 
-				if tr, exists := allToolResults[toolID]; exists {
-					// Found the result in history - use it
+				if tr, exists := allToolResults[sanitizedID]; exists {
+					// Found the result in history - use it (already has sanitized ID)
 					toolResults = append(toolResults, anthropic.ContentBlockParamUnion{
 						OfToolResult: &tr,
 					})
-					usedToolResultIDs[toolID] = true
-					if !immediatelyFollows(messages, msg, toolID) {
-						stats.modified = true
-						L_trace("relocated tool_result to proper position", "toolID", toolID)
-					}
+					usedToolResultIDs[sanitizedID] = true
+					stats.modified = true
+					L_trace("relocated tool_result to proper position", "toolID", sanitizedID)
 				} else {
 					// No result anywhere - insert synthetic
 					toolResults = append(toolResults, anthropic.ContentBlockParamUnion{
 						OfToolResult: &anthropic.ToolResultBlockParam{
-							ToolUseID: toolID,
+							ToolUseID: sanitizedID,
 							Content: []anthropic.ToolResultBlockParamContentUnion{
 								{
 									OfText: &anthropic.TextBlockParam{
@@ -590,10 +729,10 @@ func repairToolPairing(messages []anthropic.MessageParam) ([]anthropic.MessagePa
 							IsError: anthropic.Bool(true),
 						},
 					})
-					usedToolResultIDs[toolID] = true
+					usedToolResultIDs[sanitizedID] = true
 					stats.insertedMissing++
 					stats.modified = true
-					L_trace("inserted synthetic tool_result", "toolID", toolID)
+					L_trace("inserted synthetic tool_result", "toolID", sanitizedID)
 				}
 			}
 
@@ -609,28 +748,31 @@ func repairToolPairing(messages []anthropic.MessageParam) ([]anthropic.MessagePa
 		// Handle user messages - filter out tool_results (we handle them above)
 		if msg.Role == anthropic.MessageParamRoleUser {
 			var nonToolResultBlocks []anthropic.ContentBlockParamUnion
-			var skippedResults int
 
 			for _, block := range msg.Content {
 				if block.OfToolResult != nil {
-					toolID := block.OfToolResult.ToolUseID
-					if usedToolResultIDs[toolID] {
+					// Use sanitized ID for lookup
+					sanitizedID := sanitizeToolID(block.OfToolResult.ToolUseID)
+					if usedToolResultIDs[sanitizedID] {
 						// Already placed by the assistant message handler
-						skippedResults++
 						continue
 					}
 					// Orphaned result - no matching tool_use exists
-					if _, hasToolUse := allToolUses[toolID]; !hasToolUse {
+					if _, hasToolUse := allToolUses[sanitizedID]; !hasToolUse {
 						stats.droppedOrphans++
 						stats.modified = true
-						L_trace("dropped orphaned tool_result", "toolID", toolID)
+						L_trace("dropped orphaned tool_result", "toolID", sanitizedID)
 						continue
 					}
 					// This shouldn't happen - result exists but wasn't used?
-					// Keep it to avoid data loss
-					L_warn("unexpected tool_result not yet placed", "toolID", toolID)
-					nonToolResultBlocks = append(nonToolResultBlocks, block)
-					usedToolResultIDs[toolID] = true
+					// Keep it to avoid data loss (with sanitized ID)
+					L_warn("unexpected tool_result not yet placed", "toolID", sanitizedID)
+					toolResult := *block.OfToolResult
+					toolResult.ToolUseID = sanitizedID
+					nonToolResultBlocks = append(nonToolResultBlocks, anthropic.ContentBlockParamUnion{
+						OfToolResult: &toolResult,
+					})
+					usedToolResultIDs[sanitizedID] = true
 				} else {
 					nonToolResultBlocks = append(nonToolResultBlocks, block)
 				}

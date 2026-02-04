@@ -143,10 +143,12 @@ func (s *Server) setupRoutes() http.Handler {
 	mux.HandleFunc("/api/events", wrap(s.handleEvents))
 	mux.HandleFunc("/api/status", wrap(s.handleStatus))
 	mux.HandleFunc("/api/media", wrap(s.handleMedia))
+	mux.HandleFunc("/api/metrics", wrap(s.handleMetricsAPI))
 
 	// Web UI routes
 	mux.HandleFunc("/", wrap(s.handleIndex))
 	mux.HandleFunc("/chat", wrap(s.handleChat))
+	mux.HandleFunc("/metrics", wrap(s.handleMetrics))
 
 	return mux
 }

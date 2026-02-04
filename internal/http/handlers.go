@@ -14,6 +14,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
+	"github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 )
 
@@ -548,4 +549,54 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 
 	// Serve the file with proper content type detection
 	http.ServeFile(w, r, absPath)
+}
+
+// handleMetricsAPI handles GET /api/metrics - JSON metrics snapshot
+func (s *Server) handleMetricsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	u := getUserFromContext(r)
+	if u == nil {
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+
+	snapshot := metrics.GetInstance().GetSnapshot()
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(snapshot)
+}
+
+// handleMetrics handles GET /metrics - metrics dashboard page
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	// Reload templates in dev mode
+	if err := s.reloadTemplatesIfDev(); err != nil {
+		L_error("http: template reload error", "error", err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+		return
+	}
+
+	u := getUserFromContext(r)
+	if u == nil {
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+
+	data := struct {
+		Title     string
+		User      *UserTemplateData
+		Timestamp time.Time
+	}{
+		Title:     "GoClaw - Metrics",
+		User:      &UserTemplateData{Name: u.Name, Username: u.ID, IsOwner: u.IsOwner()},
+		Timestamp: time.Now(),
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.templates.ExecuteTemplate(w, "metrics.html", data); err != nil {
+		L_error("http: template error", "error", err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+	}
 }

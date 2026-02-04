@@ -13,6 +13,7 @@ import (
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	. "github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
@@ -22,10 +23,11 @@ type OllamaProvider struct {
 	name          string // Provider instance name (e.g., "ollama-local")
 	url           string
 	model         string
-	maxTokens     int // Output limit (0 = use model default)
-	contextTokens int // Model's context window in tokens (queried from Ollama)
-	dimensions    int // Embedding dimensions (detected on first embed)
-	embeddingOnly bool // True if this is an embedding-only model (skip chat availability check)
+	maxTokens     int    // Output limit (0 = use model default)
+	contextTokens int    // Model's context window in tokens (queried from Ollama)
+	dimensions    int    // Embedding dimensions (detected on first embed)
+	embeddingOnly bool   // True if this is an embedding-only model (skip chat availability check)
+	metricPrefix  string // e.g., "llm/ollama/ollama/nomic-embed-text"
 	client        *http.Client
 	available     bool
 	mu            sync.RWMutex
@@ -385,6 +387,11 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 		c.available = false
 		c.mu.Unlock()
 		L_error("ollama: request failed, marking unavailable", "error", err)
+		// Record metrics for failed request
+		if c.metricPrefix != "" {
+			MetricDuration(c.metricPrefix, "request", time.Since(startTime))
+			MetricFailWithReason(c.metricPrefix, "request_status", "connection_error")
+		}
 		return "", fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
@@ -393,6 +400,11 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 		body, _ := io.ReadAll(resp.Body)
 		errMsg := fmt.Sprintf("ollama returned status %d: %s", resp.StatusCode, string(body))
 		L_error("ollama: request failed", "status", resp.StatusCode, "body", string(body))
+		// Record metrics for failed request
+		if c.metricPrefix != "" {
+			MetricDuration(c.metricPrefix, "request", time.Since(startTime))
+			MetricFailWithReason(c.metricPrefix, "request_status", fmt.Sprintf("http_%d", resp.StatusCode))
+		}
 		return "", fmt.Errorf(errMsg)
 	}
 
@@ -411,6 +423,12 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 	c.mu.Lock()
 	c.available = true
 	c.mu.Unlock()
+
+	// Record metrics
+	if c.metricPrefix != "" {
+		MetricDuration(c.metricPrefix, "request", duration)
+		MetricSuccess(c.metricPrefix, "request_status")
+	}
 
 	return responseText, nil
 }
@@ -433,6 +451,7 @@ func (p *OllamaProvider) Type() string {
 func (p *OllamaProvider) WithModel(model string) Provider {
 	clone := *p
 	clone.model = model
+	clone.metricPrefix = fmt.Sprintf("llm/%s/%s/%s", p.Type(), p.Name(), model)
 	// Initialize model in background
 	go clone.initializeModel()
 	return &clone
@@ -444,6 +463,7 @@ func (p *OllamaProvider) WithModelForEmbedding(model string) *OllamaProvider {
 	clone := *p
 	clone.model = model
 	clone.embeddingOnly = true
+	clone.metricPrefix = fmt.Sprintf("llm/%s/%s/%s", p.Type(), p.Name(), model)
 	// Initialize model in background (will use embedding check)
 	go clone.initializeModel()
 	return &clone
@@ -538,6 +558,8 @@ func (p *OllamaProvider) EmbedBatch(ctx context.Context, texts []string) ([][]fl
 
 // embedSingle sends a single embedding request to Ollama
 func (p *OllamaProvider) embedSingle(ctx context.Context, text string) ([]float32, error) {
+	startTime := time.Now()
+
 	reqBody := ollamaEmbedRequest{
 		Model:  p.model,
 		Prompt: text,
@@ -559,12 +581,22 @@ func (p *OllamaProvider) embedSingle(ctx context.Context, text string) ([]float3
 
 	resp, err := p.client.Do(req)
 	if err != nil {
+		// Record metrics for failed request
+		if p.metricPrefix != "" {
+			MetricDuration(p.metricPrefix, "embed", time.Since(startTime))
+			MetricFailWithReason(p.metricPrefix, "embed_status", "connection_error")
+		}
 		return nil, fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		// Record metrics for failed request
+		if p.metricPrefix != "" {
+			MetricDuration(p.metricPrefix, "embed", time.Since(startTime))
+			MetricFailWithReason(p.metricPrefix, "embed_status", fmt.Sprintf("http_%d", resp.StatusCode))
+		}
 		return nil, fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -587,6 +619,12 @@ func (p *OllamaProvider) embedSingle(ctx context.Context, text string) ([]float3
 			L_debug("ollama: detected embedding dimensions", "dimensions", p.dimensions)
 		}
 		p.mu.Unlock()
+	}
+
+	// Record metrics for successful request
+	if p.metricPrefix != "" {
+		MetricDuration(p.metricPrefix, "embed", time.Since(startTime))
+		MetricSuccess(p.metricPrefix, "embed_status")
 	}
 
 	return embedding, nil

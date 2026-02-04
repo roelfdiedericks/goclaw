@@ -43,12 +43,18 @@ type Bot struct {
 	cancel context.CancelFunc
 }
 
-// getChatPrefs returns preferences for a chat, creating if needed
-func (b *Bot) getChatPrefs(chatID int64) *ChatPreferences {
+// getChatPrefs returns preferences for a chat, creating if needed.
+// If user is provided and prefs don't exist, initializes ShowThinking from user preference.
+func (b *Bot) getChatPrefs(chatID int64, u *user.User) *ChatPreferences {
 	if prefs, ok := b.chatPrefs.Load(chatID); ok {
 		return prefs.(*ChatPreferences)
 	}
-	prefs := &ChatPreferences{ShowThinking: false}
+	// Initialize from user preference if available
+	showThinking := false
+	if u != nil {
+		showThinking = u.Thinking
+	}
+	prefs := &ChatPreferences{ShowThinking: showThinking}
 	b.chatPrefs.Store(chatID, prefs)
 	return prefs
 }
@@ -113,7 +119,9 @@ func (b *Bot) setupHandlers() {
 	// Handle /thinking command (channel-specific preference)
 	b.bot.Handle("/thinking", func(c tele.Context) error {
 		chatID := c.Chat().ID
-		prefs := b.getChatPrefs(chatID)
+		userID := fmt.Sprintf("%d", c.Sender().ID)
+		u := b.users.FromIdentity("telegram", userID)
+		prefs := b.getChatPrefs(chatID, u)
 		
 		// Parse subcommand
 		arg := strings.ToLower(strings.TrimSpace(c.Message().Payload))
@@ -375,7 +383,9 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 	updateInterval := 500 * time.Millisecond // Don't update too frequently
 
 	// Get thinking mode preference upfront
-	prefs := b.getChatPrefs(c.Chat().ID)
+	userID := fmt.Sprintf("%d", c.Sender().ID)
+	u := b.users.FromIdentity("telegram", userID)
+	prefs := b.getChatPrefs(c.Chat().ID, u)
 	bufferMode := prefs.ShowThinking // When thinking is ON, buffer response until end
 
 	L_debug("telegram: starting response stream", "chatID", c.Chat().ID, "bufferMode", bufferMode)

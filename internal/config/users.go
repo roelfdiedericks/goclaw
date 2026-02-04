@@ -18,10 +18,26 @@ type UsersConfig map[string]*UserEntry
 // UserEntry represents a single user in users.json
 // The map key (username) is used for HTTP auth and non-owner session keys
 type UserEntry struct {
-	Name             string `json:"name"`                        // Display name
-	Role             string `json:"role"`                        // "owner" or "user"
-	TelegramID       string `json:"telegram_id,omitempty"`       // Telegram user ID (numeric string)
+	Name             string `json:"name"`                         // Display name
+	Role             string `json:"role"`                         // "owner" or "user"
+	TelegramID       string `json:"telegram_id,omitempty"`        // Telegram user ID (numeric string)
 	HTTPPasswordHash string `json:"http_password_hash,omitempty"` // Argon2id hash of HTTP password
+	Thinking         *bool  `json:"thinking,omitempty"`           // Default /thinking toggle state (nil = role default)
+	Sandbox          *bool  `json:"sandbox,omitempty"`            // Enable file sandboxing (nil = role default)
+}
+
+// applyDefaults sets role-based defaults for nil Thinking and Sandbox fields
+func (e *UserEntry) applyDefaults() {
+	isOwner := e.Role == "owner"
+
+	if e.Thinking == nil {
+		val := isOwner // true for owner, false for others
+		e.Thinking = &val
+	}
+	if e.Sandbox == nil {
+		val := !isOwner // false for owner, true for others
+		e.Sandbox = &val
+	}
 }
 
 // Username validation: lowercase alphanumeric + underscore, 1-32 chars, starts with letter
@@ -82,7 +98,7 @@ func LoadUsers() (UsersConfig, error) {
 		logging.L_info("users: loaded", "path", loadedFrom, "count", len(users))
 	}
 
-	// Validate all users
+	// Validate all users and apply defaults
 	ownerCount := 0
 	usersWithoutCredentials := 0
 	for username, entry := range users {
@@ -99,6 +115,8 @@ func LoadUsers() (UsersConfig, error) {
 		if entry.TelegramID == "" && entry.HTTPPasswordHash == "" {
 			usersWithoutCredentials++
 		}
+		// Apply role-based defaults for thinking/sandbox
+		entry.applyDefaults()
 	}
 
 	if usersWithoutCredentials > 0 {

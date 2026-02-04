@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -66,10 +68,28 @@ func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 		return "", fmt.Errorf("invalid input: %w", err)
 	}
 
-	L_debug("read tool: reading file", "path", params.Path, "startLine", params.StartLine, "endLine", params.EndLine)
+	// Check if user has sandbox disabled
+	sandboxed := true
+	if sessCtx := GetSessionContext(ctx); sessCtx != nil && sessCtx.User != nil {
+		sandboxed = sessCtx.User.Sandbox
+	}
 
-	// Validate path and read file (sandbox validation)
-	content, err := sandbox.ReadFile(params.Path, t.workingDir, t.workspaceRoot)
+	L_debug("read tool: reading file", "path", params.Path, "startLine", params.StartLine, "endLine", params.EndLine, "sandboxed", sandboxed)
+
+	var content []byte
+	var err error
+
+	if sandboxed {
+		// Validate path and read file (sandbox validation)
+		content, err = sandbox.ReadFile(params.Path, t.workingDir, t.workspaceRoot)
+	} else {
+		// No sandbox: resolve relative paths from workingDir, allow any absolute path
+		resolved := params.Path
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(t.workingDir, resolved)
+		}
+		content, err = os.ReadFile(resolved)
+	}
 	if err != nil {
 		L_warn("read tool: failed", "path", params.Path, "error", err)
 		return "", err
