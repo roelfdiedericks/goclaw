@@ -166,6 +166,8 @@ type CompactionSubConfig struct {
 	ReserveTokens    int  `json:"reserveTokens"`    // Tokens to reserve before compaction (default: 4000)
 	MaxMessages      int  `json:"maxMessages"`      // Trigger compaction if messages exceed this (default: 500, 0 = disabled)
 	PreferCheckpoint bool `json:"preferCheckpoint"` // Use existing checkpoint for summary if available
+	KeepPercent      int  `json:"keepPercent"`      // Percent of messages to keep after compaction (default: 50)
+	MinMessages      int  `json:"minMessages"`      // Minimum messages to always keep (default: 20)
 }
 
 // MemoryFlushConfig configures memory flush prompting
@@ -433,6 +435,8 @@ func Load() (*LoadResult, error) {
 					ReserveTokens:    4000,
 					MaxMessages:      500, // Trigger compaction if > 500 messages
 					PreferCheckpoint: true,
+					KeepPercent:      50, // Keep 50% of messages
+					MinMessages:      20, // Never drop below 20 messages
 				},
 			},
 			MemoryFlush: MemoryFlushConfig{

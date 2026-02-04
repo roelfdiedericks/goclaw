@@ -9,12 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
-
-// Global provider getter - set once at startup from main.go
-// This avoids import cycles (llm imports session, so session can't import llm)
-var GetSummarizationClient func() SummarizationClient
 
 // CompactionManager handles session compaction with background retry
 type CompactionManager struct {
@@ -37,6 +34,10 @@ type CompactionManagerConfig struct {
 	ReserveTokens    int  // Tokens to reserve before compaction (default: 4000)
 	MaxMessages      int  // Trigger compaction if messages exceed this (default: 500, 0 = disabled)
 	PreferCheckpoint bool // Use checkpoint for summary if available
+
+	// Retention settings
+	KeepPercent int // Percent of messages to keep after compaction (default: 50)
+	MinMessages int // Minimum messages to always keep (default: 20)
 
 	// Retry settings
 	RetryIntervalSeconds int // Background retry interval (default: 60, 0 = disabled)
@@ -70,6 +71,12 @@ func NewCompactionManager(cfg *CompactionManagerConfig) *CompactionManager {
 	if cfg.ReserveTokens == 0 {
 		cfg.ReserveTokens = 4000
 	}
+	if cfg.KeepPercent == 0 {
+		cfg.KeepPercent = 50
+	}
+	if cfg.MinMessages == 0 {
+		cfg.MinMessages = 20
+	}
 	if cfg.RetryIntervalSeconds == 0 {
 		cfg.RetryIntervalSeconds = 60
 	}
@@ -80,12 +87,22 @@ func NewCompactionManager(cfg *CompactionManagerConfig) *CompactionManager {
 	}
 }
 
-// getClient returns the current summarization client from the global getter.
+// getClient returns the current summarization client from the LLM registry.
 func (m *CompactionManager) getClient() SummarizationClient {
-	if GetSummarizationClient == nil {
+	reg := llm.GetRegistry()
+	if reg == nil {
 		return nil
 	}
-	return GetSummarizationClient()
+	provider, err := reg.GetProvider("summarization")
+	if err != nil {
+		L_debug("compaction: no summarization provider", "error", err)
+		return nil
+	}
+	// The provider implements SummarizationClient interface
+	if client, ok := provider.(SummarizationClient); ok {
+		return client
+	}
+	return nil
 }
 
 // SetStore sets the store for persistence
@@ -173,7 +190,9 @@ func (m *CompactionManager) ShouldCompact(sess *Session) bool {
 	return shouldCompact
 }
 
-// Compact performs compaction on a session (immediate/direct call)
+// Compact performs compaction on a session.
+// Truncation happens immediately (fast), summary generation is async (slow).
+// Returns quickly - user is not blocked waiting for LLM summary.
 func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionFile string) (*CompactionResult, error) {
 	if m == nil {
 		return nil, fmt.Errorf("compaction manager not initialized")
@@ -183,19 +202,18 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 	if !m.inProgress.CompareAndSwap(false, true) {
 		return nil, fmt.Errorf("compaction already in progress")
 	}
-	defer m.inProgress.Store(false)
+	// Note: inProgress is cleared after truncation, not after summary generation
 
 	tokensBefore := sess.GetTotalTokens()
-	L_info("starting compaction", "tokensBefore", tokensBefore, "messages", len(sess.Messages))
+	messagesBefore := len(sess.Messages)
+	L_info("starting compaction", "tokensBefore", tokensBefore, "messages", messagesBefore)
 
 	var summary string
 	var fromCheckpoint bool
-	var emergencyTruncation bool
-	var usedFallback bool
 	var summaryModel string
-	var details *CompactionDetails
+	var needsAsyncSummary bool
 
-	// Try fast path: use recent checkpoint
+	// Fast path: use recent checkpoint (no async needed)
 	if m.config.PreferCheckpoint && sess.LastCheckpoint != nil {
 		checkpointTokens := sess.LastCheckpoint.Checkpoint.TokensAtCheckpoint
 		if checkpointTokens >= tokensBefore/2 {
@@ -208,44 +226,35 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 		}
 	}
 
-	// Slow path: generate summary via LLM
+	// No checkpoint available - will generate summary async
 	if summary == "" {
-		L_info("compaction: generating summary via LLM", "messages", len(sess.Messages), "tokens", tokensBefore)
-		var err error
-		summary, usedFallback, summaryModel, err = m.generateSummary(ctx, sess.Messages)
-		if err != nil {
-			// Fall back to checkpoint if available
-			if sess.LastCheckpoint != nil {
-				summary = m.buildSummaryFromCheckpoint(sess.LastCheckpoint)
-				fromCheckpoint = true
-				summaryModel = "checkpoint"
-				L_warn("LLM summary failed, falling back to checkpoint", "error", err)
-			} else {
-				// Emergency: no checkpoint, no LLM - aggressive truncation
-				summary = m.buildBasicSummary(sess)
-				emergencyTruncation = true
-				summaryModel = "truncation"
-				L_warn("all LLMs failed, using emergency truncation (keeping last 20%)", "error", err)
-			}
-		}
+		summary = fmt.Sprintf("[Summary pending - %d messages compacted at %s]",
+			messagesBefore, time.Now().Format("15:04:05"))
+		summaryModel = "pending"
+		needsAsyncSummary = true
 	}
 
-	// Extract file tracking details
-	details = m.extractFileDetails(sess)
+	// Extract file tracking details before truncation
+	details := m.extractFileDetails(sess)
 
-	// Normal compaction keeps 50%, emergency keeps 70%
-	// This preserves more context and reduces amnesia after compaction
-	keepPercent := 50
-	if emergencyTruncation {
-		keepPercent = 70
+	// Capture messages for async summary generation BEFORE truncation
+	var messagesToSummarize []Message
+	if needsAsyncSummary {
+		messagesToSummarize = make([]Message, messagesBefore)
+		copy(messagesToSummarize, sess.Messages)
 	}
-	firstKeptID := m.findFirstKeptID(sess, keepPercent)
 
-	// Write compaction record (use sess.Key for multi-user support)
+	// Calculate what to keep based on config
+	firstKeptID := m.findFirstKeptID(sess, m.config.KeepPercent)
+
+	// Get session key for storage
 	sessionKey := sess.Key
 	if sessionKey == "" {
-		sessionKey = PrimarySession // fallback for legacy sessions without Key set
+		sessionKey = PrimarySession
 	}
+
+	// Write compaction record with placeholder or checkpoint summary
+	var compactionID string
 	if m.store != nil {
 		storedComp := &StoredCompaction{
 			ID:                GenerateRecordID(),
@@ -253,20 +262,23 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 			Summary:           summary,
 			FirstKeptEntryID:  firstKeptID,
 			TokensBefore:      tokensBefore,
-			NeedsSummaryRetry: emergencyTruncation,
+			NeedsSummaryRetry: needsAsyncSummary,
 		}
+		compactionID = storedComp.ID
+
 		if parentID := sess.GetLastRecordID(); parentID != nil {
 			storedComp.ParentID = *parentID
 		}
 
 		if err := m.store.AppendCompaction(ctx, sessionKey, storedComp); err != nil {
+			m.inProgress.Store(false)
 			return nil, fmt.Errorf("failed to write compaction to store: %w", err)
 		}
 
 		sess.SetLastRecordID(storedComp.ID)
 	}
 
-	// Truncate messages in session
+	// Truncate messages immediately (fast)
 	m.truncateMessages(sess, firstKeptID)
 
 	// Recalculate token count after truncation
@@ -278,6 +290,15 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 	sess.ResetFlushedThresholds()
 
 	tokensAfter := sess.GetTotalTokens()
+
+	// Release the lock - truncation is done, summary can proceed in background
+	m.inProgress.Store(false)
+
+	// Fire off async summary generation if needed
+	if needsAsyncSummary && len(messagesToSummarize) > 0 {
+		go m.generateSummaryAsync(context.Background(), sessionKey, compactionID, messagesToSummarize)
+	}
+
 	result := &CompactionResult{
 		Summary:             summary,
 		TokensBefore:        tokensBefore,
@@ -285,23 +306,59 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 		MessagesAfter:       len(sess.Messages),
 		FirstKeptEntryID:    firstKeptID,
 		FromCheckpoint:      fromCheckpoint,
-		EmergencyTruncation: emergencyTruncation,
-		UsedFallback:        usedFallback,
+		EmergencyTruncation: false, // No longer needed - async handles failures gracefully
+		UsedFallback:        false,
 		Model:               summaryModel,
 		Details:             details,
 	}
 
-	L_info("compaction completed",
+	L_info("compaction truncation completed",
 		"tokensBefore", tokensBefore,
 		"tokensAfter", tokensAfter,
 		"messagesAfter", len(sess.Messages),
-		"model", summaryModel,
-		"fromCheckpoint", fromCheckpoint,
-		"emergencyTruncation", emergencyTruncation,
-		"usedFallback", usedFallback,
+		"summaryModel", summaryModel,
+		"asyncSummary", needsAsyncSummary,
 		"compactionCount", sess.CompactionCount)
 
 	return result, nil
+}
+
+// generateSummaryAsync generates a summary in the background and updates the compaction record.
+// Called after truncation is complete - user is not blocked.
+func (m *CompactionManager) generateSummaryAsync(ctx context.Context, sessionKey, compactionID string, messages []Message) {
+	L_info("compaction: starting async summary generation",
+		"compactionID", compactionID,
+		"messages", len(messages))
+
+	startTime := time.Now()
+
+	// Generate summary via LLM
+	summary, _, model, err := m.generateSummary(ctx, messages)
+	elapsed := time.Since(startTime)
+
+	if err != nil {
+		L_warn("compaction: async summary generation failed, will retry later",
+			"compactionID", compactionID,
+			"error", err,
+			"elapsed", elapsed.Round(time.Second))
+		// NeedsSummaryRetry is already true - background retry loop will handle it
+		return
+	}
+
+	// Update compaction record with real summary
+	if m.store != nil {
+		if err := m.store.UpdateCompactionSummary(ctx, compactionID, summary); err != nil {
+			L_warn("compaction: failed to update summary in store",
+				"compactionID", compactionID,
+				"error", err)
+			return
+		}
+	}
+
+	L_info("compaction: async summary completed",
+		"compactionID", compactionID,
+		"model", model,
+		"elapsed", elapsed.Round(time.Second))
 }
 
 // generateSummary generates a summary using the configured client
@@ -461,21 +518,6 @@ func (m *CompactionManager) buildSummaryFromCheckpoint(cp *CheckpointRecord) str
 	return strings.Join(parts, "\n")
 }
 
-// buildBasicSummary builds a minimal summary when no LLM is available
-func (m *CompactionManager) buildBasicSummary(sess *Session) string {
-	msgCount := len(sess.Messages)
-	userCount := 0
-	for _, msg := range sess.Messages {
-		if msg.Role == "user" {
-			userCount++
-		}
-	}
-
-	return fmt.Sprintf("Summary unavailable due to context limits. Older messages were truncated.\n\n"+
-		"Session contained %d messages (%d user messages) before compaction at %s.",
-		msgCount, userCount, time.Now().Format(time.RFC3339))
-}
-
 // extractFileDetails extracts read/modified files from session messages
 func (m *CompactionManager) extractFileDetails(sess *Session) *CompactionDetails {
 	readFiles := make(map[string]bool)
@@ -533,9 +575,14 @@ func (m *CompactionManager) findFirstKeptID(sess *Session, keepPercent int) stri
 	}
 
 	keepCount := (len(sess.Messages) * keepPercent) / 100
-	// Minimum floor of 20 messages to prevent amnesia
-	if keepCount < 20 {
-		keepCount = 20
+
+	// Apply minimum floor to prevent amnesia
+	minMessages := m.config.MinMessages
+	if minMessages <= 0 {
+		minMessages = 20
+	}
+	if keepCount < minMessages {
+		keepCount = minMessages
 	}
 	if keepCount > len(sess.Messages) {
 		keepCount = len(sess.Messages)
@@ -549,6 +596,7 @@ func (m *CompactionManager) findFirstKeptID(sess *Session, keepPercent int) stri
 	L_debug("compaction: calculating keep range",
 		"totalMessages", len(sess.Messages),
 		"keepPercent", keepPercent,
+		"minMessages", minMessages,
 		"keepCount", keepCount,
 		"startIdx", startIdx)
 

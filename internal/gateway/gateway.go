@@ -145,6 +145,8 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 		ReserveTokens:        sumCfg.Compaction.ReserveTokens,
 		MaxMessages:          sumCfg.Compaction.MaxMessages,
 		PreferCheckpoint:     sumCfg.Compaction.PreferCheckpoint,
+		KeepPercent:          sumCfg.Compaction.KeepPercent,
+		MinMessages:          sumCfg.Compaction.MinMessages,
 		RetryIntervalSeconds: sumCfg.RetryIntervalSeconds,
 	}
 	g.compactor = session.NewCompactionManager(compactorCfg)
@@ -153,37 +155,19 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 		"reserveTokens", sumCfg.Compaction.ReserveTokens,
 		"maxMessages", sumCfg.Compaction.MaxMessages,
 		"preferCheckpoint", sumCfg.Compaction.PreferCheckpoint,
+		"keepPercent", sumCfg.Compaction.KeepPercent,
+		"minMessages", sumCfg.Compaction.MinMessages,
 		"retryInterval", sumCfg.RetryIntervalSeconds)
 
-	// Set up lazy provider resolution for summarization.
-	// The resolver is called when compaction/checkpoint actually needs the client,
-	// not at startup when providers may still be initializing.
-	sumResolver := func() session.SummarizationClient {
-		provider, err := registry.GetProvider("summarization")
-		if err != nil {
-			L_debug("summarization: provider unavailable, using agent", "error", err)
-			return agentProvider
-		}
-		switch p := provider.(type) {
-		case *llm.OllamaProvider:
-			return p
-		case *llm.AnthropicProvider:
-			return p
-		default:
-			L_debug("summarization: unknown provider type, using agent")
-			return agentProvider
-		}
-	}
-	g.compactor.SetProviderResolver(sumResolver)
-	g.checkpointGenerator.SetProviderResolver(sumResolver)
-	L_info("summarization: lazy provider resolution configured")
+	// Summarization uses llm.GetRegistry() directly - no setup needed here
+	L_info("summarization: will use registry for lazy provider resolution")
 
 	// Initialize memory manager if enabled
 	if cfg.MemorySearch.Enabled {
 		L_info("memory: initializing manager", "workspace", cfg.Gateway.WorkingDir)
 
-		// Set up lazy provider resolution for embeddings
-		embedResolver := func() memory.EmbeddingProvider {
+		// Set up global embedding provider getter (can't use llm directly in memory due to cycle)
+		memory.GetEmbeddingProvider = func() memory.EmbeddingProvider {
 			provider, err := registry.GetProvider("embeddings")
 			if err != nil {
 				return nil
@@ -194,7 +178,7 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 			return nil
 		}
 
-		memMgr, err := memory.NewManager(cfg.MemorySearch, cfg.Gateway.WorkingDir, embedResolver)
+		memMgr, err := memory.NewManager(cfg.MemorySearch, cfg.Gateway.WorkingDir)
 		if err != nil {
 			L_warn("failed to create memory manager", "error", err)
 		} else {
@@ -851,15 +835,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				"tokensAfter", sess.GetTotalTokens(),
 				"messagesAfter", sess.MessageCount(),
 				"fromCheckpoint", result.FromCheckpoint,
-				"emergencyTruncation", result.EmergencyTruncation)
-
-			// Notify user if emergency truncation was used
-			if result.EmergencyTruncation {
-				events <- EventTextDelta{
-					RunID: runID,
-					Delta: "[System: Compaction failed - session memory truncated to last 20%. Some context may be lost.]\n\n",
-				}
-			}
+				"summaryModel", result.Model)
 		}
 	}
 
@@ -902,7 +878,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					"maxTokens", maxTokens,
 					"usage", fmt.Sprintf("%.1f%%", usagePercent*100))
 				if g.compactor != nil {
-					result, err := g.compactor.Compact(ctx, sess, sess.SessionFile)
+					_, err := g.compactor.Compact(ctx, sess, sess.SessionFile)
 					if err != nil {
 						L_error("pre-flight compaction failed", "error", err)
 					} else {
@@ -911,13 +887,6 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 						L_info("pre-flight compaction completed",
 							"newTokens", sess.GetTotalTokens(),
 							"newUsage", fmt.Sprintf("%.1f%%", sess.GetContextUsage()*100))
-						// Notify user if emergency truncation
-						if result.EmergencyTruncation {
-							events <- EventTextDelta{
-								RunID: runID,
-								Delta: "[System: Compaction failed - session memory truncated to last 20%. Some context may be lost.]\n\n",
-							}
-						}
 					}
 				}
 			}
@@ -944,7 +913,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 						"error", llmErr.Error())
 
 					// Perform emergency compaction
-					result, compactErr := g.compactor.Compact(ctx, sess, sess.SessionFile)
+					_, compactErr := g.compactor.Compact(ctx, sess, sess.SessionFile)
 					if compactErr != nil {
 						L_error("recovery compaction failed", "error", compactErr)
 						break // Can't recover
@@ -955,14 +924,6 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					L_info("recovery compaction completed, retrying API call",
 						"newTokens", sess.GetTotalTokens(),
 						"newMessages", len(messages))
-
-					// Notify user if emergency truncation
-					if result.EmergencyTruncation {
-						events <- EventTextDelta{
-							RunID: runID,
-							Delta: "[System: Compaction failed - session memory truncated to last 20%. Some context may be lost.]\n\n",
-						}
-					}
 					continue // Retry the API call
 				}
 				L_error("context overflow: max retries exceeded", "retries", retry)

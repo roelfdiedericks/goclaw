@@ -245,9 +245,11 @@ func (c *OllamaClient) checkAvailability() {
 	var err error
 	if c.embeddingOnly {
 		// For embedding models, test with a simple embedding request
-		_, err = c.Embed(ctx, "test")
+		// Use embedSingle directly to bypass IsAvailable check (we're testing availability!)
+		_, err = c.embedSingle(ctx, "test")
 	} else {
 		// For chat models, try a simple chat request
+		// SimpleMessage doesn't check IsAvailable, safe to call here
 		_, err = c.SimpleMessage(ctx, "hi", "respond with 'ok'")
 	}
 

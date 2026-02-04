@@ -3,15 +3,12 @@ package session
 import (
 	"context"
 	"fmt"
+
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
-// SummarizationClient is the interface for LLM clients used in checkpoint/compaction.
-// This matches the llm.Provider interface methods, avoiding import cycles.
-type SummarizationClient interface {
-	SimpleMessage(ctx context.Context, userMessage, systemPrompt string) (string, error)
-	Model() string
-	IsAvailable() bool
-}
+// Type alias for SummarizationClient - defined in types package
+type SummarizationClient = types.SummarizationClient
 
 // GenerateCheckpointWithClient generates a checkpoint using the provided client
 func GenerateCheckpointWithClient(ctx context.Context, client SummarizationClient, messages []Message, currentTokens int) (*CheckpointData, error) {

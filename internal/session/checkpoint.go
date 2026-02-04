@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -15,7 +16,6 @@ type CheckpointGenerator struct {
 	config       *CheckpointGeneratorConfig
 	store        Store
 	sessionKey   string
-	resolver     ProviderResolver // Lazy provider resolution (from registry)
 	mu           sync.Mutex
 	lastGenTime  time.Time
 	lastGenTurns int
@@ -44,21 +44,21 @@ func (g *CheckpointGenerator) SetStore(store Store, sessionKey string) {
 	g.sessionKey = sessionKey
 }
 
-// SetProviderResolver sets the function used to get the summarization client.
-// The resolver is called lazily when checkpoint generation needs the client.
-func (g *CheckpointGenerator) SetProviderResolver(resolver ProviderResolver) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.resolver = resolver
-}
-
-// getClient returns the current summarization client by calling the resolver.
-// Note: resolver is set once at init and not modified, so no lock needed.
+// getClient returns the current summarization client from the LLM registry.
 func (g *CheckpointGenerator) getClient() SummarizationClient {
-	if g.resolver == nil {
+	reg := llm.GetRegistry()
+	if reg == nil {
 		return nil
 	}
-	return g.resolver()
+	provider, err := reg.GetProvider("summarization")
+	if err != nil {
+		L_debug("checkpoint: no summarization provider", "error", err)
+		return nil
+	}
+	if client, ok := provider.(SummarizationClient); ok {
+		return client
+	}
+	return nil
 }
 
 // ShouldCheckpoint determines if a checkpoint should be generated

@@ -5,32 +5,19 @@ import (
 	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
-// ImageAttachment represents an image attached to a message
-type ImageAttachment struct {
-	Data     string `json:"data"`             // Base64-encoded image data
-	MimeType string `json:"mimeType"`         // MIME type (e.g., "image/jpeg")
-	Source   string `json:"source,omitempty"` // Source (e.g., "telegram", "browser")
-}
+// Ensure json is available for other code in this file
+var _ = json.RawMessage{}
 
-// Message represents a single message in a conversation
-type Message struct {
-	ID        string          `json:"id"`
-	Role      string          `json:"role"`      // "user", "assistant", "tool_use", "tool_result"
-	Content   string          `json:"content"`
-	Source    string          `json:"source"`    // "tui", "telegram", etc.
-	Timestamp time.Time       `json:"timestamp"`
-	ToolUseID string          `json:"toolUseId,omitempty"` // for tool_use and tool_result
-	ToolName  string          `json:"toolName,omitempty"`  // for tool_use
-	ToolInput json.RawMessage `json:"toolInput,omitempty"` // for tool_use
-	Images    []ImageAttachment `json:"images,omitempty"`  // Image attachments (for multimodal)
-}
-
-// HasImages returns true if the message contains any images
-func (m *Message) HasImages() bool {
-	return len(m.Images) > 0
-}
+// Type aliases for shared types - allows session code to use session.Message
+// while the actual definition lives in types package (avoiding import cycles)
+type (
+	ImageAttachment = types.ImageAttachment
+	Message         = types.Message
+)
 
 // Session holds the conversation state for a single session
 type Session struct {
