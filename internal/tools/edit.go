@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -66,8 +68,6 @@ func (t *EditTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 		return "", fmt.Errorf("invalid input: %w", err)
 	}
 
-	L_debug("edit tool: editing file", "path", params.Path, "oldLen", len(params.OldString), "newLen", len(params.NewString))
-
 	// Validate path is not empty
 	if params.Path == "" {
 		return "", fmt.Errorf("path is required")
@@ -79,15 +79,36 @@ func (t *EditTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 		return "", fmt.Errorf("old_string cannot be empty")
 	}
 
-	// Validate path (sandbox check)
-	resolved, err := sandbox.ValidatePath(params.Path, t.workingDir, t.workspaceRoot)
-	if err != nil {
-		L_warn("edit tool: path validation failed", "path", params.Path, "error", err)
-		return "", err
+	// Check if user has sandbox disabled
+	sandboxed := true
+	if sessCtx := GetSessionContext(ctx); sessCtx != nil && sessCtx.User != nil {
+		sandboxed = sessCtx.User.Sandbox
 	}
 
-	// Read file using sandbox-validated path
-	content, err := sandbox.ReadFile(params.Path, t.workingDir, t.workspaceRoot)
+	L_debug("edit tool: editing file", "path", params.Path, "oldLen", len(params.OldString), "newLen", len(params.NewString), "sandboxed", sandboxed)
+
+	var resolved string
+	var content []byte
+	var err error
+
+	if sandboxed {
+		// Validate path (sandbox check)
+		resolved, err = sandbox.ValidatePath(params.Path, t.workingDir, t.workspaceRoot)
+		if err != nil {
+			L_warn("edit tool: path validation failed", "path", params.Path, "error", err)
+			return "", err
+		}
+
+		// Read file using sandbox-validated path
+		content, err = sandbox.ReadFile(params.Path, t.workingDir, t.workspaceRoot)
+	} else {
+		// No sandbox: resolve relative paths from workingDir, allow any absolute path
+		resolved = params.Path
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(t.workingDir, resolved)
+		}
+		content, err = os.ReadFile(resolved)
+	}
 	if err != nil {
 		L_warn("edit tool: failed to read", "path", params.Path, "error", err)
 		return "", err
@@ -110,7 +131,12 @@ func (t *EditTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 	newText := strings.Replace(text, params.OldString, params.NewString, 1)
 
 	// Write back atomically (preserves permissions)
-	if err := sandbox.AtomicWriteFile(resolved, []byte(newText), 0644); err != nil {
+	if sandboxed {
+		err = sandbox.AtomicWriteFile(resolved, []byte(newText), 0644)
+	} else {
+		err = os.WriteFile(resolved, []byte(newText), 0644)
+	}
+	if err != nil {
 		L_error("edit tool: failed to write", "path", params.Path, "error", err)
 		return "", err
 	}

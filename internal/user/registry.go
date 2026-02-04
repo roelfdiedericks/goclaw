@@ -28,6 +28,8 @@ func NewRegistryFromUsers(users config.UsersConfig) *Registry {
 			Role:             Role(entry.Role),
 			TelegramID:       entry.TelegramID,
 			HTTPPasswordHash: entry.HTTPPasswordHash,
+			Thinking:         entry.Thinking != nil && *entry.Thinking,
+			Sandbox:          entry.Sandbox == nil || *entry.Sandbox, // default true if nil
 		}
 
 		r.users[username] = user

@@ -16,6 +16,14 @@ import (
 // Matches OpenClaw's UNICODE_SPACES pattern
 var unicodeSpaces = regexp.MustCompile(`[\x{00A0}\x{2000}-\x{200A}\x{202F}\x{205F}\x{3000}]`)
 
+// Denied files - these are blocked even within the sandbox
+// Contains sensitive configuration like API keys and password hashes
+var deniedFiles = []string{
+	"users.json",
+	"goclaw.json",
+	"openclaw.json",
+}
+
 // normalizeUnicodeSpaces replaces unicode space characters with regular spaces
 func normalizeUnicodeSpaces(s string) string {
 	return unicodeSpaces.ReplaceAllString(s, " ")
@@ -81,6 +89,15 @@ func ValidatePath(inputPath, workingDir, workspaceRoot string) (string, error) {
 	if relative != "" && relative != "." {
 		if err := assertNoSymlink(relative, rootResolved); err != nil {
 			return "", err
+		}
+	}
+
+	// Check against denied files list
+	filename := filepath.Base(resolved)
+	for _, denied := range deniedFiles {
+		if filename == denied {
+			L_warn("sandbox: access to denied file blocked", "path", inputPath, "file", denied)
+			return "", fmt.Errorf("access denied: %s is a protected file", denied)
 		}
 	}
 

@@ -1,0 +1,398 @@
+{{template "header" .}}
+
+<!-- Metrics-specific styles -->
+<style>
+    .metric-tree {
+        font-family: 'Courier New', monospace;
+    }
+    .tree-node {
+        cursor: pointer;
+        user-select: none;
+        padding: 2px 0;
+    }
+    .tree-node:hover {
+        background-color: #f0f0f0;
+    }
+    .tree-children {
+        margin-left: 20px;
+    }
+    .metric-value {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        margin-left: 10px;
+    }
+    .health-good {
+        color: #28a745;
+    }
+    .health-warning {
+        color: #ffc107;
+    }
+    .health-critical {
+        color: #dc3545;
+    }
+    .metric-details {
+        background-color: #f8f9fa;
+        padding: 8px;
+        border-radius: 4px;
+        margin-top: 4px;
+        font-size: 0.9em;
+    }
+    .tree-icon {
+        display: inline-block;
+        width: 20px;
+        text-align: center;
+    }
+    .metric-badge {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 0.85em;
+        margin-left: 5px;
+    }
+    .timing-badge {
+        background-color: #e3f2fd;
+        color: #1976d2;
+    }
+    .hit-miss-badge {
+        background-color: #f3e5f5;
+        color: #7b1fa2;
+    }
+    .counter-badge {
+        background-color: #e8f5e9;
+        color: #388e3c;
+    }
+    .gauge-badge {
+        background-color: #fff3e0;
+        color: #f57c00;
+    }
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 10px;
+        margin-top: 8px;
+    }
+    .stat-item {
+        background: white;
+        padding: 5px 10px;
+        border-radius: 4px;
+        border: 1px solid #dee2e6;
+    }
+    .stat-label {
+        font-size: 0.75em;
+        color: #6c757d;
+        text-transform: uppercase;
+    }
+    .stat-value {
+        font-size: 1.1em;
+        font-weight: 600;
+    }
+</style>
+
+<h1>Metrics</h1>
+
+<!-- Breadcrumb and Controls -->
+<div class="row mb-3">
+    <div class="col">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="/">Home</a></li>
+                <li class="breadcrumb-item active" aria-current="page">Metrics</li>
+            </ol>
+        </nav>
+    </div>
+    <div class="col-auto">
+        <button class="btn btn-sm btn-outline-secondary me-2" onclick="expandAll()">
+            <i class="bi bi-arrows-expand"></i> Expand All
+        </button>
+        <button class="btn btn-sm btn-outline-secondary me-2" onclick="collapseAll()">
+            <i class="bi bi-arrows-collapse"></i> Collapse All
+        </button>
+        <button class="btn btn-sm btn-primary" onclick="refreshMetrics()">
+            <i class="bi bi-arrow-clockwise"></i> Refresh
+        </button>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div>
+                    <i class="bi bi-diagram-3"></i> Metrics Tree
+                    <span class="text-muted small ms-2" id="last-update"></span>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="metrics-tree" class="metric-tree">
+                    <div class="text-muted">Loading metrics...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let metricsData = {};
+    let expandedNodes = new Set();
+
+    // Initialize with root expanded
+    function initializeExpanded() {
+        expandedNodes.add('root');
+    }
+
+    function formatDuration(ms) {
+        if (ms >= 1000) {
+            return ms.toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }) + 'ms';
+        }
+        return ms.toFixed(2) + 'ms';
+    }
+
+    function formatNumber(num) {
+        if (num >= 1000000) {
+            return (num / 1000000).toFixed(2) + 'M';
+        }
+        if (num >= 1000) {
+            return (num / 1000).toFixed(1) + 'K';
+        }
+        return num.toString();
+    }
+
+    function getHealthClass(health) {
+        switch(health) {
+            case 0: return 'health-good';
+            case 1: return 'health-warning';
+            case 2: return 'health-critical';
+            default: return '';
+        }
+    }
+
+    function getHealthIcon(health) {
+        switch(health) {
+            case 0: return '🟢';
+            case 1: return '🟡';
+            case 2: return '🔴';
+            default: return '';
+        }
+    }
+
+    function getMetricBadgeClass(type) {
+        switch(type) {
+            case 'timing': return 'timing-badge';
+            case 'hit_miss': return 'hit-miss-badge';
+            case 'counter': return 'counter-badge';
+            case 'gauge': return 'gauge-badge';
+            case 'success_fail': return 'timing-badge';
+            case 'outcome': return 'hit-miss-badge';
+            case 'error': return 'counter-badge';
+            case 'condition': return 'gauge-badge';
+            case 'threshold': return 'gauge-badge';
+            default: return '';
+        }
+    }
+
+    function buildTree(metrics) {
+        const tree = {};
+        
+        Object.entries(metrics).forEach(([path, metric]) => {
+            const parts = path.split('/');
+            let current = tree;
+            
+            parts.forEach((part, index) => {
+                if (!current[part]) {
+                    current[part] = {
+                        children: {},
+                        metric: null,
+                        path: parts.slice(0, index + 1).join('/')
+                    };
+                }
+                
+                if (index === parts.length - 1) {
+                    current[part].metric = metric;
+                }
+                
+                current = current[part].children;
+            });
+        });
+        
+        return tree;
+    }
+
+    function renderTreeNode(name, node, level = 0) {
+        const nodeId = node.path || name;
+        const isExpanded = expandedNodes.has(nodeId);
+        const hasChildren = Object.keys(node.children).length > 0;
+        
+        let html = '<div class="tree-node" data-node-id="' + nodeId + '">';
+        
+        // Indentation
+        html += '<span style="margin-left: ' + (level * 20) + 'px;"></span>';
+        
+        // Expand/collapse icon
+        if (hasChildren) {
+            html += '<span class="tree-icon" onclick="toggleNode(\'' + nodeId + '\')">';
+            html += isExpanded ? '▼' : '▶';
+            html += '</span>';
+        } else {
+            html += '<span class="tree-icon">•</span>';
+        }
+        
+        // Node name
+        html += '<span class="fw-bold">' + name + '</span>';
+        
+        // Metric data
+        if (node.metric) {
+            const metric = node.metric;
+            const healthClass = getHealthClass(metric.health);
+            const healthIcon = getHealthIcon(metric.health);
+            const badgeClass = getMetricBadgeClass(metric.type);
+            
+            html += '<span class="metric-badge ' + badgeClass + '">' + metric.type + '</span>';
+            html += '<span class="' + healthClass + '"> ' + healthIcon + '</span>';
+            
+            html += '<span class="metric-value">';
+            
+            if (metric.type === 'timing' && metric.data) {
+                const data = metric.data;
+                html += 'avg: ' + formatDuration(data.avg_ms);
+                html += ', count: ' + formatNumber(data.count);
+                if (data.p95_ms > 0) {
+                    html += ', p95: ' + formatDuration(data.p95_ms);
+                }
+            } else if (metric.type === 'hit_miss' && metric.data) {
+                const data = metric.data;
+                html += 'hits: ' + formatNumber(data.hits);
+                html += ', misses: ' + formatNumber(data.misses);
+                html += ' (' + data.hit_rate.toFixed(1) + '% hit rate)';
+            } else if (metric.type === 'counter' && metric.data) {
+                html += 'value: ' + formatNumber(metric.data.value);
+            } else if (metric.type === 'gauge' && metric.data) {
+                const data = metric.data;
+                html += 'value: ' + formatNumber(data.value);
+                html += ' (min: ' + formatNumber(data.min);
+                html += ', max: ' + formatNumber(data.max) + ')';
+            } else if (metric.type === 'success_fail' && metric.data) {
+                const data = metric.data;
+                html += '✓ ' + formatNumber(data.success);
+                html += ' / ✗ ' + formatNumber(data.failures);
+                html += ' (' + data.success_rate.toFixed(1) + '%)';
+            } else if (metric.type === 'outcome' && metric.data) {
+                const data = metric.data;
+                html += 'total: ' + formatNumber(data.total);
+                if (data.top_outcomes && data.top_outcomes.length > 0) {
+                    html += ' [' + data.top_outcomes[0].name + ': ' + 
+                            data.top_outcomes[0].percentage.toFixed(1) + '%]';
+                }
+            } else if (metric.type === 'error' && metric.data) {
+                const data = metric.data;
+                html += 'errors: ' + formatNumber(data.total_errors);
+                if (data.last_error_type) {
+                    html += ' [last: ' + data.last_error_type + ']';
+                }
+            } else if (metric.type === 'condition' && metric.data) {
+                const data = metric.data;
+                html += data.current_value ? '✓ TRUE' : '✗ FALSE';
+                html += ' (' + data.true_rate.toFixed(1) + '% true)';
+            } else if (metric.type === 'threshold' && metric.data) {
+                const data = metric.data;
+                html += 'value: ' + data.value.toFixed(2);
+                html += ' / threshold: ' + data.threshold.toFixed(2);
+                html += data.is_exceeded ? ' ⚠️ EXCEEDED' : ' ✓';
+            }
+            
+            html += '</span>';
+            
+            // Detailed stats (collapsible) for timing metrics
+            if (isExpanded && metric.type === 'timing' && metric.data) {
+                html += '<div class="metric-details">';
+                html += '<div class="stats-grid">';
+                html += '<div class="stat-item"><div class="stat-label">Min</div><div class="stat-value">' + formatDuration(metric.data.min_ms) + '</div></div>';
+                html += '<div class="stat-item"><div class="stat-label">Max</div><div class="stat-value">' + formatDuration(metric.data.max_ms) + '</div></div>';
+                html += '<div class="stat-item"><div class="stat-label">Last</div><div class="stat-value">' + formatDuration(metric.data.last_ms) + '</div></div>';
+                html += '<div class="stat-item"><div class="stat-label">Total Calls</div><div class="stat-value">' + formatNumber(metric.data.count) + '</div></div>';
+                html += '</div>';
+                html += '</div>';
+            }
+        }
+        
+        html += '</div>';
+        
+        // Render children if expanded
+        if (hasChildren && isExpanded) {
+            html += '<div class="tree-children">';
+            Object.entries(node.children).forEach(([childName, childNode]) => {
+                html += renderTreeNode(childName, childNode, level + 1);
+            });
+            html += '</div>';
+        }
+        
+        return html;
+    }
+
+    function renderTree(metrics) {
+        const tree = buildTree(metrics);
+        let html = '';
+        
+        Object.entries(tree).forEach(([name, node]) => {
+            html += renderTreeNode(name, node);
+        });
+        
+        if (html === '') {
+            html = '<div class="text-muted">No metrics collected yet</div>';
+        }
+        
+        document.getElementById('metrics-tree').innerHTML = html;
+    }
+
+    function toggleNode(nodeId) {
+        if (expandedNodes.has(nodeId)) {
+            expandedNodes.delete(nodeId);
+        } else {
+            expandedNodes.add(nodeId);
+        }
+        renderTree(metricsData);
+    }
+
+    function expandAll() {
+        // Add all nodes to expanded set
+        Object.keys(metricsData).forEach(path => {
+            const parts = path.split('/');
+            for (let i = 1; i <= parts.length; i++) {
+                expandedNodes.add(parts.slice(0, i).join('/'));
+            }
+        });
+        expandedNodes.add('root');
+        renderTree(metricsData);
+    }
+
+    function collapseAll() {
+        expandedNodes.clear();
+        renderTree(metricsData);
+    }
+
+    async function refreshMetrics() {
+        try {
+            const response = await fetch('/api/metrics');
+            metricsData = await response.json();
+            
+            renderTree(metricsData);
+            
+            document.getElementById('last-update').textContent = 
+                'Last updated: ' + new Date().toLocaleTimeString();
+        } catch (error) {
+            console.error('Failed to fetch metrics:', error);
+            document.getElementById('metrics-tree').innerHTML = 
+                '<div class="text-danger">Failed to load metrics: ' + error.message + '</div>';
+        }
+    }
+
+    // Initialize
+    initializeExpanded();
+    refreshMetrics();
+    
+    // Auto-refresh every 5 seconds
+    setInterval(refreshMetrics, 5000);
+</script>
+
+{{template "footer" .}}

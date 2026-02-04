@@ -155,14 +155,15 @@ func (c *HTTPChannel) getOrCreateSession(sessionID string, u *user.User) *SSESes
 	}
 
 	sess := &SSESession{
-		SessionID:   sessionID,
-		UserID:      u.ID,
-		User:        u,
-		eventBuffer: make([]BufferedEvent, 0, maxEventBuffer),
-		nextEventID: 1,
+		SessionID:    sessionID,
+		UserID:       u.ID,
+		User:         u,
+		eventBuffer:  make([]BufferedEvent, 0, maxEventBuffer),
+		nextEventID:  1,
+		ShowThinking: u.Thinking, // Initialize from user preference
 	}
 	c.sessions[sessionID] = sess
-	L_debug("http: session created", "session", sessionID, "user", u.ID)
+	L_debug("http: session created", "session", sessionID, "user", u.ID, "showThinking", u.Thinking)
 	return sess
 }
 

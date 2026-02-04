@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
@@ -64,10 +66,32 @@ func (t *WriteTool) Execute(ctx context.Context, input json.RawMessage) (string,
 		return "", fmt.Errorf("path is required")
 	}
 
-	L_debug("write tool: writing file", "path", params.Path, "bytes", len(params.Content))
+	// Check if user has sandbox disabled
+	sandboxed := true
+	if sessCtx := GetSessionContext(ctx); sessCtx != nil && sessCtx.User != nil {
+		sandboxed = sessCtx.User.Sandbox
+	}
 
-	// Validate path and write atomically (sandbox validation + atomic write)
-	if err := sandbox.WriteFileValidated(params.Path, t.workingDir, t.workspaceRoot, []byte(params.Content), 0644); err != nil {
+	L_debug("write tool: writing file", "path", params.Path, "bytes", len(params.Content), "sandboxed", sandboxed)
+
+	var err error
+	if sandboxed {
+		// Validate path and write atomically (sandbox validation + atomic write)
+		err = sandbox.WriteFileValidated(params.Path, t.workingDir, t.workspaceRoot, []byte(params.Content), 0644)
+	} else {
+		// No sandbox: resolve relative paths from workingDir, allow any absolute path
+		resolved := params.Path
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(t.workingDir, resolved)
+		}
+		// Create parent directories if needed
+		if err := os.MkdirAll(filepath.Dir(resolved), 0755); err != nil {
+			L_error("write tool: failed to create parent dirs", "path", params.Path, "error", err)
+			return "", err
+		}
+		err = os.WriteFile(resolved, []byte(params.Content), 0644)
+	}
+	if err != nil {
 		L_error("write tool failed", "path", params.Path, "error", err)
 		return "", err
 	}
