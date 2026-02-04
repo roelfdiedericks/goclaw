@@ -824,6 +824,27 @@ func (s *SQLiteStore) GetPreviousCompaction(ctx context.Context, sessionKey stri
 	return &comp, nil
 }
 
+// DeleteOrphanedToolMessages deletes ALL tool_use and tool_result messages from a session
+// This is a nuclear option to fix corrupted tool pairing in session history
+func (s *SQLiteStore) DeleteOrphanedToolMessages(ctx context.Context, sessionKey string) (int, error) {
+	// Delete ALL tool messages (both tool_use and tool_result)
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM messages
+		WHERE session_key = ?
+		AND role IN ('tool_use', 'tool_result')
+	`, sessionKey)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete tool messages: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows > 0 {
+		L_info("sqlite: deleted all tool messages", "count", rows, "sessionKey", sessionKey)
+	}
+
+	return int(rows), nil
+}
+
 // Helper functions
 
 func nullString(s string) interface{} {

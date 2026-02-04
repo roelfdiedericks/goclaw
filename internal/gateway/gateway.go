@@ -275,6 +275,8 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 					"watchEnabled", cfg.Skills.Watch)
 			}
 		}
+	} else {
+		L_info("skills: disabled by configuration")
 	}
 
 	return g, nil
@@ -1264,6 +1266,11 @@ func (g *Gateway) ResetSession(sessionID string) error {
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
 	return nil
+}
+
+// CleanOrphanedToolMessages deletes orphaned tool_use/tool_result messages from a session
+func (g *Gateway) CleanOrphanedToolMessages(ctx context.Context, sessionKey string) (int, error) {
+	return g.sessions.CleanOrphanedToolMessages(ctx, sessionKey)
 }
 
 // Health returns the gateway health status

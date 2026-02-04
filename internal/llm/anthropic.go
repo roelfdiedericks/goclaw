@@ -17,6 +17,7 @@ import (
 
 // AnthropicProvider implements the Provider interface for Anthropic's Claude API.
 // Supports streaming, native tool calling, and prompt caching.
+// Also works with Anthropic-compatible APIs (e.g., Kimi K2) via BaseURL.
 type AnthropicProvider struct {
 	name          string // Provider instance name (e.g., "anthropic")
 	client        *anthropic.Client
@@ -24,6 +25,7 @@ type AnthropicProvider struct {
 	maxTokens     int
 	promptCaching bool
 	apiKey        string // Stored for cloning
+	baseURL       string // Custom API base URL (for Kimi K2, etc.)
 }
 
 // Response represents the LLM response
@@ -51,19 +53,29 @@ func (r *Response) HasToolUse() bool {
 
 // NewAnthropicProvider creates a new Anthropic provider from ProviderConfig.
 // This is the preferred constructor for the unified provider system.
+// Supports custom BaseURL for Anthropic-compatible APIs (e.g., Kimi K2).
 func NewAnthropicProvider(name string, cfg ProviderConfig) (*AnthropicProvider, error) {
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("anthropic API key not configured")
 	}
 
-	client := anthropic.NewClient(option.WithAPIKey(cfg.APIKey))
+	// Build client options
+	opts := []option.RequestOption{option.WithAPIKey(cfg.APIKey)}
+	if cfg.BaseURL != "" {
+		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
+	}
+	client := anthropic.NewClient(opts...)
 
 	maxTokens := cfg.MaxTokens
 	if maxTokens == 0 {
 		maxTokens = 8192
 	}
 
-	L_debug("anthropic provider created", "name", name, "maxTokens", maxTokens, "promptCaching", cfg.PromptCaching)
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = "(default)"
+	}
+	L_debug("anthropic provider created", "name", name, "baseURL", baseURL, "maxTokens", maxTokens, "promptCaching", cfg.PromptCaching)
 
 	return &AnthropicProvider{
 		name:          name,
@@ -72,6 +84,7 @@ func NewAnthropicProvider(name string, cfg ProviderConfig) (*AnthropicProvider, 
 		maxTokens:     maxTokens,
 		promptCaching: cfg.PromptCaching,
 		apiKey:        cfg.APIKey,
+		baseURL:       cfg.BaseURL,
 	}, nil
 }
 
@@ -500,122 +513,72 @@ type repairStats struct {
 
 // repairToolPairing fixes tool_use/tool_result pairing issues in the message stream.
 // Anthropic requires that each tool_result must immediately follow its matching tool_use.
-// This function:
-// - Drops orphaned tool_results (no matching tool_use in previous assistant message)
-// - Drops duplicate tool_results for the same tool_use_id
-// - Inserts synthetic error results for tool_uses with no result
+// This function uses a two-pass approach:
+// Pass 1: Scan all messages to build complete inventory of tool_uses and tool_results
+// Pass 2: Reconstruct messages ensuring proper pairing:
+// - For each tool_use, find its result from anywhere in the history and place it immediately after
+// - Insert synthetic error results only for tool_uses with NO result anywhere
+// - Drop orphaned tool_results that have no matching tool_use
 func repairToolPairing(messages []anthropic.MessageParam) ([]anthropic.MessageParam, repairStats) {
 	var stats repairStats
-	var result []anthropic.MessageParam
-	seenToolResultIDs := make(map[string]bool)
 
-	for i := 0; i < len(messages); i++ {
-		msg := messages[i]
+	// === PASS 1: Build complete inventory ===
+	// Map tool_use ID -> the tool_use block
+	allToolUses := make(map[string]anthropic.ToolUseBlockParam)
+	// Map tool_result ID -> the tool_result block
+	allToolResults := make(map[string]anthropic.ToolResultBlockParam)
 
-		// Handle user messages - check for tool_results
-		if msg.Role == anthropic.MessageParamRoleUser {
-			// Check if this user message contains tool_result blocks
-			hasToolResult := false
-			var validBlocks []anthropic.ContentBlockParamUnion
-			var toolResultBlocks []anthropic.ToolResultBlockParam
-
-			for _, block := range msg.Content {
-				if block.OfToolResult != nil {
-					hasToolResult = true
-					toolResultBlocks = append(toolResultBlocks, *block.OfToolResult)
-				} else {
-					validBlocks = append(validBlocks, block)
+	for _, msg := range messages {
+		for _, block := range msg.Content {
+			if block.OfToolUse != nil {
+				allToolUses[block.OfToolUse.ID] = *block.OfToolUse
+			}
+			if block.OfToolResult != nil {
+				// Keep the first occurrence (in case of duplicates)
+				if _, exists := allToolResults[block.OfToolResult.ToolUseID]; !exists {
+					allToolResults[block.OfToolResult.ToolUseID] = *block.OfToolResult
 				}
 			}
-
-			if !hasToolResult {
-				// No tool results, keep message as-is
-				result = append(result, msg)
-				continue
-			}
-
-			// Get the previous message to check for matching tool_uses
-			var prevAssistantToolIDs map[string]bool
-			if len(result) > 0 {
-				prevMsg := result[len(result)-1]
-				if prevMsg.Role == anthropic.MessageParamRoleAssistant {
-					prevAssistantToolIDs = extractToolUseIDs(prevMsg)
-				}
-			}
-
-			// Filter tool results - keep only those matching previous assistant's tool_uses
-			var keptToolResults []anthropic.ContentBlockParamUnion
-			for _, tr := range toolResultBlocks {
-				toolID := tr.ToolUseID
-				
-				// Check if duplicate
-				if seenToolResultIDs[toolID] {
-					stats.droppedDuplicates++
-					stats.modified = true
-					continue
-				}
-
-				// Check if orphan (no matching tool_use)
-				if prevAssistantToolIDs == nil || !prevAssistantToolIDs[toolID] {
-					stats.droppedOrphans++
-					stats.modified = true
-					continue
-				}
-
-				// Valid tool result
-				seenToolResultIDs[toolID] = true
-				keptToolResults = append(keptToolResults, anthropic.ContentBlockParamUnion{
-					OfToolResult: &tr,
-				})
-			}
-
-			// Build the repaired message
-			if len(keptToolResults) > 0 {
-				// Tool results go in their own user message
-				result = append(result, anthropic.MessageParam{
-					Role:    anthropic.MessageParamRoleUser,
-					Content: keptToolResults,
-				})
-			}
-			
-			// If there were other blocks (text), add them separately
-			if len(validBlocks) > 0 {
-				result = append(result, anthropic.MessageParam{
-					Role:    anthropic.MessageParamRoleUser,
-					Content: validBlocks,
-				})
-			}
-			continue
 		}
+	}
 
-		// Handle assistant messages - check for tool_uses that need results
+	L_trace("repair pass 1 complete", "toolUses", len(allToolUses), "toolResults", len(allToolResults))
+
+	// === PASS 2: Reconstruct with proper pairing ===
+	var result []anthropic.MessageParam
+	usedToolResultIDs := make(map[string]bool) // Track which results we've already placed
+
+	for _, msg := range messages {
+		// Handle assistant messages - ensure tool_uses have results immediately after
 		if msg.Role == anthropic.MessageParamRoleAssistant {
 			result = append(result, msg)
 			toolIDs := extractToolUseIDs(msg)
-			
+
 			if len(toolIDs) == 0 {
 				continue
 			}
 
-			// Look ahead to find tool_results for these tool_uses
-			foundResults := make(map[string]bool)
-			if i+1 < len(messages) {
-				nextMsg := messages[i+1]
-				if nextMsg.Role == anthropic.MessageParamRoleUser {
-					for _, block := range nextMsg.Content {
-						if block.OfToolResult != nil {
-							foundResults[block.OfToolResult.ToolUseID] = true
-						}
-					}
-				}
-			}
-
-			// Check for missing results and insert synthetic ones
-			var syntheticResults []anthropic.ContentBlockParamUnion
+			// Build the tool_result message that must follow
+			var toolResults []anthropic.ContentBlockParamUnion
 			for toolID := range toolIDs {
-				if !foundResults[toolID] && !seenToolResultIDs[toolID] {
-					// Insert synthetic error result
-					syntheticResults = append(syntheticResults, anthropic.ContentBlockParamUnion{
+				if usedToolResultIDs[toolID] {
+					// Already placed this result (shouldn't happen, but safety check)
+					continue
+				}
+
+				if tr, exists := allToolResults[toolID]; exists {
+					// Found the result in history - use it
+					toolResults = append(toolResults, anthropic.ContentBlockParamUnion{
+						OfToolResult: &tr,
+					})
+					usedToolResultIDs[toolID] = true
+					if !immediatelyFollows(messages, msg, toolID) {
+						stats.modified = true
+						L_trace("relocated tool_result to proper position", "toolID", toolID)
+					}
+				} else {
+					// No result anywhere - insert synthetic
+					toolResults = append(toolResults, anthropic.ContentBlockParamUnion{
 						OfToolResult: &anthropic.ToolResultBlockParam{
 							ToolUseID: toolID,
 							Content: []anthropic.ToolResultBlockParamContentUnion{
@@ -628,16 +591,57 @@ func repairToolPairing(messages []anthropic.MessageParam) ([]anthropic.MessagePa
 							IsError: anthropic.Bool(true),
 						},
 					})
-					seenToolResultIDs[toolID] = true
+					usedToolResultIDs[toolID] = true
 					stats.insertedMissing++
 					stats.modified = true
+					L_trace("inserted synthetic tool_result", "toolID", toolID)
 				}
 			}
 
-			if len(syntheticResults) > 0 {
+			if len(toolResults) > 0 {
 				result = append(result, anthropic.MessageParam{
 					Role:    anthropic.MessageParamRoleUser,
-					Content: syntheticResults,
+					Content: toolResults,
+				})
+			}
+			continue
+		}
+
+		// Handle user messages - filter out tool_results (we handle them above)
+		if msg.Role == anthropic.MessageParamRoleUser {
+			var nonToolResultBlocks []anthropic.ContentBlockParamUnion
+			var skippedResults int
+
+			for _, block := range msg.Content {
+				if block.OfToolResult != nil {
+					toolID := block.OfToolResult.ToolUseID
+					if usedToolResultIDs[toolID] {
+						// Already placed by the assistant message handler
+						skippedResults++
+						continue
+					}
+					// Orphaned result - no matching tool_use exists
+					if _, hasToolUse := allToolUses[toolID]; !hasToolUse {
+						stats.droppedOrphans++
+						stats.modified = true
+						L_trace("dropped orphaned tool_result", "toolID", toolID)
+						continue
+					}
+					// This shouldn't happen - result exists but wasn't used?
+					// Keep it to avoid data loss
+					L_warn("unexpected tool_result not yet placed", "toolID", toolID)
+					nonToolResultBlocks = append(nonToolResultBlocks, block)
+					usedToolResultIDs[toolID] = true
+				} else {
+					nonToolResultBlocks = append(nonToolResultBlocks, block)
+				}
+			}
+
+			// Only add the message if it has content
+			if len(nonToolResultBlocks) > 0 {
+				result = append(result, anthropic.MessageParam{
+					Role:    anthropic.MessageParamRoleUser,
+					Content: nonToolResultBlocks,
 				})
 			}
 			continue
@@ -647,7 +651,47 @@ func repairToolPairing(messages []anthropic.MessageParam) ([]anthropic.MessagePa
 		result = append(result, msg)
 	}
 
+	// Count duplicates that were skipped (results that appeared multiple times in input)
+	for toolID := range allToolResults {
+		count := 0
+		for _, msg := range messages {
+			for _, block := range msg.Content {
+				if block.OfToolResult != nil && block.OfToolResult.ToolUseID == toolID {
+					count++
+				}
+			}
+		}
+		if count > 1 {
+			stats.droppedDuplicates += count - 1
+			stats.modified = true
+		}
+	}
+
+	L_trace("repair pass 2 complete", "inputMessages", len(messages), "outputMessages", len(result))
+
 	return result, stats
+}
+
+// immediatelyFollows checks if a tool_result for toolID immediately follows the given assistant message
+// in the original message list (used for logging whether we relocated a result)
+func immediatelyFollows(messages []anthropic.MessageParam, assistantMsg anthropic.MessageParam, toolID string) bool {
+	for i, msg := range messages {
+		if msg.Role == assistantMsg.Role && len(msg.Content) == len(assistantMsg.Content) {
+			// Found the assistant message, check next
+			if i+1 < len(messages) {
+				nextMsg := messages[i+1]
+				if nextMsg.Role == anthropic.MessageParamRoleUser {
+					for _, block := range nextMsg.Content {
+						if block.OfToolResult != nil && block.OfToolResult.ToolUseID == toolID {
+							return true
+						}
+					}
+				}
+			}
+			return false
+		}
+	}
+	return false
 }
 
 // extractToolUseIDs extracts all tool_use IDs from an assistant message

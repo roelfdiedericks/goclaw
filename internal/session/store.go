@@ -35,6 +35,9 @@ type Store interface {
 	GetMessagesInRange(ctx context.Context, sessionKey string, startAfterID, endBeforeID string) ([]StoredMessage, error)
 	GetPreviousCompaction(ctx context.Context, sessionKey string, beforeTimestamp time.Time) (*StoredCompaction, error)
 
+	// Cleanup operations
+	DeleteOrphanedToolMessages(ctx context.Context, sessionKey string) (int, error) // Delete tool_use/tool_result with no matching pair
+
 	// Lifecycle
 	Close() error
 	Migrate() error // Run schema migrations

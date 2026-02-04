@@ -35,6 +35,12 @@ func registerBuiltins(m *Manager) {
 	})
 
 	m.Register(&Command{
+		Name:        "/cleartool",
+		Description: "Delete all tool messages (fixes corruption)",
+		Handler:     handleClearTool,
+	})
+
+	m.Register(&Command{
 		Name:        "/help",
 		Description: "Show this help",
 		Handler:     handleHelp,
@@ -201,6 +207,30 @@ func handleClear(ctx context.Context, args *CommandArgs) *CommandResult {
 	return &CommandResult{
 		Text:     "Session cleared.",
 		Markdown: "Session cleared.",
+	}
+}
+
+// handleClearTool removes recent tool_use/tool_result messages to fix corruption
+func handleClearTool(ctx context.Context, args *CommandArgs) *CommandResult {
+	deleted, err := args.Provider.CleanOrphanedToolMessages(ctx, args.SessionKey)
+	if err != nil {
+		return &CommandResult{
+			Text:     fmt.Sprintf("Failed to clean tool messages: %s", err),
+			Markdown: fmt.Sprintf("Failed to clean tool messages: `%s`", err),
+			Error:    err,
+		}
+	}
+
+	if deleted == 0 {
+		return &CommandResult{
+			Text:     "No tool messages found.",
+			Markdown: "No tool messages found.",
+		}
+	}
+
+	return &CommandResult{
+		Text:     fmt.Sprintf("Deleted %d recent tool messages.", deleted),
+		Markdown: fmt.Sprintf("Deleted **%d** recent tool messages.", deleted),
 	}
 }
 

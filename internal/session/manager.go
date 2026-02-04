@@ -383,6 +383,34 @@ func (m *Manager) Reset(id string) bool {
 	return true
 }
 
+// CleanOrphanedToolMessages deletes tool_use/tool_result messages from store AND memory
+func (m *Manager) CleanOrphanedToolMessages(ctx context.Context, sessionKey string) (int, error) {
+	totalDeleted := 0
+
+	// Clear from database
+	if m.store != nil {
+		dbDeleted, err := m.store.DeleteOrphanedToolMessages(ctx, sessionKey)
+		if err != nil {
+			return 0, err
+		}
+		totalDeleted += dbDeleted
+	}
+
+	// Clear from in-memory session
+	m.mu.RLock()
+	sess, ok := m.sessions[sessionKey]
+	m.mu.RUnlock()
+	if ok {
+		memDeleted := sess.ClearToolMessages()
+		L_info("session: cleared in-memory tool messages", "count", memDeleted, "sessionKey", sessionKey)
+		if memDeleted > totalDeleted {
+			totalDeleted = memDeleted // Return the higher count
+		}
+	}
+
+	return totalDeleted, nil
+}
+
 // Count returns the number of active sessions
 func (m *Manager) Count() int {
 	m.mu.RLock()

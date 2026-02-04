@@ -209,6 +209,25 @@ func (s *Session) Clear() {
 	s.UpdatedAt = time.Now()
 }
 
+// ClearToolMessages removes all tool_use and tool_result messages from the session
+func (s *Session) ClearToolMessages() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	kept := make([]Message, 0, len(s.Messages))
+	removed := 0
+	for _, msg := range s.Messages {
+		if msg.Role == "tool_use" || msg.Role == "tool_result" {
+			removed++
+		} else {
+			kept = append(kept, msg)
+		}
+	}
+	s.Messages = kept
+	s.UpdatedAt = time.Now()
+	return removed
+}
+
 // UpdateTokens updates the token count for the session
 func (s *Session) UpdateTokens(input, output int) {
 	s.mu.Lock()
