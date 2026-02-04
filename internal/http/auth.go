@@ -75,7 +75,7 @@ func (s *Server) basicAuth(handler http.HandlerFunc) http.HandlerFunc {
 			L_debug("http: new session created", "session", sessionID, "user", username)
 		}
 
-		L_debug("http: auth success", "username", username, "session", sessionID[:8]+"...", "ip", clientIP)
+		L_trace("http: auth success", "username", username, "session", sessionID[:8]+"...", "ip", clientIP)
 
 		// Store user and session in request context
 		ctx := r.Context()

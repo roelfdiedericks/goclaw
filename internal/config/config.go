@@ -81,8 +81,9 @@ type HTTPConfig struct {
 
 // CronConfig configures the cron scheduler
 type CronConfig struct {
-	Enabled   bool            `json:"enabled"`   // Enable cron scheduler (default: true)
-	Heartbeat HeartbeatConfig `json:"heartbeat"` // Heartbeat configuration
+	Enabled           bool            `json:"enabled"`           // Enable cron scheduler (default: true)
+	JobTimeoutMinutes int             `json:"jobTimeoutMinutes"` // Timeout for job execution in minutes (default: 30, 0 = no timeout)
+	Heartbeat         HeartbeatConfig `json:"heartbeat"`         // Heartbeat configuration
 }
 
 // HeartbeatConfig configures the periodic heartbeat system
@@ -492,9 +493,9 @@ func Load() (*LoadResult, error) {
 			PollInterval: 60, // Check file hashes every 60 seconds as fallback
 		},
 		Media: MediaConfig{
-			Dir:     "~/.openclaw/media", // Shared with OpenClaw
-			TTL:     600,                 // 10 minutes (more generous than OpenClaw's 2 min)
-			MaxSize: 5 * 1024 * 1024,     // 5MB
+			Dir:     "media", // Relative to workspace (resolved in gateway)
+			TTL:     600,     // 10 minutes (more generous than OpenClaw's 2 min)
+			MaxSize: 5 * 1024 * 1024, // 5MB
 		},
 		TUI: TUIConfig{
 			ShowLogs: true, // Show logs panel by default
@@ -506,7 +507,8 @@ func Load() (*LoadResult, error) {
 			Entries:       make(map[string]SkillEntryConfig),
 		},
 		Cron: CronConfig{
-			Enabled: true, // Cron enabled by default
+			Enabled:           true, // Cron enabled by default
+			JobTimeoutMinutes: 5,    // Default 5 minute timeout for jobs
 			Heartbeat: HeartbeatConfig{
 				Enabled:         true,
 				IntervalMinutes: 30,

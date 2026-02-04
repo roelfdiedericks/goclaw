@@ -4,10 +4,13 @@ package llm
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/roelfdiedericks/goclaw/internal/tools"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
 // Provider is the unified interface for all LLM backends.
-// Implementations: AnthropicProvider, OllamaProvider, OpenAIProvider (future)
+// Implementations: AnthropicProvider, OllamaProvider, OpenAIProvider
 type Provider interface {
 	// Identity
 	Name() string  // Provider instance name (e.g., "anthropic", "ollama-local")
@@ -19,7 +22,7 @@ type Provider interface {
 	WithMaxTokens(max int) Provider     // Clone with output limit override
 
 	// Availability
-	IsAvailable() bool // Ready to accept requests
+	IsAvailable() bool  // Ready to accept requests
 	ContextTokens() int // Model's context window size
 	MaxTokens() int     // Current output limit
 
@@ -29,10 +32,10 @@ type Provider interface {
 	// Chat - Full streaming with tools
 	StreamMessage(
 		ctx context.Context,
-		messages []Message,
-		tools []ToolDefinition,
+		messages []types.Message,
+		toolDefs []tools.ToolDefinition,
 		systemPrompt string,
-		callbacks StreamCallbacks,
+		onDelta func(delta string),
 	) (*Response, error)
 
 	// Embeddings
@@ -40,13 +43,6 @@ type Provider interface {
 	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
 	EmbeddingDimensions() int
 	SupportsEmbeddings() bool
-}
-
-// StreamCallbacks handles streaming events during StreamMessage
-type StreamCallbacks struct {
-	OnDelta   func(delta string) // Text chunk received
-	OnToolUse func(tool ToolUse) // Tool call requested (for providers with native tool support)
-	OnError   func(err error)    // Error during stream
 }
 
 // Message represents a conversation message (provider-agnostic).

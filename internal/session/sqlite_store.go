@@ -20,7 +20,7 @@ type SQLiteStore struct {
 }
 
 // Schema version for migrations
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 // NewSQLiteStore creates a new SQLite store
 func NewSQLiteStore(cfg StoreConfig) (*SQLiteStore, error) {
@@ -84,6 +84,7 @@ func (s *SQLiteStore) Migrate() error {
 		migrateV1,
 		migrateV2,
 		migrateV3,
+		migrateV4,
 	}
 
 	for i := version; i < len(migrations); i++ {
@@ -250,6 +251,20 @@ func migrateV3(db *sql.DB) error {
 	return err
 }
 
+// migrateV4 adds thinking column for reasoning/thinking content (Kimi, Deepseek, etc.)
+func migrateV4(db *sql.DB) error {
+	schema := `
+	-- Add thinking column to messages for reasoning/thinking content
+	ALTER TABLE messages ADD COLUMN thinking TEXT DEFAULT NULL;
+	
+	-- Update schema version
+	INSERT INTO schema_version (version, applied_at) VALUES (4, ?);
+	`
+
+	_, err := db.Exec(schema, time.Now().Unix())
+	return err
+}
+
 // Close closes the database connection
 func (s *SQLiteStore) Close() error {
 	L_debug("sqlite: closing store")
@@ -381,13 +396,13 @@ func (s *SQLiteStore) AppendMessage(ctx context.Context, sessionKey string, msg 
 		INSERT INTO messages (id, session_key, parent_id, timestamp,
 		                      role, content, tool_call_id, tool_name, tool_input,
 		                      tool_result, tool_is_error, source, channel_id, user_id,
-		                      input_tokens, output_tokens, raw_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                      input_tokens, output_tokens, raw_json, thinking)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		msg.ID, sessionKey, nullString(msg.ParentID), msg.Timestamp.Unix(),
 		msg.Role, msg.Content, nullString(msg.ToolCallID), nullString(msg.ToolName), msg.ToolInput,
 		nullString(msg.ToolResult), msg.ToolIsError, nullString(msg.Source), nullString(msg.ChannelID), nullString(msg.UserID),
-		msg.InputTokens, msg.OutputTokens, msg.RawJSON,
+		msg.InputTokens, msg.OutputTokens, msg.RawJSON, nullString(msg.Thinking),
 	)
 
 	if err != nil {
@@ -406,7 +421,7 @@ func (s *SQLiteStore) GetMessages(ctx context.Context, sessionKey string, opts M
 	query := `
 		SELECT id, session_key, parent_id, timestamp, role, content,
 		       tool_call_id, tool_name, tool_input, tool_result, tool_is_error,
-		       source, channel_id, user_id, input_tokens, output_tokens, raw_json
+		       source, channel_id, user_id, input_tokens, output_tokens, raw_json, thinking
 		FROM messages
 		WHERE session_key = ?
 	`
@@ -445,13 +460,13 @@ func (s *SQLiteStore) GetMessages(ctx context.Context, sessionKey string, opts M
 	for rows.Next() {
 		var msg StoredMessage
 		var ts int64
-		var parentID, toolCallID, toolName, toolResult, source, channelID, userID sql.NullString
+		var parentID, toolCallID, toolName, toolResult, source, channelID, userID, thinking sql.NullString
 		var toolInput, rawJSON []byte
 
 		if err := rows.Scan(
 			&msg.ID, &msg.SessionKey, &parentID, &ts, &msg.Role, &msg.Content,
 			&toolCallID, &toolName, &toolInput, &toolResult, &msg.ToolIsError,
-			&source, &channelID, &userID, &msg.InputTokens, &msg.OutputTokens, &rawJSON,
+			&source, &channelID, &userID, &msg.InputTokens, &msg.OutputTokens, &rawJSON, &thinking,
 		); err != nil {
 			return nil, err
 		}
@@ -465,6 +480,7 @@ func (s *SQLiteStore) GetMessages(ctx context.Context, sessionKey string, opts M
 		msg.Source = source.String
 		msg.ChannelID = channelID.String
 		msg.UserID = userID.String
+		msg.Thinking = thinking.String
 		if opts.IncludeRaw {
 			msg.RawJSON = rawJSON
 		}
@@ -729,7 +745,7 @@ func (s *SQLiteStore) GetMessagesInRange(ctx context.Context, sessionKey string,
 			SELECT id, session_key, parent_id, timestamp,
 			       role, content, tool_call_id, tool_name, tool_input,
 			       tool_result, tool_is_error, source, channel_id, user_id,
-			       input_tokens, output_tokens
+			       input_tokens, output_tokens, thinking
 			FROM messages
 			WHERE session_key = ? AND id < ?
 			ORDER BY timestamp ASC
@@ -741,7 +757,7 @@ func (s *SQLiteStore) GetMessagesInRange(ctx context.Context, sessionKey string,
 			SELECT id, session_key, parent_id, timestamp,
 			       role, content, tool_call_id, tool_name, tool_input,
 			       tool_result, tool_is_error, source, channel_id, user_id,
-			       input_tokens, output_tokens
+			       input_tokens, output_tokens, thinking
 			FROM messages
 			WHERE session_key = ? AND id > ? AND id < ?
 			ORDER BY timestamp ASC
@@ -760,13 +776,13 @@ func (s *SQLiteStore) GetMessagesInRange(ctx context.Context, sessionKey string,
 		var msg StoredMessage
 		var ts int64
 		var parentID, toolCallID, toolName, toolInput, toolResult sql.NullString
-		var source, channelID, userID sql.NullString
+		var source, channelID, userID, thinking sql.NullString
 
 		if err := rows.Scan(
 			&msg.ID, &msg.SessionKey, &parentID, &ts,
 			&msg.Role, &msg.Content, &toolCallID, &toolName, &toolInput,
 			&toolResult, &msg.ToolIsError, &source, &channelID, &userID,
-			&msg.InputTokens, &msg.OutputTokens,
+			&msg.InputTokens, &msg.OutputTokens, &thinking,
 		); err != nil {
 			return nil, err
 		}
@@ -782,6 +798,7 @@ func (s *SQLiteStore) GetMessagesInRange(ctx context.Context, sessionKey string,
 		msg.Source = source.String
 		msg.ChannelID = channelID.String
 		msg.UserID = userID.String
+		msg.Thinking = thinking.String
 
 		messages = append(messages, msg)
 	}

@@ -156,6 +156,7 @@ type CronCmd struct {
 	Remove CronRemoveCmd `cmd:"" help:"Remove a cron job"`
 	Run    CronRunCmd    `cmd:"" help:"Run a job immediately"`
 	Runs   CronRunsCmd   `cmd:"" help:"View job execution history"`
+	Kill   CronKillCmd   `cmd:"" help:"Clear stuck running state for a job"`
 }
 
 // CronListCmd lists all cron jobs
@@ -183,6 +184,10 @@ func (c *CronListCmd) Run(ctx *Context) error {
 		fmt.Printf("  ID: %s\n", job.ID)
 		fmt.Printf("  Session: %s\n", job.SessionTarget)
 		fmt.Printf("  Schedule: %s\n", formatCronSchedule(&job.Schedule))
+		if job.IsRunning() {
+			runningFor := time.Since(time.UnixMilli(*job.State.RunningAtMs))
+			fmt.Printf("  RUNNING: for %s (use 'goclaw cron kill %s' to clear)\n", runningFor.Round(time.Second), job.ID)
+		}
 		if job.State.NextRunAtMs != nil {
 			fmt.Printf("  Next run: %s\n", time.UnixMilli(*job.State.NextRunAtMs).Format(time.RFC3339))
 		}
@@ -357,6 +362,41 @@ func (c *CronRunsCmd) Run(ctx *Context) error {
 	} else {
 		fmt.Println("No runs recorded yet.")
 	}
+	return nil
+}
+
+// CronKillCmd clears the stuck running state for a job
+type CronKillCmd struct {
+	ID string `arg:"" help:"Job ID to kill (clear running state)"`
+}
+
+func (c *CronKillCmd) Run(ctx *Context) error {
+	store := cron.NewStore("", "")
+	if err := store.Load(); err != nil {
+		return fmt.Errorf("failed to load jobs: %w", err)
+	}
+
+	job := store.GetJob(c.ID)
+	if job == nil {
+		return fmt.Errorf("job not found: %s", c.ID)
+	}
+
+	if !job.IsRunning() {
+		fmt.Printf("Job '%s' is not currently marked as running.\n", job.Name)
+		return nil
+	}
+
+	// Get running duration for info
+	runningFor := time.Since(time.UnixMilli(*job.State.RunningAtMs))
+
+	// Clear the running state
+	job.ClearRunning()
+	if err := store.UpdateJob(job); err != nil {
+		return fmt.Errorf("failed to update job: %w", err)
+	}
+
+	fmt.Printf("Cleared running state for job '%s' (was running for %s).\n", job.Name, runningFor.Round(time.Second))
+	fmt.Printf("Note: If the job is actually still executing, it will continue until completion or timeout.\n")
 	return nil
 }
 

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/tools"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
 // OllamaProvider implements the Provider interface for Ollama.
@@ -429,8 +431,7 @@ func (p *OllamaProvider) Type() string {
 }
 
 // WithModel returns a clone of the provider configured with a specific model
-// Note: Returns *OllamaProvider until full Provider interface is implemented
-func (p *OllamaProvider) WithModel(model string) *OllamaProvider {
+func (p *OllamaProvider) WithModel(model string) Provider {
 	clone := *p
 	clone.model = model
 	// Initialize model in background
@@ -450,10 +451,21 @@ func (p *OllamaProvider) WithModelForEmbedding(model string) *OllamaProvider {
 }
 
 // WithMaxTokens returns a clone of the provider with a different output limit
-func (p *OllamaProvider) WithMaxTokens(max int) *OllamaProvider {
+func (p *OllamaProvider) WithMaxTokens(max int) Provider {
 	clone := *p
 	clone.maxTokens = max
 	return &clone
+}
+
+// StreamMessage is not supported by Ollama provider (use for embeddings/summarization only)
+func (p *OllamaProvider) StreamMessage(
+	ctx context.Context,
+	messages []types.Message,
+	toolDefs []tools.ToolDefinition,
+	systemPrompt string,
+	onDelta func(delta string),
+) (*Response, error) {
+	return nil, ErrNotSupported{Provider: p.name, Operation: "StreamMessage (use Anthropic or OpenAI for agent)"}
 }
 
 // MaxTokens returns the current output limit

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -43,8 +44,8 @@ type Channel interface {
 type Gateway struct {
 	sessions            *session.Manager
 	users               *user.Registry
-	llm                 *llm.AnthropicProvider // Primary LLM provider for agent
-	registry            *llm.Registry          // Unified provider registry
+	llm                 llm.Provider  // Primary LLM provider for agent (any provider type)
+	registry            *llm.Registry // Unified provider registry
 	tools               *tools.Registry
 	channels            map[string]Channel
 	config              *config.Config
@@ -69,8 +70,8 @@ var (
 
 // New creates a new Gateway instance
 func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, toolsReg *tools.Registry) (*Gateway, error) {
-	// Get agent provider from registry
-	agentProvider, err := registry.GetAnthropicProvider("agent")
+	// Get agent provider from registry (supports any provider type)
+	agentProvider, err := registry.GetProvider("agent")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get agent provider: %w", err)
 	}
@@ -198,8 +199,13 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 	}
 
 	// Initialize media store
+	// Resolve relative media dir against workspace
+	mediaDir := cfg.Media.Dir
+	if mediaDir != "" && !filepath.IsAbs(mediaDir) && !strings.HasPrefix(mediaDir, "~") {
+		mediaDir = filepath.Join(cfg.Gateway.WorkingDir, mediaDir)
+	}
 	mediaStore, err := media.NewMediaStore(media.MediaConfig{
-		Dir:     cfg.Media.Dir,
+		Dir:     mediaDir,
 		TTL:     cfg.Media.TTL,
 		MaxSize: cfg.Media.MaxSize,
 	})
@@ -581,6 +587,11 @@ func (g *Gateway) StartCron(ctx context.Context) error {
 	// Set up channel provider for delivery
 	g.cronService.SetChannelProvider(&gatewayCronChannelProvider{g: g})
 
+	// Set job timeout if configured
+	if g.config.Cron.JobTimeoutMinutes > 0 {
+		g.cronService.SetJobTimeout(g.config.Cron.JobTimeoutMinutes)
+	}
+
 	// Set up heartbeat config if enabled
 	if g.config.Cron.Heartbeat.Enabled {
 		heartbeatCfg := &cron.HeartbeatConfig{
@@ -738,10 +749,13 @@ func isContextOverflowError(err error) bool {
 		return true
 	}
 
-	// Also check for common variations
+	// Check for common variations across providers
 	if strings.Contains(errStr, "prompt is too long") ||
 		strings.Contains(errStr, "context_length_exceeded") ||
-		strings.Contains(errStr, "maximum context length") {
+		strings.Contains(errStr, "maximum context length") ||
+		strings.Contains(errStr, "exceeded model token limit") || // Kimi/OpenAI style
+		strings.Contains(errStr, "token limit") ||                // Generic
+		strings.Contains(errStr, "max_tokens") {                  // Another common pattern
 		return true
 	}
 
@@ -796,7 +810,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	
 	// Persist user message to SQLite (skip for heartbeat - ephemeral)
 	if !req.IsHeartbeat {
-		g.persistMessage(ctx, sessionKey, "user", req.UserMsg, req.Source, "", "", nil, "")
+		g.persistMessage(ctx, sessionKey, "user", req.UserMsg, req.Source, "", "", nil, "", "")
 	}
 
 	// Build system prompt
@@ -940,6 +954,15 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 		// Update token tracking
 		sess.UpdateTokens(response.InputTokens, response.OutputTokens)
+		// Also update TotalTokens (current context size) for compaction threshold checking
+		if response.InputTokens > 0 {
+			sess.SetTotalTokens(response.InputTokens)
+		}
+
+		// Emit thinking event if we have reasoning content
+		if response.Thinking != "" {
+			events <- EventThinking{RunID: runID, Content: response.Thinking}
+		}
 
 		// Handle tool use
 		if response.HasToolUse() {
@@ -953,12 +976,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					Result:   result,
 					Error:    "permission_denied",
 				}
-			sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput)
+			sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
 			sess.AddToolResult(response.ToolUseID, result)
 			// Persist denied tool use/result (skip for heartbeat - ephemeral)
 			if !req.IsHeartbeat {
-				g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "")
-				g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, "")
+				g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking)
+				g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, "", "")
 			}
 			continue
 		}
@@ -1012,12 +1035,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			}
 
 			// Add to session and continue loop
-			sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput)
+			sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
 			sess.AddToolResult(response.ToolUseID, result)
 			// Persist tool use and result to SQLite (skip for heartbeat - ephemeral)
 			if !req.IsHeartbeat {
-				g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "")
-				g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, errStr)
+				g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking)
+				g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, errStr, "")
 			}
 			continue
 		}
@@ -1027,7 +1050,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		sess.AddAssistantMessage(finalText)
 		// Persist assistant message (skip for heartbeat - ephemeral)
 		if !req.IsHeartbeat {
-			g.persistMessage(ctx, sessionKey, "assistant", finalText, "", "", "", nil, "")
+			g.persistMessage(ctx, sessionKey, "assistant", finalText, "", "", "", nil, "", "")
 		}
 		break
 	}
@@ -1310,7 +1333,7 @@ func (g *Gateway) SessionDB() *sql.DB {
 }
 
 // persistMessage writes a message to SQLite storage for audit trail
-func (g *Gateway) persistMessage(ctx context.Context, sessionKey, role, content, source, toolCallID, toolName string, toolInput []byte, toolError string) {
+func (g *Gateway) persistMessage(ctx context.Context, sessionKey, role, content, source, toolCallID, toolName string, toolInput []byte, toolError, thinking string) {
 	store := g.sessions.GetStore()
 	if store == nil {
 		return // No store configured
@@ -1326,6 +1349,7 @@ func (g *Gateway) persistMessage(ctx context.Context, sessionKey, role, content,
 		ToolCallID: toolCallID,
 		ToolName:   toolName,
 		ToolInput:  toolInput,
+		Thinking:   thinking,
 	}
 
 	// For tool_result, store the result in ToolResult field and mark errors
@@ -1356,15 +1380,19 @@ func (g *Gateway) buildMediaInstructions() string {
 
 Media root: %s
 
-Subdirectory conventions:
-- browser/     - browser screenshots (BrowserTool uses this)
-- screenshots/ - general screenshots, screen captures
+**IMPORTANT:** When saving images, screenshots, or media files:
+- **ALWAYS** save to media/ subdirectories, NEVER /tmp/ or /var/tmp/
+- /tmp/ is sandboxed - files saved there cannot be accessed for inline display
+
+Subdirectory mapping:
 - camera/      - camera/security captures
+- browser/     - browser screenshots
+- screenshots/ - general screenshots, screen captures
 - inbound/     - user-uploaded media (Telegram photos, HTTP paste)
 - generated/   - AI-generated images
-- downloads/   - downloaded files
+- downloads/   - downloaded files (default fallback if path isn't obvious)
 
-When saving media, use appropriate subdirectory.
+When saving media, use appropriate subdirectory. If unsure, use downloads/.
 
 ## Media References
 

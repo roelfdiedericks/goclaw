@@ -455,7 +455,7 @@ func (m *CompactionManager) retryPendingSummary(ctx context.Context) {
 	}
 
 	if len(messages) == 0 {
-		L_warn("compaction: no messages found for retry, clearing flag", "compactionID", pending.ID)
+		L_debug("compaction: no messages found for retry, clearing flag", "compactionID", pending.ID)
 		_ = m.store.UpdateCompactionSummary(ctx, pending.ID, pending.Summary)
 		return
 	}

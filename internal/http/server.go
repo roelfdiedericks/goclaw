@@ -161,7 +161,7 @@ func (s *Server) loadTemplates() error {
 			return fmt.Errorf("failed to parse templates from disk: %w", err)
 		}
 		s.templates = tmpl
-		L_debug("http: loaded templates from disk", "dir", s.templatesDir)
+		L_trace("http: loaded templates from disk", "dir", s.templatesDir)
 		return nil
 	}
 
@@ -231,7 +231,7 @@ func (s *Server) logRequest(handler http.HandlerFunc) http.HandlerFunc {
 
 		handler(lw, r)
 
-		L_debug("http: request",
+		L_trace("http: request",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", lw.statusCode,
