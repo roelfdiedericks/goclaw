@@ -12,8 +12,8 @@ import (
 type ToolsConfig struct {
 	WorkingDir        string
 	BraveAPIKey       string
-	BrowserPool       *BrowserPool
-	BrowserEnabled    bool
+	UseBrowser        string // "auto", "always", "never" for web_fetch browser fallback
+	WebProfile        string // browser profile for web_fetch
 	MemoryManager     *memory.Manager
 	MediaStore        *media.MediaStore
 	SkillsManager     *skills.Manager
@@ -38,17 +38,14 @@ func RegisterDefaults(reg *Registry, cfg ToolsConfig) {
 		L_debug("tools: web_search skipped (no Brave API key)")
 	}
 
-	// web_fetch doesn't need an API key
-	reg.Register(NewWebFetchTool())
-	L_debug("tools: web_fetch registered")
+	// web_fetch with optional browser fallback
+	reg.Register(NewWebFetchToolWithConfig(WebFetchConfig{
+		UseBrowser: cfg.UseBrowser,
+		Profile:    cfg.WebProfile,
+	}))
+	L_debug("tools: web_fetch registered", "useBrowser", cfg.UseBrowser, "profile", cfg.WebProfile)
 
-	// Browser tool (headless browser for JS-rendered pages)
-	if cfg.BrowserEnabled && cfg.BrowserPool != nil && cfg.MediaStore != nil {
-		reg.Register(NewBrowserTool(cfg.BrowserPool, cfg.MediaStore))
-		L_debug("tools: browser registered")
-	} else {
-		L_debug("tools: browser skipped (not enabled, no pool, or no media store)")
-	}
+	// Note: Browser tool is registered in main.go using browser.NewTool()
 
 	// Memory search tools
 	if cfg.MemoryManager != nil {

@@ -516,12 +516,19 @@ require (
 - [ ] `scroll` action
 - [ ] `wait` action
 
-### Phase 3: Polish
-- [ ] Stealth mode integration
-- [ ] Browser pool (persistent instance)
-- [ ] Retry logic
-- [ ] Better markdown extraction from HTML
-- [ ] Profile management commands
+### Phase 3: Browser-Powered web_fetch
+- [ ] Auto-fallback: web_fetch retries with browser on 403/bot-detection
+- [ ] HTML-to-markdown extraction from rendered DOM
+- [ ] Domain-to-profile mapping for authenticated fetches
+- [ ] Configurable: `tools.web.useBrowser: "auto"|"always"|"never"`
+- [ ] Metrics: track when browser fallback was needed
+
+### Future: Polish & Extensions
+- [ ] Chrome extension relay for native browser integration
+- [ ] Stealth mode improvements
+- [ ] Retry logic with exponential backoff
+- [ ] Memory limits on browser pool
+- [ ] Performance metrics
 
 ## Security Considerations
 

@@ -10,19 +10,49 @@ import (
 	"strings"
 	"time"
 
+	htmltomd "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/go-shiori/go-readability"
+	"github.com/roelfdiedericks/goclaw/internal/browser"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
 // WebFetchTool fetches and extracts readable content from URLs
 type WebFetchTool struct {
-	client *http.Client
+	client     *http.Client
+	useBrowser string // "auto", "always", "never"
+	profile    string // browser profile for rendering
+	headless   bool   // run browser in headless mode
 }
 
 // NewWebFetchTool creates a new web fetch tool
 func NewWebFetchTool() *WebFetchTool {
 	return &WebFetchTool{
-		client: &http.Client{Timeout: 30 * time.Second},
+		client:     &http.Client{Timeout: 30 * time.Second},
+		useBrowser: "auto",
+		profile:    "default",
+	}
+}
+
+// WebFetchConfig holds configuration for web fetch tool
+type WebFetchConfig struct {
+	UseBrowser string // "auto", "always", "never"
+	Profile    string // browser profile for rendering
+}
+
+// NewWebFetchToolWithConfig creates a web fetch tool with config
+func NewWebFetchToolWithConfig(cfg WebFetchConfig) *WebFetchTool {
+	useBrowser := cfg.UseBrowser
+	if useBrowser == "" {
+		useBrowser = "auto"
+	}
+	profile := cfg.Profile
+	if profile == "" {
+		profile = "default"
+	}
+	return &WebFetchTool{
+		client:     &http.Client{Timeout: 30 * time.Second},
+		useBrowser: useBrowser,
+		profile:    profile,
 	}
 }
 
@@ -80,10 +110,31 @@ func (t *WebFetchTool) Execute(ctx context.Context, input json.RawMessage) (stri
 		maxLen = 10000
 	}
 
-	L_debug("web_fetch: fetching", "url", params.URL, "maxLength", maxLen)
+	L_debug("web_fetch: fetching", "url", params.URL, "maxLength", maxLen, "useBrowser", t.useBrowser)
 
+	// If "always" use browser, skip HTTP entirely
+	if t.useBrowser == "always" {
+		return t.fetchWithBrowser(ctx, params.URL, maxLen)
+	}
+
+	// Try HTTP first (unless browser mode is "always")
+	content, err := t.fetchWithHTTP(ctx, params.URL, maxLen, parsedURL)
+	
+	// If failed and auto mode, try browser fallback
+	if err != nil && t.useBrowser == "auto" {
+		if t.shouldFallbackToBrowser(err) {
+			L_info("web_fetch: falling back to browser", "url", params.URL, "reason", err.Error())
+			return t.fetchWithBrowser(ctx, params.URL, maxLen)
+		}
+	}
+
+	return content, err
+}
+
+// fetchWithHTTP performs a standard HTTP fetch
+func (t *WebFetchTool) fetchWithHTTP(ctx context.Context, urlStr string, maxLen int, parsedURL *url.URL) (string, error) {
 	// Create request
-	req, err := http.NewRequestWithContext(ctx, "GET", params.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
@@ -106,36 +157,155 @@ func (t *WebFetchTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	// Execute request
 	resp, err := t.client.Do(req)
 	if err != nil {
-		L_error("web_fetch: request failed", "error", err, "url", params.URL)
-		return "", fmt.Errorf("failed to fetch URL: %w", err)
+		L_error("web_fetch: request failed", "error", err, "url", urlStr)
+		return "", &fetchError{code: 0, msg: fmt.Sprintf("failed to fetch URL: %v", err), retryable: true}
 	}
 	defer resp.Body.Close()
 
+	// Check for bot-protection status codes
+	if resp.StatusCode == 403 || resp.StatusCode == 503 {
+		L_warn("web_fetch: bot protection detected", "status", resp.StatusCode, "url", urlStr)
+		return "", &fetchError{code: resp.StatusCode, msg: fmt.Sprintf("HTTP %d - likely bot protection", resp.StatusCode), retryable: true}
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		L_warn("web_fetch: non-200 status", "status", resp.StatusCode, "url", params.URL)
-		return "", fmt.Errorf("HTTP error: %s", resp.Status)
+		L_warn("web_fetch: non-200 status", "status", resp.StatusCode, "url", urlStr)
+		return "", &fetchError{code: resp.StatusCode, msg: fmt.Sprintf("HTTP error: %s", resp.Status), retryable: false}
+	}
+
+	// Read body
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxLen*2))) // Read extra for detection
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Check for Cloudflare challenge in body
+	bodyStr := string(body)
+	if t.isCloudflareChallenge(bodyStr) {
+		L_warn("web_fetch: Cloudflare challenge detected in body", "url", urlStr)
+		return "", &fetchError{code: 403, msg: "Cloudflare challenge page", retryable: true}
 	}
 
 	// Check content type
 	contentType := resp.Header.Get("Content-Type")
 	if !strings.Contains(contentType, "text/html") && !strings.Contains(contentType, "application/xhtml") {
 		// For non-HTML content, just return the raw text (truncated)
-		body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxLen)))
-		if err != nil {
-			return "", fmt.Errorf("failed to read response: %w", err)
+		if len(bodyStr) > maxLen {
+			bodyStr = bodyStr[:maxLen]
 		}
-		L_debug("web_fetch: non-HTML content", "contentType", contentType, "length", len(body))
-		return string(body), nil
+		L_debug("web_fetch: non-HTML content", "contentType", contentType, "length", len(bodyStr))
+		return bodyStr, nil
 	}
 
 	// Parse with readability
-	article, err := readability.FromReader(resp.Body, parsedURL)
+	article, err := readability.FromReader(strings.NewReader(bodyStr), parsedURL)
 	if err != nil {
-		L_error("web_fetch: readability parse failed", "error", err, "url", params.URL)
+		L_error("web_fetch: readability parse failed", "error", err, "url", urlStr)
 		return "", fmt.Errorf("failed to parse page: %w", err)
 	}
 
 	// Build result
+	content := t.formatArticle(article, urlStr, maxLen)
+	L_debug("web_fetch: completed via HTTP", "url", urlStr, "contentLength", len(content), "title", article.Title)
+	return content, nil
+}
+
+// fetchWithBrowser uses the headless browser to render and fetch the page
+func (t *WebFetchTool) fetchWithBrowser(ctx context.Context, urlStr string, maxLen int) (string, error) {
+	startTotal := time.Now()
+
+	mgr := browser.GetManager()
+	if mgr == nil {
+		return "", fmt.Errorf("browser not available (not initialized)")
+	}
+
+	// Use configured profile
+	profile := t.profile
+	L_debug("web_fetch: using browser", "url", urlStr, "profile", profile)
+
+	// Create stealth page
+	startPage := time.Now()
+	page, err := mgr.GetStealthPage(profile)
+	if err != nil {
+		return "", fmt.Errorf("failed to create page: %w", err)
+	}
+	defer page.Close()
+	L_trace("web_fetch: page created", "took", time.Since(startPage))
+
+	// Navigate with timeout
+	page = page.Timeout(60 * time.Second)
+	startNav := time.Now()
+	if err := page.Navigate(urlStr); err != nil {
+		return "", fmt.Errorf("browser navigation failed: %w", err)
+	}
+	L_trace("web_fetch: navigate done", "took", time.Since(startNav))
+
+	// Wait for page load event
+	startWait := time.Now()
+	if err := page.WaitLoad(); err != nil {
+		L_warn("web_fetch: WaitLoad timeout", "url", urlStr, "took", time.Since(startWait))
+	} else {
+		L_trace("web_fetch: page loaded", "took", time.Since(startWait))
+	}
+
+	// Brief stability wait - 500ms without activity, max 3s total
+	startStable := time.Now()
+	stablePage := page.Timeout(3 * time.Second)
+	if err := stablePage.WaitStable(500 * time.Millisecond); err != nil {
+		L_debug("web_fetch: stability timeout (normal for SPAs)", "url", urlStr, "took", time.Since(startStable))
+	} else {
+		L_debug("web_fetch: page stable", "url", urlStr, "took", time.Since(startStable))
+	}
+
+	// Get page info
+	info, err := page.Info()
+	if err != nil {
+		return "", fmt.Errorf("failed to get page info: %w", err)
+	}
+
+	// Get rendered HTML
+	startHTML := time.Now()
+	html, err := page.HTML()
+	if err != nil {
+		return "", fmt.Errorf("failed to get page HTML: %w", err)
+	}
+	L_trace("web_fetch: got HTML", "length", len(html), "took", time.Since(startHTML))
+
+	// Convert HTML to Markdown
+	startConvert := time.Now()
+	markdown, err := htmltomd.ConvertString(html)
+	if err != nil {
+		L_warn("web_fetch: html-to-markdown failed, falling back to readability", "error", err)
+		// Fallback to readability
+		parsedURL, _ := url.Parse(urlStr)
+		article, readErr := readability.FromReader(strings.NewReader(html), parsedURL)
+		if readErr != nil {
+			return "", fmt.Errorf("failed to extract content: %w", readErr)
+		}
+		content := t.formatArticle(article, urlStr, maxLen)
+		content = strings.Replace(content, "URL: "+urlStr, "URL: "+urlStr+"\n[Fetched via browser]", 1)
+		return content, nil
+	}
+	L_trace("web_fetch: markdown converted", "length", len(markdown), "took", time.Since(startConvert))
+
+	// Build result with header
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("Title: %s\n", info.Title))
+	result.WriteString(fmt.Sprintf("URL: %s\n", urlStr))
+	result.WriteString("[Fetched via browser]\n\n---\n\n")
+	result.WriteString(markdown)
+
+	content := result.String()
+	if len(content) > maxLen {
+		content = content[:maxLen] + "\n\n[Content truncated...]"
+	}
+
+	L_info("web_fetch: browser fetch complete", "url", urlStr, "title", info.Title, "chars", len(content), "took", time.Since(startTotal))
+	return content, nil
+}
+
+// formatArticle formats a readability article into output string
+func (t *WebFetchTool) formatArticle(article readability.Article, urlStr string, maxLen int) string {
 	var result strings.Builder
 	result.WriteString(fmt.Sprintf("Title: %s\n", article.Title))
 	if article.Byline != "" {
@@ -144,7 +314,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, input json.RawMessage) (stri
 	if article.SiteName != "" {
 		result.WriteString(fmt.Sprintf("Site: %s\n", article.SiteName))
 	}
-	result.WriteString(fmt.Sprintf("URL: %s\n\n", params.URL))
+	result.WriteString(fmt.Sprintf("URL: %s\n\n", urlStr))
 	result.WriteString("---\n\n")
 	result.WriteString(article.TextContent)
 
@@ -155,6 +325,46 @@ func (t *WebFetchTool) Execute(ctx context.Context, input json.RawMessage) (stri
 		content = content[:maxLen] + "\n\n[Content truncated...]"
 	}
 
-	L_debug("web_fetch: completed", "url", params.URL, "contentLength", len(content), "title", article.Title)
-	return content, nil
+	return content
+}
+
+// shouldFallbackToBrowser determines if we should retry with browser
+func (t *WebFetchTool) shouldFallbackToBrowser(err error) bool {
+	if fe, ok := err.(*fetchError); ok {
+		return fe.retryable
+	}
+	return false
+}
+
+// isCloudflareChallenge detects Cloudflare challenge pages
+func (t *WebFetchTool) isCloudflareChallenge(body string) bool {
+	indicators := []string{
+		"cf-browser-verification",
+		"cf_chl_opt",
+		"__cf_chl_f_tk",
+		"challenge-platform",
+		"Checking your browser",
+		"DDoS protection by Cloudflare",
+		"Ray ID:",
+		"cf-spinner",
+	}
+	
+	bodyLower := strings.ToLower(body)
+	for _, indicator := range indicators {
+		if strings.Contains(bodyLower, strings.ToLower(indicator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// fetchError represents a fetch error with retry information
+type fetchError struct {
+	code      int
+	msg       string
+	retryable bool
+}
+
+func (e *fetchError) Error() string {
+	return e.msg
 }
