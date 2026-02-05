@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +24,7 @@ type Wizard struct {
 	openclawConfig    map[string]interface{}
 	selectedProviders []string
 	providerConfigs   map[string]ProviderConfig
+	importedAPIKeys   map[string]string // provider -> API key from OpenClaw
 	agentModel        string
 	embeddingModel    string
 	skipEmbeddings    bool
@@ -56,6 +58,7 @@ type ProviderConfig struct {
 func NewWizard() *Wizard {
 	return &Wizard{
 		providerConfigs: make(map[string]ProviderConfig),
+		importedAPIKeys: make(map[string]string),
 		httpPort:        1337,
 		httpAuthEnabled: true,
 		userRole:        "owner",
@@ -131,7 +134,7 @@ func (w *Wizard) showWelcome() error {
 	fmt.Println()
 
 	var proceed bool
-	form := huh.NewForm(
+	form := newForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title("Ready to begin?").
@@ -161,7 +164,7 @@ func (w *Wizard) handleOpenClawDetection() error {
 	fmt.Println()
 
 	var importConfig bool
-	form := huh.NewForm(
+	form := newForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title("Import settings from OpenClaw?").
@@ -209,6 +212,11 @@ func (w *Wizard) handleOpenClawDetection() error {
 	if w.userTelegramID != "" {
 		fmt.Printf("  Telegram user ID: %s\n", w.userTelegramID)
 	}
+	if len(w.importedAPIKeys) > 0 {
+		for provider := range w.importedAPIKeys {
+			fmt.Printf("  %s API key: found\n", provider)
+		}
+	}
 	fmt.Println()
 
 	return nil
@@ -239,8 +247,30 @@ func (w *Wizard) extractOpenClawSettings() {
 		}
 	}
 
-	// Note: API keys in OpenClaw are stored differently (in auth.profiles)
-	// We'll let the user configure providers fresh for clarity
+	// Extract API keys from auth-profiles.json
+	home, _ := os.UserHomeDir()
+	authProfilesPath := filepath.Join(home, ".openclaw", "agents", "main", "agent", "auth-profiles.json")
+	if data, err := os.ReadFile(authProfilesPath); err == nil {
+		var authProfiles map[string]interface{}
+		if err := json.Unmarshal(data, &authProfiles); err == nil {
+			if profiles, ok := authProfiles["profiles"].(map[string]interface{}); ok {
+				// Anthropic key
+				if anthropic, ok := profiles["anthropic:default"].(map[string]interface{}); ok {
+					if key, ok := anthropic["key"].(string); ok {
+						w.importedAPIKeys["anthropic"] = key
+						L_debug("setup: imported Anthropic API key from auth-profiles.json")
+					}
+				}
+				// OpenAI key
+				if openai, ok := profiles["openai:default"].(map[string]interface{}); ok {
+					if key, ok := openai["key"].(string); ok {
+						w.importedAPIKeys["openai"] = key
+						L_debug("setup: imported OpenAI API key from auth-profiles.json")
+					}
+				}
+			}
+		}
+	}
 }
 
 func (w *Wizard) setupWorkspace() error {
@@ -248,7 +278,7 @@ func (w *Wizard) setupWorkspace() error {
 
 	defaultPath := DefaultWorkspacePath()
 
-	form := huh.NewForm(
+	form := newForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Where should GoClaw store your workspace?").
@@ -280,40 +310,70 @@ func (w *Wizard) setupWorkspace() error {
 func (w *Wizard) selectProviders() error {
 	fmt.Println()
 
-	// Build options from presets
-	var options []huh.Option[string]
-	for _, p := range Presets {
-		label := fmt.Sprintf("%s - %s", p.Name, p.Description)
-		options = append(options, huh.NewOption(label, p.Key))
-	}
-	options = append(options, huh.NewOption("Other OpenAI-compatible - Custom endpoint", "custom"))
+	configured := make(map[string]bool)
+	first := true
 
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewMultiSelect[string]().
-				Title("Which LLM providers would you like to configure?").
-				Description("Select all that apply (space to toggle, enter to confirm)").
-				Options(options...).
-				Value(&w.selectedProviders),
-		),
-	)
+	for {
+		// Build options from presets (excluding already configured)
+		var options []huh.Option[string]
+		for _, p := range Presets {
+			if configured[p.Key] {
+				continue
+			}
+			label := fmt.Sprintf("%s - %s", p.Name, p.Description)
+			options = append(options, huh.NewOption(label, p.Key))
+		}
+		if !configured["custom"] {
+			options = append(options, huh.NewOption("Other OpenAI-compatible - Custom endpoint", "custom"))
+		}
 
-	if err := form.Run(); err != nil {
-		return err
-	}
+		// Add "Done" option after first provider is configured
+		if !first {
+			options = append(options, huh.NewOption("Done - no more providers", "done"))
+		}
 
-	if len(w.selectedProviders) == 0 {
-		return fmt.Errorf("at least one provider must be selected")
-	}
+		// Determine title
+		title := "Which LLM provider would you like to configure?"
+		if !first {
+			title = "Setup another provider?"
+		}
 
-	// Configure each selected provider
-	for _, key := range w.selectedProviders {
-		if err := w.configureProvider(key); err != nil {
+		var choice string
+		form := newForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title(title).
+					Options(options...).
+					Value(&choice),
+			),
+		)
+
+		if err := form.Run(); err != nil {
+			if isUserAbort(err) {
+				if first {
+					return fmt.Errorf("at least one provider must be configured")
+				}
+				return nil // Escape after first provider = done
+			}
 			return err
 		}
-	}
 
-	return nil
+		if choice == "done" {
+			return nil
+		}
+
+		// Configure the selected provider
+		if err := w.configureProvider(choice); err != nil {
+			if isUserAbort(err) {
+				continue // User cancelled this provider, let them pick again
+			}
+			return err
+		}
+
+		configured[choice] = true
+		w.selectedProviders = append(w.selectedProviders, choice)
+		first = false
+	}
 }
 
 func (w *Wizard) configureProvider(key string) error {
@@ -323,7 +383,7 @@ func (w *Wizard) configureProvider(key string) error {
 
 	if key == "custom" {
 		// Custom provider needs name and URL
-		form := huh.NewForm(
+		form := newForm(
 			huh.NewGroup(
 				huh.NewInput().
 					Title("Provider name").
@@ -337,7 +397,6 @@ func (w *Wizard) configureProvider(key string) error {
 				huh.NewInput().
 					Title("API Key (optional)").
 					Description("Leave empty if not required").
-					EchoMode(huh.EchoModePassword).
 					Value(&apiKey),
 			),
 		)
@@ -359,7 +418,7 @@ func (w *Wizard) configureProvider(key string) error {
 		// Local providers - just need URL confirmation
 		baseURL = preset.BaseURL
 
-		form := huh.NewForm(
+		form := newForm(
 			huh.NewGroup(
 				huh.NewInput().
 					Title(fmt.Sprintf("%s URL", preset.Name)).
@@ -393,12 +452,21 @@ func (w *Wizard) configureProvider(key string) error {
 		}
 	} else {
 		// Cloud providers - need API key
-		form := huh.NewForm(
+		// Pre-populate from OpenClaw import if available
+		if imported, ok := w.importedAPIKeys[key]; ok {
+			apiKey = imported
+		}
+
+		description := "Enter your API key"
+		if apiKey != "" {
+			description = "Pre-filled from OpenClaw import"
+		}
+
+		form := newForm(
 			huh.NewGroup(
 				huh.NewInput().
 					Title(fmt.Sprintf("%s API Key", preset.Name)).
-					Description("Enter your API key").
-					EchoMode(huh.EchoModePassword).
+					Description(description).
 					Value(&apiKey),
 			),
 		)
@@ -477,7 +545,7 @@ func (w *Wizard) selectModels() error {
 	embedOptions = append(embedOptions, huh.NewOption("Skip embeddings (not recommended)", "skip"))
 
 	// Select agent model
-	form := huh.NewForm(
+	form := newForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select primary agent model").
@@ -492,7 +560,7 @@ func (w *Wizard) selectModels() error {
 	}
 
 	if w.agentModel == "manual" {
-		form := huh.NewForm(
+		form := newForm(
 			huh.NewGroup(
 				huh.NewInput().
 					Title("Enter agent model").
@@ -506,7 +574,7 @@ func (w *Wizard) selectModels() error {
 	}
 
 	// Select embedding model
-	form = huh.NewForm(
+	form = newForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select embedding model").
@@ -529,7 +597,7 @@ func (w *Wizard) selectModels() error {
 		fmt.Println()
 
 		var confirmSkip bool
-		form := huh.NewForm(
+		form := newForm(
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title("Continue without embeddings?").
@@ -549,7 +617,7 @@ func (w *Wizard) selectModels() error {
 		w.skipEmbeddings = true
 		w.embeddingModel = ""
 	} else if w.embeddingModel == "manual" {
-		form := huh.NewForm(
+		form := newForm(
 			huh.NewGroup(
 				huh.NewInput().
 					Title("Enter embedding model").
@@ -574,7 +642,7 @@ func (w *Wizard) setupUser() error {
 		telegramPlaceholder = w.userTelegramID
 	}
 
-	form := huh.NewForm(
+	form := newForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("What's your name?").
@@ -613,7 +681,7 @@ func (w *Wizard) setupTelegram() error {
 		fmt.Println("✓ Telegram already configured from OpenClaw import")
 
 		var testToken bool
-		form := huh.NewForm(
+		form := newForm(
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title("Test Telegram token?").
@@ -637,7 +705,7 @@ func (w *Wizard) setupTelegram() error {
 		return nil
 	}
 
-	form := huh.NewForm(
+	form := newForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title("Enable Telegram bot?").
@@ -654,12 +722,11 @@ func (w *Wizard) setupTelegram() error {
 		return nil
 	}
 
-	form = huh.NewForm(
+	form = newForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Telegram Bot Token").
 				Description("Get this from @BotFather on Telegram").
-				EchoMode(huh.EchoModePassword).
 				Value(&w.telegramToken),
 		),
 	)
@@ -684,7 +751,7 @@ func (w *Wizard) setupTelegram() error {
 func (w *Wizard) setupHTTP() error {
 	fmt.Println()
 
-	form := huh.NewForm(
+	form := newForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("HTTP server port").
@@ -720,7 +787,7 @@ func (w *Wizard) setupHTTP() error {
 func (w *Wizard) offerBrowserSetup() error {
 	fmt.Println()
 
-	form := huh.NewForm(
+	form := newForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title("Set up browser for authenticated web access?").
@@ -763,7 +830,7 @@ func (w *Wizard) reviewAndSave() error {
 	fmt.Println()
 
 	var action string
-	form := huh.NewForm(
+	form := newForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("What would you like to do?").
@@ -803,6 +870,11 @@ func (w *Wizard) saveConfig() error {
 	// Ensure directory exists
 	if err := EnsureConfigDir(configPath); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Create backup before writing (if file exists)
+	if err := BackupFile(configPath); err != nil {
+		L_warn("setup: backup failed, continuing anyway", "error", err)
 	}
 
 	// Build configuration

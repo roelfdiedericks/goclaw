@@ -329,6 +329,11 @@ func SetLevel(level int) {
 	}
 }
 
+// GetLevel returns the current log level
+func GetLevel() int {
+	return int(atomic.LoadInt32(&currentLevel))
+}
+
 // SetShuttingDown marks the application as shutting down
 func SetShuttingDown() {
 	atomic.StoreInt32(&shuttingDown, 1)

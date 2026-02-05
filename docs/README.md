@@ -2,15 +2,17 @@
 
 GoClaw is a Golang implementation of a certain molty bot, compatible with OpenClaw session formats and "soul-ness".
 
-Originally intended as a "minimum viable" replacement for OpenClaw, it has evolved to achieve strong feature parity while adding capabilities like **transcript search** — persistent, searchable conversation history that survives context compaction. Your bot is able to recall detailed information from days ago.
+Originally intended as a "minimum viable" replacement for OpenClaw, it has molted to reasonable feature parity with OpenClaw. It's not a complete replacement for OpenClaw but it's very driveable.
+
+GoClaw has a superpower called **transcript search** a persistent, searchable conversation history that survives context compaction. Your bot is able to recall detailed chat messages from it's birth. Long live the memories!
 
 Telegram, http (web), and TUI interfaces are the primary methods for interaction at the moment.
 
 GoClaw can run side-by-side with OpenClaw in the same workspace directory. The two "consciousness" streams are merged at startup to create one unified timeline, and GoClaw monitors your OpenClaw session to sync any new interactions in real-time. Two brains, one identity. It can also run completely standalone if you prefer.
 
-A SQLite database with vector extensions powers session storage, semantic memory search, and transcript indexing.
+A SQLite database with vector extensions manages session storage, semantic memory search, and session transcripts.
 
-Goclaw is also rather pedantic about security, considering the brave new era we're entering. Tool sandboxing and binary/exec level (cloudflare libsandbox) is available on intel/linux systems. Many other guardrails also exist. Of course you can disable this if you want your bot to have full access. Nothing is ever entirely secure, but one can try.
+Goclaw is a bit opinionated about security, considering the brave new era we're entering. Tool sandboxing by default, and binary/exec level (cloudflare libsandbox) on intel/linux systems. Many other guardrails also exist. Of course you can disable this if you want your bot to have unfettered, dangerous access. Nothing is ever entirely secure, but one can try. CVE's welcome.
 
 ### OpenClaw Compatibility
 
