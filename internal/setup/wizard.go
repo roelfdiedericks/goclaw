@@ -12,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/roelfdiedericks/goclaw/internal/browser"
+	"github.com/roelfdiedericks/goclaw/internal/bwrap"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
@@ -45,6 +46,10 @@ type Wizard struct {
 
 	// Browser
 	browserSetup bool
+
+	// Sandboxing
+	execBubblewrap    bool
+	browserBubblewrap bool
 }
 
 // ProviderConfig holds configuration for a single provider
@@ -114,7 +119,12 @@ func (w *Wizard) Run() error {
 		return err
 	}
 
-	// Step 9: Review and Save
+	// Step 9: Sandboxing (bubblewrap)
+	if err := w.setupSandbox(); err != nil {
+		return err
+	}
+
+	// Step 10: Review and Save
 	return w.reviewAndSave()
 }
 
@@ -899,6 +909,87 @@ func (w *Wizard) offerBrowserSetup() error {
 	return nil
 }
 
+func (w *Wizard) setupSandbox() error {
+	fmt.Println()
+
+	// Check if bubblewrap is available
+	bwrapAvailable := bwrap.IsLinux() && bwrap.IsAvailable("")
+
+	if !bwrap.IsLinux() {
+		fmt.Println("Note: Bubblewrap sandboxing is only available on Linux.")
+		fmt.Println("      The exec and browser tools will run without kernel sandboxing.")
+		fmt.Println()
+		return nil
+	}
+
+	if !bwrapAvailable {
+		fmt.Println("═══════════════════════════════════════")
+		fmt.Println("       Sandboxing (Recommended)")
+		fmt.Println("═══════════════════════════════════════")
+		fmt.Println()
+		fmt.Println("Bubblewrap (bwrap) is not installed.")
+		fmt.Println("It provides kernel-level sandboxing for the exec tool,")
+		fmt.Println("restricting file access to the workspace directory.")
+		fmt.Println()
+		fmt.Println("Install with:")
+		fmt.Println("  Debian/Ubuntu:  sudo apt install bubblewrap")
+		fmt.Println("  Fedora/RHEL:    sudo dnf install bubblewrap")
+		fmt.Println("  Arch:           sudo pacman -S bubblewrap")
+		fmt.Println()
+		fmt.Println("After installing, run 'goclaw setup edit' to enable sandboxing.")
+		fmt.Println()
+		return nil
+	}
+
+	fmt.Println("═══════════════════════════════════════")
+	fmt.Println("       Sandboxing (bubblewrap)")
+	fmt.Println("═══════════════════════════════════════")
+	fmt.Println()
+	fmt.Println("Bubblewrap is available! It can restrict exec tool commands")
+	fmt.Println("to only access the workspace directory.")
+	fmt.Println()
+
+	form := newForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Enable exec tool sandboxing?").
+				Description("Restricts shell commands to workspace directory only").
+				Value(&w.execBubblewrap),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return err
+	}
+
+	if w.execBubblewrap {
+		fmt.Println("Exec sandboxing enabled.")
+	}
+
+	// Browser sandboxing (if browser is enabled)
+	if w.browserSetup {
+		form = newForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Enable browser sandboxing?").
+					Description("Restricts browser to workspace and profile directories").
+					Value(&w.browserBubblewrap),
+			),
+		)
+
+		if err := form.Run(); err != nil {
+			return err
+		}
+
+		if w.browserBubblewrap {
+			fmt.Println("Browser sandboxing enabled.")
+		}
+	}
+
+	fmt.Println()
+	return nil
+}
+
 func (w *Wizard) reviewAndSave() error {
 	fmt.Println()
 	fmt.Println("═══════════════════════════════════════")
@@ -917,6 +1008,10 @@ func (w *Wizard) reviewAndSave() error {
 	fmt.Printf("Telegram:      %v\n", w.telegramEnabled)
 	fmt.Printf("HTTP port:     %d (auth: %v)\n", w.httpPort, w.httpAuthEnabled)
 	fmt.Printf("Providers:     %s\n", strings.Join(w.selectedProviders, ", "))
+	fmt.Printf("Exec sandbox:  %v\n", w.execBubblewrap)
+	if w.browserSetup {
+		fmt.Printf("Browser sandbox: %v\n", w.browserBubblewrap)
+	}
 	fmt.Println()
 
 	var action string
@@ -1174,6 +1269,31 @@ func (w *Wizard) buildConfig() map[string]interface{} {
 		},
 		"http": map[string]interface{}{
 			"listen": fmt.Sprintf(":%d", w.httpPort),
+		},
+		"tools": map[string]interface{}{
+			"bubblewrap": map[string]interface{}{
+				"path": "", // Use PATH lookup
+			},
+			"exec": map[string]interface{}{
+				"timeout": 1800, // 30 minutes (matches OpenClaw)
+				"bubblewrap": map[string]interface{}{
+					"enabled":      w.execBubblewrap,
+					"extraRoBind":  []string{},
+					"extraBind":    []string{},
+					"extraEnv":     map[string]string{},
+					"allowNetwork": true,
+					"clearEnv":     true,
+				},
+			},
+			"browser": map[string]interface{}{
+				"enabled": true,
+				"bubblewrap": map[string]interface{}{
+					"enabled":     w.browserBubblewrap,
+					"extraRoBind": []string{},
+					"extraBind":   []string{},
+					"gpu":         true,
+				},
+			},
 		},
 	}
 

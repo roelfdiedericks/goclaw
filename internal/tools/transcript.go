@@ -26,7 +26,7 @@ func (t *TranscriptTool) Name() string {
 }
 
 func (t *TranscriptTool) Description() string {
-	return "Search and query conversation history. Use 'semantic' for natural language search, 'recent' for latest messages, 'search' for keyword search, 'gaps' for time gaps (sleep detection), 'stats' for indexing status."
+	return "Search and query conversation history. Use 'semantic' for natural language search, 'recent' for latest messages, 'search' for keyword search, 'gaps' for time gaps (the most recent gap shows time since last conversation - useful for 'how long was my break?'), 'stats' for indexing status."
 }
 
 func (t *TranscriptTool) Schema() map[string]any {

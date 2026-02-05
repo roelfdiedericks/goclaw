@@ -19,6 +19,21 @@ type ToolsConfig struct {
 	MediaStore        *media.MediaStore
 	SkillsManager     *skills.Manager
 	TranscriptManager *transcript.Manager
+
+	// Exec tool configuration
+	ExecTimeout         int               // Timeout in seconds (default: 1800 = 30 min)
+	ExecBubblewrap      ExecBubblewrapCfg // Bubblewrap sandbox settings
+	BubblewrapPath      string            // Global path to bwrap binary
+}
+
+// ExecBubblewrapCfg holds bubblewrap configuration for exec tool
+type ExecBubblewrapCfg struct {
+	Enabled      bool
+	ExtraRoBind  []string
+	ExtraBind    []string
+	ExtraEnv     map[string]string
+	AllowNetwork bool
+	ClearEnv     bool
 }
 
 // RegisterDefaults registers the default set of tools
@@ -29,7 +44,12 @@ func RegisterDefaults(reg *Registry, cfg ToolsConfig) {
 	reg.Register(NewEditTool(cfg.WorkingDir))
 
 	// Exec tool
-	reg.Register(NewExecTool(cfg.WorkingDir))
+	reg.Register(NewExecTool(ExecToolConfig{
+		WorkingDir:     cfg.WorkingDir,
+		Timeout:        cfg.ExecTimeout,
+		BubblewrapPath: cfg.BubblewrapPath,
+		Bubblewrap:     cfg.ExecBubblewrap,
+	}))
 
 	// Web tools
 	if cfg.BraveAPIKey != "" {
