@@ -12,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/roelfdiedericks/goclaw/internal/browser"
+	"github.com/roelfdiedericks/goclaw/internal/bwrap"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
@@ -70,6 +71,7 @@ func (e *Editor) mainMenu() error {
 			huh.NewOption(fmt.Sprintf("Embedding Model       [%s]", e.getEmbeddingModel()), "embedding"),
 			huh.NewOption(fmt.Sprintf("Telegram              [%s]", e.getTelegramStatus()), "telegram"),
 			huh.NewOption(fmt.Sprintf("HTTP Server           [%s]", e.getHTTPStatus()), "http"),
+			huh.NewOption(fmt.Sprintf("Sandboxing            [%s]", e.getSandboxStatus()), "sandbox"),
 			huh.NewOption("Browser Profiles", "browser"),
 			huh.NewOption("---", "---"),
 			huh.NewOption("View Current Config", "view"),
@@ -125,6 +127,10 @@ func (e *Editor) mainMenu() error {
 			}
 		case "http":
 			if err := e.editHTTP(); err != nil {
+				return err
+			}
+		case "sandbox":
+			if err := e.editSandbox(); err != nil {
 				return err
 			}
 		case "browser":
@@ -251,6 +257,44 @@ func (e *Editor) getHTTPStatus() string {
 		}
 	}
 	return ":1337"
+}
+
+func (e *Editor) getSandboxStatus() string {
+	execEnabled := false
+	browserEnabled := false
+
+	if tools, ok := e.config["tools"].(map[string]interface{}); ok {
+		if exec, ok := tools["exec"].(map[string]interface{}); ok {
+			if bw, ok := exec["bubblewrap"].(map[string]interface{}); ok {
+				if enabled, ok := bw["enabled"].(bool); ok {
+					execEnabled = enabled
+				}
+			}
+		}
+		if browser, ok := tools["browser"].(map[string]interface{}); ok {
+			if bw, ok := browser["bubblewrap"].(map[string]interface{}); ok {
+				if enabled, ok := bw["enabled"].(bool); ok {
+					browserEnabled = enabled
+				}
+			}
+		}
+	}
+
+	if !bwrap.IsLinux() {
+		return "N/A (Linux only)"
+	}
+	if !bwrap.IsAvailable("") {
+		return "bwrap not installed"
+	}
+
+	if execEnabled && browserEnabled {
+		return "exec + browser"
+	} else if execEnabled {
+		return "exec"
+	} else if browserEnabled {
+		return "browser"
+	}
+	return "disabled"
 }
 
 func (e *Editor) editWorkspace() error {
@@ -984,6 +1028,151 @@ func (e *Editor) editHTTP() error {
 		}
 		e.config["http"].(map[string]interface{})["listen"] = newListen
 		e.modified = true
+	}
+
+	return nil
+}
+
+func (e *Editor) editSandbox() error {
+	fmt.Println()
+
+	// Check if bubblewrap is available
+	if !bwrap.IsLinux() {
+		fmt.Println("Bubblewrap sandboxing is only available on Linux.")
+		fmt.Println("Press Enter to continue...")
+		fmt.Scanln()
+		return nil
+	}
+
+	if !bwrap.IsAvailable("") {
+		fmt.Println("Bubblewrap (bwrap) is not installed.")
+		fmt.Println()
+		fmt.Println("Install with:")
+		fmt.Println("  Debian/Ubuntu:  sudo apt install bubblewrap")
+		fmt.Println("  Fedora/RHEL:    sudo dnf install bubblewrap")
+		fmt.Println("  Arch:           sudo pacman -S bubblewrap")
+		fmt.Println()
+		fmt.Println("Press Enter to continue...")
+		fmt.Scanln()
+		return nil
+	}
+
+	// Get current values
+	execEnabled := false
+	browserEnabled := false
+
+	if tools, ok := e.config["tools"].(map[string]interface{}); ok {
+		if exec, ok := tools["exec"].(map[string]interface{}); ok {
+			if bw, ok := exec["bubblewrap"].(map[string]interface{}); ok {
+				if enabled, ok := bw["enabled"].(bool); ok {
+					execEnabled = enabled
+				}
+			}
+		}
+		if browser, ok := tools["browser"].(map[string]interface{}); ok {
+			if bw, ok := browser["bubblewrap"].(map[string]interface{}); ok {
+				if enabled, ok := bw["enabled"].(bool); ok {
+					browserEnabled = enabled
+				}
+			}
+		}
+	}
+
+	fmt.Println("═══════════════════════════════════════")
+	fmt.Println("       Sandbox Configuration")
+	fmt.Println("═══════════════════════════════════════")
+	fmt.Println()
+	fmt.Println("Bubblewrap provides kernel-level sandboxing that")
+	fmt.Println("restricts file access to the workspace directory.")
+	fmt.Println()
+
+	form := newForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Enable exec tool sandboxing?").
+				Description("Restricts shell commands to workspace directory only").
+				Value(&execEnabled),
+			huh.NewConfirm().
+				Title("Enable browser sandboxing?").
+				Description("Restricts browser to workspace and profile directories").
+				Value(&browserEnabled),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		if isUserAbort(err) {
+			return nil // Escape pressed, go back
+		}
+		return err
+	}
+
+	// Ensure tools section exists
+	if e.config["tools"] == nil {
+		e.config["tools"] = make(map[string]interface{})
+	}
+	tools := e.config["tools"].(map[string]interface{})
+
+	// Ensure bubblewrap global section exists
+	if tools["bubblewrap"] == nil {
+		tools["bubblewrap"] = map[string]interface{}{"path": ""}
+	}
+
+	// Ensure exec section exists
+	if tools["exec"] == nil {
+		tools["exec"] = map[string]interface{}{
+			"timeout": 1800,
+			"bubblewrap": map[string]interface{}{
+				"enabled":      false,
+				"extraRoBind":  []string{},
+				"extraBind":    []string{},
+				"extraEnv":     map[string]string{},
+				"allowNetwork": true,
+				"clearEnv":     true,
+			},
+		}
+	}
+	exec := tools["exec"].(map[string]interface{})
+	if exec["bubblewrap"] == nil {
+		exec["bubblewrap"] = map[string]interface{}{
+			"enabled":      false,
+			"extraRoBind":  []string{},
+			"extraBind":    []string{},
+			"extraEnv":     map[string]string{},
+			"allowNetwork": true,
+			"clearEnv":     true,
+		}
+	}
+	exec["bubblewrap"].(map[string]interface{})["enabled"] = execEnabled
+
+	// Ensure browser section exists with bubblewrap
+	if tools["browser"] == nil {
+		tools["browser"] = map[string]interface{}{
+			"enabled": true,
+			"bubblewrap": map[string]interface{}{
+				"enabled":     false,
+				"extraRoBind": []string{},
+				"extraBind":   []string{},
+				"gpu":         true,
+			},
+		}
+	}
+	browser := tools["browser"].(map[string]interface{})
+	if browser["bubblewrap"] == nil {
+		browser["bubblewrap"] = map[string]interface{}{
+			"enabled":     false,
+			"extraRoBind": []string{},
+			"extraBind":   []string{},
+			"gpu":         true,
+		}
+	}
+	browser["bubblewrap"].(map[string]interface{})["enabled"] = browserEnabled
+
+	e.modified = true
+
+	if execEnabled || browserEnabled {
+		fmt.Println("Sandbox settings updated.")
+	} else {
+		fmt.Println("Sandboxing disabled.")
 	}
 
 	return nil

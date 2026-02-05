@@ -12,17 +12,33 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
+// ExecToolConfig holds configuration for the exec tool
+type ExecToolConfig struct {
+	WorkingDir     string
+	Timeout        int // seconds, 0 = use default (1800)
+	BubblewrapPath string
+	Bubblewrap     ExecBubblewrapCfg
+}
+
 // ExecTool executes shell commands
 type ExecTool struct {
-	workingDir string
-	timeout    time.Duration
+	workingDir     string
+	timeout        time.Duration
+	bubblewrapPath string
+	bubblewrap     ExecBubblewrapCfg
 }
 
 // NewExecTool creates a new exec tool
-func NewExecTool(workingDir string) *ExecTool {
+func NewExecTool(cfg ExecToolConfig) *ExecTool {
+	timeout := 30 * time.Minute // default: 30 minutes (matches OpenClaw)
+	if cfg.Timeout > 0 {
+		timeout = time.Duration(cfg.Timeout) * time.Second
+	}
 	return &ExecTool{
-		workingDir: workingDir,
-		timeout:    5 * time.Minute, // default timeout
+		workingDir:     cfg.WorkingDir,
+		timeout:        timeout,
+		bubblewrapPath: cfg.BubblewrapPath,
+		bubblewrap:     cfg.Bubblewrap,
 	}
 }
 
@@ -48,7 +64,7 @@ func (t *ExecTool) Schema() map[string]any {
 			},
 			"timeout_seconds": map[string]any{
 				"type":        "integer",
-				"description": "Optional: Timeout in seconds. Defaults to 300 (5 minutes).",
+				"description": "Optional: Timeout in seconds. Defaults to 1800 (30 minutes).",
 			},
 		},
 		"required": []string{"command"},
@@ -79,6 +95,15 @@ func (t *ExecTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 		workDir = params.WorkingDir
 	}
 
+	// Check if user has sandbox disabled
+	useSandbox := t.bubblewrap.Enabled
+	if sessCtx := GetSessionContext(ctx); sessCtx != nil && sessCtx.User != nil {
+		if !sessCtx.User.Sandbox {
+			useSandbox = false
+			L_debug("exec tool: sandbox disabled for user", "user", sessCtx.User.Name)
+		}
+	}
+
 	// Create command preview for INFO: first linebreak or 30 chars, newlines stripped
 	cmdPreview := strings.ReplaceAll(params.Command, "\n", " ")
 	cmdPreview = strings.ReplaceAll(cmdPreview, "\r", "")
@@ -86,16 +111,32 @@ func (t *ExecTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 		cmdPreview = cmdPreview[:30] + "..."
 	}
 
-	L_info("exec tool: running", "cmd", cmdPreview, "workDir", workDir)
+	L_info("exec tool: running", "cmd", cmdPreview, "workDir", workDir, "sandboxed", useSandbox)
 	L_trace("exec tool: full command", "cmd", params.Command, "timeout", timeout)
 
 	// Create context with timeout
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Create command
-	cmd := exec.CommandContext(ctx, "bash", "-c", params.Command)
-	cmd.Dir = workDir
+	// Build command - sandboxed or unsandboxed
+	var cmd *exec.Cmd
+	if useSandbox {
+		sandboxedCmd, err := t.buildSandboxedCommand(execCtx, params.Command, workDir)
+		if err != nil {
+			// Sandbox was requested but failed to build - hard error
+			L_error("exec tool: sandbox failed", "error", err)
+			return "", fmt.Errorf("sandbox error: %w", err)
+		}
+		if sandboxedCmd != nil {
+			cmd = sandboxedCmd
+		}
+	}
+
+	// Fall back to unsandboxed execution if no sandbox command was built
+	if cmd == nil {
+		cmd = exec.CommandContext(execCtx, "bash", "-c", params.Command)
+		cmd.Dir = workDir
+	}
 
 	// Capture output
 	var stdout, stderr bytes.Buffer
@@ -124,7 +165,7 @@ func (t *ExecTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 	}
 
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
+		if execCtx.Err() == context.DeadlineExceeded {
 			L_warn("exec tool: timed out", "cmd", cmdPreview, "timeout", timeout)
 			return result.String(), fmt.Errorf("command timed out after %v", timeout)
 		}

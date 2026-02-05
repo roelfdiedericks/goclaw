@@ -12,7 +12,7 @@ GoClaw can run side-by-side with OpenClaw in the same workspace directory. The t
 
 A SQLite database with vector extensions manages session storage, semantic memory search, and session transcripts.
 
-Goclaw is a bit opinionated about security, considering the brave new era we're entering. Tool sandboxing and exec bubblewrap if available. Many other guardrails also exist. Of course you can disable this if you want your bot to have unfettered, dangerous access. Nothing is ever entirely secure, but one can try. 
+Goclaw is a bit opinionated about security, considering the brave new era we're entering. Tool sandboxing and exec bubblewrap if available. The managed chromium install can also be bubblewrapped. Many other guardrails also exist. Of course you can disable this if you want your bot to have unfettered, dangerous access. Nothing is ever entirely secure, but one can try. 
 
 ### OpenClaw Compatibility
 
@@ -90,6 +90,7 @@ See [Browser Tool](./browser_tool.md) for full documentation.
 - [Transcript Search](./transcript-search.md) - Searchable conversation history with embeddings
 - [Memory Search](./memory-search.md) - Semantic search over memory files
 - [Browser Tool](./browser_tool.md) - Managed browser for web automation
+- [Sandboxing](./sandbox.md) - File, exec, and browser isolation
 - [Telegram Integration](./telegram.md) - Bot setup and commands
 - [Cron & Heartbeat](./cron.md) - Scheduled tasks and periodic checks
 - [Skills](./skills.md) - Extensible agent capabilities

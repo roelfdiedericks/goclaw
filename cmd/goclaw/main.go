@@ -19,6 +19,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/roelfdiedericks/goclaw/internal/browser"
+	"github.com/roelfdiedericks/goclaw/internal/bwrap"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/setup"
@@ -1389,6 +1390,27 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		L_info("browser: disabled by configuration")
 	}
 
+	// Check bubblewrap availability for sandboxing
+	execBwrapEnabled := cfg.Tools.Exec.Bubblewrap.Enabled
+	browserBwrapEnabled := cfg.Tools.Browser.Bubblewrap.Enabled
+	if execBwrapEnabled || browserBwrapEnabled {
+		if !bwrap.IsLinux() {
+			L_warn("sandbox: bubblewrap only available on Linux, disabling")
+			cfg.Tools.Exec.Bubblewrap.Enabled = false
+			cfg.Tools.Browser.Bubblewrap.Enabled = false
+		} else if !bwrap.IsAvailable(cfg.Tools.Bubblewrap.Path) {
+			L_warn("sandbox: bwrap not found, disabling sandboxing",
+				"execEnabled", execBwrapEnabled,
+				"browserEnabled", browserBwrapEnabled)
+			cfg.Tools.Exec.Bubblewrap.Enabled = false
+			cfg.Tools.Browser.Bubblewrap.Enabled = false
+		} else {
+			L_info("sandbox: bubblewrap available",
+				"execEnabled", cfg.Tools.Exec.Bubblewrap.Enabled,
+				"browserEnabled", cfg.Tools.Browser.Bubblewrap.Enabled)
+		}
+	}
+
 	// Create tool registry and register base defaults (browser tool registered after gateway)
 	toolsReg := tools.NewRegistry()
 	// Determine web_fetch headless mode (defaults to true if not specified)
@@ -1402,6 +1424,18 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		UseBrowser:  cfg.Tools.Web.UseBrowser, // "auto", "always", "never" for web_fetch
 		WebProfile:  cfg.Tools.Web.Profile,    // browser profile for web_fetch
 		WebHeadless: webHeadless,              // headless mode for web_fetch browser
+
+		// Exec tool config
+		ExecTimeout:    cfg.Tools.Exec.Timeout,
+		BubblewrapPath: cfg.Tools.Bubblewrap.Path,
+		ExecBubblewrap: tools.ExecBubblewrapCfg{
+			Enabled:      cfg.Tools.Exec.Bubblewrap.Enabled,
+			ExtraRoBind:  cfg.Tools.Exec.Bubblewrap.ExtraRoBind,
+			ExtraBind:    cfg.Tools.Exec.Bubblewrap.ExtraBind,
+			ExtraEnv:     cfg.Tools.Exec.Bubblewrap.ExtraEnv,
+			AllowNetwork: cfg.Tools.Exec.Bubblewrap.AllowNetwork,
+			ClearEnv:     cfg.Tools.Exec.Bubblewrap.ClearEnv,
+		},
 	})
 	L_debug("base tools registered", "count", toolsReg.Count())
 
