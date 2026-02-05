@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -676,6 +679,7 @@ type BrowserCmd struct {
 	Profiles BrowserProfilesCmd `cmd:"" help:"List browser profiles"`
 	Clear    BrowserClearCmd    `cmd:"" help:"Clear profile data (cookies, cache, etc.)"`
 	Status   BrowserStatusCmd   `cmd:"" help:"Show browser status (running instances, download state)"`
+	Migrate  BrowserMigrateCmd  `cmd:"" help:"Import profiles from OpenClaw"`
 }
 
 // BrowserDownloadCmd downloads Chromium
@@ -1035,6 +1039,184 @@ func (b *BrowserStatusCmd) Run(ctx *Context) error {
 	return nil
 }
 
+// BrowserMigrateCmd imports profiles from OpenClaw
+type BrowserMigrateCmd struct{}
+
+func (b *BrowserMigrateCmd) Run(ctx *Context) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	// OpenClaw profile location
+	openclawProfilesDir := filepath.Join(home, ".openclaw", "browser", "profiles")
+	
+	// GoClaw profile location
+	goclawProfilesDir := filepath.Join(home, ".openclaw", "goclaw", "browser", "profiles")
+
+	// Check if OpenClaw profiles exist
+	if _, err := os.Stat(openclawProfilesDir); os.IsNotExist(err) {
+		fmt.Println("No OpenClaw profiles found at:", openclawProfilesDir)
+		return nil
+	}
+
+	// List OpenClaw profiles
+	entries, err := os.ReadDir(openclawProfilesDir)
+	if err != nil {
+		return fmt.Errorf("failed to read OpenClaw profiles: %w", err)
+	}
+
+	var profiles []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			profiles = append(profiles, entry.Name())
+		}
+	}
+
+	if len(profiles) == 0 {
+		fmt.Println("No profiles found in OpenClaw directory")
+		return nil
+	}
+
+	fmt.Println("Found OpenClaw profiles:")
+	for _, p := range profiles {
+		srcPath := filepath.Join(openclawProfilesDir, p)
+		size := getDirSize(srcPath)
+		fmt.Printf("  - %s (%s)\n", p, browser.FormatSize(size))
+	}
+	fmt.Println()
+
+	// Ensure GoClaw profiles directory exists
+	if err := os.MkdirAll(goclawProfilesDir, 0755); err != nil {
+		return fmt.Errorf("failed to create GoClaw profiles directory: %w", err)
+	}
+
+	// Process each profile
+	reader := bufio.NewReader(os.Stdin)
+	for _, p := range profiles {
+		srcPath := filepath.Join(openclawProfilesDir, p)
+		
+		// Suggest renaming "openclaw" to "default"
+		destName := p
+		if p == "openclaw" {
+			fmt.Printf("\nProfile '%s' found. Import as:\n", p)
+			fmt.Println("  [1] 'default' (recommended - GoClaw's default profile name)")
+			fmt.Println("  [2] 'openclaw' (keep original name)")
+			fmt.Println("  [3] Skip this profile")
+			fmt.Print("Choice [1]: ")
+			
+			choice, _ := reader.ReadString('\n')
+			choice = strings.TrimSpace(choice)
+			
+			switch choice {
+			case "", "1":
+				destName = "default"
+			case "2":
+				destName = "openclaw"
+			case "3":
+				fmt.Printf("Skipped '%s'\n", p)
+				continue
+			default:
+				fmt.Printf("Invalid choice, skipping '%s'\n", p)
+				continue
+			}
+		} else {
+			fmt.Printf("\nImport '%s'? [Y/n]: ", p)
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(strings.ToLower(answer))
+			if answer == "n" || answer == "no" {
+				fmt.Printf("Skipped '%s'\n", p)
+				continue
+			}
+		}
+
+		destPath := filepath.Join(goclawProfilesDir, destName)
+		
+		// Check if destination exists
+		if _, err := os.Stat(destPath); err == nil {
+			fmt.Printf("  Warning: '%s' already exists in GoClaw. Overwrite? [y/N]: ", destName)
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(strings.ToLower(answer))
+			if answer != "y" && answer != "yes" {
+				fmt.Printf("  Skipped (destination exists)\n")
+				continue
+			}
+			// Remove existing
+			os.RemoveAll(destPath)
+		}
+
+		// Copy the profile directory
+		fmt.Printf("  Copying '%s' -> '%s'...", p, destName)
+		if err := copyDir(srcPath, destPath); err != nil {
+			fmt.Printf(" FAILED: %v\n", err)
+			continue
+		}
+		fmt.Println(" OK")
+	}
+
+	fmt.Println("\nMigration complete!")
+	fmt.Println("\nNext steps:")
+	fmt.Println("  1. Run 'goclaw browser profiles' to verify imported profiles")
+	fmt.Println("  2. Update profileDomains in goclaw.json to map domains to profiles")
+	fmt.Println("  3. Or set allowAgentProfiles: true to let agent specify profiles directly")
+	
+	return nil
+}
+
+// getDirSize calculates the total size of a directory
+func getDirSize(path string) int64 {
+	var size int64
+	filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !info.IsDir() {
+			size += info.Size()
+		}
+		return nil
+	})
+	return size
+}
+
+// copyDir recursively copies a directory
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Calculate destination path
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		destPath := filepath.Join(dst, relPath)
+
+		if info.IsDir() {
+			return os.MkdirAll(destPath, info.Mode())
+		}
+
+		// Copy file
+		srcFile, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer srcFile.Close()
+
+		destFile, err := os.Create(destPath)
+		if err != nil {
+			return err
+		}
+		defer destFile.Close()
+
+		if _, err := io.Copy(destFile, srcFile); err != nil {
+			return err
+		}
+
+		return os.Chmod(destPath, info.Mode())
+	})
+}
+
 // Context passed to all commands
 type Context struct {
 	Debug  bool
@@ -1130,11 +1312,17 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 
 	// Create tool registry and register base defaults (browser tool registered after gateway)
 	toolsReg := tools.NewRegistry()
+	// Determine web_fetch headless mode (defaults to true if not specified)
+	webHeadless := true
+	if cfg.Tools.Web.Headless != nil {
+		webHeadless = *cfg.Tools.Web.Headless
+	}
 	tools.RegisterDefaults(toolsReg, tools.ToolsConfig{
 		WorkingDir:  cfg.Gateway.WorkingDir,
 		BraveAPIKey: cfg.Tools.Web.BraveAPIKey,
 		UseBrowser:  cfg.Tools.Web.UseBrowser, // "auto", "always", "never" for web_fetch
 		WebProfile:  cfg.Tools.Web.Profile,    // browser profile for web_fetch
+		WebHeadless: webHeadless,              // headless mode for web_fetch browser
 	})
 	L_debug("base tools registered", "count", toolsReg.Count())
 

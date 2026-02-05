@@ -14,6 +14,7 @@ type ToolsConfig struct {
 	BraveAPIKey       string
 	UseBrowser        string // "auto", "always", "never" for web_fetch browser fallback
 	WebProfile        string // browser profile for web_fetch
+	WebHeadless       bool   // run web_fetch browser in headless mode (default: true)
 	MemoryManager     *memory.Manager
 	MediaStore        *media.MediaStore
 	SkillsManager     *skills.Manager
@@ -42,8 +43,9 @@ func RegisterDefaults(reg *Registry, cfg ToolsConfig) {
 	reg.Register(NewWebFetchToolWithConfig(WebFetchConfig{
 		UseBrowser: cfg.UseBrowser,
 		Profile:    cfg.WebProfile,
+		Headless:   cfg.WebHeadless,
 	}))
-	L_debug("tools: web_fetch registered", "useBrowser", cfg.UseBrowser, "profile", cfg.WebProfile)
+	L_debug("tools: web_fetch registered", "useBrowser", cfg.UseBrowser, "profile", cfg.WebProfile, "headless", cfg.WebHeadless)
 
 	// Note: Browser tool is registered in main.go using browser.NewTool()
 

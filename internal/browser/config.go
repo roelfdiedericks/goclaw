@@ -50,16 +50,18 @@ func (a ToolsConfigAdapter) ToConfig() BrowserConfig {
 
 // BrowserConfig holds browser configuration
 type BrowserConfig struct {
-	Dir            string            `json:"dir"`            // Browser data directory (empty = ~/.openclaw/goclaw/browser)
-	AutoDownload   bool              `json:"autoDownload"`   // Download Chromium if missing
-	Revision       string            `json:"revision"`       // Chromium revision (empty = latest)
-	Headless       bool              `json:"headless"`       // Run in headless mode
-	NoSandbox      bool              `json:"noSandbox"`      // Disable sandbox (needed for Docker/root)
-	DefaultProfile string            `json:"defaultProfile"` // Default profile name
-	Timeout        string            `json:"timeout"`        // Default action timeout (e.g., "30s")
-	Stealth        bool              `json:"stealth"`        // Enable stealth mode
-	Device         string            `json:"device"`         // Device emulation: "clear", "laptop", "iphone-x", etc.
-	ProfileDomains map[string]string `json:"profileDomains"` // Domain → profile mapping
+	Dir                string            `json:"dir"`                // Browser data directory (empty = ~/.openclaw/goclaw/browser)
+	AutoDownload       bool              `json:"autoDownload"`       // Download Chromium if missing
+	Revision           string            `json:"revision"`           // Chromium revision (empty = latest)
+	Headless           bool              `json:"headless"`           // Run in headless mode
+	NoSandbox          bool              `json:"noSandbox"`          // Disable sandbox (needed for Docker/root)
+	DefaultProfile     string            `json:"defaultProfile"`     // Default profile name
+	Timeout            string            `json:"timeout"`            // Default action timeout (e.g., "30s")
+	Stealth            bool              `json:"stealth"`            // Enable stealth mode
+	Device             string            `json:"device"`             // Device emulation: "clear", "laptop", "iphone-x", etc.
+	ProfileDomains     map[string]string `json:"profileDomains"`     // Domain → profile mapping
+	ChromeCDP          string            `json:"chromeCDP"`          // CDP endpoint for profile="chrome" (default: ws://localhost:9222)
+	AllowAgentProfiles bool              `json:"allowAgentProfiles"` // Allow agent to specify any profile (default: false, only "chrome" honored)
 }
 
 // DefaultBrowserConfig returns the default browser configuration

@@ -3,6 +3,7 @@ package browser
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/go-rod/rod"
@@ -11,6 +12,27 @@ import (
 	"github.com/go-rod/stealth"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
+
+// cleanupStaleLocks removes Chrome lock files left behind by crashed sessions
+// Chrome refuses to start if SingletonLock or other lock files exist
+func cleanupStaleLocks(profileDir string) {
+	lockFiles := []string{
+		"SingletonLock",
+		"SingletonCookie",
+		"SingletonSocket",
+	}
+	
+	for _, lockFile := range lockFiles {
+		lockPath := filepath.Join(profileDir, lockFile)
+		if _, err := os.Stat(lockPath); err == nil {
+			if err := os.Remove(lockPath); err != nil {
+				L_warn("browser: failed to remove stale lock file", "file", lockPath, "error", err)
+			} else {
+				L_info("browser: removed stale lock file", "file", lockPath)
+			}
+		}
+	}
+}
 
 // Manager is the singleton browser manager
 // It handles browser download, profiles, and browser instance pooling
@@ -131,6 +153,7 @@ func (m *Manager) ForceDownload() (string, error) {
 
 // GetBrowser returns a browser instance for the given profile.
 // The browser is created lazily and reused for subsequent calls with the same profile.
+// Special case: profile="chrome" connects to an existing Chrome via CDP endpoint.
 func (m *Manager) GetBrowser(profile string) (*rod.Browser, error) {
 	if m == nil {
 		return nil, fmt.Errorf("browser manager not initialized")
@@ -147,13 +170,34 @@ func (m *Manager) GetBrowser(profile string) (*rod.Browser, error) {
 	if browser, ok := m.browsers[profile]; ok {
 		// Check if browser is still connected
 		// rod doesn't have a direct "IsConnected" method, so we try a simple operation
-		_, err := browser.Call(nil, "", "Browser.getVersion", nil)
-		if err == nil {
+		// Wrap in func to recover from panic if CDP client is nil
+		connected := func() (ok bool) {
+			defer func() {
+				if r := recover(); r != nil {
+					L_debug("browser: connection check panicked, browser is dead", "profile", profile, "panic", r)
+					ok = false
+				}
+			}()
+			_, err := browser.Call(nil, "", "Browser.getVersion", nil)
+			return err == nil
+		}()
+		
+		if connected {
 			return browser, nil
 		}
 		// Browser disconnected, remove and recreate
 		L_debug("browser: existing browser disconnected, recreating", "profile", profile)
 		delete(m.browsers, profile)
+	}
+	
+	// Special case: profile="chrome" connects to existing Chrome via CDP
+	if profile == "chrome" {
+		browser, err := m.connectToChrome()
+		if err != nil {
+			return nil, err
+		}
+		m.browsers[profile] = browser
+		return browser, nil
 	}
 	
 	// Ensure browser is downloaded
@@ -167,6 +211,10 @@ func (m *Manager) GetBrowser(profile string) (*rod.Browser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to ensure profile: %w", err)
 	}
+	
+	// Clean up stale Chrome lock files from crashed sessions
+	// Chrome refuses to start if these exist from a previous crash
+	cleanupStaleLocks(profileDir)
 	
 	L_debug("browser: launching browser", "profile", profile, "profileDir", profileDir, "headless", m.config.Headless)
 	
@@ -229,7 +277,34 @@ func (m *Manager) GetStealthPage(profile string) (*rod.Page, error) {
 	return browser.Page(proto.TargetCreateTarget{})
 }
 
-// CloseBrowser closes the browser for a specific profile
+// connectToChrome connects to an existing Chrome browser via CDP endpoint.
+// This is used when profile="chrome" to connect to the user's native Chrome
+// (typically with OpenClaw's browser extension installed).
+func (m *Manager) connectToChrome() (*rod.Browser, error) {
+	endpoint := m.config.ChromeCDP
+	if endpoint == "" {
+		endpoint = "ws://localhost:9222"
+	}
+	
+	L_info("browser: connecting to Chrome", "endpoint", endpoint)
+	
+	browser := rod.New().ControlURL(endpoint)
+	if err := browser.Connect(); err != nil {
+		return nil, fmt.Errorf("failed to connect to Chrome at %s (is Chrome running with extension?): %w", endpoint, err)
+	}
+	
+	L_info("browser: connected to Chrome", "endpoint", endpoint)
+	return browser, nil
+}
+
+// IsExternalProfile returns true if the profile connects to an external browser
+// that should not be closed by GoClaw (e.g., profile="chrome").
+func (m *Manager) IsExternalProfile(profile string) bool {
+	return profile == "chrome"
+}
+
+// CloseBrowser closes the browser for a specific profile.
+// Does nothing for external profiles like "chrome" (user's browser).
 func (m *Manager) CloseBrowser(profile string) {
 	if m == nil {
 		return
@@ -237,6 +312,12 @@ func (m *Manager) CloseBrowser(profile string) {
 	
 	if profile == "" {
 		profile = m.config.DefaultProfile
+	}
+	
+	// Don't close external browsers (user's Chrome)
+	if m.IsExternalProfile(profile) {
+		L_debug("browser: skipping close for external profile", "profile", profile)
+		return
 	}
 	
 	m.browsersMu.Lock()
@@ -249,7 +330,7 @@ func (m *Manager) CloseBrowser(profile string) {
 	}
 }
 
-// CloseAll closes all browser instances
+// CloseAll closes all browser instances (except external profiles like "chrome")
 func (m *Manager) CloseAll() {
 	if m == nil {
 		return
@@ -259,11 +340,16 @@ func (m *Manager) CloseAll() {
 	defer m.browsersMu.Unlock()
 	
 	for profile, browser := range m.browsers {
+		// Don't close external browsers (user's Chrome)
+		if m.IsExternalProfile(profile) {
+			L_debug("browser: skipping close for external profile", "profile", profile)
+			continue
+		}
 		browser.Close()
 		L_debug("browser: closed", "profile", profile)
+		delete(m.browsers, profile)
 	}
-	m.browsers = make(map[string]*rod.Browser)
-	L_info("browser: closed all instances")
+	L_info("browser: closed all managed instances")
 }
 
 // Profiles returns the profile manager
@@ -384,6 +470,9 @@ func (m *Manager) LaunchHeaded(profile string, startURL string) (*rod.Browser, *
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to ensure profile: %w", err)
 	}
+	
+	// Clean up stale Chrome lock files from crashed sessions
+	cleanupStaleLocks(profileDir)
 	
 	L_info("browser: launching headed browser for setup", "profile", profile, "startURL", startURL)
 	

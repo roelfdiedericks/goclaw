@@ -64,7 +64,9 @@ func (t *Tool) Name() string {
 }
 
 func (t *Tool) Description() string {
-	return `Headless browser for JavaScript-rendered pages or sites with bot protection.
+	return `Browser automation for JavaScript-rendered pages or sites with bot protection.
+
+Chrome Extension: If user mentions Chrome extension, Browser Relay, toolbar button, or "attach tab", use profile="chrome" to connect to their existing Chrome tabs. Requires user to click the toolbar icon to attach.
 
 Tab Actions:
 - tabs: List all open tabs
@@ -78,7 +80,7 @@ Navigation:
 - screenshot: Capture page as image
 - pdf: Save page as PDF
 
-Interaction:
+Interaction (use ref from snapshot, e.g. "e1", "e12"):
 - click: Click element by ref or selector
 - type: Type text into element
 - press: Press keyboard key(s)
@@ -124,7 +126,7 @@ func (t *Tool) Schema() map[string]interface{} {
 			},
 			"profile": map[string]interface{}{
 				"type":        "string",
-				"description": "Browser profile to use (default: 'default')",
+				"description": "Only use 'chrome' for Chrome extension relay (user's existing tabs). Omit for normal use.",
 			},
 			"format": map[string]interface{}{
 				"type":        "string",
@@ -230,11 +232,66 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 		params.Timeout = 30
 	}
 
+	// Profile selection precedence:
+	// 1. "chrome" always honored (extension relay)
+	// 2. Explicit profile honored if allowAgentProfiles is true
+	// 3. Otherwise, use profileDomains based on URL (profile ignored with note)
+	var ignoredProfile string
+	config := t.manager.Config()
+	
+	if params.Profile == "chrome" {
+		// Always honor "chrome" for extension relay
+		L_debug("browser: using chrome extension relay")
+	} else if params.Profile != "" && config.AllowAgentProfiles {
+		// Agent explicitly requested and allowed - honor it
+		L_debug("browser: using agent-specified profile", "profile", params.Profile)
+	} else if params.Profile != "" {
+		// Agent requested but not allowed - ignore with note
+		ignoredProfile = params.Profile
+		L_warn("browser: profile ignored (allowAgentProfiles=false), using config-driven selection", "requested", params.Profile)
+		params.Profile = ""
+	}
+	// If profile is empty, profileDomains will be used in getOrCreateSession
+
 	// Use default session ID (could be passed from agent context later)
 	sessionID := "default"
 
 	L_debug("browser: executing", "action", params.Action, "url", params.URL, "profile", params.Profile, "format", params.Format, "headed", params.Headed)
 
+	// Execute action and potentially append profile note
+	result, err := t.executeAction(ctx, sessionID, params)
+	
+	// If we ignored a profile request, append helpful note to successful results
+	if err == nil && ignoredProfile != "" {
+		profileNote := fmt.Sprintf("\n\n---\nNote: Requested profile '%s' was ignored. GoClaw uses config-driven profile selection based on URL domain. To allow explicit profiles, set allowAgentProfiles: true in goclaw.json. If authentication fails, run: goclaw browser setup <profile>", ignoredProfile)
+		result = result + profileNote
+	}
+	
+	return result, err
+}
+
+// executeAction dispatches to the appropriate action handler
+func (t *Tool) executeAction(ctx context.Context, sessionID string, params struct {
+	Action       string `json:"action"`
+	URL          string `json:"url"`
+	TabIndex     *int   `json:"tabIndex"`
+	FullPage     bool   `json:"fullPage"`
+	MaxLength    int    `json:"maxLength"`
+	Profile      string `json:"profile"`
+	Format       string `json:"format"`
+	Ref          *int   `json:"ref"`
+	Selector     string `json:"selector"`
+	Text         string `json:"text"`
+	Key          string `json:"key"`
+	Direction    string `json:"direction"`
+	Value        string `json:"value"`
+	Timeout      int    `json:"timeout"`
+	Code         string `json:"code"`
+	File         string `json:"file"`
+	DialogAction string `json:"dialogAction"`
+	DialogText   string `json:"dialogText"`
+	Headed       bool   `json:"headed"`
+}) (string, error) {
 	switch params.Action {
 	// Tab management
 	case "tabs":
