@@ -478,9 +478,17 @@ func formatCronSchedule(s *cron.Schedule) string {
 type UserCmd struct {
 	Add         UserAddCmd         `cmd:"" help:"Add a new user"`
 	List        UserListCmd        `cmd:"" help:"List all users"`
+	Edit        UserEditCmd        `cmd:"" help:"Interactive user management (TUI)"`
 	Delete      UserDeleteCmd      `cmd:"" help:"Delete a user"`
 	SetTelegram UserTelegramCmd    `cmd:"set-telegram" help:"Set Telegram ID"`
 	SetPassword UserPasswordCmd    `cmd:"set-password" help:"Set HTTP password"`
+}
+
+// UserEditCmd launches the TUI user editor
+type UserEditCmd struct{}
+
+func (u *UserEditCmd) Run(ctx *Context) error {
+	return setup.RunUserEditor()
 }
 
 // UserAddCmd adds a new user
@@ -715,7 +723,7 @@ func (b *BrowserDownloadCmd) Run(ctx *Context) error {
 	// Load config to get browser settings
 	loadResult, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
 	cfg := loadResult.Config
 
@@ -783,7 +791,7 @@ func (b *BrowserSetupCmd) Run(ctx *Context) error {
 	// Load config
 	loadResult, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
 	cfg := loadResult.Config
 
@@ -883,7 +891,7 @@ func (b *BrowserProfilesCmd) Run(ctx *Context) error {
 	// Load config
 	loadResult, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
 	cfg := loadResult.Config
 
@@ -949,7 +957,7 @@ func (b *BrowserClearCmd) Run(ctx *Context) error {
 	// Load config
 	loadResult, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
 	cfg := loadResult.Config
 
@@ -997,7 +1005,7 @@ func (b *BrowserStatusCmd) Run(ctx *Context) error {
 	// Load config
 	loadResult, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
 	cfg := loadResult.Config
 
@@ -1307,15 +1315,10 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	// Load config (handles bootstrap from openclaw.json if needed)
 	loadResult, err := config.Load()
 	if err != nil {
-		L_error("failed to load config", "error", err)
 		return err
 	}
 	cfg := loadResult.Config
-	if loadResult.Bootstrapped {
-		L_info("config bootstrapped from openclaw.json", "path", loadResult.SourcePath)
-	} else {
-		L_debug("config loaded", "path", loadResult.SourcePath)
-	}
+	L_debug("config loaded", "path", loadResult.SourcePath)
 
 	// Load users from users.json (new format)
 	usersConfig, err := config.LoadUsers()
@@ -1728,6 +1731,15 @@ func main() {
 		Config: cli.Config,
 	})
 	if err != nil {
+		// Print user-facing errors cleanly without log formatting
+		errMsg := err.Error()
+		if strings.HasPrefix(errMsg, "no goclaw.json") ||
+			strings.HasPrefix(errMsg, "goclaw.json is empty") ||
+			strings.HasPrefix(errMsg, "at least one") ||
+			strings.HasPrefix(errMsg, "setup:") {
+			fmt.Fprintln(os.Stderr, errMsg)
+			os.Exit(1)
+		}
 		L_fatal("command failed", "error", err)
 	}
 }
