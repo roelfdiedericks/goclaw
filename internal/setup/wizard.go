@@ -276,24 +276,87 @@ func (w *Wizard) extractOpenClawSettings() {
 func (w *Wizard) setupWorkspace() error {
 	fmt.Println()
 
-	defaultPath := DefaultWorkspacePath()
+	// If workspace already set from OpenClaw import, just confirm
+	if w.workspacePath != "" && w.openclawImport {
+		fmt.Printf("Using workspace from OpenClaw: %s\n", w.workspacePath)
 
-	form := newForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Where should GoClaw store your workspace?").
-				Description("This is where your agent's files will live").
-				Value(&w.workspacePath).
-				Placeholder(defaultPath),
-		),
-	)
+		// Create the workspace if needed
+		if err := CreateWorkspace(w.workspacePath); err != nil {
+			return fmt.Errorf("failed to create workspace: %w", err)
+		}
+		fmt.Printf("✓ Workspace ready at %s\n", w.workspacePath)
+		return nil
+	}
 
-	if err := form.Run(); err != nil {
-		return err
+	// Check if OpenClaw exists (even if user didn't import)
+	if OpenClawExists() {
+		openclawWorkspace := GetOpenClawWorkspace()
+		defaultPath := DefaultWorkspacePath()
+
+		for {
+			var choice string
+			form := newForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title("OpenClaw installation detected").
+						Description("Would you like to share the workspace with OpenClaw?").
+						Options(
+							huh.NewOption(fmt.Sprintf("Share with OpenClaw (%s)", openclawWorkspace), "share"),
+							huh.NewOption(fmt.Sprintf("Create new workspace (%s)", defaultPath), "new"),
+							huh.NewOption("Custom path", "custom"),
+						).
+						Value(&choice),
+				),
+			)
+
+			if err := form.Run(); err != nil {
+				return err // Escape at top-level selection = abort
+			}
+
+			switch choice {
+			case "share":
+				w.workspacePath = openclawWorkspace
+			case "new":
+				w.workspacePath = defaultPath
+			case "custom":
+				w.workspacePath = defaultPath // Pre-fill with default
+				customForm := newForm(
+					huh.NewGroup(
+						huh.NewInput().
+							Title("Workspace path").
+							Description("Enter your custom workspace path").
+							Value(&w.workspacePath),
+					),
+				)
+				if err := customForm.Run(); err != nil {
+					if isUserAbort(err) {
+						continue // Go back to workspace selection
+					}
+					return err
+				}
+			}
+			break // Selection made, exit loop
+		}
+	} else {
+		// No OpenClaw - just ask for path with default pre-filled
+		w.workspacePath = DefaultWorkspacePath()
+
+		form := newForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Where should GoClaw store your workspace?").
+					Description("This is where your agent's files will live").
+					Value(&w.workspacePath),
+			),
+		)
+
+		if err := form.Run(); err != nil {
+			return err
+		}
 	}
 
 	if w.workspacePath == "" {
-		w.workspacePath = defaultPath
+		w.workspacePath = DefaultWorkspacePath()
 	}
 
 	w.workspacePath = ExpandPath(w.workspacePath)
@@ -402,7 +465,7 @@ func (w *Wizard) configureProvider(key string) error {
 		)
 
 		if err := form.Run(); err != nil {
-			return err
+			return err // Escape = go back to provider selection (handled by caller)
 		}
 
 		w.providerConfigs[name] = ProviderConfig{
@@ -429,7 +492,7 @@ func (w *Wizard) configureProvider(key string) error {
 		)
 
 		if err := form.Run(); err != nil {
-			return err
+			return err // Escape = go back to provider selection (handled by caller)
 		}
 
 		if baseURL == "" {
@@ -472,7 +535,7 @@ func (w *Wizard) configureProvider(key string) error {
 		)
 
 		if err := form.Run(); err != nil {
-			return err
+			return err // Escape = go back to provider selection (handled by caller)
 		}
 
 		if apiKey == "" {
@@ -544,90 +607,110 @@ func (w *Wizard) selectModels() error {
 	embedOptions = append(embedOptions, huh.NewOption("Enter manually...", "manual"))
 	embedOptions = append(embedOptions, huh.NewOption("Skip embeddings (not recommended)", "skip"))
 
-	// Select agent model
-	form := newForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Select primary agent model").
-				Description("This model will be used for the main agent").
-				Options(agentOptions...).
-				Value(&w.agentModel),
-		),
-	)
-
-	if err := form.Run(); err != nil {
-		return err
-	}
-
-	if w.agentModel == "manual" {
+	// Select agent model (with loop for manual entry escape handling)
+agentLoop:
+	for {
 		form := newForm(
 			huh.NewGroup(
-				huh.NewInput().
-					Title("Enter agent model").
-					Description("Format: provider/model (e.g., anthropic/claude-opus-4-5)").
+				huh.NewSelect[string]().
+					Title("Select primary agent model").
+					Description("This model will be used for the main agent").
+					Options(agentOptions...).
 					Value(&w.agentModel),
 			),
 		)
-		if err := form.Run(); err != nil {
-			return err
-		}
-	}
-
-	// Select embedding model
-	form = newForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Select embedding model").
-				Description("Used for memory search and transcript search").
-				Options(embedOptions...).
-				Value(&w.embeddingModel),
-		),
-	)
-
-	if err := form.Run(); err != nil {
-		return err
-	}
-
-	if w.embeddingModel == "skip" {
-		// Show warning
-		fmt.Println()
-		fmt.Println("⚠️  Without embeddings, the following features will be disabled:")
-		fmt.Println("   - Memory search (semantic search over workspace files)")
-		fmt.Println("   - Transcript search (search past conversations)")
-		fmt.Println()
-
-		var confirmSkip bool
-		form := newForm(
-			huh.NewGroup(
-				huh.NewConfirm().
-					Title("Continue without embeddings?").
-					Value(&confirmSkip),
-			),
-		)
 
 		if err := form.Run(); err != nil {
-			return err
+			return err // Escape at selection = abort
 		}
 
-		if !confirmSkip {
-			// Go back to embedding selection
-			return w.selectModels()
+		if w.agentModel == "manual" {
+			manualForm := newForm(
+				huh.NewGroup(
+					huh.NewInput().
+						Title("Enter agent model").
+						Description("Format: provider/model (e.g., anthropic/claude-opus-4-5)").
+						Value(&w.agentModel),
+				),
+			)
+			if err := manualForm.Run(); err != nil {
+				if isUserAbort(err) {
+					w.agentModel = "" // Reset and go back to selection
+					continue agentLoop
+				}
+				return err
+			}
 		}
+		break agentLoop
+	}
 
-		w.skipEmbeddings = true
-		w.embeddingModel = ""
-	} else if w.embeddingModel == "manual" {
+	// Select embedding model (with loop for manual entry escape handling)
+embedLoop:
+	for {
 		form := newForm(
 			huh.NewGroup(
-				huh.NewInput().
-					Title("Enter embedding model").
-					Description("Format: provider/model (e.g., ollama/nomic-embed-text)").
+				huh.NewSelect[string]().
+					Title("Select embedding model").
+					Description("Used for memory search and transcript search").
+					Options(embedOptions...).
 					Value(&w.embeddingModel),
 			),
 		)
+
 		if err := form.Run(); err != nil {
-			return err
+			return err // Escape at selection = abort
 		}
+
+		if w.embeddingModel == "skip" {
+			// Show warning
+			fmt.Println()
+			fmt.Println("⚠️  Without embeddings, the following features will be disabled:")
+			fmt.Println("   - Memory search (semantic search over workspace files)")
+			fmt.Println("   - Transcript search (search past conversations)")
+			fmt.Println()
+
+			var confirmSkip bool
+			confirmForm := newForm(
+				huh.NewGroup(
+					huh.NewConfirm().
+						Title("Continue without embeddings?").
+						Value(&confirmSkip),
+				),
+			)
+
+			if err := confirmForm.Run(); err != nil {
+				if isUserAbort(err) {
+					w.embeddingModel = "" // Reset and go back to selection
+					continue embedLoop
+				}
+				return err
+			}
+
+			if !confirmSkip {
+				w.embeddingModel = "" // Go back to embedding selection
+				continue embedLoop
+			}
+
+			w.skipEmbeddings = true
+			w.embeddingModel = ""
+		} else if w.embeddingModel == "manual" {
+			manualForm := newForm(
+				huh.NewGroup(
+					huh.NewInput().
+						Title("Enter embedding model").
+						Description("Format: provider/model (e.g., ollama/nomic-embed-text)").
+						Value(&w.embeddingModel),
+				),
+			)
+			if err := manualForm.Run(); err != nil {
+				if isUserAbort(err) {
+					w.embeddingModel = "" // Reset and go back to selection
+					continue embedLoop
+				}
+				return err
+			}
+		}
+		break embedLoop
 	}
 
 	return nil
@@ -690,7 +773,7 @@ func (w *Wizard) setupTelegram() error {
 		)
 
 		if err := form.Run(); err != nil {
-			return err
+			return err // Escape = skip test
 		}
 
 		if testToken {
@@ -705,47 +788,54 @@ func (w *Wizard) setupTelegram() error {
 		return nil
 	}
 
-	form := newForm(
-		huh.NewGroup(
-			huh.NewConfirm().
-				Title("Enable Telegram bot?").
-				Description("Connect GoClaw to Telegram for mobile access").
-				Value(&w.telegramEnabled),
-		),
-	)
+	// Loop for escape handling in token input
+	for {
+		form := newForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Enable Telegram bot?").
+					Description("Connect GoClaw to Telegram for mobile access").
+					Value(&w.telegramEnabled),
+			),
+		)
 
-	if err := form.Run(); err != nil {
-		return err
-	}
+		if err := form.Run(); err != nil {
+			return err // Escape at enable question = abort
+		}
 
-	if !w.telegramEnabled {
+		if !w.telegramEnabled {
+			return nil
+		}
+
+		tokenForm := newForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Telegram Bot Token").
+					Description("Get this from @BotFather on Telegram").
+					Value(&w.telegramToken),
+			),
+		)
+
+		if err := tokenForm.Run(); err != nil {
+			if isUserAbort(err) {
+				w.telegramEnabled = false // Reset and go back to enable question
+				continue
+			}
+			return err
+		}
+
+		if w.telegramToken != "" {
+			fmt.Println("Testing Telegram token...")
+			username, err := TestTelegramToken(w.telegramToken)
+			if err != nil {
+				fmt.Printf("⚠ Token validation failed: %s\n", err)
+			} else {
+				fmt.Printf("✓ Bot username: @%s\n", username)
+			}
+		}
+
 		return nil
 	}
-
-	form = newForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Telegram Bot Token").
-				Description("Get this from @BotFather on Telegram").
-				Value(&w.telegramToken),
-		),
-	)
-
-	if err := form.Run(); err != nil {
-		return err
-	}
-
-	if w.telegramToken != "" {
-		fmt.Println("Testing Telegram token...")
-		username, err := TestTelegramToken(w.telegramToken)
-		if err != nil {
-			fmt.Printf("⚠ Token validation failed: %s\n", err)
-		} else {
-			fmt.Printf("✓ Bot username: @%s\n", username)
-		}
-	}
-
-	return nil
 }
 
 func (w *Wizard) setupHTTP() error {

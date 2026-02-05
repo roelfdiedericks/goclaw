@@ -1,9 +1,9 @@
 package setup
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -37,21 +37,6 @@ func CreateWorkspace(wsPath string) error {
 		}
 	}
 
-	// Initialize git repository if git is available
-	if gitAvailable() {
-		gitDir := filepath.Join(wsPath, ".git")
-		if _, err := os.Stat(gitDir); os.IsNotExist(err) {
-			L_debug("setup: initializing git repository", "path", wsPath)
-			cmd := exec.Command("git", "init", wsPath)
-			if err := cmd.Run(); err != nil {
-				L_warn("setup: git init failed", "error", err)
-				// Not fatal, continue
-			} else {
-				L_info("setup: git repository initialized")
-			}
-		}
-	}
-
 	L_info("setup: workspace created successfully", "path", wsPath)
 	return nil
 }
@@ -79,11 +64,6 @@ func writeTemplateIfMissing(destPath, templateName string) error {
 	return nil
 }
 
-// gitAvailable checks if git is installed and available
-func gitAvailable() bool {
-	_, err := exec.LookPath("git")
-	return err == nil
-}
 
 // ExpandPath expands ~ to home directory
 func ExpandPath(path string) string {
@@ -128,4 +108,30 @@ func OpenClawConfigPath() string {
 func OpenClawExists() bool {
 	_, err := os.Stat(OpenClawConfigPath())
 	return err == nil
+}
+
+// GetOpenClawWorkspace returns OpenClaw's workspace path from openclaw.json
+func GetOpenClawWorkspace() string {
+	data, err := os.ReadFile(OpenClawConfigPath())
+	if err != nil {
+		return ""
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return ""
+	}
+
+	// Extract from agents.defaults.workspace
+	if agents, ok := config["agents"].(map[string]interface{}); ok {
+		if defaults, ok := agents["defaults"].(map[string]interface{}); ok {
+			if ws, ok := defaults["workspace"].(string); ok {
+				return ws
+			}
+		}
+	}
+
+	// Fallback to default OpenClaw workspace
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".openclaw", "workspace")
 }
