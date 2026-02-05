@@ -237,10 +237,30 @@ func (b *Builder) Wayland() *Builder {
 	return b
 }
 
+// Dbus binds the D-Bus system socket for applications that need it.
+// Optional but needed for some Chromium features in headed mode.
+func (b *Builder) Dbus() *Builder {
+	// System bus
+	if pathExists("/run/dbus/system_bus_socket") {
+		b.args = append(b.args, "--ro-bind", "/run/dbus/system_bus_socket", "/run/dbus/system_bus_socket")
+	}
+	// Session bus (if available)
+	if xdgRuntime := os.Getenv("XDG_RUNTIME_DIR"); xdgRuntime != "" {
+		sessionBus := filepath.Join(xdgRuntime, "bus")
+		if pathExists(sessionBus) {
+			b.args = append(b.args, "--ro-bind", sessionBus, sessionBus)
+		}
+	}
+	return b
+}
+
 // DefaultEnv sets minimal required environment variables (PATH, TERM, LANG, USER).
 // Should be called after ClearEnv().
 func (b *Builder) DefaultEnv(home string) *Builder {
-	b.SetEnv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+	// Preserve user's PATH so binaries in ~/.local/bin etc. are found
+	if hostPath := os.Getenv("PATH"); hostPath != "" {
+		b.SetEnv("PATH", hostPath)
+	}
 	b.SetEnv("HOME", home)
 	b.SetEnv("TERM", "xterm")
 	

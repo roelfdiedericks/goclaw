@@ -339,10 +339,6 @@ If enabled, show warning:
 The user will not know a human is responding. Use responsibly.
 ```
 
-### Recording Consent
-- All sessions are recorded (transcripts)
-- Users should be informed
-- Comply with local regulations (GDPR, etc.)
 
 ---
 

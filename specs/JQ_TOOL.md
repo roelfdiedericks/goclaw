@@ -16,7 +16,7 @@ A built-in jq tool for JSON querying and manipulation, powered by `github.com/it
 ```json
 {
   "name": "jq",
-  "description": "Query and transform JSON using jq syntax. Can read from file or inline JSON.",
+  "description": "Query and transform JSON using jq syntax. Can read from file, inline JSON, or command output.",
   "parameters": {
     "query": {
       "type": "string",
@@ -25,11 +25,15 @@ A built-in jq tool for JSON querying and manipulation, powered by `github.com/it
     },
     "file": {
       "type": "string",
-      "description": "Path to JSON file to query. Mutually exclusive with 'input'."
+      "description": "Path to JSON file to query. Mutually exclusive with 'input' and 'exec'."
     },
     "input": {
       "type": "string",
-      "description": "Inline JSON string to query. Mutually exclusive with 'file'."
+      "description": "Inline JSON string to query. Mutually exclusive with 'file' and 'exec'."
+    },
+    "exec": {
+      "type": "string",
+      "description": "Shell command whose stdout is piped through jq. Mutually exclusive with 'file' and 'input'. Respects sandbox settings."
     },
     "raw": {
       "type": "boolean",
@@ -49,6 +53,26 @@ A built-in jq tool for JSON querying and manipulation, powered by `github.com/it
 ```
 jq(query=".jobs[] | .name", file="~/.openclaw/cron/jobs.json")
 // Output: ["Twitter Scrape", "Morning Brief", ...]
+```
+
+### Pipe from command (exec)
+```
+jq(query=".results[0].id", exec="curl -s https://api.example.com/data")
+// Output: "user-12345"
+```
+
+The JSON response never hits agent context — just the extracted result.
+
+### API with auth header
+```
+jq(query=".items | length", exec="curl -s -H 'Authorization: Bearer $TOKEN' https://api.example.com/items")
+// Output: 42
+```
+
+### Chain commands
+```
+jq(query=".name", exec="cat /workspace/config.json")
+// Equivalent to: file="/workspace/config.json" but via exec
 ```
 
 ### Filter with conditions
@@ -144,14 +168,23 @@ func formatOutput(results []interface{}, raw bool, compact bool) (string, error)
 }
 ```
 
-### File Reading
+### File Reading & Exec
 ```go
 func (t *JQTool) Execute(params JQParams) (string, error) {
     var data []byte
     var err error
 
-    if params.File != "" && params.Input != "" {
-        return "", errors.New("cannot specify both 'file' and 'input'")
+    // Count how many input sources specified
+    sources := 0
+    if params.File != "" { sources++ }
+    if params.Input != "" { sources++ }
+    if params.Exec != "" { sources++ }
+
+    if sources > 1 {
+        return "", errors.New("cannot specify multiple input sources (file, input, exec)")
+    }
+    if sources == 0 {
+        return "", errors.New("must specify one of: 'file', 'input', or 'exec'")
     }
 
     if params.File != "" {
@@ -163,11 +196,32 @@ func (t *JQTool) Execute(params JQParams) (string, error) {
         }
     } else if params.Input != "" {
         data = []byte(params.Input)
-    } else {
-        return "", errors.New("must specify either 'file' or 'input'")
+    } else if params.Exec != "" {
+        // Run command and capture stdout
+        data, err = t.execCommand(params.Exec)
+        if err != nil {
+            return "", fmt.Errorf("exec failed: %w", err)
+        }
     }
 
     return executeJQ(params.Query, data, params.Raw, params.Compact)
+}
+
+func (t *JQTool) execCommand(command string) ([]byte, error) {
+    // Uses same sandbox logic as exec tool
+    // If sandbox enabled, runs through bwrap
+    // Respects timeout settings
+    ctx, cancel := context.WithTimeout(context.Background(), t.timeout)
+    defer cancel()
+
+    var cmd *exec.Cmd
+    if t.sandboxEnabled {
+        cmd = t.buildSandboxedCommand(ctx, command)
+    } else {
+        cmd = exec.CommandContext(ctx, "sh", "-c", command)
+    }
+
+    return cmd.Output()
 }
 ```
 
@@ -176,11 +230,17 @@ func (t *JQTool) Execute(params JQParams) (string, error) {
 ### Path Restrictions
 - File access should respect sandbox settings
 - Sandbox mode: restrict to workspace root
-- Owner mode: full filesystem access (like `read` tool)
+- Owner mode (sandbox = false in users.json): full filesystem access (like `read` tool)
+
+### Exec Sandbox
+- The `exec` parameter runs through the same sandbox as the `exec` tool
+- If bwrap sandbox enabled, command runs in sandboxed environment
+- Inherits timeout settings from exec tool config
 
 ### No Side Effects
 - jq tool is **read-only** — cannot modify files
 - For modifications, use `read` → `jq` → `write` pattern
+- `exec` commands should be read-only (curl, cat, etc.) — writes would be sandboxed anyway
 
 ## Error Handling
 
@@ -189,8 +249,10 @@ func (t *JQTool) Execute(params JQParams) (string, error) {
 | Invalid JSON | "invalid JSON: {parse error}" |
 | Invalid query | "invalid jq query: {syntax error}" |
 | File not found | "failed to read file: {path}" |
-| Both file and input | "cannot specify both 'file' and 'input'" |
-| Neither file nor input | "must specify either 'file' or 'input'" |
+| Multiple sources | "cannot specify multiple input sources (file, input, exec)" |
+| No source | "must specify one of: 'file', 'input', or 'exec'" |
+| Exec failed | "exec failed: {error}" |
+| Exec timeout | "exec failed: context deadline exceeded" |
 | Runtime error | jq execution errors passed through |
 
 ## Future Enhancements

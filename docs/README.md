@@ -12,7 +12,7 @@ GoClaw can run side-by-side with OpenClaw in the same workspace directory. The t
 
 A SQLite database with vector extensions manages session storage, semantic memory search, and session transcripts.
 
-Goclaw is a bit opinionated about security, considering the brave new era we're entering. Tool sandboxing and exec bubblewrap if available. The managed chromium install can also be bubblewrapped. Many other guardrails also exist. Of course you can disable this if you want your bot to have unfettered, dangerous access. Nothing is ever entirely secure, but one can try. 
+Goclaw is a bit opinionated about security, considering the brave new era we're entering. Tool sandboxing and exec bubblewrap if available. The managed chromium install can also be bubblewrapped (tested on ubuntu). Many other guardrails also exist. Of course you can disable this if you want your bot to have unfettered, dangerous access. Nothing is ever entirely secure, but one can try. 
 
 ### OpenClaw Compatibility
 
@@ -65,11 +65,10 @@ See [Memory Search](./memory-search.md) for details.
 
 GoClaw includes a managed Chromium browser as a first-class citizen, not an afterthought:
 
-- **`web_fetch`** — Automatically uses the browser for JavaScript-rendered pages (SPAs, dynamic content). Falls back gracefully when browser isn't needed.
+- **`web_fetch`** — Automatically uses the browser for JavaScript-rendered pages (SPAs, dynamic content). Falls back gracefully when browser isn't available.
 - **`browser` tool** — Full browser automation: navigate, click, type, screenshot, extract content. Headless or headed operation.
 - **Persistent Profiles** — Maintain authenticated sessions across restarts. Log in once, stay logged in.
 - **Domain Mapping** — Route specific sites to specific profiles (e.g., `*.twitter.com` → `twitter` profile).
-- **Stealth Mode** — Configurable anti-detection for sites that block automation.
 
 The browser auto-downloads and updates Chromium, so there's nothing to install manually.
 
@@ -167,7 +166,7 @@ GoClaw supports using different LLMs for different tasks:
 | Task | Typical Choice | Purpose |
 |------|----------------|---------|
 | Agent responses | Anthropic Claude | Main intelligence |
-| Summarization | Ollama / Haiku | Checkpoints and compaction |
+| Summarization | LM Studi/ Ollama / Haiku | Checkpoints and compaction |
 | Embeddings | LM Studio / Ollama | Memory and transcript search |
 
 Each task can have a fallback chain — if the primary provider fails, GoClaw automatically tries the next in the list.

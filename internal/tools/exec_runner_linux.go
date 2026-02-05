@@ -13,38 +13,38 @@ import (
 
 // buildSandboxedCommand creates a sandboxed exec.Cmd using bubblewrap.
 // Returns nil if sandboxing is disabled or not available.
-func (t *ExecTool) buildSandboxedCommand(ctx context.Context, command, workDir string) (*exec.Cmd, error) {
-	if !t.bubblewrap.Enabled {
+func (r *ExecRunner) buildSandboxedCommand(ctx context.Context, command, workDir string) (*exec.Cmd, error) {
+	if !r.config.Bubblewrap.Enabled {
 		return nil, nil // Not sandboxed
 	}
 
 	home, _ := os.UserHomeDir()
 
 	// Build base sandbox config
-	b := bwrap.ExecSandbox(t.workingDir, home, t.bubblewrap.AllowNetwork, t.bubblewrap.ClearEnv)
+	b := bwrap.ExecSandbox(r.config.WorkingDir, home, r.config.Bubblewrap.AllowNetwork, r.config.Bubblewrap.ClearEnv)
 
 	// Set custom bwrap path if provided
-	if t.bubblewrapPath != "" {
-		b.BwrapPath(t.bubblewrapPath)
+	if r.config.BubblewrapPath != "" {
+		b.BwrapPath(r.config.BubblewrapPath)
 	}
 
 	// Add extra read-only binds
-	for _, path := range t.bubblewrap.ExtraRoBind {
+	for _, path := range r.config.Bubblewrap.ExtraRoBind {
 		b.RoBind(path)
 	}
 
 	// Add extra read-write binds
-	for _, path := range t.bubblewrap.ExtraBind {
+	for _, path := range r.config.Bubblewrap.ExtraBind {
 		b.Bind(path)
 	}
 
 	// Add extra environment variables
-	for k, v := range t.bubblewrap.ExtraEnv {
+	for k, v := range r.config.Bubblewrap.ExtraEnv {
 		b.SetEnv(k, v)
 	}
 
 	// Set working directory inside sandbox (if different from workspace root)
-	if workDir != "" && workDir != t.workingDir {
+	if workDir != "" && workDir != r.config.WorkingDir {
 		// Ensure the working directory is bound and accessible
 		b.Bind(workDir)
 		b.Chdir(workDir)
@@ -56,25 +56,25 @@ func (t *ExecTool) buildSandboxedCommand(ctx context.Context, command, workDir s
 	// Build the command
 	cmd, err := b.BuildCommand()
 	if err != nil {
-		L_error("exec sandbox: failed to build command", "error", err)
+		L_error("exec runner: failed to build sandbox command", "error", err)
 		return nil, err
 	}
 
 	// Apply context for timeout handling
 	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
 
-	L_debug("exec sandbox: command built",
-		"command", command[:min(len(command), 50)],
-		"allowNetwork", t.bubblewrap.AllowNetwork,
-		"clearEnv", t.bubblewrap.ClearEnv,
+	L_debug("exec runner: sandbox command built",
+		"command", truncate(command, 50),
+		"allowNetwork", r.config.Bubblewrap.AllowNetwork,
+		"clearEnv", r.config.Bubblewrap.ClearEnv,
 	)
 
 	return cmd, nil
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
 	}
-	return b
+	return s[:maxLen] + "..."
 }

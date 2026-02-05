@@ -21,7 +21,7 @@ run: build
 	./$(BINARY) gateway
 
 tui: build
-	./$(BINARY) gateway -d --tui
+	./$(BINARY) gateway -d -i
 
 
 debug: build

@@ -829,6 +829,8 @@ func (b *BrowserSetupCmd) Run(ctx *Context) error {
 	}
 	fmt.Println("\nLog in, set cookies, etc. Close the browser when done.")
 	fmt.Println("Press Ctrl+C to cancel.")
+	fmt.Println()
+	fmt.Println("Starting browser, please wait...")
 
 	// Launch headed browser
 	browserInstance, _, err := mgr.LaunchHeaded(profile, b.URL)
@@ -1377,6 +1379,13 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 			Stealth:        cfg.Tools.Browser.Stealth,
 			Device:         cfg.Tools.Browser.Device,
 			ProfileDomains: cfg.Tools.Browser.ProfileDomains,
+			// Bubblewrap sandboxing
+			Workspace:         cfg.Gateway.WorkingDir,
+			BubblewrapEnabled: cfg.Tools.Browser.Bubblewrap.Enabled,
+			BubblewrapPath:    cfg.Tools.Bubblewrap.Path,
+			BubblewrapGPU:     cfg.Tools.Browser.Bubblewrap.GPU,
+			ExtraRoBind:       cfg.Tools.Browser.Bubblewrap.ExtraRoBind,
+			ExtraBind:         cfg.Tools.Browser.Bubblewrap.ExtraBind,
 		}.ToConfig()
 
 		browserMgr, err := browser.InitManager(browserCfg)
@@ -1384,7 +1393,9 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 			L_warn("browser: failed to initialize manager", "error", err)
 		} else {
 			defer browserMgr.CloseAll()
-			L_info("browser: manager initialized", "headless", cfg.Tools.Browser.Headless)
+			L_info("browser: manager initialized",
+				"headless", cfg.Tools.Browser.Headless,
+				"sandbox", cfg.Tools.Browser.Bubblewrap.Enabled)
 		}
 	} else {
 		L_info("browser: disabled by configuration")
@@ -1393,17 +1404,20 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	// Check bubblewrap availability for sandboxing
 	execBwrapEnabled := cfg.Tools.Exec.Bubblewrap.Enabled
 	browserBwrapEnabled := cfg.Tools.Browser.Bubblewrap.Enabled
+	sandboxDisabledReason := "" // Track if sandbox was disabled for later warning
 	if execBwrapEnabled || browserBwrapEnabled {
 		if !bwrap.IsLinux() {
 			L_warn("sandbox: bubblewrap only available on Linux, disabling")
 			cfg.Tools.Exec.Bubblewrap.Enabled = false
 			cfg.Tools.Browser.Bubblewrap.Enabled = false
+			sandboxDisabledReason = "not Linux"
 		} else if !bwrap.IsAvailable(cfg.Tools.Bubblewrap.Path) {
 			L_warn("sandbox: bwrap not found, disabling sandboxing",
 				"execEnabled", execBwrapEnabled,
 				"browserEnabled", browserBwrapEnabled)
 			cfg.Tools.Exec.Bubblewrap.Enabled = false
 			cfg.Tools.Browser.Bubblewrap.Enabled = false
+			sandboxDisabledReason = "bwrap not installed"
 		} else {
 			L_info("sandbox: bubblewrap available",
 				"execEnabled", cfg.Tools.Exec.Bubblewrap.Enabled,
@@ -1668,10 +1682,14 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	if useTUI {
 		// Run TUI mode
 		L_info("starting TUI mode")
-		return runTUI(runCtx, gw, users, cfg.TUI.ShowLogs)
+		return runTUI(runCtx, gw, users, cfg.TUI.ShowLogs, sandboxDisabledReason)
 	}
 
 	// Non-TUI mode: just wait for signals
+	if sandboxDisabledReason != "" {
+		L_warn("sandbox: sandboxing is disabled", "reason", sandboxDisabledReason,
+			"hint", "install bubblewrap and restart to enable")
+	}
 	L_info("gateway ready")
 	L_info("press Ctrl+C to stop")
 
@@ -1696,11 +1714,21 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 }
 
 // runTUI runs the interactive TUI mode
-func runTUI(ctx context.Context, gw *gateway.Gateway, users *user.Registry, showLogs bool) error {
+func runTUI(ctx context.Context, gw *gateway.Gateway, users *user.Registry, showLogs bool, sandboxDisabledReason string) error {
 	owner := users.Owner()
 	if owner == nil {
 		return fmt.Errorf("no owner user configured")
 	}
+	
+	// Log sandbox warning after TUI starts (in a goroutine so TUI can initialize first)
+	if sandboxDisabledReason != "" {
+		go func() {
+			time.Sleep(100 * time.Millisecond) // Brief delay for TUI to initialize
+			L_warn("sandbox: sandboxing is disabled", "reason", sandboxDisabledReason,
+				"hint", "install bubblewrap and restart to enable")
+		}()
+	}
+	
 	return tui.Run(ctx, gw, owner, showLogs)
 }
 
