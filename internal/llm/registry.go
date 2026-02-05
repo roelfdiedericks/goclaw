@@ -229,6 +229,10 @@ func (r *Registry) resolveForPurpose(ref, purpose string) (interface{}, error) {
 		}
 		return p.WithModel(modelName), nil
 	case *OpenAIProvider:
+		// Use embedding-specific initialization for embeddings purpose
+		if purpose == "embeddings" {
+			return p.WithModelForEmbedding(modelName), nil
+		}
 		return p.WithModel(modelName), nil
 	default:
 		return nil, fmt.Errorf("provider %s has unexpected type", providerName)

@@ -72,6 +72,7 @@ func (m *Manager) TriggerIndex() {
 func (m *Manager) Stats() TranscriptStats {
 	chunksIndexed, lastSync := m.indexer.Stats()
 	pending := m.indexer.PendingCount()
+	needingEmbeddings := m.indexer.ChunksNeedingEmbeddings()
 
 	var totalChunks int
 	m.db.QueryRow("SELECT COUNT(*) FROM transcript_chunks").Scan(&totalChunks)
@@ -85,12 +86,13 @@ func (m *Manager) Stats() TranscriptStats {
 	}
 
 	return TranscriptStats{
-		TotalChunks:          totalChunks,
-		ChunksWithEmbeddings: chunksWithEmbeddings,
-		PendingMessages:      pending,
-		ChunksIndexedSession: chunksIndexed,
-		LastSync:             lastSync,
-		Provider:             providerName,
+		TotalChunks:             totalChunks,
+		ChunksWithEmbeddings:    chunksWithEmbeddings,
+		ChunksNeedingEmbeddings: needingEmbeddings,
+		PendingMessages:         pending,
+		ChunksIndexedSession:    chunksIndexed,
+		LastSync:                lastSync,
+		Provider:                providerName,
 	}
 }
 
@@ -217,12 +219,13 @@ func (m *Manager) Gaps(ctx context.Context, userID string, isOwner bool, minHour
 
 // TranscriptStats contains indexing statistics
 type TranscriptStats struct {
-	TotalChunks          int       `json:"totalChunks"`
-	ChunksWithEmbeddings int       `json:"chunksWithEmbeddings"`
-	PendingMessages      int       `json:"pendingMessages"`
-	ChunksIndexedSession int       `json:"chunksIndexedSession"`
-	LastSync             time.Time `json:"lastSync"`
-	Provider             string    `json:"provider"`
+	TotalChunks             int       `json:"totalChunks"`
+	ChunksWithEmbeddings    int       `json:"chunksWithEmbeddings"`
+	ChunksNeedingEmbeddings int       `json:"chunksNeedingEmbeddings"`
+	PendingMessages         int       `json:"pendingMessages"`
+	ChunksIndexedSession    int       `json:"chunksIndexedSession"`
+	LastSync                time.Time `json:"lastSync"`
+	Provider                string    `json:"provider"`
 }
 
 // RecentEntry represents a recent message

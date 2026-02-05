@@ -459,13 +459,16 @@ func (p *OllamaProvider) WithModel(model string) Provider {
 
 // WithModelForEmbedding returns a clone configured for embedding-only use.
 // This skips chat availability checks and uses embedding API instead.
+// Initialization is synchronous (blocking) because embeddings are typically
+// needed immediately when GetProvider("embeddings") is called.
 func (p *OllamaProvider) WithModelForEmbedding(model string) *OllamaProvider {
 	clone := *p
 	clone.model = model
 	clone.embeddingOnly = true
 	clone.metricPrefix = fmt.Sprintf("llm/%s/%s/%s", p.Type(), p.Name(), model)
-	// Initialize model in background (will use embedding check)
-	go clone.initializeModel()
+	// Initialize synchronously - embedding providers need to be ready immediately
+	// since GetProvider checks IsAvailable() right after this returns
+	clone.initializeModel()
 	return &clone
 }
 

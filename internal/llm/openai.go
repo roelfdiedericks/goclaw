@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -15,28 +16,50 @@ import (
 )
 
 // OpenAIProvider implements the Provider interface for OpenAI-compatible APIs.
-// Supports streaming, native tool calling, and vision (images).
-// Works with OpenAI, Kimi, OpenRouter, and other compatible APIs via BaseURL.
+// Supports streaming, native tool calling, vision (images), and embeddings.
+// Works with OpenAI, Kimi, LM Studio, OpenRouter, and other compatible APIs via BaseURL.
 type OpenAIProvider struct {
-	name         string // Provider instance name (e.g., "openai", "kimi")
+	name         string // Provider instance name (e.g., "openai", "kimi", "lmstudio")
 	client       *openai.Client
 	model        string
 	maxTokens    int
 	apiKey       string // Stored for cloning
 	baseURL      string // Custom API base URL
 	metricPrefix string // e.g., "llm/openai/kimi/kimi-k2.5"
+
+	// Embedding support
+	embeddingOnly      bool // If true, only used for embeddings (not chat)
+	embeddingDimensions int  // Cached embedding dimensions (detected on first use)
+
+	// Thread-safe availability tracking
+	mu        sync.RWMutex
+	available bool
 }
 
 // NewOpenAIProvider creates a new OpenAI-compatible provider from ProviderConfig.
+// Supports both "baseUrl" (standard) and "url" (for compatibility with Ollama-style configs).
+// API key is optional for local servers like LM Studio.
 func NewOpenAIProvider(name string, cfg ProviderConfig) (*OpenAIProvider, error) {
-	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("openai API key not configured")
+	// Determine the base URL - accept both "baseUrl" and "url" fields
+	baseURL := cfg.BaseURL
+	if baseURL == "" && cfg.URL != "" {
+		baseURL = cfg.URL
+	}
+
+	// API key is optional for local servers (LM Studio, LocalAI, etc.)
+	apiKey := cfg.APIKey
+	if apiKey == "" {
+		apiKey = "not-needed" // Placeholder for local servers that don't require auth
 	}
 
 	// Build client config
-	config := openai.DefaultConfig(cfg.APIKey)
-	if cfg.BaseURL != "" {
-		config.BaseURL = cfg.BaseURL
+	config := openai.DefaultConfig(apiKey)
+	if baseURL != "" {
+		// Ensure the URL ends with /v1 for OpenAI-compatible APIs
+		if !strings.HasSuffix(baseURL, "/v1") && !strings.HasSuffix(baseURL, "/v1/") {
+			baseURL = strings.TrimSuffix(baseURL, "/") + "/v1"
+		}
+		config.BaseURL = baseURL
 	}
 
 	client := openai.NewClientWithConfig(config)
@@ -46,11 +69,11 @@ func NewOpenAIProvider(name string, cfg ProviderConfig) (*OpenAIProvider, error)
 		maxTokens = 8192
 	}
 
-	baseURL := cfg.BaseURL
-	if baseURL == "" {
-		baseURL = "(default)"
+	displayURL := baseURL
+	if displayURL == "" {
+		displayURL = "(default)"
 	}
-	L_debug("openai provider created", "name", name, "baseURL", baseURL, "maxTokens", maxTokens)
+	L_debug("openai provider created", "name", name, "baseURL", displayURL, "maxTokens", maxTokens)
 
 	return &OpenAIProvider{
 		name:      name,
@@ -58,7 +81,7 @@ func NewOpenAIProvider(name string, cfg ProviderConfig) (*OpenAIProvider, error)
 		model:     "", // Model set via WithModel()
 		maxTokens: maxTokens,
 		apiKey:    cfg.APIKey,
-		baseURL:   cfg.BaseURL,
+		baseURL:   baseURL,
 	}, nil
 }
 
@@ -92,9 +115,68 @@ func (p *OpenAIProvider) WithMaxTokens(max int) Provider {
 	return &clone
 }
 
+// WithModelForEmbedding returns a clone configured for embedding-only use.
+// Initialization is synchronous (blocking) because embeddings are typically
+// needed immediately when GetProvider("embeddings") is called.
+func (p *OpenAIProvider) WithModelForEmbedding(model string) *OpenAIProvider {
+	clone := *p
+	clone.model = model
+	clone.embeddingOnly = true
+	clone.metricPrefix = fmt.Sprintf("llm/%s/%s/%s", p.Type(), p.Name(), model)
+	// Initialize synchronously - test that embeddings actually work
+	clone.checkEmbeddingAvailability()
+	return &clone
+}
+
+// checkEmbeddingAvailability tests if the embedding endpoint works
+func (p *OpenAIProvider) checkEmbeddingAvailability() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	L_info("openai: checking embedding availability", "name", p.name, "model", p.model, "baseURL", p.baseURL)
+
+	// Test with a simple embedding request
+	req := openai.EmbeddingRequest{
+		Model: openai.EmbeddingModel(p.model),
+		Input: []string{"test"},
+	}
+
+	resp, err := p.client.CreateEmbeddings(ctx, req)
+	if err != nil {
+		L_warn("openai: embedding not available", "error", err, "name", p.name, "model", p.model)
+		p.mu.Lock()
+		p.available = false
+		p.mu.Unlock()
+		return
+	}
+
+	if len(resp.Data) > 0 && len(resp.Data[0].Embedding) > 0 {
+		p.mu.Lock()
+		p.available = true
+		p.embeddingDimensions = len(resp.Data[0].Embedding)
+		p.mu.Unlock()
+		L_info("openai: embedding ready", "name", p.name, "model", p.model, "dimensions", len(resp.Data[0].Embedding))
+	} else {
+		L_warn("openai: embedding returned empty data", "name", p.name, "model", p.model)
+		p.mu.Lock()
+		p.available = false
+		p.mu.Unlock()
+	}
+}
+
 // IsAvailable returns true if the provider is configured and ready
 func (p *OpenAIProvider) IsAvailable() bool {
-	return p != nil && p.client != nil && p.model != ""
+	if p == nil || p.client == nil || p.model == "" {
+		return false
+	}
+	// For embedding-only providers, check the availability flag (set by initialization)
+	if p.embeddingOnly {
+		p.mu.RLock()
+		defer p.mu.RUnlock()
+		return p.available
+	}
+	// For chat providers, always available if configured
+	return true
 }
 
 // ContextTokens returns the model's context window size in tokens
@@ -107,24 +189,102 @@ func (p *OpenAIProvider) MaxTokens() int {
 	return p.maxTokens
 }
 
-// Embed is not supported by OpenAI provider (different endpoint structure)
+// Embed generates an embedding for a single text using the OpenAI-compatible /v1/embeddings endpoint.
+// Works with OpenAI, LM Studio, and other compatible APIs.
 func (p *OpenAIProvider) Embed(ctx context.Context, text string) ([]float32, error) {
-	return nil, ErrNotSupported{Provider: "openai", Operation: "embeddings"}
+	if !p.embeddingOnly {
+		return nil, ErrNotSupported{Provider: p.name, Operation: "embeddings (not configured as embedding provider)"}
+	}
+
+	req := openai.EmbeddingRequest{
+		Model: openai.EmbeddingModel(p.model),
+		Input: []string{text},
+	}
+
+	resp, err := p.client.CreateEmbeddings(ctx, req)
+	if err != nil {
+		L_error("openai: embedding failed", "error", err, "model", p.model)
+		return nil, fmt.Errorf("embedding failed: %w", err)
+	}
+
+	if len(resp.Data) == 0 {
+		return nil, fmt.Errorf("embedding returned no data")
+	}
+
+	// Convert float64 to float32
+	embedding := make([]float32, len(resp.Data[0].Embedding))
+	for i, v := range resp.Data[0].Embedding {
+		embedding[i] = float32(v)
+	}
+
+	// Cache dimensions on first successful embedding
+	if p.embeddingDimensions == 0 && len(embedding) > 0 {
+		p.mu.Lock()
+		p.embeddingDimensions = len(embedding)
+		p.mu.Unlock()
+		L_debug("openai: cached embedding dimensions", "dimensions", len(embedding), "model", p.model)
+	}
+
+	return embedding, nil
 }
 
-// EmbedBatch is not supported by OpenAI provider
+// EmbedBatch generates embeddings for multiple texts in a single request.
 func (p *OpenAIProvider) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	return nil, ErrNotSupported{Provider: "openai", Operation: "embeddings"}
+	if !p.embeddingOnly {
+		return nil, ErrNotSupported{Provider: p.name, Operation: "embeddings (not configured as embedding provider)"}
+	}
+
+	if len(texts) == 0 {
+		return [][]float32{}, nil
+	}
+
+	req := openai.EmbeddingRequest{
+		Model: openai.EmbeddingModel(p.model),
+		Input: texts,
+	}
+
+	resp, err := p.client.CreateEmbeddings(ctx, req)
+	if err != nil {
+		L_error("openai: batch embedding failed", "error", err, "model", p.model, "count", len(texts))
+		return nil, fmt.Errorf("batch embedding failed: %w", err)
+	}
+
+	// Convert response to [][]float32, maintaining input order
+	result := make([][]float32, len(texts))
+	for _, data := range resp.Data {
+		if data.Index >= len(result) {
+			continue
+		}
+		embedding := make([]float32, len(data.Embedding))
+		for i, v := range data.Embedding {
+			embedding[i] = float32(v)
+		}
+		result[data.Index] = embedding
+	}
+
+	// Cache dimensions on first successful batch
+	if p.embeddingDimensions == 0 && len(result) > 0 && len(result[0]) > 0 {
+		p.mu.Lock()
+		p.embeddingDimensions = len(result[0])
+		p.mu.Unlock()
+		L_debug("openai: cached embedding dimensions from batch", "dimensions", len(result[0]), "model", p.model)
+	}
+
+	L_debug("openai: batch embedding complete", "count", len(result), "model", p.model)
+	return result, nil
 }
 
-// EmbeddingDimensions returns 0 - embeddings not supported via this provider
+// EmbeddingDimensions returns the embedding vector dimensions.
+// Returns cached value or 0 if not yet determined.
 func (p *OpenAIProvider) EmbeddingDimensions() int {
-	return 0
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.embeddingDimensions
 }
 
-// SupportsEmbeddings returns false
+// SupportsEmbeddings returns true if this provider is configured for embeddings
 func (p *OpenAIProvider) SupportsEmbeddings() bool {
-	return false
+	return p.embeddingOnly
 }
 
 // getOpenAIModelContextWindow returns the context window size for a given model

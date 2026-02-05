@@ -90,17 +90,22 @@ func (m *Manager) Provider() EmbeddingProvider {
 func (m *Manager) refreshProvider() {
 	reg := llm.GetRegistry()
 	if reg == nil {
+		L_debug("memory: refreshProvider registry is nil")
 		return
 	}
 
 	provider, err := reg.GetProvider("embeddings")
 	if err != nil {
+		L_debug("memory: refreshProvider GetProvider failed", "error", err)
 		return
 	}
+
+	L_debug("memory: refreshProvider got provider", "type", fmt.Sprintf("%T", provider), "name", provider.Name())
 
 	// Adapt llm.Provider to EmbeddingProvider interface
 	embedder, ok := provider.(LLMEmbedder)
 	if !ok {
+		L_warn("memory: refreshProvider type assertion failed", "type", fmt.Sprintf("%T", provider))
 		return
 	}
 	newProvider := NewLLMProviderAdapter(embedder)

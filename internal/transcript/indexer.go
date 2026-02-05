@@ -46,6 +46,9 @@ func NewIndexer(db *sql.DB, provider memory.EmbeddingProvider, cfg config.Transc
 	if cfg.BatchSize <= 0 {
 		cfg.BatchSize = 100
 	}
+	if cfg.BackfillBatchSize <= 0 {
+		cfg.BackfillBatchSize = 10
+	}
 	if cfg.MaxGroupGapSeconds <= 0 {
 		cfg.MaxGroupGapSeconds = 300
 	}
@@ -123,6 +126,8 @@ func (idx *Indexer) loop() {
 
 		case <-ticker.C:
 			idx.runSync()
+			// After processing new messages, backfill old chunks without embeddings
+			idx.runBackfill()
 
 		case <-idx.syncChan:
 			idx.runSync()
@@ -211,6 +216,110 @@ func (idx *Indexer) runSync() {
 		L_trace("transcript: sync completed (no chunks)",
 			"messagesProcessed", len(messages),
 			"progress", progress,
+		)
+	}
+}
+
+// runBackfill adds embeddings to chunks that were created without them
+func (idx *Indexer) runBackfill() {
+	// Only backfill if we have a working embedding provider
+	if idx.provider == nil || !idx.provider.Available() {
+		return
+	}
+
+	ctx := context.Background()
+
+	// Get count of chunks needing embeddings
+	needingCount := idx.ChunksNeedingEmbeddings()
+	if needingCount == 0 {
+		return
+	}
+
+	// Process a batch of chunks (limit to avoid overwhelming the embedding provider)
+	backfillBatchSize := idx.config.BackfillBatchSize
+
+	rows, err := idx.db.QueryContext(ctx, `
+		SELECT id, content FROM transcript_chunks
+		WHERE embedding IS NULL
+		ORDER BY created_at ASC
+		LIMIT ?
+	`, backfillBatchSize)
+	if err != nil {
+		L_warn("transcript: backfill query failed", "error", err)
+		return
+	}
+	defer rows.Close()
+
+	var chunks []struct {
+		id      string
+		content string
+	}
+	for rows.Next() {
+		var c struct {
+			id      string
+			content string
+		}
+		if err := rows.Scan(&c.id, &c.content); err != nil {
+			continue
+		}
+		chunks = append(chunks, c)
+	}
+
+	if len(chunks) == 0 {
+		return
+	}
+
+	startTime := time.Now()
+	successCount := 0
+	failCount := 0
+
+	for _, chunk := range chunks {
+		// Truncate content if too long
+		contentToEmbed := chunk.content
+		maxLen := idx.config.MaxEmbeddingContentLen
+		if len(contentToEmbed) > maxLen {
+			contentToEmbed = contentToEmbed[:maxLen]
+		}
+
+		embedding, err := idx.provider.EmbedQuery(ctx, contentToEmbed)
+		if err != nil {
+			L_debug("transcript: backfill embedding failed", "chunkID", chunk.id, "error", err)
+			failCount++
+			continue
+		}
+
+		if embedding == nil {
+			failCount++
+			continue
+		}
+
+		embeddingBlob, _ := json.Marshal(embedding)
+		embeddingModel := idx.provider.Model()
+
+		_, err = idx.db.ExecContext(ctx, `
+			UPDATE transcript_chunks 
+			SET embedding = ?, embedding_model = ?
+			WHERE id = ?
+		`, embeddingBlob, embeddingModel, chunk.id)
+		if err != nil {
+			L_warn("transcript: backfill update failed", "chunkID", chunk.id, "error", err)
+			failCount++
+			continue
+		}
+
+		successCount++
+	}
+
+	elapsed := time.Since(startTime)
+	remaining := needingCount - successCount
+
+	// Always log backfill progress at INFO level so user can see it
+	if successCount > 0 || failCount > 0 {
+		L_info("transcript: backfill progress",
+			"processed", successCount,
+			"failed", failCount,
+			"remaining", remaining,
+			"elapsed", elapsed.Round(time.Millisecond),
 		)
 	}
 }
@@ -465,6 +574,20 @@ func (idx *Indexer) TotalIndexableCount() int {
 	`).Scan(&count)
 	if err != nil {
 		L_warn("transcript: failed to count total", "error", err)
+		return 0
+	}
+	return count
+}
+
+// ChunksNeedingEmbeddings returns the count of chunks without embeddings
+func (idx *Indexer) ChunksNeedingEmbeddings() int {
+	var count int
+	err := idx.db.QueryRow(`
+		SELECT COUNT(*) FROM transcript_chunks
+		WHERE embedding IS NULL
+	`).Scan(&count)
+	if err != nil {
+		L_warn("transcript: failed to count chunks needing embeddings", "error", err)
 		return 0
 	}
 	return count

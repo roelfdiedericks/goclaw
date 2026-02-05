@@ -96,7 +96,7 @@ Advanced:
 - upload: Upload file to input element
 - dialog: Handle alert/confirm/prompt dialogs
 
-Use when web_fetch returns 403, empty content, or page requires JavaScript.`
+Use for interactive automation or when web_fetch doesn't return expected content.`
 }
 
 func (t *Tool) Schema() map[string]interface{} {
