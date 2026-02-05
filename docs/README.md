@@ -10,7 +10,7 @@ GoClaw can run side-by-side with OpenClaw in the same workspace directory. The t
 
 A SQLite database with vector extensions powers session storage, semantic memory search, and transcript indexing.
 
-Goclaw is also rather pedantic about security, considering the brave new era we're entering. Tool sandboxing and exec level (cloudflare libsandbox) is available on intel/linux systems. Many other guardrails also exist. Of course you can disable this if you want your bot to have full access.
+Goclaw is also rather pedantic about security, considering the brave new era we're entering. Tool sandboxing and binary/exec level (cloudflare libsandbox) is available on intel/linux systems. Many other guardrails also exist. Of course you can disable this if you want your bot to have full access. Nothing is ever entirely secure, but one can try.
 
 ### OpenClaw Compatibility
 
@@ -26,7 +26,7 @@ On first run, GoClaw bootstraps from your existing `openclaw.json` — extractin
 
 Different providers can be assigned to different tasks (agent, summarization, embeddings) with automatic fallback chains.
 
-*Entirely written by Claude/Cursor.*
+*This AI agent was written by an AI agent, under human guidance*
 
 ---
 
@@ -102,10 +102,42 @@ See [Browser Tool](./browser_tool.md) for full documentation.
 
 ## Quick Start
 
-1. Copy `goclaw.example.json` to `goclaw.json`
-2. Add your Anthropic API key and Telegram bot token
-3. Run `make run` or `make debug`
-4. For a Text UI do `make tui`
+### Interactive Setup (Recommended)
+
+```bash
+goclaw setup
+```
+
+The setup wizard will:
+
+1. **Detect OpenClaw** — If found, offer to import settings (API keys, workspace, Telegram token)
+2. **Create workspace** — Set up your agent's home directory with default files
+3. **Configure providers** — Select and test LLM providers (Anthropic, Ollama, LM Studio, etc.)
+4. **Set up user** — Create your owner account with optional Telegram ID
+5. **Test connections** — Validate API keys and fetch available models
+6. **Optionally launch browser** — Set up authenticated browser profiles
+
+After setup, start GoClaw:
+
+```bash
+goclaw tui           # Interactive TUI mode (recommended)
+goclaw gateway       # Foreground mode (logs to terminal)
+goclaw start         # Daemon mode (background)
+```
+
+### Manual Setup
+
+For manual tweaks, use `goclaw setup edit` to access the menu-based editor. For full manual configuration, create `~/.goclaw/goclaw.json` and `~/.goclaw/users.json` by hand — see [Configuration Reference](./configuration.md) for the schema.
+
+### Re-configure
+
+```bash
+goclaw setup              # Auto-detect: edit if config exists, wizard if new
+goclaw setup wizard       # Force full wizard (re-walk all steps)
+goclaw setup edit         # Edit existing config (menu-based)
+goclaw config             # View current configuration
+goclaw config path        # Show config file location
+```
 
 ## Key Concepts
 

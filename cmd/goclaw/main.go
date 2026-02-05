@@ -21,6 +21,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/browser"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
+	"github.com/roelfdiedericks/goclaw/internal/setup"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	goclawhttp "github.com/roelfdiedericks/goclaw/internal/http"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
@@ -60,16 +61,34 @@ type CLI struct {
 	Cron    CronCmd    `cmd:"" help:"Manage cron jobs"`
 	User    UserCmd    `cmd:"" help:"Manage users"`
 	Browser BrowserCmd `cmd:"" help:"Manage browser (download, profiles, setup)"`
+	Setup   SetupCmd   `cmd:"" help:"Interactive setup wizard"`
+	Cfg     ConfigCmd  `cmd:"config" help:"View configuration"`
+	TUI     TUICmd     `cmd:"tui" help:"Run gateway with interactive TUI"`
 }
 
 // GatewayCmd runs gateway in foreground
 type GatewayCmd struct {
-	TUI bool `help:"Run with interactive TUI" short:"i"`
+	Run GatewayRunCmd `cmd:"" default:"withargs" help:"Run gateway in foreground"`
+	TUI GatewayTUICmd `cmd:"tui" help:"Run gateway with interactive TUI"`
+}
+
+// GatewayRunCmd runs gateway in foreground (default)
+type GatewayRunCmd struct {
+	TUI bool `help:"Run with interactive TUI" short:"i" name:"interactive"`
 	Dev bool `help:"Development mode: reload HTML templates from disk on each request"`
 }
 
-func (g *GatewayCmd) Run(ctx *Context) error {
+func (g *GatewayRunCmd) Run(ctx *Context) error {
 	return runGateway(ctx, g.TUI, g.Dev)
+}
+
+// GatewayTUICmd runs gateway with TUI (goclaw gateway tui)
+type GatewayTUICmd struct {
+	Dev bool `help:"Development mode: reload HTML templates from disk on each request"`
+}
+
+func (g *GatewayTUICmd) Run(ctx *Context) error {
+	return runGateway(ctx, true, g.Dev)
 }
 
 // StartCmd daemonizes the gateway
@@ -1215,6 +1234,63 @@ func copyDir(src, dst string) error {
 
 		return os.Chmod(destPath, info.Mode())
 	})
+}
+
+// SetupCmd is the interactive setup wizard
+type SetupCmd struct {
+	Auto   SetupAutoCmd   `cmd:"" default:"withargs" help:"Run setup (auto-detect mode)"`
+	Wizard SetupWizardCmd `cmd:"wizard" help:"Run full setup wizard (even if config exists)"`
+	Edit   SetupEditCmd   `cmd:"edit" help:"Edit existing configuration"`
+}
+
+// SetupAutoCmd auto-detects mode: wizard if no config, edit if exists
+type SetupAutoCmd struct{}
+
+func (s *SetupAutoCmd) Run(ctx *Context) error {
+	return setup.RunAuto()
+}
+
+// SetupWizardCmd forces the full wizard
+type SetupWizardCmd struct{}
+
+func (s *SetupWizardCmd) Run(ctx *Context) error {
+	return setup.RunWizard()
+}
+
+// SetupEditCmd edits existing config
+type SetupEditCmd struct{}
+
+func (s *SetupEditCmd) Run(ctx *Context) error {
+	return setup.RunEdit()
+}
+
+// ConfigCmd shows configuration
+type ConfigCmd struct {
+	Show ConfigShowCmd `cmd:"" default:"withargs" help:"Show current configuration"`
+	Path ConfigPathCmd `cmd:"path" help:"Show path to goclaw.json"`
+}
+
+// ConfigShowCmd shows the current configuration
+type ConfigShowCmd struct{}
+
+func (c *ConfigShowCmd) Run(ctx *Context) error {
+	return setup.ShowConfig()
+}
+
+// ConfigPathCmd shows the config file path
+type ConfigPathCmd struct{}
+
+func (c *ConfigPathCmd) Run(ctx *Context) error {
+	return setup.ShowConfigPath()
+}
+
+// TUICmd is a top-level shortcut for goclaw tui
+type TUICmd struct {
+	Dev bool `help:"Development mode: reload HTML templates from disk on each request"`
+}
+
+func (t *TUICmd) Run(ctx *Context) error {
+	return runGateway(ctx, true, t.Dev)
 }
 
 // Context passed to all commands
