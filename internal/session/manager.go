@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
@@ -104,6 +105,7 @@ func NewManagerWithConfig(cfg *ManagerConfig) (*Manager, error) {
 // InheritOpenClawSession loads an OpenClaw session and merges with GoClaw's own history.
 // Messages from both sources are merged chronologically by timestamp.
 // GoClaw always uses PrimarySession ("primary") for the owner's session.
+// OpenClaw messages are also stored in SQLite (with source='openclaw') for transcript indexing.
 func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey string) error {
 	L_debug("session: attempting to inherit OpenClaw session",
 		"sessionsDir", sessionsDir,
@@ -130,22 +132,36 @@ func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey string) error {
 
 	// Load GoClaw's own messages from SQLite and merge
 	// Note: Runtime writes go to PrimarySession ("primary"), not writeKey
+	var goclawMsgs []StoredMessage
 	if m.store != nil {
 		ctx := context.Background()
-		goclawMsgs, err := m.store.GetMessages(ctx, PrimarySession, MessageQueryOpts{})
+		goclawMsgs, err = m.store.GetMessages(ctx, PrimarySession, MessageQueryOpts{})
 		if err != nil {
 			L_warn("session: failed to load GoClaw messages from SQLite", "error", err)
+			goclawMsgs = nil
 		} else if len(goclawMsgs) > 0 {
 			L_debug("session: loaded GoClaw messages from SQLite", "count", len(goclawMsgs))
-			
-			// Merge OpenClaw and GoClaw messages by timestamp
-			sess.Messages = mergeMessagesByTimestamp(sess.Messages, goclawMsgs)
-			
-			L_info("session: merged message histories",
-				"openclaw", openclawMsgCount,
-				"goclaw", len(goclawMsgs),
-				"merged", len(sess.Messages))
 		}
+	}
+
+	// Store OpenClaw messages in SQLite for transcript indexing
+	// Only store messages that don't already exist in GoClaw's store
+	if m.store != nil && openclawMsgCount > 0 {
+		imported := m.importOpenClawMessages(sess.Messages, goclawMsgs)
+		if imported > 0 {
+			L_info("session: imported OpenClaw messages to SQLite for transcript indexing",
+				"imported", imported,
+				"total", openclawMsgCount)
+		}
+	}
+
+	// Merge for in-memory session (after import, so we have accurate counts)
+	if len(goclawMsgs) > 0 {
+		sess.Messages = mergeMessagesByTimestamp(sess.Messages, goclawMsgs)
+		L_info("session: merged message histories",
+			"openclaw", openclawMsgCount,
+			"goclaw", len(goclawMsgs),
+			"merged", len(sess.Messages))
 	}
 
 	// Set up the session for GoClaw use
@@ -245,8 +261,83 @@ func mergeMessagesByTimestamp(openclawMsgs []Message, goclawMsgs []StoredMessage
 	return result
 }
 
+// importOpenClawMessages stores OpenClaw messages in SQLite for transcript indexing.
+// Only imports messages that don't already exist in goclawMsgs (by timestamp+role+content).
+// Returns the number of messages imported.
+func (m *Manager) importOpenClawMessages(openclawMsgs []Message, goclawMsgs []StoredMessage) int {
+	if m.store == nil {
+		return 0
+	}
+
+	// Build set of existing message keys (timestamp+role+content prefix)
+	makeKey := func(ts int64, role, content string) string {
+		contentKey := content
+		if len(contentKey) > 50 {
+			contentKey = contentKey[:50]
+		}
+		return fmt.Sprintf("%d:%s:%s", ts, role, contentKey)
+	}
+
+	existing := make(map[string]bool)
+	for _, sm := range goclawMsgs {
+		key := makeKey(sm.Timestamp.Unix(), sm.Role, sm.Content)
+		existing[key] = true
+	}
+
+	// Also check for messages already imported (source='openclaw')
+	ctx := context.Background()
+	existingOpenClaw, _ := m.store.GetMessages(ctx, PrimarySession, MessageQueryOpts{})
+	for _, sm := range existingOpenClaw {
+		if sm.Source == "openclaw" {
+			key := makeKey(sm.Timestamp.Unix(), sm.Role, sm.Content)
+			existing[key] = true
+		}
+	}
+
+	imported := 0
+	for _, msg := range openclawMsgs {
+		// Skip if already exists
+		key := makeKey(msg.Timestamp.Unix(), msg.Role, msg.Content)
+		if existing[key] {
+			continue
+		}
+
+		// Skip system messages and tool interactions for transcript indexing
+		// Focus on user and assistant messages which are most useful for search
+		if msg.Role != "user" && msg.Role != "assistant" {
+			continue
+		}
+
+		// Create StoredMessage for SQLite
+		stored := &StoredMessage{
+			ID:         fmt.Sprintf("oc-%s", msg.ID), // Prefix to avoid ID collision
+			SessionKey: PrimarySession,
+			Timestamp:  msg.Timestamp,
+			Role:       msg.Role,
+			Content:    msg.Content,
+			Source:     "openclaw",
+			ToolCallID: msg.ToolUseID,
+			ToolName:   msg.ToolName,
+		}
+		if msg.ToolInput != nil {
+			stored.ToolInput = msg.ToolInput
+		}
+
+		if err := m.store.AppendMessage(ctx, PrimarySession, stored); err != nil {
+			L_debug("session: failed to import OpenClaw message", "id", msg.ID, "error", err)
+			continue
+		}
+
+		existing[key] = true // Mark as imported to avoid duplicates in same batch
+		imported++
+	}
+
+	return imported
+}
+
 // StartWatching begins monitoring the OpenClaw session file for changes.
 // The onNewRecords callback is called when new records are detected.
+// New messages are also stored in SQLite (source='openclaw') for transcript indexing.
 func (m *Manager) StartWatching(ctx context.Context, sessionFile string, onNewRecords func([]Record)) error {
 	sess := m.GetPrimary()
 	if sess == nil {
@@ -255,6 +346,10 @@ func (m *Manager) StartWatching(ctx context.Context, sessionFile string, onNewRe
 
 	callback := func(records []Record) {
 		L_debug("session: received new records from OpenClaw", "count", len(records))
+		
+		// Store new messages in SQLite for transcript indexing
+		m.storeWatchedMessages(records)
+		
 		if onNewRecords != nil {
 			onNewRecords(records)
 		}
@@ -267,6 +362,62 @@ func (m *Manager) StartWatching(ctx context.Context, sessionFile string, onNewRe
 
 	m.watcher = watcher
 	return watcher.Start(ctx)
+}
+
+// storeWatchedMessages stores new OpenClaw messages in SQLite for transcript indexing
+func (m *Manager) storeWatchedMessages(records []Record) {
+	if m.store == nil {
+		return
+	}
+
+	ctx := context.Background()
+	stored := 0
+
+	for _, r := range records {
+		msgRec, ok := r.(*MessageRecord)
+		if !ok {
+			continue
+		}
+
+		// Only store user and assistant messages (skip system/tool for transcript)
+		if msgRec.Message.Role != "user" && msgRec.Message.Role != "assistant" {
+			continue
+		}
+
+		// Extract content from message record
+		content := ""
+		for _, c := range msgRec.Message.Content {
+			if c.Type == "text" && c.Text != "" {
+				content = c.Text
+				break
+			}
+		}
+
+		if content == "" {
+			continue
+		}
+
+		// Create StoredMessage
+		msg := &StoredMessage{
+			ID:         fmt.Sprintf("oc-%s", msgRec.ID),
+			SessionKey: PrimarySession,
+			Timestamp:  time.Unix(msgRec.Message.Timestamp/1000, (msgRec.Message.Timestamp%1000)*1000000), // Convert ms to time.Time
+			Role:       msgRec.Message.Role,
+			Content:    content,
+			Source:     "openclaw",
+		}
+
+		if err := m.store.AppendMessage(ctx, PrimarySession, msg); err != nil {
+			// Likely duplicate - that's fine
+			L_trace("session: failed to store watched OpenClaw message", "id", msgRec.ID, "error", err)
+			continue
+		}
+		stored++
+	}
+
+	if stored > 0 {
+		L_info("session: stored new OpenClaw messages for transcript indexing", "count", stored)
+	}
 }
 
 // StopWatching stops monitoring the OpenClaw session file
