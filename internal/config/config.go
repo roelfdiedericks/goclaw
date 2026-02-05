@@ -316,14 +316,24 @@ type ToolsConfig struct {
 // WebToolsConfig contains web tool settings
 type WebToolsConfig struct {
 	BraveAPIKey string `json:"braveApiKey"`
+	UseBrowser  string `json:"useBrowser"` // Browser fallback: "auto" (on 403/bot), "always", "never" (default: "auto")
+	Profile     string `json:"profile"`    // Browser profile for web_fetch (default: "default")
+	Headless    *bool  `json:"headless"`   // Run browser headless (default: true, set false for debugging)
 }
 
 // BrowserToolsConfig contains browser tool settings
 type BrowserToolsConfig struct {
-	Enabled   bool   `json:"enabled"`   // Enable headless browser tool (requires Chrome/Chromium)
-	Headless  bool   `json:"headless"`  // Run browser in headless mode (default: true)
-	NoSandbox bool   `json:"noSandbox"` // Disable Chrome sandbox (needed for Docker/root)
-	Profile   string `json:"profile"`   // Browser profile name (default: "openclaw")
+	Enabled        bool              `json:"enabled"`        // Enable headless browser tool (requires Chrome/Chromium)
+	Dir            string            `json:"dir"`            // Browser data directory (empty = ~/.openclaw/goclaw/browser)
+	AutoDownload   bool              `json:"autoDownload"`   // Download Chromium if missing (default: true)
+	Revision       string            `json:"revision"`       // Chromium revision (empty = latest)
+	Headless       bool              `json:"headless"`       // Run browser in headless mode (default: true)
+	NoSandbox      bool              `json:"noSandbox"`      // Disable Chrome sandbox (needed for Docker/root)
+	DefaultProfile string            `json:"defaultProfile"` // Default profile name (default: "default")
+	Timeout        string            `json:"timeout"`        // Default action timeout (default: "30s")
+	Stealth        bool              `json:"stealth"`        // Enable stealth mode (default: true)
+	Device         string            `json:"device"`         // Device emulation: "clear", "laptop", "iphone-x", etc. (default: "clear")
+	ProfileDomains map[string]string `json:"profileDomains"` // Domain → profile mapping for auto-selection
 }
 
 // Load reads configuration from goclaw.json.
@@ -405,8 +415,17 @@ func Load() (*LoadResult, error) {
 		},
 		Tools: ToolsConfig{
 			Browser: BrowserToolsConfig{
-				Headless: true,           // default headless
-				Profile:  "openclaw",     // default profile
+				Enabled:        true,
+				Dir:            "",        // Default: ~/.openclaw/goclaw/browser
+				AutoDownload:   true,
+				Revision:       "",        // Latest
+				Headless:       true,
+				NoSandbox:      false,
+				DefaultProfile: "default",
+				Timeout:        "30s",
+				Stealth:        true,
+				Device:         "clear",   // No viewport emulation, fills window
+				ProfileDomains: map[string]string{},
 			},
 		},
 		Session: SessionConfig{
@@ -677,8 +696,8 @@ func (c *Config) mergeOpenclawConfig(base map[string]interface{}, openclawDir st
 			logging.L_debug("config: browser noSandbox", "noSandbox", noSandbox)
 		}
 		if profile, ok := browser["defaultProfile"].(string); ok {
-			c.Tools.Browser.Profile = profile
-			logging.L_debug("config: browser profile", "profile", profile)
+			c.Tools.Browser.DefaultProfile = profile
+			logging.L_debug("config: browser defaultProfile", "profile", profile)
 		}
 	}
 

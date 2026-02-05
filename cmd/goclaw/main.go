@@ -15,6 +15,7 @@ import (
 	"github.com/sevlyar/go-daemon"
 	"golang.org/x/term"
 
+	"github.com/roelfdiedericks/goclaw/internal/browser"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
@@ -55,6 +56,7 @@ type CLI struct {
 	Version VersionCmd `cmd:"" help:"Show version"`
 	Cron    CronCmd    `cmd:"" help:"Manage cron jobs"`
 	User    UserCmd    `cmd:"" help:"Manage users"`
+	Browser BrowserCmd `cmd:"" help:"Manage browser (download, profiles, setup)"`
 }
 
 // GatewayCmd runs gateway in foreground
@@ -667,6 +669,372 @@ func (u *UserDeleteCmd) Run(ctx *Context) error {
 	return nil
 }
 
+// BrowserCmd manages browser (download, profiles, setup)
+type BrowserCmd struct {
+	Download BrowserDownloadCmd `cmd:"" help:"Download/update Chromium browser"`
+	Setup    BrowserSetupCmd    `cmd:"" help:"Launch browser for profile setup (login, cookies, etc.)"`
+	Profiles BrowserProfilesCmd `cmd:"" help:"List browser profiles"`
+	Clear    BrowserClearCmd    `cmd:"" help:"Clear profile data (cookies, cache, etc.)"`
+	Status   BrowserStatusCmd   `cmd:"" help:"Show browser status (running instances, download state)"`
+}
+
+// BrowserDownloadCmd downloads Chromium
+type BrowserDownloadCmd struct {
+	Force bool `help:"Force re-download even if already present"`
+}
+
+func (b *BrowserDownloadCmd) Run(ctx *Context) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	// Load config to get browser settings
+	loadResult, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	cfg := loadResult.Config
+
+	// Create browser config adapter
+	browserCfg := browser.ToolsConfigAdapter{
+		Dir:            cfg.Tools.Browser.Dir,
+		AutoDownload:   true, // Force for this command
+		Revision:       cfg.Tools.Browser.Revision,
+		Headless:       cfg.Tools.Browser.Headless,
+		NoSandbox:      cfg.Tools.Browser.NoSandbox,
+		DefaultProfile: cfg.Tools.Browser.DefaultProfile,
+		Timeout:        cfg.Tools.Browser.Timeout,
+		Stealth:        cfg.Tools.Browser.Stealth,
+		Device:         cfg.Tools.Browser.Device,
+		ProfileDomains: cfg.Tools.Browser.ProfileDomains,
+	}.ToConfig()
+
+	// Create downloader
+	binDir := browserCfg.ResolveBinDir(home)
+	downloader := browser.NewDownloader(binDir, browserCfg.Revision)
+
+	if b.Force {
+		fmt.Println("Force downloading Chromium...")
+		path, err := downloader.ForceDownload()
+		if err != nil {
+			return fmt.Errorf("download failed: %w", err)
+		}
+		fmt.Printf("Chromium downloaded to: %s\n", path)
+	} else {
+		// Check if already downloaded
+		if path, err := downloader.FindExistingBrowser(); err == nil {
+			fmt.Printf("Chromium already downloaded: %s\n", path)
+			fmt.Println("Use --force to re-download.")
+			return nil
+		}
+
+		fmt.Println("Downloading Chromium...")
+		path, err := downloader.EnsureBrowser()
+		if err != nil {
+			return fmt.Errorf("download failed: %w", err)
+		}
+		fmt.Printf("Chromium downloaded to: %s\n", path)
+	}
+
+	return nil
+}
+
+// BrowserSetupCmd launches browser for profile setup
+type BrowserSetupCmd struct {
+	Profile string `arg:"" optional:"" help:"Profile name (default: 'default')"`
+	URL     string `arg:"" optional:"" help:"Starting URL (optional)"`
+}
+
+func (b *BrowserSetupCmd) Run(ctx *Context) error {
+	profile := b.Profile
+	if profile == "" {
+		profile = "default"
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	// Load config
+	loadResult, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	cfg := loadResult.Config
+
+	// Create browser config
+	browserCfg := browser.ToolsConfigAdapter{
+		Dir:            cfg.Tools.Browser.Dir,
+		AutoDownload:   cfg.Tools.Browser.AutoDownload,
+		Revision:       cfg.Tools.Browser.Revision,
+		Headless:       false, // Headed for setup
+		NoSandbox:      cfg.Tools.Browser.NoSandbox,
+		DefaultProfile: cfg.Tools.Browser.DefaultProfile,
+		Timeout:        cfg.Tools.Browser.Timeout,
+		Stealth:        cfg.Tools.Browser.Stealth,
+		Device:         cfg.Tools.Browser.Device,
+		ProfileDomains: cfg.Tools.Browser.ProfileDomains,
+	}.ToConfig()
+
+	// Initialize manager
+	mgr, err := browser.InitManager(browserCfg)
+	if err != nil {
+		return fmt.Errorf("failed to initialize browser manager: %w", err)
+	}
+
+	// Ensure browser is downloaded
+	if _, err := mgr.EnsureBrowser(); err != nil {
+		return fmt.Errorf("failed to ensure browser: %w", err)
+	}
+
+	profileDir := browserCfg.ResolveProfileDir(home, profile)
+	fmt.Printf("Launching browser for profile: %s\n", profile)
+	fmt.Printf("Profile directory: %s\n", profileDir)
+	if b.URL != "" {
+		fmt.Printf("Starting URL: %s\n", b.URL)
+	}
+	fmt.Println("\nLog in, set cookies, etc. Close the browser when done.")
+	fmt.Println("Press Ctrl+C to cancel.")
+
+	// Launch headed browser
+	browserInstance, _, err := mgr.LaunchHeaded(profile, b.URL)
+	if err != nil {
+		return fmt.Errorf("failed to launch browser: %w", err)
+	}
+
+	// Wait for browser window to close or Ctrl+C
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	doneChan := make(chan struct{})
+	go func() {
+		// Poll for all pages closed (workaround: go-rod doesn't have window close event)
+		// Initial delay to let the first page open
+		time.Sleep(2 * time.Second)
+
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				pages, err := browserInstance.Pages()
+				if err != nil {
+					L_debug("browser setup: error getting pages", "error", err)
+					close(doneChan)
+					return
+				}
+				if len(pages) == 0 {
+					L_debug("browser setup: all pages closed")
+					close(doneChan)
+					return
+				}
+			}
+		}
+	}()
+
+	select {
+	case <-sigChan:
+		fmt.Println("\nCancelled.")
+	case <-doneChan:
+		fmt.Println("\nBrowser window closed.")
+	}
+
+	browserInstance.Close()
+
+	fmt.Printf("\nProfile '%s' is ready to use.\n", profile)
+	return nil
+}
+
+// BrowserProfilesCmd lists browser profiles
+type BrowserProfilesCmd struct{}
+
+func (b *BrowserProfilesCmd) Run(ctx *Context) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	// Load config
+	loadResult, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	cfg := loadResult.Config
+
+	// Create browser config
+	browserCfg := browser.ToolsConfigAdapter{
+		Dir:            cfg.Tools.Browser.Dir,
+		DefaultProfile: cfg.Tools.Browser.DefaultProfile,
+	}.ToConfig()
+
+	profilesDir := browserCfg.ResolveProfilesDir(home)
+	profileMgr := browser.NewProfileManager(profilesDir)
+
+	profiles, err := profileMgr.ListProfiles()
+	if err != nil {
+		return fmt.Errorf("failed to list profiles: %w", err)
+	}
+
+	if len(profiles) == 0 {
+		fmt.Println("No browser profiles found.")
+		fmt.Printf("Profiles directory: %s\n", profilesDir)
+		fmt.Println("\nUse 'goclaw browser setup [profile]' to create a profile.")
+		return nil
+	}
+
+	fmt.Printf("Browser profiles (%d):\n\n", len(profiles))
+	for _, p := range profiles {
+		marker := ""
+		if p.Name == cfg.Tools.Browser.DefaultProfile {
+			marker = " (default)"
+		}
+		lastUsed := "never"
+		if !p.LastUsed.IsZero() {
+			lastUsed = p.LastUsed.Format("2006-01-02 15:04")
+		}
+		fmt.Printf("  %s%s\n", p.Name, marker)
+		fmt.Printf("    Size: %s, Last used: %s\n", browser.FormatSize(p.Size), lastUsed)
+		fmt.Printf("    Path: %s\n\n", p.Path)
+	}
+
+	// Show domain mappings if any
+	if len(cfg.Tools.Browser.ProfileDomains) > 0 {
+		fmt.Println("Domain mappings:")
+		for domain, profile := range cfg.Tools.Browser.ProfileDomains {
+			fmt.Printf("  %s → %s\n", domain, profile)
+		}
+	}
+
+	return nil
+}
+
+// BrowserClearCmd clears profile data
+type BrowserClearCmd struct {
+	Profile string `arg:"" help:"Profile name to clear"`
+	Force   bool   `help:"Skip confirmation"`
+}
+
+func (b *BrowserClearCmd) Run(ctx *Context) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	// Load config
+	loadResult, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	cfg := loadResult.Config
+
+	// Create browser config
+	browserCfg := browser.ToolsConfigAdapter{
+		Dir:            cfg.Tools.Browser.Dir,
+		DefaultProfile: cfg.Tools.Browser.DefaultProfile,
+	}.ToConfig()
+
+	profilesDir := browserCfg.ResolveProfilesDir(home)
+	profileMgr := browser.NewProfileManager(profilesDir)
+
+	if !profileMgr.ProfileExists(b.Profile) {
+		return fmt.Errorf("profile '%s' does not exist", b.Profile)
+	}
+
+	if !b.Force {
+		fmt.Printf("Clear all data for profile '%s'? This will delete cookies, cache, and login sessions.\n", b.Profile)
+		fmt.Print("Type 'yes' to confirm: ")
+		var confirm string
+		fmt.Scanln(&confirm)
+		if confirm != "yes" {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+	}
+
+	if err := profileMgr.ClearProfile(b.Profile); err != nil {
+		return fmt.Errorf("failed to clear profile: %w", err)
+	}
+
+	fmt.Printf("Profile '%s' cleared.\n", b.Profile)
+	return nil
+}
+
+// BrowserStatusCmd shows browser status
+type BrowserStatusCmd struct{}
+
+func (b *BrowserStatusCmd) Run(ctx *Context) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	// Load config
+	loadResult, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	cfg := loadResult.Config
+
+	fmt.Println("Browser Status")
+	fmt.Println("==============")
+	fmt.Println()
+
+	// Check if browser is enabled
+	if !cfg.Tools.Browser.Enabled {
+		fmt.Println("Browser: DISABLED (set tools.browser.enabled=true to enable)")
+		return nil
+	}
+	fmt.Println("Browser: ENABLED")
+
+	// Create browser config
+	browserCfg := browser.ToolsConfigAdapter{
+		Dir:            cfg.Tools.Browser.Dir,
+		AutoDownload:   cfg.Tools.Browser.AutoDownload,
+		Revision:       cfg.Tools.Browser.Revision,
+		DefaultProfile: cfg.Tools.Browser.DefaultProfile,
+	}.ToConfig()
+
+	// Check download status
+	binDir := browserCfg.ResolveBinDir(home)
+	downloader := browser.NewDownloader(binDir, browserCfg.Revision)
+
+	if binPath, err := downloader.FindExistingBrowser(); err == nil {
+		fmt.Printf("Chromium: DOWNLOADED\n")
+		fmt.Printf("  Path: %s\n", binPath)
+	} else {
+		if cfg.Tools.Browser.AutoDownload {
+			fmt.Println("Chromium: NOT DOWNLOADED (will auto-download on first use)")
+		} else {
+			fmt.Println("Chromium: NOT DOWNLOADED (run 'goclaw browser download')")
+		}
+	}
+
+	// Check profiles
+	profilesDir := browserCfg.ResolveProfilesDir(home)
+	profileMgr := browser.NewProfileManager(profilesDir)
+	profiles, _ := profileMgr.ListProfiles()
+
+	fmt.Printf("\nProfiles: %d\n", len(profiles))
+	if len(profiles) > 0 {
+		for _, p := range profiles {
+			marker := ""
+			if p.Name == cfg.Tools.Browser.DefaultProfile {
+				marker = " (default)"
+			}
+			fmt.Printf("  - %s%s (%s)\n", p.Name, marker, browser.FormatSize(p.Size))
+		}
+	}
+
+	// Note about running instances
+	fmt.Println("\nNote: Running browser instances are managed by the gateway.")
+	fmt.Println("Use 'goclaw status' to check if the gateway is running.")
+
+	return nil
+}
+
 // Context passed to all commands
 type Context struct {
 	Debug  bool
@@ -734,31 +1102,39 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	llm.SetGlobalRegistry(llmRegistry)
 	L_info("LLM registry created", "providers", len(cfg.LLM.Providers))
 
-	// Create browser pool if enabled
-	var browserPool *tools.BrowserPool
+	// Initialize browser manager for web_fetch fallback and browser tool
 	if cfg.Tools.Browser.Enabled {
-		var err error
-		browserPool, err = tools.NewBrowserPool(tools.BrowserPoolConfig{
-			Headless:  cfg.Tools.Browser.Headless,
-			NoSandbox: cfg.Tools.Browser.NoSandbox,
-			Profile:   cfg.Tools.Browser.Profile,
-		})
+		browserCfg := browser.ToolsConfigAdapter{
+			Dir:            cfg.Tools.Browser.Dir,
+			AutoDownload:   cfg.Tools.Browser.AutoDownload,
+			Revision:       cfg.Tools.Browser.Revision,
+			Headless:       cfg.Tools.Browser.Headless,
+			NoSandbox:      cfg.Tools.Browser.NoSandbox,
+			DefaultProfile: cfg.Tools.Browser.DefaultProfile,
+			Timeout:        cfg.Tools.Browser.Timeout,
+			Stealth:        cfg.Tools.Browser.Stealth,
+			Device:         cfg.Tools.Browser.Device,
+			ProfileDomains: cfg.Tools.Browser.ProfileDomains,
+		}.ToConfig()
+
+		browserMgr, err := browser.InitManager(browserCfg)
 		if err != nil {
-			L_warn("failed to create browser pool, browser tool disabled", "error", err)
+			L_warn("browser: failed to initialize manager", "error", err)
 		} else {
-			defer browserPool.Close()
+			defer browserMgr.CloseAll()
+			L_info("browser: manager initialized", "headless", cfg.Tools.Browser.Headless)
 		}
 	} else {
 		L_info("browser: disabled by configuration")
 	}
 
-	// Create tool registry and register base defaults (no media-dependent tools yet)
+	// Create tool registry and register base defaults (browser tool registered after gateway)
 	toolsReg := tools.NewRegistry()
 	tools.RegisterDefaults(toolsReg, tools.ToolsConfig{
-		WorkingDir:     cfg.Gateway.WorkingDir,
-		BraveAPIKey:    cfg.Tools.Web.BraveAPIKey,
-		BrowserPool:    nil,       // Browser registered after gateway (needs MediaStore)
-		BrowserEnabled: false,     // Deferred
+		WorkingDir:  cfg.Gateway.WorkingDir,
+		BraveAPIKey: cfg.Tools.Web.BraveAPIKey,
+		UseBrowser:  cfg.Tools.Web.UseBrowser, // "auto", "always", "never" for web_fetch
+		WebProfile:  cfg.Tools.Web.Profile,    // browser profile for web_fetch
 	})
 	L_debug("base tools registered", "count", toolsReg.Count())
 
@@ -770,11 +1146,17 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	}
 	L_info("gateway initialized")
 
-	// Register browser tool (needs gateway's MediaStore)
-	if cfg.Tools.Browser.Enabled && browserPool != nil {
+	// Register browser tool (needs gateway's MediaStore and browser.Manager)
+	if cfg.Tools.Browser.Enabled {
 		if mediaStore := gw.MediaStore(); mediaStore != nil {
-			toolsReg.Register(tools.NewBrowserTool(browserPool, mediaStore))
-			L_debug("browser tool registered")
+			if browserMgr := browser.GetManager(); browserMgr != nil {
+				toolsReg.Register(browser.NewTool(browserMgr, mediaStore))
+				L_debug("browser tool registered", "headless", cfg.Tools.Browser.Headless)
+			} else {
+				L_warn("browser tool not registered: manager not initialized")
+			}
+		} else {
+			L_warn("browser tool not registered: no media store")
 		}
 	}
 
