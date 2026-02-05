@@ -1,21 +1,79 @@
 # GoClaw Documentation
 
-GoClaw is a Go implementation of an AI agent gateway, compatible with OpenClaw session formats, and "soul-ness".
+GoClaw is a Golang implementation of a certain molty bot, compatible with OpenClaw session formats and "soul-ness".
 
-It reimplements many of OpenClaw's concepts and functionality in go, and can actually run side-by-side with OpenClaw, in the same workspace directory. 
+Originally intended as a "minimum viable" replacement for OpenClaw, it has evolved to achieve strong feature parity while adding capabilities like **transcript search** — persistent, searchable conversation history that survives context compaction. Your bot is able to recall detailed information from days ago.
 
-It will read your openclaw.json file to overlay into it's own configuration file, so that it's easier to run side-by-side. It will also read your openclaw session history at startup so you can takeoff where you left in openclaw, or goclaw
+Telegram, http (web), and TUI interfaces are the primary methods for interaction at the moment.
 
-The two "consciousness" streams are merged at startup to create one timeline.
-It will also monitor your openclaw session and add any other interactions with openclaw to the timeline.
+GoClaw can run side-by-side with OpenClaw in the same workspace directory. The two "consciousness" streams are merged at startup to create one unified timeline, and GoClaw monitors your OpenClaw session to sync any new interactions in real-time. Two brains, one identity. It can also run completely standalone if you prefer.
 
-It was intended as a "mimimum viable" replacement for OpenClaw, focusing on Anthropic models for the main agent, and Ollama for context compaction and memory embeddings.
+A SQLite database with vector extensions powers session storage, semantic memory search, and transcript indexing.
 
-A SQLite database with vector extensions is used for session storage and semantic memory search.
+Goclaw is also rather pedantic about security, considering the brave new era we're entering. Tool sandboxing and exec level (cloudflare libsandbox) is available on intel/linux systems. Many other guardrails also exist. Of course you can disable this if you want your bot to have full access.
 
-It is intended to be feature-rich enough to use as a daily driver given the minimum viable design.
+### OpenClaw Compatibility
 
-It was entirely written by Claude/Cursor.
+On first run, GoClaw bootstraps from your existing `openclaw.json` — extracting workspace, Telegram, browser settings, and Anthropic API key. Other providers (Ollama, LM Studio) need manual configuration. See [OpenClaw Bootstrap](#openclaw-bootstrap) for details.
+
+### Supported LLM Providers
+
+| Provider | Use Cases |
+|----------|-----------|
+| **Anthropic** | Agent responses (Claude Opus, Sonnet, Haiku) |
+| **Ollama** | Local inference, embeddings, summarization |
+| **OpenAI-compatible** | LM Studio, LocalAI, Kimi, OpenRouter, etc. |
+
+Different providers can be assigned to different tasks (agent, summarization, embeddings) with automatic fallback chains.
+
+*Entirely written by Claude/Cursor.*
+
+---
+
+## Superpowers
+
+### Transcript Search — Your Agent Never Forgets
+
+GoClaw indexes every conversation into a searchable database with semantic embeddings. GoClaw transcripts are:
+
+- **Local & Private** — Your conversations stay on your machine
+- **Persistent** — Survives context compaction; nothing is ever truly lost
+- **Cross-Platform** — Merges OpenClaw + GoClaw history into one searchable index
+- **Real-time** — New messages indexed within 30 seconds
+- **Hybrid Search** — Combines semantic understanding with keyword matching
+
+Your agent can search past conversations to recover context after compaction, find previous decisions, or recall what you discussed weeks ago.
+
+```
+Agent: "What did we decide about the authentication system?"
+→ Searches 500+ conversation chunks
+→ Finds relevant discussion from 2 weeks ago
+→ "We decided to use JWT tokens with refresh rotation..."
+```
+
+See [Transcript Search](./transcript-search.md) for full documentation.
+
+### Memory Search — Workspace Knowledge
+
+Search your memory files (`memory/*.md`, `MEMORY.md`) with the same hybrid semantic + keyword search. The agent can find relevant notes, decisions, and context from your written records.
+
+See [Memory Search](./memory-search.md) for details.
+
+### Managed Browser — First-Class Web Access
+
+GoClaw includes a managed Chromium browser as a first-class citizen, not an afterthought:
+
+- **`web_fetch`** — Automatically uses the browser for JavaScript-rendered pages (SPAs, dynamic content). Falls back gracefully when browser isn't needed.
+- **`browser` tool** — Full browser automation: navigate, click, type, screenshot, extract content. Headless or headed operation.
+- **Persistent Profiles** — Maintain authenticated sessions across restarts. Log in once, stay logged in.
+- **Domain Mapping** — Route specific sites to specific profiles (e.g., `*.twitter.com` → `twitter` profile).
+- **Stealth Mode** — Configurable anti-detection for sites that block automation.
+
+The browser auto-downloads and updates Chromium, so there's nothing to install manually.
+
+See [Browser Tool](./browser_tool.md) for full documentation.
+
+---
 
 ## Documentation Index
 
@@ -27,9 +85,12 @@ It was entirely written by Claude/Cursor.
 
 ### Features
 
+- [Transcript Search](./transcript-search.md) - Searchable conversation history with embeddings
+- [Memory Search](./memory-search.md) - Semantic search over memory files
+- [Browser Tool](./browser_tool.md) - Managed browser for web automation
 - [Telegram Integration](./telegram.md) - Bot setup and commands
 - [Cron & Heartbeat](./cron.md) - Scheduled tasks and periodic checks
-- [Memory Search](./memory-search.md) - Semantic search over memory files
+- [Skills](./skills.md) - Extensible agent capabilities
 - [Tools](./tools.md) - Available agent tools
 
 ### Operations
@@ -68,14 +129,13 @@ See [Session Management](./session-management.md) for details.
 
 GoClaw supports using different LLMs for different tasks:
 
-| Task | Default | Purpose |
-|------|---------|---------|
+| Task | Typical Choice | Purpose |
+|------|----------------|---------|
 | Agent responses | Anthropic Claude | Main intelligence |
-| Checkpoints | Ollama (local) | Cheap rolling summaries |
-| Compaction | Ollama (local) | Cheap compaction summaries |
-| Embeddings | Ollama (local) | Memory search vectors |
+| Summarization | Ollama / Haiku | Checkpoints and compaction |
+| Embeddings | LM Studio / Ollama | Memory and transcript search |
 
-If Ollama fails, compaction falls back to the main Anthropic model automatically.
+Each task can have a fallback chain — if the primary provider fails, GoClaw automatically tries the next in the list.
 
 ### Session Storage
 
@@ -84,6 +144,33 @@ Sessions are stored in SQLite (`~/.openclaw/sessions.db`) with full message hist
 - Audit trails
 - Summary retry after failures
 - Future analysis
+
+---
+
+## OpenClaw Bootstrap
+
+On first run (when `goclaw.json` doesn't exist or is empty), GoClaw extracts settings from your existing OpenClaw installation:
+
+**From `openclaw.json`:**
+| Setting | GoClaw Equivalent |
+|---------|-------------------|
+| `agents.defaults.workspace` | Working directory |
+| `agents.defaults.model.primary` | Primary agent model |
+| `channels.telegram.botToken` | Telegram bot token |
+| `tools.web.search.apiKey` | Brave search API key |
+| `browser.*` | Browser tool settings |
+
+**From `~/.openclaw/agents/main/agent/auth-profiles.json`:**
+| Setting | GoClaw Equivalent |
+|---------|-------------------|
+| `profiles["anthropic:default"].key` | Anthropic API key |
+
+**Not extracted** (configure manually):
+- Ollama URL and settings
+- OpenAI/LM Studio API keys
+- Embedding provider configuration
+
+After bootstrap, `goclaw.json` is the authoritative config. The bootstrap is Anthropic-oriented — you'll need to manually add local providers for embeddings and summarization.
 
 ---
 
