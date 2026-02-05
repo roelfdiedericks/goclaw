@@ -1736,7 +1736,8 @@ func main() {
 		if strings.HasPrefix(errMsg, "no goclaw.json") ||
 			strings.HasPrefix(errMsg, "goclaw.json is empty") ||
 			strings.HasPrefix(errMsg, "at least one") ||
-			strings.HasPrefix(errMsg, "setup:") {
+			strings.HasPrefix(errMsg, "setup:") ||
+			strings.Contains(errMsg, "user aborted") {
 			fmt.Fprintln(os.Stderr, errMsg)
 			os.Exit(1)
 		}

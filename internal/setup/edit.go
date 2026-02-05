@@ -273,10 +273,42 @@ func (e *Editor) editWorkspace() error {
 	}
 
 	if newPath != current {
+		expandedPath := ExpandPath(newPath)
+
+		// Check if workspace needs initialization
+		soulPath := expandedPath + "/SOUL.md"
+		if _, err := os.Stat(soulPath); os.IsNotExist(err) {
+			// Workspace doesn't have template files
+			var initWorkspace bool
+			initForm := newForm(
+				huh.NewGroup(
+					huh.NewConfirm().
+						Title("Initialize workspace?").
+						Description("This path doesn't contain workspace files. Create them?").
+						Value(&initWorkspace),
+				),
+			)
+
+			if err := initForm.Run(); err != nil {
+				if isUserAbort(err) {
+					return nil // Escape = cancel the whole edit
+				}
+				return err
+			}
+
+			if initWorkspace {
+				if err := CreateWorkspace(expandedPath); err != nil {
+					fmt.Printf("⚠ Failed to initialize workspace: %s\n", err)
+				} else {
+					fmt.Printf("✓ Workspace initialized at %s\n", expandedPath)
+				}
+			}
+		}
+
 		if e.config["gateway"] == nil {
 			e.config["gateway"] = make(map[string]interface{})
 		}
-		e.config["gateway"].(map[string]interface{})["workingDir"] = ExpandPath(newPath)
+		e.config["gateway"].(map[string]interface{})["workingDir"] = expandedPath
 		e.modified = true
 	}
 
