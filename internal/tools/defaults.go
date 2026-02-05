@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"time"
+
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
@@ -43,13 +45,25 @@ func RegisterDefaults(reg *Registry, cfg ToolsConfig) {
 	reg.Register(NewWriteTool(cfg.WorkingDir))
 	reg.Register(NewEditTool(cfg.WorkingDir))
 
-	// Exec tool
-	reg.Register(NewExecTool(ExecToolConfig{
+	// Create shared ExecRunner for exec and jq tools
+	timeout := 30 * time.Minute // default: 30 minutes
+	if cfg.ExecTimeout > 0 {
+		timeout = time.Duration(cfg.ExecTimeout) * time.Second
+	}
+	execRunner := NewExecRunner(ExecRunnerConfig{
 		WorkingDir:     cfg.WorkingDir,
-		Timeout:        cfg.ExecTimeout,
+		Timeout:        timeout,
 		BubblewrapPath: cfg.BubblewrapPath,
 		Bubblewrap:     cfg.ExecBubblewrap,
-	}))
+	})
+
+	// Exec tool
+	reg.Register(NewExecToolWithRunner(execRunner))
+	L_debug("tools: exec registered")
+
+	// JQ tool (shares exec runner for sandbox support)
+	reg.Register(NewJQTool(cfg.WorkingDir, execRunner))
+	L_debug("tools: jq registered")
 
 	// Web tools
 	if cfg.BraveAPIKey != "" {

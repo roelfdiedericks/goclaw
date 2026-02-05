@@ -43,13 +43,16 @@ func BrowserSandbox(workspace, browserProfile, home string, gpu bool) *Builder {
 	// Network required for browser
 	b.ShareNet()
 
-	// Display access (X11 or Wayland)
+	// Environment - clearenv MUST come before any setenv calls
+	b.ClearEnv()
+	b.DefaultEnv(home)
+
+	// Display access (X11 or Wayland) - after clearenv so DISPLAY is preserved
 	b.Display()
 	b.Wayland()
 
-	// Environment
-	b.ClearEnv()
-	b.DefaultEnv(home)
+	// D-Bus for Chromium (needed for some features in headed mode)
+	b.Dbus()
 
 	// Set working directory
 	b.Chdir(workspace)

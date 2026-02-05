@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -41,8 +42,8 @@ type Wizard struct {
 	telegramToken   string
 
 	// HTTP
-	httpPort    int
-	httpAuthEnabled bool
+	httpEnabled bool
+	httpListen  string
 
 	// Browser
 	browserSetup bool
@@ -64,8 +65,8 @@ func NewWizard() *Wizard {
 	return &Wizard{
 		providerConfigs: make(map[string]ProviderConfig),
 		importedAPIKeys: make(map[string]string),
-		httpPort:        1337,
-		httpAuthEnabled: true,
+		httpEnabled: true,
+		httpListen:  ":1337",
 		userRole:        "owner",
 	}
 }
@@ -141,6 +142,8 @@ func (w *Wizard) showWelcome() error {
 	fmt.Println("  • User authentication")
 	fmt.Println("  • Telegram bot (optional)")
 	fmt.Println("  • HTTP server")
+	fmt.Println("  • Browser profiles (for authenticated web access)")
+	fmt.Println("  • Sandboxing (restrict agent file/exec access)")
 	fmt.Println()
 
 	var proceed bool
@@ -389,6 +392,12 @@ func (w *Wizard) selectProviders() error {
 	for {
 		// Build options from presets (excluding already configured)
 		var options []huh.Option[string]
+
+		// Add "Done" option first after first provider is configured (most common path)
+		if !first {
+			options = append(options, huh.NewOption("Done - no more providers", "done"))
+		}
+
 		for _, p := range Presets {
 			if configured[p.Key] {
 				continue
@@ -398,11 +407,6 @@ func (w *Wizard) selectProviders() error {
 		}
 		if !configured["custom"] {
 			options = append(options, huh.NewOption("Other OpenAI-compatible - Custom endpoint", "custom"))
-		}
-
-		// Add "Done" option after first provider is configured
-		if !first {
-			options = append(options, huh.NewOption("Done - no more providers", "done"))
 		}
 
 		// Determine title
@@ -674,9 +678,9 @@ embedLoop:
 		if w.embeddingModel == "skip" {
 			// Show warning
 			fmt.Println()
-			fmt.Println("⚠️  Without embeddings, the following features will be disabled:")
-			fmt.Println("   - Memory search (semantic search over workspace files)")
-			fmt.Println("   - Transcript search (search past conversations)")
+			fmt.Println("⚠️  Without embeddings, semantic search will be unavailable:")
+			fmt.Println("   - Memory search: keyword search only (no semantic matching)")
+			fmt.Println("   - Transcript search: keyword search only (no semantic matching)")
 			fmt.Println()
 
 			var confirmSkip bool
@@ -851,28 +855,19 @@ func (w *Wizard) setupTelegram() error {
 func (w *Wizard) setupHTTP() error {
 	fmt.Println()
 
+	// First ask about access scope
+	accessChoice := "local"
 	form := newForm(
 		huh.NewGroup(
-			huh.NewInput().
-				Title("HTTP server port").
-				Description("Port for the web interface").
-				Placeholder("1337").
-				Validate(func(s string) error {
-					if s == "" {
-						return nil
-					}
-					var port int
-					_, err := fmt.Sscanf(s, "%d", &port)
-					if err != nil || port < 1 || port > 65535 {
-						return fmt.Errorf("invalid port number")
-					}
-					return nil
-				}).
-				Value(new(string)),
-			huh.NewConfirm().
-				Title("Enable HTTP authentication?").
-				Description("Recommended if the server is accessible from the network").
-				Value(&w.httpAuthEnabled),
+			huh.NewSelect[string]().
+				Title("HTTP server access").
+				Description("The HTTP server lets you interact with GoClaw via a web browser.\nHow do you want to to access it?").
+				Options(
+					huh.NewOption("Local only (this machine)", "local"),
+					huh.NewOption("Network (any IP address)", "network"),
+					huh.NewOption("Disable HTTP server", "disabled"),
+				).
+				Value(&accessChoice),
 		),
 	)
 
@@ -880,7 +875,62 @@ func (w *Wizard) setupHTTP() error {
 		return err
 	}
 
-	fmt.Printf("✓ HTTP server will be available at http://localhost:%d\n", w.httpPort)
+	if accessChoice == "disabled" {
+		w.httpEnabled = false
+		w.httpListen = ""
+		fmt.Println("✓ HTTP server disabled")
+		return nil
+	}
+
+	// Pre-fill based on choice
+	var listenAddr string
+	if accessChoice == "local" {
+		listenAddr = "127.0.0.1:1337"
+	} else {
+		listenAddr = ":1337"
+	}
+
+	// Allow customization of port/address
+	form = newForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("HTTP server listen address").
+				Description("You can change the port or address if needed").
+				Validate(func(s string) error {
+					if s == "" {
+						return fmt.Errorf("address required (or go back to disable)")
+					}
+					// Must contain a colon and port
+					if !strings.Contains(s, ":") {
+						return fmt.Errorf("format: [host]:port (e.g., :1337, or 0.0.0.0:1337, or 127.0.0.1:1337)")
+					}
+					// Extract and validate port
+					parts := strings.Split(s, ":")
+					portStr := parts[len(parts)-1]
+					var port int
+					_, err := fmt.Sscanf(portStr, "%d", &port)
+					if err != nil || port < 1 || port > 65535 {
+						return fmt.Errorf("invalid port (1-65535)")
+					}
+					return nil
+				}).
+				Value(&listenAddr),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return err
+	}
+
+	w.httpListen = listenAddr
+	w.httpEnabled = true
+
+	if strings.HasPrefix(listenAddr, "127.") || strings.HasPrefix(listenAddr, "localhost") {
+		fmt.Printf("✓ HTTP server will listen on %s (local access only)\n", w.httpListen)
+	} else {
+		fmt.Printf("✓ HTTP server will listen on %s (network accessible)\n", w.httpListen)
+	}
+	fmt.Println("  (Authentication is always required - set password with 'goclaw user edit')")
 	return nil
 }
 
@@ -912,9 +962,7 @@ func (w *Wizard) offerBrowserSetup() error {
 func (w *Wizard) setupSandbox() error {
 	fmt.Println()
 
-	// Check if bubblewrap is available
-	bwrapAvailable := bwrap.IsLinux() && bwrap.IsAvailable("")
-
+	// Non-Linux: sandboxing not available
 	if !bwrap.IsLinux() {
 		fmt.Println("Note: Bubblewrap sandboxing is only available on Linux.")
 		fmt.Println("      The exec and browser tools will run without kernel sandboxing.")
@@ -922,38 +970,24 @@ func (w *Wizard) setupSandbox() error {
 		return nil
 	}
 
-	if !bwrapAvailable {
-		fmt.Println("═══════════════════════════════════════")
-		fmt.Println("       Sandboxing (Recommended)")
-		fmt.Println("═══════════════════════════════════════")
-		fmt.Println()
-		fmt.Println("Bubblewrap (bwrap) is not installed.")
-		fmt.Println("It provides kernel-level sandboxing for the exec tool,")
-		fmt.Println("restricting file access to the workspace directory.")
-		fmt.Println()
-		fmt.Println("Install with:")
-		fmt.Println("  Debian/Ubuntu:  sudo apt install bubblewrap")
-		fmt.Println("  Fedora/RHEL:    sudo dnf install bubblewrap")
-		fmt.Println("  Arch:           sudo pacman -S bubblewrap")
-		fmt.Println()
-		fmt.Println("After installing, run 'goclaw setup edit' to enable sandboxing.")
-		fmt.Println()
-		return nil
-	}
-
 	fmt.Println("═══════════════════════════════════════")
-	fmt.Println("       Sandboxing (bubblewrap)")
+	fmt.Println("    Sandboxing (Highly Recommended)")
 	fmt.Println("═══════════════════════════════════════")
 	fmt.Println()
-	fmt.Println("Bubblewrap is available! It can restrict exec tool commands")
-	fmt.Println("to only access the workspace directory.")
+	fmt.Println("Sandboxing restricts the exec tool to only access files")
+	fmt.Println("within your workspace directory, preventing accidental")
+	fmt.Println("or malicious access to system files and credentials.")
 	fmt.Println()
 
+	// Step 1: Ask about exec sandboxing
+	w.execBubblewrap = true // Default to yes (recommended)
 	form := newForm(
 		huh.NewGroup(
 			huh.NewConfirm().
-				Title("Enable exec tool sandboxing?").
+				Title("Enable exec sandboxing? (Highly recommended)").
 				Description("Restricts shell commands to workspace directory only").
+				Affirmative("Yes, enable").
+				Negative("No, skip").
 				Value(&w.execBubblewrap),
 		),
 	)
@@ -962,31 +996,136 @@ func (w *Wizard) setupSandbox() error {
 		return err
 	}
 
-	if w.execBubblewrap {
-		fmt.Println("Exec sandboxing enabled.")
+	// Step 2: Ask about browser sandboxing
+	w.browserBubblewrap = true // Default to yes (recommended)
+	form = newForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Enable browser sandboxing? (Recommended)").
+				Description("Restricts browser to workspace and profile directories").
+				Affirmative("Yes, enable").
+				Negative("No, skip").
+				Value(&w.browserBubblewrap),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return err
 	}
 
-	// Browser sandboxing (if browser is enabled)
-	if w.browserSetup {
-		form = newForm(
-			huh.NewGroup(
-				huh.NewConfirm().
-					Title("Enable browser sandboxing?").
-					Description("Restricts browser to workspace and profile directories").
-					Value(&w.browserBubblewrap),
-			),
-		)
+	// Step 3: If either enabled, check bwrap availability
+	if !w.execBubblewrap && !w.browserBubblewrap {
+		fmt.Println("Sandboxing disabled.")
+		fmt.Println()
+		return nil
+	}
 
-		if err := form.Run(); err != nil {
+	// Check if bwrap is available
+	if bwrap.IsAvailable("") {
+		fmt.Println()
+		fmt.Println("✓ Bubblewrap available.")
+		if w.execBubblewrap {
+			fmt.Println("  Exec sandboxing: enabled")
+		}
+		if w.browserBubblewrap {
+			fmt.Println("  Browser sandboxing: enabled")
+		}
+		fmt.Println()
+		return nil
+	}
+
+	// bwrap not found - show install options
+	fmt.Println()
+	fmt.Println("⚠ Bubblewrap (bwrap) is required but not installed.")
+	fmt.Println()
+
+	var installChoice string
+	form = newForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("How would you like to install bubblewrap?").
+				Options(
+					huh.NewOption("Install now (Debian/Ubuntu: sudo apt install bubblewrap)", "apt"),
+					huh.NewOption("Install now (Fedora/RHEL: sudo dnf install bubblewrap)", "dnf"),
+					huh.NewOption("Install now (Arch: sudo pacman -S bubblewrap)", "pacman"),
+					huh.NewOption("I'll install it myself, enable sandboxing anyway", "manual"),
+					huh.NewOption("Go back (disable sandboxing)", "disable"),
+				).
+				Value(&installChoice),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return err
+	}
+
+	switch installChoice {
+	case "apt":
+		if err := w.runInstallCommand("sudo", "apt", "install", "-y", "bubblewrap"); err != nil {
 			return err
 		}
-
-		if w.browserBubblewrap {
-			fmt.Println("Browser sandboxing enabled.")
+	case "dnf":
+		if err := w.runInstallCommand("sudo", "dnf", "install", "-y", "bubblewrap"); err != nil {
+			return err
 		}
+	case "pacman":
+		if err := w.runInstallCommand("sudo", "pacman", "-S", "--noconfirm", "bubblewrap"); err != nil {
+			return err
+		}
+	case "manual":
+		fmt.Println()
+		fmt.Println("Sandboxing enabled. Remember to install bubblewrap before running GoClaw:")
+		fmt.Println("  Debian/Ubuntu:  sudo apt install bubblewrap")
+		fmt.Println("  Fedora/RHEL:    sudo dnf install bubblewrap")
+		fmt.Println("  Arch:           sudo pacman -S bubblewrap")
+		fmt.Println()
+		return nil
+	case "disable":
+		w.execBubblewrap = false
+		w.browserBubblewrap = false
+		fmt.Println("Sandboxing disabled.")
+		fmt.Println()
+		return nil
+	}
+
+	// Verify installation worked
+	if bwrap.IsAvailable("") {
+		fmt.Println()
+		fmt.Println("✓ Bubblewrap installed successfully!")
+		if w.execBubblewrap {
+			fmt.Println("  Exec sandboxing: enabled")
+		}
+		if w.browserBubblewrap {
+			fmt.Println("  Browser sandboxing: enabled")
+		}
+	} else {
+		fmt.Println()
+		fmt.Println("⚠ Installation may have failed. bwrap not found in PATH.")
+		fmt.Println("  Sandboxing will be enabled in config, but you may need to")
+		fmt.Println("  install bubblewrap manually or check your PATH.")
 	}
 
 	fmt.Println()
+	return nil
+}
+
+// runInstallCommand runs a package manager command with live output
+func (w *Wizard) runInstallCommand(name string, args ...string) error {
+	fmt.Println()
+	fmt.Printf("Running: %s %s\n", name, strings.Join(args, " "))
+	fmt.Println()
+
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("\n⚠ Command failed: %v\n", err)
+		fmt.Println("You may need to install bubblewrap manually.")
+		// Don't return error - let user continue
+	}
+
 	return nil
 }
 
@@ -1006,10 +1145,14 @@ func (w *Wizard) reviewAndSave() error {
 		fmt.Printf("Embeddings:    %s\n", w.embeddingModel)
 	}
 	fmt.Printf("Telegram:      %v\n", w.telegramEnabled)
-	fmt.Printf("HTTP port:     %d (auth: %v)\n", w.httpPort, w.httpAuthEnabled)
+	if w.httpEnabled {
+		fmt.Printf("HTTP server:   %s\n", w.httpListen)
+	} else {
+		fmt.Println("HTTP server:   disabled")
+	}
 	fmt.Printf("Providers:     %s\n", strings.Join(w.selectedProviders, ", "))
-	fmt.Printf("Exec sandbox:  %v\n", w.execBubblewrap)
-	if w.browserSetup {
+	if bwrap.IsLinux() {
+		fmt.Printf("Exec sandbox:  %v\n", w.execBubblewrap)
 		fmt.Printf("Browser sandbox: %v\n", w.browserBubblewrap)
 	}
 	fmt.Println()
@@ -1171,6 +1314,8 @@ func (w *Wizard) launchBrowserSetup(configPath string) error {
 	fmt.Printf("Profile: %s\n", profile)
 	fmt.Printf("Location: %s\n", profileDir)
 	fmt.Println()
+	fmt.Println("Starting browser, please wait...")
+	fmt.Println()
 
 	// Launch headed browser
 	browserInstance, _, err := mgr.LaunchHeaded(profile, "")
@@ -1268,7 +1413,8 @@ func (w *Wizard) buildConfig() map[string]interface{} {
 			"botToken": w.telegramToken,
 		},
 		"http": map[string]interface{}{
-			"listen": fmt.Sprintf(":%d", w.httpPort),
+			"enabled": w.httpEnabled,
+			"listen":  w.httpListen,
 		},
 		"tools": map[string]interface{}{
 			"bubblewrap": map[string]interface{}{

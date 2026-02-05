@@ -70,7 +70,7 @@ func (c *AgentIdentityConfig) TypingText() string {
 // HTTP is enabled by default if any user has HTTP credentials configured
 type HTTPConfig struct {
 	Enabled *bool  `json:"enabled,omitempty"` // Enable HTTP server (default: true if users have passwords)
-	Listen  string `json:"listen"`            // Address to listen on (default: ":1337")
+	Listen  string `json:"listen"`            // Address to listen on (e.g., ":1337", "127.0.0.1:1337")
 }
 
 // CronConfig configures the cron scheduler

@@ -260,6 +260,10 @@ func (e *Editor) getHTTPStatus() string {
 }
 
 func (e *Editor) getSandboxStatus() string {
+	if !bwrap.IsLinux() {
+		return "N/A (Linux only)"
+	}
+
 	execEnabled := false
 	browserEnabled := false
 
@@ -280,21 +284,21 @@ func (e *Editor) getSandboxStatus() string {
 		}
 	}
 
-	if !bwrap.IsLinux() {
-		return "N/A (Linux only)"
-	}
-	if !bwrap.IsAvailable("") {
-		return "bwrap not installed"
+	var status string
+	if execEnabled && browserEnabled {
+		status = "exec + browser"
+	} else if execEnabled {
+		status = "exec"
+	} else if browserEnabled {
+		status = "browser"
+	} else {
+		status = "disabled"
 	}
 
-	if execEnabled && browserEnabled {
-		return "exec + browser"
-	} else if execEnabled {
-		return "exec"
-	} else if browserEnabled {
-		return "browser"
+	if !bwrap.IsAvailable("") {
+		return status + " (bwrap not installed)"
 	}
-	return "disabled"
+	return status
 }
 
 func (e *Editor) editWorkspace() error {
@@ -1036,7 +1040,7 @@ func (e *Editor) editHTTP() error {
 func (e *Editor) editSandbox() error {
 	fmt.Println()
 
-	// Check if bubblewrap is available
+	// Check platform
 	if !bwrap.IsLinux() {
 		fmt.Println("Bubblewrap sandboxing is only available on Linux.")
 		fmt.Println("Press Enter to continue...")
@@ -1044,17 +1048,30 @@ func (e *Editor) editSandbox() error {
 		return nil
 	}
 
-	if !bwrap.IsAvailable("") {
-		fmt.Println("Bubblewrap (bwrap) is not installed.")
+	fmt.Println("═══════════════════════════════════════")
+	fmt.Println("       Sandbox Configuration")
+	fmt.Println("═══════════════════════════════════════")
+	fmt.Println()
+
+	// Check if bubblewrap is available and warn if not
+	bwrapAvailable := bwrap.IsAvailable("")
+	if !bwrapAvailable {
+		fmt.Println("⚠️  Bubblewrap (bwrap) is not installed.")
 		fmt.Println()
 		fmt.Println("Install with:")
 		fmt.Println("  Debian/Ubuntu:  sudo apt install bubblewrap")
 		fmt.Println("  Fedora/RHEL:    sudo dnf install bubblewrap")
 		fmt.Println("  Arch:           sudo pacman -S bubblewrap")
 		fmt.Println()
-		fmt.Println("Press Enter to continue...")
-		fmt.Scanln()
-		return nil
+		fmt.Println("You can still configure sandbox settings below.")
+		fmt.Println("Sandboxing will activate once bwrap is installed.")
+		fmt.Println()
+	} else {
+		fmt.Println("✓ Bubblewrap is installed")
+		fmt.Println()
+		fmt.Println("Bubblewrap provides kernel-level sandboxing that")
+		fmt.Println("restricts file access to the workspace directory.")
+		fmt.Println()
 	}
 
 	// Get current values
@@ -1077,14 +1094,6 @@ func (e *Editor) editSandbox() error {
 			}
 		}
 	}
-
-	fmt.Println("═══════════════════════════════════════")
-	fmt.Println("       Sandbox Configuration")
-	fmt.Println("═══════════════════════════════════════")
-	fmt.Println()
-	fmt.Println("Bubblewrap provides kernel-level sandboxing that")
-	fmt.Println("restricts file access to the workspace directory.")
-	fmt.Println()
 
 	form := newForm(
 		huh.NewGroup(
@@ -1296,6 +1305,8 @@ func (e *Editor) launchBrowserSetup() error {
 	profileDir := browserCfg.ResolveProfileDir(home, profile)
 	fmt.Printf("Profile: %s\n", profile)
 	fmt.Printf("Location: %s\n", profileDir)
+	fmt.Println()
+	fmt.Println("Starting browser, please wait...")
 	fmt.Println()
 
 	// Launch headed browser

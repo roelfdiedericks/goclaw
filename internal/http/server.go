@@ -43,7 +43,7 @@ type Server struct {
 
 // ServerConfig holds HTTP server configuration
 type ServerConfig struct {
-	Listen    string // Address to listen on (e.g., ":1337")
+	Listen    string // Address to listen on (e.g., ":1337", "127.0.0.1:1337")
 	DevMode   bool   // Reload templates from disk on each request
 	MediaRoot string // Base directory for media files
 }

@@ -22,6 +22,14 @@ type ToolsConfigAdapter struct {
 	Stealth        bool
 	Device         string // Device emulation profile (friendly name)
 	ProfileDomains map[string]string
+
+	// Bubblewrap sandboxing
+	Workspace         string   // Workspace directory for sandbox
+	BubblewrapEnabled bool     // Enable bubblewrap sandboxing
+	BubblewrapPath    string   // Path to bwrap binary (empty = search PATH)
+	BubblewrapGPU     bool     // Allow GPU access in sandbox
+	ExtraRoBind       []string // Extra read-only bind mounts
+	ExtraBind         []string // Extra read-write bind mounts
 }
 
 // ToConfig converts the adapter to a BrowserConfig
@@ -45,6 +53,17 @@ func (a ToolsConfigAdapter) ToConfig() BrowserConfig {
 	if a.ProfileDomains != nil {
 		cfg.ProfileDomains = a.ProfileDomains
 	}
+
+	// Bubblewrap sandboxing
+	cfg.Workspace = a.Workspace
+	cfg.Bubblewrap = BrowserBubblewrapConfig{
+		Enabled:     a.BubblewrapEnabled,
+		BwrapPath:   a.BubblewrapPath,
+		GPU:         a.BubblewrapGPU,
+		ExtraRoBind: a.ExtraRoBind,
+		ExtraBind:   a.ExtraBind,
+	}
+
 	return cfg
 }
 
@@ -62,20 +81,24 @@ type BrowserConfig struct {
 	ProfileDomains     map[string]string `json:"profileDomains"`     // Domain → profile mapping
 	ChromeCDP          string            `json:"chromeCDP"`          // CDP endpoint for profile="chrome" (default: ws://localhost:9222)
 	AllowAgentProfiles bool              `json:"allowAgentProfiles"` // Allow agent to specify any profile (default: false, only "chrome" honored)
+
+	// Bubblewrap sandboxing (set at runtime, not persisted to JSON)
+	Workspace  string                  `json:"-"` // Workspace directory for sandbox
+	Bubblewrap BrowserBubblewrapConfig `json:"-"` // Bubblewrap config
 }
 
 // DefaultBrowserConfig returns the default browser configuration
 func DefaultBrowserConfig() BrowserConfig {
 	return BrowserConfig{
-		Dir:            "",        // Will resolve to ~/.openclaw/goclaw/browser
+		Dir:            "",      // Will resolve to ~/.openclaw/goclaw/browser
 		AutoDownload:   true,
-		Revision:       "",        // Latest
+		Revision:       "",      // Latest
 		Headless:       true,
 		NoSandbox:      false,
 		DefaultProfile: "default",
 		Timeout:        "30s",
 		Stealth:        true,
-		Device:         "clear",   // No viewport emulation, fills window
+		Device:         "clear", // No viewport emulation, fills window
 		ProfileDomains: map[string]string{},
 	}
 }

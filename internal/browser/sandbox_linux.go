@@ -47,6 +47,13 @@ func CreateSandboxedLauncher(browserBin, workspace, profileDir string, cfg Brows
 		b.BwrapPath(cfg.BwrapPath)
 	}
 
+	// Add browser binary directory (read-only) so chromium can execute
+	// browserBin is something like /home/user/.openclaw/goclaw/browser/bin/chromium-XXX/chrome
+	// We need to bind the parent directories up to the bin/ level
+	browserBinDir := filepath.Dir(browserBin) // chromium-XXX directory
+	browserBaseDir := filepath.Dir(browserBinDir) // bin directory
+	b.RoBind(browserBaseDir)
+
 	// Add extra read-only binds
 	for _, path := range cfg.ExtraRoBind {
 		b.RoBind(path)
@@ -96,6 +103,7 @@ func CreateSandboxedLauncher(browserBin, workspace, profileDir string, cfg Brows
 	L_debug("browser sandbox: created wrapper script",
 		"wrapper", wrapperPath,
 		"browser", browserBin,
+		"browserBinDir", browserBaseDir,
 		"gpu", cfg.GPU,
 	)
 

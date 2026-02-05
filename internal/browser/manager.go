@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/launcher"
@@ -32,6 +34,78 @@ func cleanupStaleLocks(profileDir string) {
 			}
 		}
 	}
+}
+
+// createLauncher creates a configured Chrome launcher
+// If bubblewrap sandboxing is enabled, it creates a wrapper script and uses that instead
+func (m *Manager) createLauncher(binPath, profileDir string, headless bool) (*launcher.Launcher, error) {
+	// Check if we should use bubblewrap sandboxing
+	actualBinPath := binPath
+	sandboxed := false
+	
+	if m.config.Bubblewrap.Enabled {
+		// Create sandboxed launcher wrapper
+		wrapperPath, err := CreateSandboxedLauncher(binPath, m.config.Workspace, profileDir, m.config.Bubblewrap)
+		if err != nil {
+			L_warn("browser: failed to create sandbox wrapper, running unsandboxed", "error", err)
+		} else if wrapperPath != binPath {
+			actualBinPath = wrapperPath
+			sandboxed = true
+			L_info("browser: using bubblewrap sandbox", "wrapper", wrapperPath)
+		}
+	}
+	
+	if !sandboxed {
+		L_debug("browser: running without sandbox")
+	}
+	
+	l := launcher.New().
+		Bin(actualBinPath).
+		UserDataDir(profileDir).
+		Headless(headless).
+		Set("disable-dev-shm-usage") // For Docker/limited memory
+	
+	// Set window size for headed mode (otherwise Chrome uses a tiny default)
+	if !headless {
+		l = l.Set("window-size", "1920,1080").
+			Set("start-maximized")
+	}
+	
+	if m.config.Stealth {
+		l = l.Set("disable-blink-features", "AutomationControlled")
+	}
+	
+	if m.config.NoSandbox {
+		l = l.Set("no-sandbox")
+	}
+	
+	return l, nil
+}
+
+// launchWithRetry launches Chrome with retry on SingletonLock error
+func (m *Manager) launchWithRetry(binPath, profileDir string, headless bool) (string, error) {
+	l, err := m.createLauncher(binPath, profileDir, headless)
+	if err != nil {
+		return "", err
+	}
+	
+	controlURL, err := l.Launch()
+	if err != nil {
+		// Check for SingletonLock error and retry once after cleanup
+		if strings.Contains(err.Error(), "SingletonLock") || strings.Contains(err.Error(), "ProcessSingleton") {
+			L_warn("browser: SingletonLock error, cleaning up and retrying", "error", err)
+			cleanupStaleLocks(profileDir)
+			time.Sleep(500 * time.Millisecond)
+			
+			l, err = m.createLauncher(binPath, profileDir, headless)
+			if err != nil {
+				return "", err
+			}
+			controlURL, err = l.Launch()
+		}
+	}
+	
+	return controlURL, err
 }
 
 // Manager is the singleton browser manager
@@ -218,32 +292,7 @@ func (m *Manager) GetBrowser(profile string) (*rod.Browser, error) {
 	
 	L_debug("browser: launching browser", "profile", profile, "profileDir", profileDir, "headless", m.config.Headless)
 	
-	// Create launcher
-	l := launcher.New().
-		Bin(binPath).
-		UserDataDir(profileDir).
-		Headless(m.config.Headless).
-		Set("disable-dev-shm-usage") // For Docker/limited memory
-	
-	// Set window size for headed mode (otherwise Chrome uses a tiny default)
-	// Use 1920x1080 to ensure sites show full desktop layout, not responsive/mobile
-	if !m.config.Headless {
-		l = l.Set("window-size", "1920,1080").
-			Set("start-maximized")
-	}
-	
-	// Stealth options
-	if m.config.Stealth {
-		l = l.Set("disable-blink-features", "AutomationControlled")
-	}
-	
-	// No sandbox if configured (needed for Docker/root)
-	if m.config.NoSandbox {
-		l = l.Set("no-sandbox")
-	}
-	
-	// Launch browser
-	controlURL, err := l.Launch()
+	controlURL, err := m.launchWithRetry(binPath, profileDir, m.config.Headless)
 	if err != nil {
 		return nil, fmt.Errorf("failed to launch browser: %w", err)
 	}
@@ -476,25 +525,7 @@ func (m *Manager) LaunchHeaded(profile string, startURL string) (*rod.Browser, *
 	
 	L_info("browser: launching headed browser for setup", "profile", profile, "startURL", startURL)
 	
-	// Create launcher - NOT headless
-	l := launcher.New().
-		Bin(binPath).
-		UserDataDir(profileDir).
-		Headless(false). // Headed mode for interactive setup
-		Set("disable-dev-shm-usage").
-		Set("window-size", "1920,1080").
-		Set("start-maximized")
-	
-	if m.config.Stealth {
-		l = l.Set("disable-blink-features", "AutomationControlled")
-	}
-	
-	if m.config.NoSandbox {
-		l = l.Set("no-sandbox")
-	}
-	
-	// Launch browser
-	controlURL, err := l.Launch()
+	controlURL, err := m.launchWithRetry(binPath, profileDir, false)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to launch headed browser: %w", err)
 	}

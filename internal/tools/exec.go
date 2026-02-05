@@ -1,11 +1,9 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -22,10 +20,7 @@ type ExecToolConfig struct {
 
 // ExecTool executes shell commands
 type ExecTool struct {
-	workingDir     string
-	timeout        time.Duration
-	bubblewrapPath string
-	bubblewrap     ExecBubblewrapCfg
+	runner *ExecRunner
 }
 
 // NewExecTool creates a new exec tool
@@ -34,12 +29,24 @@ func NewExecTool(cfg ExecToolConfig) *ExecTool {
 	if cfg.Timeout > 0 {
 		timeout = time.Duration(cfg.Timeout) * time.Second
 	}
-	return &ExecTool{
-		workingDir:     cfg.WorkingDir,
-		timeout:        timeout,
-		bubblewrapPath: cfg.BubblewrapPath,
-		bubblewrap:     cfg.Bubblewrap,
-	}
+	runner := NewExecRunner(ExecRunnerConfig{
+		WorkingDir:     cfg.WorkingDir,
+		Timeout:        timeout,
+		BubblewrapPath: cfg.BubblewrapPath,
+		Bubblewrap:     cfg.Bubblewrap,
+	})
+	return &ExecTool{runner: runner}
+}
+
+// NewExecToolWithRunner creates an exec tool using a shared ExecRunner.
+// This allows sharing the runner with other tools like JQTool.
+func NewExecToolWithRunner(runner *ExecRunner) *ExecTool {
+	return &ExecTool{runner: runner}
+}
+
+// Runner returns the underlying ExecRunner for sharing with other tools.
+func (t *ExecTool) Runner() *ExecRunner {
+	return t.runner
 }
 
 func (t *ExecTool) Name() string {
@@ -83,20 +90,14 @@ func (t *ExecTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 		return "", fmt.Errorf("invalid input: %w", err)
 	}
 
-	// Set timeout
-	timeout := t.timeout
-	if params.TimeoutSeconds > 0 {
-		timeout = time.Duration(params.TimeoutSeconds) * time.Second
-	}
-
 	// Set working directory
-	workDir := t.workingDir
-	if params.WorkingDir != "" {
-		workDir = params.WorkingDir
+	workDir := params.WorkingDir
+	if workDir == "" {
+		workDir = t.runner.Config().WorkingDir
 	}
 
 	// Check if user has sandbox disabled
-	useSandbox := t.bubblewrap.Enabled
+	useSandbox := t.runner.Config().Bubblewrap.Enabled
 	if sessCtx := GetSessionContext(ctx); sessCtx != nil && sessCtx.User != nil {
 		if !sessCtx.User.Sandbox {
 			useSandbox = false
@@ -104,7 +105,7 @@ func (t *ExecTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 		}
 	}
 
-	// Create command preview for INFO: first linebreak or 30 chars, newlines stripped
+	// Create command preview for INFO logging
 	cmdPreview := strings.ReplaceAll(params.Command, "\n", " ")
 	cmdPreview = strings.ReplaceAll(cmdPreview, "\r", "")
 	if len(cmdPreview) > 30 {
@@ -112,75 +113,48 @@ func (t *ExecTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 	}
 
 	L_info("exec tool: running", "cmd", cmdPreview, "workDir", workDir, "sandboxed", useSandbox)
-	L_trace("exec tool: full command", "cmd", params.Command, "timeout", timeout)
 
-	// Create context with timeout
-	execCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	// Build command - sandboxed or unsandboxed
-	var cmd *exec.Cmd
-	if useSandbox {
-		sandboxedCmd, err := t.buildSandboxedCommand(execCtx, params.Command, workDir)
-		if err != nil {
-			// Sandbox was requested but failed to build - hard error
-			L_error("exec tool: sandbox failed", "error", err)
-			return "", fmt.Errorf("sandbox error: %w", err)
-		}
-		if sandboxedCmd != nil {
-			cmd = sandboxedCmd
-		}
+	// Handle custom timeout if specified
+	execCtx := ctx
+	if params.TimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		execCtx, cancel = context.WithTimeout(ctx, time.Duration(params.TimeoutSeconds)*time.Second)
+		defer cancel()
 	}
 
-	// Fall back to unsandboxed execution if no sandbox command was built
-	if cmd == nil {
-		cmd = exec.CommandContext(execCtx, "bash", "-c", params.Command)
-		cmd.Dir = workDir
-	}
-
-	// Capture output
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	// Run command
-	startTime := time.Now()
-	err := cmd.Run()
-	elapsed := time.Since(startTime)
-
-	// Build result
-	var result strings.Builder
-	
-	if stdout.Len() > 0 {
-		result.WriteString("STDOUT:\n")
-		result.WriteString(stdout.String())
-	}
-	
-	if stderr.Len() > 0 {
-		if result.Len() > 0 {
-			result.WriteString("\n")
-		}
-		result.WriteString("STDERR:\n")
-		result.WriteString(stderr.String())
-	}
-
+	// Run command using shared runner
+	result, err := t.runner.RunFull(execCtx, params.Command, workDir, useSandbox)
 	if err != nil {
-		if execCtx.Err() == context.DeadlineExceeded {
-			L_warn("exec tool: timed out", "cmd", cmdPreview, "timeout", timeout)
-			return result.String(), fmt.Errorf("command timed out after %v", timeout)
-		}
-		if result.Len() > 0 {
-			result.WriteString("\n")
-		}
-		result.WriteString(fmt.Sprintf("Exit error: %v", err))
-		L_warn("exec tool: failed", "cmd", cmdPreview, "error", err, "elapsed", elapsed)
-	} else {
-		L_debug("exec tool: completed", "cmd", cmdPreview, "elapsed", elapsed, "stdoutLen", stdout.Len(), "stderrLen", stderr.Len())
+		return "", err
 	}
 
-	if result.Len() == 0 {
-		result.WriteString("Command completed successfully (no output)")
+	// Build formatted result (ExecTool shows both stdout and stderr with headers)
+	var output strings.Builder
+
+	if len(result.Stdout) > 0 {
+		output.WriteString("STDOUT:\n")
+		output.Write(result.Stdout)
 	}
 
-	return result.String(), nil
+	if len(result.Stderr) > 0 {
+		if output.Len() > 0 {
+			output.WriteString("\n")
+		}
+		output.WriteString("STDERR:\n")
+		output.Write(result.Stderr)
+	}
+
+	if result.ExitCode != 0 {
+		if output.Len() > 0 {
+			output.WriteString("\n")
+		}
+		output.WriteString(fmt.Sprintf("Exit code: %d", result.ExitCode))
+		L_warn("exec tool: non-zero exit", "cmd", cmdPreview, "exitCode", result.ExitCode)
+	}
+
+	if output.Len() == 0 {
+		output.WriteString("Command completed successfully (no output)")
+	}
+
+	return output.String(), nil
 }
