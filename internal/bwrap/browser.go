@@ -25,6 +25,11 @@ func BrowserSandbox(workspace, browserProfile, home string, gpu bool) *Builder {
 	// Browser profile writable (cookies, cache, etc)
 	b.Bind(browserProfile)
 
+	// Chromium needs writable ~/.cache and ~/.config for various temp files
+	// Use tmpfs so it can write but nothing persists outside profile
+	b.Tmpfs(home + "/.cache")
+	b.Tmpfs(home + "/.config")
+
 	// Isolated /tmp
 	b.Tmpfs("/tmp")
 
