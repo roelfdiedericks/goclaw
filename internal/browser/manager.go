@@ -110,6 +110,12 @@ func (m *Manager) launchWithRetry(binPath, profileDir string, headless bool) (st
 
 // Manager is the singleton browser manager
 // It handles browser download, profiles, and browser instance pooling
+// browserInstance tracks a browser and its state
+type browserInstance struct {
+	browser *rod.Browser
+	headed  bool
+}
+
 type Manager struct {
 	config     BrowserConfig
 	homeDir    string
@@ -117,7 +123,7 @@ type Manager struct {
 	profiles   *ProfileManager
 	
 	// Browser instances per profile
-	browsers   map[string]*rod.Browser
+	browsers   map[string]*browserInstance
 	browsersMu sync.Mutex
 	
 	// Initialization state
@@ -151,7 +157,7 @@ func InitManager(cfg BrowserConfig) (*Manager, error) {
 		globalManager = &Manager{
 			config:   cfg,
 			homeDir:  homeDir,
-			browsers: make(map[string]*rod.Browser),
+			browsers: make(map[string]*browserInstance),
 		}
 		
 		// Initialize downloader and profile manager
@@ -241,7 +247,7 @@ func (m *Manager) GetBrowser(profile string) (*rod.Browser, error) {
 	defer m.browsersMu.Unlock()
 	
 	// Return existing browser if available
-	if browser, ok := m.browsers[profile]; ok {
+	if instance, ok := m.browsers[profile]; ok {
 		// Check if browser is still connected
 		// rod doesn't have a direct "IsConnected" method, so we try a simple operation
 		// Wrap in func to recover from panic if CDP client is nil
@@ -252,12 +258,12 @@ func (m *Manager) GetBrowser(profile string) (*rod.Browser, error) {
 					ok = false
 				}
 			}()
-			_, err := browser.Call(nil, "", "Browser.getVersion", nil)
+			_, err := instance.browser.Call(nil, "", "Browser.getVersion", nil)
 			return err == nil
 		}()
 		
 		if connected {
-			return browser, nil
+			return instance.browser, nil
 		}
 		// Browser disconnected, remove and recreate
 		L_debug("browser: existing browser disconnected, recreating", "profile", profile)
@@ -270,7 +276,7 @@ func (m *Manager) GetBrowser(profile string) (*rod.Browser, error) {
 		if err != nil {
 			return nil, err
 		}
-		m.browsers[profile] = browser
+		m.browsers[profile] = &browserInstance{browser: browser, headed: true}
 		return browser, nil
 	}
 	
@@ -306,7 +312,7 @@ func (m *Manager) GetBrowser(profile string) (*rod.Browser, error) {
 	// Rod defaults to LaptopWithMDPIScreen which constrains the viewport
 	browser.DefaultDevice(m.config.ResolveDevice())
 	
-	m.browsers[profile] = browser
+	m.browsers[profile] = &browserInstance{browser: browser, headed: !m.config.Headless}
 	L_info("browser: launched", "profile", profile, "controlURL", controlURL)
 	
 	return browser, nil
@@ -372,8 +378,8 @@ func (m *Manager) CloseBrowser(profile string) {
 	m.browsersMu.Lock()
 	defer m.browsersMu.Unlock()
 	
-	if browser, ok := m.browsers[profile]; ok {
-		browser.Close()
+	if instance, ok := m.browsers[profile]; ok {
+		instance.browser.Close()
 		delete(m.browsers, profile)
 		L_debug("browser: closed", "profile", profile)
 	}
@@ -388,13 +394,13 @@ func (m *Manager) CloseAll() {
 	m.browsersMu.Lock()
 	defer m.browsersMu.Unlock()
 	
-	for profile, browser := range m.browsers {
+	for profile, instance := range m.browsers {
 		// Don't close external browsers (user's Chrome)
 		if m.IsExternalProfile(profile) {
 			L_debug("browser: skipping close for external profile", "profile", profile)
 			continue
 		}
-		browser.Close()
+		instance.browser.Close()
 		L_debug("browser: closed", "profile", profile)
 		delete(m.browsers, profile)
 	}
@@ -443,14 +449,14 @@ func (m *Manager) Status() []BrowserStatus {
 	defer m.browsersMu.Unlock()
 
 	var statuses []BrowserStatus
-	for profile, browser := range m.browsers {
+	for profile, instance := range m.browsers {
 		status := BrowserStatus{
 			Profile: profile,
 			Running: true,
 		}
 
 		// Try to get page count
-		pages, err := browser.Pages()
+		pages, err := instance.browser.Pages()
 		if err == nil {
 			status.PageCount = len(pages)
 		}
@@ -499,6 +505,8 @@ func (m *Manager) ProfileForDomain(domain string) string {
 
 // LaunchHeaded launches a headed (non-headless) browser for interactive setup.
 // This is used by the CLI for profile setup.
+// If a headed browser already exists for this profile, it will be reused.
+// If a headless browser exists, it will be closed and replaced with headed.
 func (m *Manager) LaunchHeaded(profile string, startURL string) (*rod.Browser, *rod.Page, error) {
 	if m == nil {
 		return nil, nil, fmt.Errorf("browser manager not initialized")
@@ -507,6 +515,40 @@ func (m *Manager) LaunchHeaded(profile string, startURL string) (*rod.Browser, *
 	if profile == "" {
 		profile = m.config.DefaultProfile
 	}
+	
+	m.browsersMu.Lock()
+	
+	// Check if we already have a browser for this profile
+	if instance, ok := m.browsers[profile]; ok {
+		if instance.headed {
+			// Already headed - reuse it, just navigate to URL
+			m.browsersMu.Unlock()
+			L_debug("browser: reusing existing headed browser", "profile", profile)
+			
+			var page *rod.Page
+			var err error
+			if m.config.Stealth {
+				page, err = stealth.Page(instance.browser)
+			} else {
+				page, err = instance.browser.Page(proto.TargetCreateTarget{})
+			}
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to create page: %w", err)
+			}
+			
+			if startURL != "" {
+				if err := page.Navigate(startURL); err != nil {
+					L_warn("browser: failed to navigate to start URL", "url", startURL, "error", err)
+				}
+			}
+			return instance.browser, page, nil
+		}
+		// Headless exists - close it, we'll launch headed
+		L_debug("browser: closing headless browser to launch headed", "profile", profile)
+		instance.browser.Close()
+		delete(m.browsers, profile)
+	}
+	m.browsersMu.Unlock()
 	
 	// Ensure browser is downloaded
 	binPath, err := m.downloader.EnsureBrowser()
@@ -538,6 +580,11 @@ func (m *Manager) LaunchHeaded(profile string, startURL string) (*rod.Browser, *
 	// Set device emulation based on config (default "clear" fills window)
 	// Rod defaults to LaptopWithMDPIScreen which constrains the viewport
 	browser.DefaultDevice(m.config.ResolveDevice())
+	
+	// Add to pool as headed
+	m.browsersMu.Lock()
+	m.browsers[profile] = &browserInstance{browser: browser, headed: true}
+	m.browsersMu.Unlock()
 	
 	// Create a page
 	var page *rod.Page
