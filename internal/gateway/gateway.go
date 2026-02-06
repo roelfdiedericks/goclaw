@@ -765,20 +765,27 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	runID := uuid.New().String()
 	sessionKey := g.sessionKeyFor(req)
 
-	events <- EventAgentStart{
-		RunID:      runID,
-		Source:     req.Source,
-		SessionKey: sessionKey,
-	}
-
-	// Get or create session
-	// Use GetFresh for isolated cron jobs to ensure clean context
+	// Get or create session first so we can check supervision
 	var sess *session.Session
 	if req.FreshContext {
 		sess = g.sessions.GetFresh(sessionKey)
 	} else {
 		sess = g.sessions.Get(sessionKey)
 	}
+
+	// Helper to send events to both the caller and supervision (if active)
+	sendEvent := func(ev AgentEvent) {
+		events <- ev
+		if supervision := sess.GetSupervision(); supervision != nil {
+			supervision.SendEvent(ev)
+		}
+	}
+
+	sendEvent(EventAgentStart{
+		RunID:      runID,
+		Source:     req.Source,
+		SessionKey: sessionKey,
+	})
 
 	// Ensure session has the model's context window size set
 	if sess.GetMaxTokens() == 0 && g.llm != nil {
@@ -793,16 +800,24 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	
 	// Add user message with images if any (skip if already added by supervision)
 	if !req.SkipAddMessage {
+		L_debug("RunAgent: adding user message", "session", sessionKey, "source", req.Source, "msgLen", len(req.UserMsg))
 		if len(req.Images) > 0 {
 			sess.AddUserMessageWithImages(req.UserMsg, req.Source, req.Images)
 		} else {
 			sess.AddUserMessage(req.UserMsg, req.Source)
 		}
 		
+		// Send user message to supervision if active
+		if supervision := sess.GetSupervision(); supervision != nil {
+			supervision.SendEvent(EventUserMessage{Content: req.UserMsg, Source: req.Source})
+		}
+		
 		// Persist user message to SQLite (skip for heartbeat - ephemeral)
 		if !req.IsHeartbeat {
 			g.persistMessage(ctx, sessionKey, "user", req.UserMsg, req.Source, "", "", nil, "", "")
 		}
+	} else {
+		L_debug("RunAgent: skipping message add (already in session)", "session", sessionKey, "source", req.Source)
 	}
 
 	// Build system prompt
@@ -838,9 +853,11 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	}
 
 	// Check if LLM is disabled (ghostwriting mode)
-	if !sess.IsLLMEnabled() {
+	llmEnabled := sess.IsLLMEnabled()
+	L_debug("RunAgent: LLM enabled check", "session", sessionKey, "llmEnabled", llmEnabled, "supervised", sess.IsSupervised())
+	if !llmEnabled {
 		L_info("supervision: LLM disabled, skipping generation", "session", sessionKey)
-		events <- EventAgentEnd{RunID: runID, FinalText: ""}
+		sendEvent(EventAgentEnd{RunID: runID, FinalText: ""})
 		return nil
 	}
 
@@ -910,7 +927,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		if supervision := sess.GetSupervision(); supervision != nil && supervision.HasInterruptRequest() {
 			L_info("supervision: interrupt requested, stopping generation", "session", sessionKey)
 			agentCancel()
-			events <- EventAgentEnd{RunID: runID, FinalText: ""}
+			sendEvent(EventAgentEnd{RunID: runID, FinalText: ""})
 			return nil
 		}
 		// Build context from session (messages and tool definitions)
@@ -943,11 +960,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		}
 
 		// Stream from LLM with overflow retry logic
+		L_debug("RunAgent: about to call LLM.StreamMessage", "session", sessionKey, "messageCount", len(messages), "toolCount", len(toolDefs))
 		var response *llm.Response
 		var llmErr error
 		for retry := 0; retry <= maxOverflowRetries; retry++ {
 			response, llmErr = g.llm.StreamMessage(agentCtx, messages, toolDefs, systemPrompt, func(delta string) {
-				events <- EventTextDelta{RunID: runID, Delta: delta}
+				sendEvent(EventTextDelta{RunID: runID, Delta: delta})
 			})
 
 			if llmErr == nil {
@@ -982,7 +1000,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		}
 
 		if llmErr != nil {
-			events <- EventAgentError{RunID: runID, Error: llmErr.Error()}
+			sendEvent(EventAgentError{RunID: runID, Error: llmErr.Error()})
 			return llmErr
 		}
 
@@ -995,7 +1013,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 		// Emit thinking event if we have reasoning content
 		if response.Thinking != "" {
-			events <- EventThinking{RunID: runID, Content: response.Thinking}
+			sendEvent(EventThinking{RunID: runID, Content: response.Thinking})
 		}
 
 		// Handle tool use
@@ -1003,13 +1021,13 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			// Check permissions
 			if !req.User.CanUseTool(response.ToolName) {
 				result := fmt.Sprintf("Permission denied: %s cannot use tool %s", req.User.Name, response.ToolName)
-				events <- EventToolEnd{
+				sendEvent(EventToolEnd{
 					RunID:    runID,
 					ToolName: response.ToolName,
 					ToolID:   response.ToolUseID,
 					Result:   result,
 					Error:    "permission_denied",
-				}
+				})
 			sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
 			sess.AddToolResult(response.ToolUseID, result)
 			// Persist denied tool use/result (skip for heartbeat - ephemeral)
@@ -1020,12 +1038,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			continue
 		}
 
-		events <- EventToolStart{
+		sendEvent(EventToolStart{
 				RunID:    runID,
 				ToolName: response.ToolName,
 				ToolID:   response.ToolUseID,
 				Input:    response.ToolInput,
-			}
+			})
 
 			// Execute tool with session context
 			toolStartTime := time.Now()
@@ -1059,14 +1077,14 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				}
 			}
 
-			events <- EventToolEnd{
+			sendEvent(EventToolEnd{
 				RunID:      runID,
 				ToolName:   response.ToolName,
 				ToolID:     response.ToolUseID,
 				Result:     result,
 				Error:      errStr,
 				DurationMs: toolDuration.Milliseconds(),
-			}
+			})
 
 			// Add to session and continue loop
 			sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
@@ -1103,7 +1121,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		L_debug("heartbeat: rolled back session messages", "before", messageCountBefore, "after", sess.MessageCount())
 	}
 
-	events <- EventAgentEnd{RunID: runID, FinalText: finalText}
+	sendEvent(EventAgentEnd{RunID: runID, FinalText: finalText})
 
 	// Check if checkpoint should be generated (async, non-blocking)
 	if g.checkpointGenerator != nil {
@@ -1330,6 +1348,33 @@ func (g *Gateway) sendAgentResponseToUser(ctx context.Context, u *user.User, res
 	}
 }
 
+// DeliverMessageToUser sends a message to all channels a user is connected to.
+// Used by ghostwriting to deliver messages directly.
+func (g *Gateway) DeliverMessageToUser(ctx context.Context, sessionKey string, message string) error {
+	if message == "" {
+		return nil
+	}
+
+	// Determine the user from session key
+	var u *user.User
+	if sessionKey == session.PrimarySession {
+		u = g.users.Owner()
+	} else if strings.HasPrefix(sessionKey, "user:") {
+		userID := strings.TrimPrefix(sessionKey, "user:")
+		u = g.users.Get(userID)
+	} else {
+		u = g.users.Owner()
+	}
+
+	if u == nil {
+		return fmt.Errorf("could not determine user for session: %s", sessionKey)
+	}
+
+	L_info("supervision: delivering ghostwrite to user", "session", sessionKey, "user", u.ID, "messageLen", len(message))
+	g.sendAgentResponseToUser(ctx, u, message)
+	return nil
+}
+
 // Sessions returns info about all sessions
 func (g *Gateway) Sessions() []session.SessionInfo {
 	return g.sessions.List()
@@ -1381,36 +1426,53 @@ func (g *Gateway) SessionManager() *session.Manager {
 // Used by supervision to trigger agent response after guidance injection.
 // The session should already have the message to respond to.
 func (g *Gateway) RunAgentForSession(ctx context.Context, sessionKey string, events chan<- AgentEvent) error {
+	L_debug("RunAgentForSession: called", "session", sessionKey)
+	
 	// Get the session to verify it exists
 	sess := g.sessions.Get(sessionKey)
 	if sess == nil {
+		L_error("RunAgentForSession: session not found", "session", sessionKey)
 		close(events)
 		return fmt.Errorf("session not found: %s", sessionKey)
 	}
+	L_debug("RunAgentForSession: session found", "session", sessionKey, "messageCount", sess.MessageCount())
 
 	// Determine the user for this session
 	var reqUser *user.User
 	if sessionKey == session.PrimarySession {
 		// Primary session belongs to owner
 		reqUser = g.users.Owner()
+		L_debug("RunAgentForSession: using owner for primary session", "session", sessionKey)
 	} else if strings.HasPrefix(sessionKey, "user:") {
 		// User session - extract user ID and look up
 		userID := strings.TrimPrefix(sessionKey, "user:")
 		reqUser = g.users.Get(userID)
+		L_debug("RunAgentForSession: looked up user", "session", sessionKey, "userID", userID, "found", reqUser != nil)
 	} else if strings.HasPrefix(sessionKey, "group:") {
 		// Group session - use owner for now (groups need special handling)
 		reqUser = g.users.Owner()
+		L_debug("RunAgentForSession: using owner for group session", "session", sessionKey)
 	} else {
 		// Unknown format - use owner
 		reqUser = g.users.Owner()
+		L_debug("RunAgentForSession: unknown session format, using owner", "session", sessionKey)
 	}
 
 	if reqUser == nil {
+		L_error("RunAgentForSession: could not determine user", "session", sessionKey)
 		close(events)
 		return fmt.Errorf("could not determine user for session: %s", sessionKey)
 	}
 
 	L_info("supervision: triggering agent run", "session", sessionKey, "user", reqUser.ID)
+
+	// Clear any stale interrupt flag before starting new run
+	// (The interrupt was meant for a previous generation, not this new one)
+	if supervision := sess.GetSupervision(); supervision != nil {
+		if supervision.HasInterruptRequest() {
+			L_debug("RunAgentForSession: cleared stale interrupt flag", "session", sessionKey)
+		}
+	}
 
 	// Create agent request - message already in session, skip adding
 	req := AgentRequest{
@@ -1419,8 +1481,15 @@ func (g *Gateway) RunAgentForSession(ctx context.Context, sessionKey string, eve
 		SessionID:      sessionKey,
 		SkipAddMessage: true, // Message already added by supervision
 	}
+	L_debug("RunAgentForSession: about to call RunAgent", "session", sessionKey, "user", reqUser.ID, "skipAddMessage", req.SkipAddMessage)
 
-	return g.RunAgent(ctx, req, events)
+	err := g.RunAgent(ctx, req, events)
+	if err != nil {
+		L_error("RunAgentForSession: RunAgent returned error", "session", sessionKey, "error", err)
+	} else {
+		L_debug("RunAgentForSession: RunAgent completed", "session", sessionKey)
+	}
+	return err
 }
 
 // SessionDB returns the SQLite database for the session store, or nil if not using SQLite

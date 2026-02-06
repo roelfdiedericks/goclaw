@@ -88,19 +88,21 @@ $(document).ready(function() {
     var $input = $('#message-input');
     var $sendBtn = $('#send-btn');
     var $status = $('#connection-status');
-    var STORAGE_KEY = 'goclaw_chat_history';
+    
+    // Supervision mode variables (must be before STORAGE_KEY)
+    var isSupervising = {{if .IsSupervising}}true{{else}}false{{end}};
+    var superviseSession = "{{.SuperviseSession}}";
+    var llmEnabled = true; // LLM enabled state for supervised session
+    var showDebug = false; // Whether to show debug content in supervision mode
+    
+    // Use different storage key for supervision sessions vs owner's own chat
+    var STORAGE_KEY = isSupervising ? 'goclaw_supervise_' + superviseSession : 'goclaw_chat_history';
     var MAX_MESSAGES = 100; // Keep last 100 messages
     var pendingImage = null; // { data: base64, mimeType: string, dataUrl: string }
     var typingTimeout = null; // For hiding typing indicator after inactivity
     var TYPING_TIMEOUT_MS = 5000; // Hide typing after 5s of no stream data
     var showThinking = false; // Whether to show tool calls and thinking output
     var activeToolCalls = {}; // Track active tool calls by ID
-    
-    // Supervision mode variables
-    var isSupervising = {{if .IsSupervising}}true{{else}}false{{end}};
-    var superviseSession = "{{.SuperviseSession}}";
-    var llmEnabled = true; // LLM enabled state for supervised session
-    var showDebug = false; // Whether to show debug content in supervision mode
     
     // Configure marked.js with highlight.js
     marked.setOptions({
@@ -430,6 +432,27 @@ $(document).ready(function() {
         eventSource.addEventListener('system', function(e) {
             var data = JSON.parse(e.data);
             appendMessage('system', data.message);
+        });
+        
+        // Handle agent_response (direct delivery from supervision/guidance)
+        eventSource.addEventListener('agent_response', function(e) {
+            var data = JSON.parse(e.data);
+            if (data.content) {
+                appendMessage('assistant', data.content);
+                saveHistory();
+            }
+        });
+        
+        // Handle user_message (real-time user messages in supervision mode)
+        eventSource.addEventListener('user_message', function(e) {
+            if (!isSupervising) return;
+            var data = JSON.parse(e.data);
+            if (data.content) {
+                // Show as user message with source indicator
+                var displayContent = data.source ? '[' + data.source + '] ' + data.content : data.content;
+                appendMessage('user', displayContent);
+                saveHistory();
+            }
         });
         
         // Handle tool start (supervision: always render with debug-content class; normal: only if showThinking)
