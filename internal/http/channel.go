@@ -142,6 +142,38 @@ func (c *HTTPChannel) HasUser(u *user.User) bool {
 	return u != nil && u.HasHTTPAuth()
 }
 
+// SendAgentResponse sends an agent response to a user's HTTP sessions.
+// Used by supervision to deliver responses triggered by guidance.
+func (c *HTTPChannel) SendAgentResponse(ctx context.Context, u *user.User, response string) error {
+	if u == nil {
+		return nil
+	}
+
+	c.sessionsMu.RLock()
+	defer c.sessionsMu.RUnlock()
+
+	event := SSEEvent{
+		Event: "agent_response",
+		Data: map[string]string{
+			"content": response,
+		},
+	}
+
+	sent := 0
+	for _, sess := range c.sessions {
+		if sess.User == nil || sess.User.ID != u.ID {
+			continue
+		}
+		sess.SendEvent(event)
+		sent++
+	}
+
+	if sent > 0 {
+		L_info("http: sent agent response", "user", u.ID, "sessions", sent, "responseLen", len(response))
+	}
+	return nil
+}
+
 // getOrCreateSession gets existing session or creates new one
 func (c *HTTPChannel) getOrCreateSession(sessionID string, u *user.User) *SSESession {
 	c.sessionsMu.Lock()

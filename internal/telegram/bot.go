@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -973,6 +974,25 @@ func (b *Bot) SendMirror(ctx context.Context, source, userMsg, response string) 
 // HasUser returns true if the user has a Telegram identity
 func (b *Bot) HasUser(u *user.User) bool {
 	return u.HasTelegramAuth()
+}
+
+// SendAgentResponse sends an agent response directly to a user's Telegram chat.
+// Used by supervision to deliver responses triggered by guidance.
+func (b *Bot) SendAgentResponse(ctx context.Context, u *user.User, response string) error {
+	if u == nil || u.TelegramID == "" {
+		return nil // User doesn't have Telegram
+	}
+
+	// Parse telegram ID
+	chatID, err := strconv.ParseInt(u.TelegramID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid telegram ID: %s", u.TelegramID)
+	}
+
+	L_info("telegram: sending agent response", "user", u.ID, "chatID", chatID, "responseLen", len(response))
+
+	_, err = b.SendText(chatID, response)
+	return err
 }
 
 // SendText sends a text message to a chat.

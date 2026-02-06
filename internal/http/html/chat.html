@@ -1,14 +1,29 @@
 {{template "header" .}}
 
+{{if .IsSupervising}}
+<div class="alert alert-info d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <i class="bi bi-eye"></i> <strong>Supervising:</strong> <code>{{.SuperviseSession}}</code>
+        <span id="llm-status" class="badge bg-success ms-2">LLM: Enabled</span>
+    </div>
+    <div>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="debug-toggle">Show Debug</button>
+        <button type="button" class="btn btn-sm btn-warning ms-2" id="llm-toggle">Disable LLM</button>
+    </div>
+</div>
+{{end}}
+
 <div class="row">
     <div class="col-12">
-        <div class="card">
+        <div class="card{{if .IsSupervising}} supervise-mode{{end}}">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <span><i class="bi bi-chat"></i> Chat</span>
+                <span><i class="bi bi-chat"></i> {{if .IsSupervising}}Supervision{{else}}Chat{{end}}</span>
                 <div>
+                    {{if not .IsSupervising}}
                     <button type="button" class="btn btn-sm btn-outline-secondary me-2" id="clear-history" title="Clear chat history">
                         <i class="bi bi-trash"></i>
                     </button>
+                    {{end}}
                     <span id="connection-status" class="badge bg-secondary">Connecting...</span>
                 </div>
             </div>
@@ -16,6 +31,14 @@
                 <!-- Messages will be inserted here -->
             </div>
             <div class="card-footer">
+                {{if .IsSupervising}}
+                <div class="btn-group mb-2" role="group">
+                    <input type="radio" class="btn-check" name="send-mode" id="mode-guidance" value="guidance" checked>
+                    <label class="btn btn-outline-primary" for="mode-guidance">Guidance</label>
+                    <input type="radio" class="btn-check" name="send-mode" id="mode-ghostwrite" value="ghostwrite">
+                    <label class="btn btn-outline-secondary" for="mode-ghostwrite">Ghostwrite</label>
+                </div>
+                {{else}}
                 <div id="image-preview" class="image-preview-container" style="display: none;">
                     <div class="image-preview-item">
                         <img id="preview-img" src="" alt="Preview">
@@ -24,8 +47,9 @@
                         </button>
                     </div>
                 </div>
+                {{end}}
                 <form id="chat-form" class="d-flex gap-2 align-items-end">
-                    <textarea id="message-input" class="form-control" placeholder="Type a message... (Shift+Enter for newline)" autocomplete="off" rows="1" style="resize: none; max-height: 150px; overflow-y: auto;"></textarea>
+                    <textarea id="message-input" class="form-control" placeholder="{{if .IsSupervising}}Send guidance or ghostwrite...{{else}}Type a message... (Shift+Enter for newline){{end}}" autocomplete="off" rows="1" style="resize: none; max-height: 150px; overflow-y: auto;"></textarea>
                     <button type="submit" class="btn btn-primary" id="send-btn">
                         <i class="bi bi-send"></i>
                     </button>
@@ -34,6 +58,24 @@
         </div>
     </div>
 </div>
+
+<style>
+/* Supervision mode: hide debug content by default */
+.supervise-mode .debug-content { display: none; }
+.supervise-mode.show-debug .debug-content { display: block; }
+
+/* Supervision message styles */
+.message.guidance .bubble {
+    background-color: #e3f2fd;
+    border-left: 3px solid #2196f3;
+    color: #1565c0;
+}
+.message.ghostwrite .bubble {
+    background-color: #fff3e0;
+    border-left: 3px solid #ff9800;
+    color: #e65100;
+}
+</style>
 
 <script>
 $(document).ready(function() {
@@ -53,6 +95,12 @@ $(document).ready(function() {
     var TYPING_TIMEOUT_MS = 5000; // Hide typing after 5s of no stream data
     var showThinking = false; // Whether to show tool calls and thinking output
     var activeToolCalls = {}; // Track active tool calls by ID
+    
+    // Supervision mode variables
+    var isSupervising = {{if .IsSupervising}}true{{else}}false{{end}};
+    var superviseSession = "{{.SuperviseSession}}";
+    var llmEnabled = true; // LLM enabled state for supervised session
+    var showDebug = false; // Whether to show debug content in supervision mode
     
     // Configure marked.js with highlight.js
     marked.setOptions({
@@ -221,10 +269,47 @@ $(document).ready(function() {
         
         $status.text('Connecting...').removeClass('bg-success bg-danger').addClass('bg-secondary');
         
-        eventSource = new EventSource('/api/events');
+        // Use supervision SSE endpoint if supervising
+        var eventsUrl = isSupervising 
+            ? '/api/sessions/' + encodeURIComponent(superviseSession) + '/events'
+            : '/api/events';
+        eventSource = new EventSource(eventsUrl);
         
         eventSource.addEventListener('connected', function(e) {
             $status.text('Connected').removeClass('bg-secondary bg-danger').addClass('bg-success');
+            
+            // In supervision mode, update LLM status from server
+            if (isSupervising) {
+                var data = JSON.parse(e.data);
+                if (typeof data.llmEnabled !== 'undefined') {
+                    llmEnabled = data.llmEnabled;
+                    updateLLMStatusUI();
+                }
+            }
+        });
+        
+        // Handle history messages in supervision mode
+        eventSource.addEventListener('history', function(e) {
+            if (!isSupervising) return;
+            var data = JSON.parse(e.data);
+            
+            // Render based on role
+            if (data.role === 'user') {
+                renderMessage('user', data.content, false);
+            } else if (data.role === 'assistant') {
+                renderMessage('assistant', data.content, false);
+            } else if (data.role === 'tool_use' || data.role === 'tool_result') {
+                // Tool messages are debug content
+                var $tool = $('<div class="tool-call debug-content">' +
+                    '<div class="tool-call-header">' +
+                    '<span class="tool-call-icon"><i class="bi bi-gear"></i></span>' +
+                    '<span class="tool-call-name">' + escapeHtml(data.toolName || data.role) + '</span>' +
+                    '</div>' +
+                    '<div class="tool-call-input">' + escapeHtml(data.content || '') + '</div>' +
+                    '</div>');
+                $messages.append($tool);
+            }
+            $messages.scrollTop($messages[0].scrollHeight);
         });
         
         eventSource.addEventListener('start', function(e) {
@@ -347,14 +432,17 @@ $(document).ready(function() {
             appendMessage('system', data.message);
         });
         
-        // Handle tool start (only show if thinking mode is on)
+        // Handle tool start (supervision: always render with debug-content class; normal: only if showThinking)
         eventSource.addEventListener('tool_start', function(e) {
-            if (!showThinking) return;
             var data = JSON.parse(e.data);
             var toolId = data.toolId;
             var inputStr = typeof data.input === 'string' ? data.input : JSON.stringify(data.input, null, 2);
             
-            var $toolCall = $('<div class="tool-call" data-tool-id="' + toolId + '">' +
+            // In normal mode, skip if thinking disabled
+            if (!isSupervising && !showThinking) return;
+            
+            var debugClass = isSupervising ? ' debug-content' : '';
+            var $toolCall = $('<div class="tool-call' + debugClass + '" data-tool-id="' + toolId + '">' +
                 '<div class="tool-call-header">' +
                     '<span class="tool-call-icon"><i class="bi bi-gear-fill"></i></span>' +
                     '<span class="tool-call-name">' + escapeHtml(data.toolName) + '</span>' +
@@ -368,12 +456,14 @@ $(document).ready(function() {
             activeToolCalls[toolId] = $toolCall;
         });
         
-        // Handle tool end (only show if thinking mode is on)
+        // Handle tool end (supervision: always render with debug-content class; normal: only if showThinking)
         eventSource.addEventListener('tool_end', function(e) {
-            if (!showThinking) return;
             var data = JSON.parse(e.data);
             var toolId = data.toolId;
             var $toolCall = activeToolCalls[toolId];
+            
+            // In normal mode, skip if thinking disabled (and we didn't create the element)
+            if (!isSupervising && !showThinking && !$toolCall) return;
             
             if ($toolCall) {
                 var statusClass = data.error ? 'error' : 'completed';
@@ -397,14 +487,17 @@ $(document).ready(function() {
             }
         });
         
-        // Handle thinking content
+        // Handle thinking content (supervision: always render with debug-content class; normal: only if showThinking)
         eventSource.addEventListener('thinking', function(e) {
-            if (!showThinking) return;
+            // In normal mode, skip if thinking disabled
+            if (!isSupervising && !showThinking) return;
+            
             var data = JSON.parse(e.data);
             var content = data.content || '';
+            var debugClass = isSupervising ? ' debug-content' : '';
             
             // Show reasoning content in collapsible element
-            var $thinking = $('<div class="thinking-content">' +
+            var $thinking = $('<div class="thinking-content' + debugClass + '">' +
                 '<details>' +
                     '<summary><i class="bi bi-lightbulb"></i> Reasoning</summary>' +
                     '<div class="thinking-text">' + escapeHtml(content) + '</div>' +
@@ -484,7 +577,40 @@ $(document).ready(function() {
         // Need either message or image
         if (!message && !pendingImage) return;
         
-        // Show user message immediately with inline image if present
+        // In supervision mode, handle guidance/ghostwrite differently
+        if (isSupervising) {
+            var sendMode = $('input[name="send-mode"]:checked').val() || 'guidance';
+            var endpoint = sendMode === 'ghostwrite' 
+                ? '/api/sessions/' + encodeURIComponent(superviseSession) + '/message'
+                : '/api/sessions/' + encodeURIComponent(superviseSession) + '/guidance';
+            
+            // Clear input
+            $input.val('');
+            $input.css('height', 'auto');
+            $sendBtn.prop('disabled', true);
+            
+            // Show what we're sending (differently styled for supervision)
+            appendMessage(sendMode === 'ghostwrite' ? 'ghostwrite' : 'guidance', message);
+            
+            $.ajax({
+                url: endpoint,
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({ content: message }),
+                success: function(data) {
+                    console.log('Supervision action sent:', data);
+                },
+                error: function(xhr) {
+                    appendMessage('error', 'Failed to send: ' + xhr.responseText);
+                },
+                complete: function() {
+                    $sendBtn.prop('disabled', false);
+                }
+            });
+            return;
+        }
+        
+        // Normal mode - show user message immediately with inline image if present
         var imageUrl = pendingImage ? pendingImage.dataUrl : null;
         appendMessage('user', message, imageUrl);
         
@@ -641,8 +767,56 @@ $(document).ready(function() {
         });
     });
     
-    // Show thinking toggle button on chat page
-    $('#thinking-toggle').removeClass('d-none');
+    // Show thinking toggle button on chat page (not in supervision mode)
+    if (!isSupervising) {
+        $('#thinking-toggle').removeClass('d-none');
+    }
+    
+    // --- Supervision mode controls ---
+    
+    // Update LLM status UI
+    function updateLLMStatusUI() {
+        var $status = $('#llm-status');
+        var $btn = $('#llm-toggle');
+        if (llmEnabled) {
+            $status.text('LLM: Enabled').removeClass('bg-warning').addClass('bg-success');
+            $btn.text('Disable LLM').removeClass('btn-success').addClass('btn-warning');
+        } else {
+            $status.text('LLM: Disabled').removeClass('bg-success').addClass('bg-warning');
+            $btn.text('Enable LLM').removeClass('btn-warning').addClass('btn-success');
+        }
+    }
+    
+    // Debug toggle button - toggles visibility of debug-content elements
+    $('#debug-toggle').on('click', function() {
+        showDebug = !showDebug;
+        var $card = $('.supervise-mode');
+        if (showDebug) {
+            $card.addClass('show-debug');
+            $(this).text('Hide Debug');
+        } else {
+            $card.removeClass('show-debug');
+            $(this).text('Show Debug');
+        }
+    });
+    
+    // LLM toggle button - enables/disables agent responses
+    $('#llm-toggle').on('click', function() {
+        var newState = !llmEnabled;
+        $.ajax({
+            url: '/api/sessions/' + encodeURIComponent(superviseSession) + '/llm',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ enabled: newState }),
+            success: function(data) {
+                llmEnabled = data.llmEnabled;
+                updateLLMStatusUI();
+            },
+            error: function(xhr) {
+                alert('Failed to toggle LLM: ' + xhr.responseText);
+            }
+        });
+    });
     
     // Make tool input/output collapsible
     $(document).on('click', '.tool-call-input, .tool-call-output', function() {
