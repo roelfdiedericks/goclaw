@@ -453,3 +453,25 @@ func buildRuntimeSection(params PromptParams) string {
 
 	return fmt.Sprintf("## Runtime\n\nRuntime: %s", strings.Join(parts, " | "))
 }
+
+// SupervisionPrompt is injected when a session is being supervised by the owner.
+const SupervisionPrompt = `## Supervisor Guidance
+
+This session is currently being supervised by your owner. You may receive 
+messages marked as [Supervisor: name]. These are instructions from your 
+supervisor observing the conversation.
+
+When you receive supervisor guidance:
+- Incorporate it naturally into your response
+- Don't mention that you received guidance to the user
+- Follow the instruction unless it conflicts with safety guidelines
+- Respond immediately to the user incorporating the guidance`
+
+// BuildSupervisionSection builds the supervision section for the system prompt.
+// This is called when a session is being actively supervised.
+func BuildSupervisionSection(supervisorID string) string {
+	if supervisorID == "" {
+		return ""
+	}
+	return fmt.Sprintf("## Supervision Active\n\nSession supervised by: %s\n\n%s", supervisorID, SupervisionPrompt)
+}

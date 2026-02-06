@@ -702,6 +702,17 @@ func (c *TUIChannel) HasUser(u *user.User) bool {
 	return c.user != nil && u != nil && c.user.ID == u.ID
 }
 
+// SendAgentResponse sends an agent response to the TUI.
+// Used by supervision to deliver responses triggered by guidance.
+func (c *TUIChannel) SendAgentResponse(ctx context.Context, u *user.User, response string) error {
+	if c.user == nil || u == nil || c.user.ID != u.ID {
+		return nil // Not the TUI user
+	}
+
+	// Send as a mirror (TUI handles display)
+	return c.SendMirror(ctx, "supervision", "", response)
+}
+
 // Run starts the TUI and returns a Channel that can receive mirrors
 // showLogs controls whether the log panel is visible by default
 func Run(ctx context.Context, gw *gateway.Gateway, u *user.User, showLogs bool) error {

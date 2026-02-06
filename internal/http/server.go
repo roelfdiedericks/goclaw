@@ -145,6 +145,9 @@ func (s *Server) setupRoutes() http.Handler {
 	mux.HandleFunc("/api/media", wrap(s.handleMedia))
 	mux.HandleFunc("/api/metrics", wrap(s.handleMetricsAPI))
 
+	// Supervision routes (owner-only, checked in handler)
+	mux.HandleFunc("/api/sessions/", wrap(s.handleSessionsAction))
+
 	// Web UI routes
 	mux.HandleFunc("/", wrap(s.handleIndex))
 	mux.HandleFunc("/chat", wrap(s.handleChat))

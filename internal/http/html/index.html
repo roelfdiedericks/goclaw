@@ -31,7 +31,7 @@
     <div class="col-12">
         <div class="card">
             <div class="card-header">
-                <i class="bi bi-people"></i> Active Sessions
+                <i class="bi bi-browser-chrome"></i> Connected Browsers
             </div>
             <div class="card-body">
                 <div id="sessions-container">
@@ -42,6 +42,23 @@
     </div>
 </div>
 
+{{if .User.IsOwner}}
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-chat-dots"></i> Active Conversations
+            </div>
+            <div class="card-body">
+                <div id="gateway-sessions-container">
+                    <p class="text-muted mb-0">Loading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}
+
 <script>
 $(document).ready(function() {
     function loadStatus() {
@@ -51,35 +68,75 @@ $(document).ready(function() {
                 .removeClass('bg-secondary')
                 .addClass(data.status === 'ready' ? 'bg-success' : 'bg-warning');
             
-            // Render sessions
+            // Render browser sessions (HTTP SSE connections)
             var $container = $('#sessions-container');
             if (!data.sessions || data.sessions.length === 0) {
-                $container.html('<p class="text-muted mb-0">No active sessions</p>');
-                return;
+                $container.html('<p class="text-muted mb-0">No active browser sessions</p>');
+            } else {
+                var html = '<table class="table table-sm table-hover mb-0">' +
+                    '<thead><tr><th>User</th><th>Session</th><th>Status</th><th>Events</th></tr></thead><tbody>';
+                
+                data.sessions.forEach(function(sess) {
+                    var statusBadge = sess.isConnected 
+                        ? '<span class="badge bg-success">Connected</span>'
+                        : '<span class="badge bg-secondary">Disconnected</span>';
+                    var ownerBadge = sess.isOwner ? ' <span class="badge bg-warning text-dark">Owner</span>' : '';
+                    
+                    html += '<tr>' +
+                        '<td>' + escapeHtml(sess.userName) + ownerBadge + '</td>' +
+                        '<td><code>' + escapeHtml(sess.sessionId) + '</code></td>' +
+                        '<td>' + statusBadge + '</td>' +
+                        '<td>' + sess.eventCount + '</td>' +
+                        '</tr>';
+                });
+                
+                html += '</tbody></table>';
+                $container.html(html);
             }
             
-            var html = '<table class="table table-sm table-hover mb-0">' +
-                '<thead><tr><th>User</th><th>Session</th><th>Status</th><th>Events</th></tr></thead><tbody>';
-            
-            data.sessions.forEach(function(sess) {
-                var statusBadge = sess.isConnected 
-                    ? '<span class="badge bg-success">Connected</span>'
-                    : '<span class="badge bg-secondary">Disconnected</span>';
-                var ownerBadge = sess.isOwner ? ' <span class="badge bg-warning text-dark">Owner</span>' : '';
-                
-                html += '<tr>' +
-                    '<td>' + escapeHtml(sess.userName) + ownerBadge + '</td>' +
-                    '<td><code>' + escapeHtml(sess.sessionId) + '</code></td>' +
-                    '<td>' + statusBadge + '</td>' +
-                    '<td>' + sess.eventCount + '</td>' +
-                    '</tr>';
-            });
-            
-            html += '</tbody></table>';
-            $container.html(html);
+            // Render gateway sessions (conversations) - owner only
+            var $gatewayContainer = $('#gateway-sessions-container');
+            if ($gatewayContainer.length > 0) {
+                if (!data.gatewaySessions || data.gatewaySessions.length === 0) {
+                    $gatewayContainer.html('<p class="text-muted mb-0">No active conversations</p>');
+                } else {
+                    var gwHtml = '<table class="table table-sm table-hover mb-0">' +
+                        '<thead><tr><th>Session</th><th>Messages</th><th>Context</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+                    
+                    data.gatewaySessions.forEach(function(sess) {
+                        var contextPercent = Math.round(sess.contextUsage * 100);
+                        var contextClass = contextPercent >= 90 ? 'text-danger' : 
+                                          contextPercent >= 75 ? 'text-warning' : '';
+                        
+                        var statusBadges = '';
+                        if (sess.supervised) {
+                            statusBadges += '<span class="badge bg-info me-1">Supervised</span>';
+                        }
+                        if (!sess.llmEnabled) {
+                            statusBadges += '<span class="badge bg-warning text-dark">LLM Off</span>';
+                        }
+                        if (!statusBadges) {
+                            statusBadges = '<span class="badge bg-secondary">Active</span>';
+                        }
+                        
+                        gwHtml += '<tr>' +
+                            '<td><code>' + escapeHtml(sess.key) + '</code></td>' +
+                            '<td>' + sess.messages + '</td>' +
+                            '<td class="' + contextClass + '">' + contextPercent + '%</td>' +
+                            '<td>' + statusBadges + '</td>' +
+                            '<td><a href="/chat?supervise=' + encodeURIComponent(sess.key) + 
+                            '" class="btn btn-sm btn-outline-primary">Supervise</a></td>' +
+                            '</tr>';
+                    });
+                    
+                    gwHtml += '</tbody></table>';
+                    $gatewayContainer.html(gwHtml);
+                }
+            }
         }).fail(function() {
             $('#status-agent').text('Error').removeClass('bg-secondary').addClass('bg-danger');
             $('#sessions-container').html('<p class="text-danger mb-0">Failed to load</p>');
+            $('#gateway-sessions-container').html('<p class="text-danger mb-0">Failed to load</p>');
         });
     }
     

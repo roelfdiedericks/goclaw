@@ -84,18 +84,34 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Check for supervision mode (owner only)
+	superviseSession := r.URL.Query().Get("supervise")
+	isSupervising := false
+	if superviseSession != "" && u.IsOwner() {
+		isSupervising = true
+		L_debug("http: chat in supervision mode", "session", superviseSession, "user", u.ID)
+	} else if superviseSession != "" && !u.IsOwner() {
+		// Non-owner trying to supervise - reject
+		L_warn("http: supervision denied - not owner", "user", u.ID, "session", superviseSession)
+		superviseSession = ""
+	}
+
 	data := struct {
-		Title      string
-		User       *UserTemplateData
-		AgentName  string
-		TypingText string
-		Timestamp  time.Time
+		Title            string
+		User             *UserTemplateData
+		AgentName        string
+		TypingText       string
+		Timestamp        time.Time
+		SuperviseSession string
+		IsSupervising    bool
 	}{
-		Title:      "GoClaw - Chat",
-		User:       &UserTemplateData{Name: u.Name, Username: u.ID, IsOwner: u.IsOwner()},
-		AgentName:  agentName,
-		TypingText: typingText,
-		Timestamp:  time.Now(),
+		Title:            "GoClaw - Chat",
+		User:             &UserTemplateData{Name: u.Name, Username: u.ID, IsOwner: u.IsOwner()},
+		AgentName:        agentName,
+		TypingText:       typingText,
+		Timestamp:        time.Now(),
+		SuperviseSession: superviseSession,
+		IsSupervising:    isSupervising,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -458,22 +474,30 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get active sessions info
+	// Get active HTTP sessions info (browser connections)
 	var sessions []SessionInfo
 	if s.channel != nil {
 		sessions = s.channel.GetSessionsInfo()
 	}
 
+	// For owner, also include gateway sessions (for supervision)
+	var gatewaySessions []GatewaySessionInfo
+	if u.IsOwner() && s.channel != nil && s.channel.gateway != nil {
+		gatewaySessions = s.getGatewaySessionsInfo()
+	}
+
 	status := struct {
-		Status   string        `json:"status"`
-		User     string        `json:"user"`
-		IsOwner  bool          `json:"isOwner"`
-		Sessions []SessionInfo `json:"sessions"`
+		Status          string               `json:"status"`
+		User            string               `json:"user"`
+		IsOwner         bool                 `json:"isOwner"`
+		Sessions        []SessionInfo        `json:"sessions"`
+		GatewaySessions []GatewaySessionInfo `json:"gatewaySessions,omitempty"`
 	}{
-		Status:   "ready",
-		User:     u.ID,
-		IsOwner:  u.IsOwner(),
-		Sessions: sessions,
+		Status:          "ready",
+		User:            u.ID,
+		IsOwner:         u.IsOwner(),
+		Sessions:        sessions,
+		GatewaySessions: gatewaySessions,
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
