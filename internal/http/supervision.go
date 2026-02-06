@@ -35,6 +35,10 @@ type SupervisionGateway interface {
 	// RunAgentForSession triggers an agent run for a specific session.
 	// Used by supervision to trigger agent response after guidance injection.
 	RunAgentForSession(ctx context.Context, sessionKey string, events chan<- gateway.AgentEvent) error
+
+	// DeliverMessageToUser sends a message to all channels a user is connected to.
+	// Used by ghostwriting to deliver messages directly.
+	DeliverMessageToUser(ctx context.Context, sessionKey string, message string) error
 }
 
 // GatewaySessionInfo contains information about a gateway session for supervision.
@@ -167,8 +171,10 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, ses
 	}
 	flusher.Flush()
 
-	// Keep connection open with heartbeats
-	// In Phase 2, we'll hook into the gateway's event system
+	// Subscribe to real-time events
+	eventChan := supervision.Subscribe()
+	defer supervision.Unsubscribe()
+
 	ctx := r.Context()
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
@@ -184,6 +190,18 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, ses
 		case <-ticker.C:
 			fmt.Fprintf(w, ": heartbeat\n\n")
 			flusher.Flush()
+		case ev, ok := <-eventChan:
+			if !ok {
+				// Channel closed
+				return
+			}
+			// Convert gateway event to SSE and send
+			sseEvent := s.supervisionEventToSSE(ev)
+			if sseEvent != nil {
+				data, _ := json.Marshal(sseEvent.Data)
+				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", sseEvent.Event, data)
+				flusher.Flush()
+			}
 		}
 	}
 }
@@ -221,31 +239,39 @@ func (s *Server) handleSessionGuidance(w http.ResponseWriter, r *http.Request, s
 	}
 
 	supervision := sess.EnsureSupervision()
+	L_debug("http: guidance: session found, supervision state ensured", "session", sessionKey, "llmEnabled", supervision.IsLLMEnabled())
 
 	// If agent is currently generating, request interrupt first
+	L_debug("http: guidance: requesting interrupt (in case agent is mid-generation)", "session", sessionKey)
 	supervision.RequestInterrupt()
 
 	// Add guidance message directly to the session as a user message
 	// This ensures the agent sees it and responds
 	guidanceMsg := fmt.Sprintf("[Supervisor: %s]: %s", u.ID, req.Content)
+	L_debug("http: guidance: adding message to session", "session", sessionKey, "msg", guidanceMsg)
 	sess.AddUserMessage(guidanceMsg, "supervisor")
 
 	L_info("http: guidance sent", "session", sessionKey, "supervisor", u.ID, "contentLen", len(req.Content))
 
 	// Trigger agent run in background to respond to the guidance
 	go func() {
+		L_debug("http: guidance: about to invoke RunAgentForSession", "session", sessionKey)
 		events := make(chan gateway.AgentEvent, 100)
 		
 		// Drain events (they'll be sent via the supervision SSE stream)
 		go func() {
-			for range events {
-				// Events are handled by the supervision SSE connection
+			for ev := range events {
+				L_trace("http: guidance: event from agent", "session", sessionKey, "eventType", fmt.Sprintf("%T", ev))
 			}
+			L_debug("http: guidance: event channel drained", "session", sessionKey)
 		}()
 
+		L_debug("http: guidance: calling RunAgentForSession now", "session", sessionKey)
 		err := gw.RunAgentForSession(context.Background(), sessionKey, events)
 		if err != nil {
 			L_error("http: guidance agent run failed", "session", sessionKey, "error", err)
+		} else {
+			L_debug("http: guidance: RunAgentForSession completed successfully", "session", sessionKey)
 		}
 	}()
 
@@ -334,8 +360,10 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request, se
 	// Add message to session as assistant
 	sess.AddAssistantMessage(req.Content)
 
-	// TODO: Deliver message to all channels the user is connected to
-	// This will be implemented in Phase 3 with SendGhost
+	// Deliver message to all channels the user is connected to
+	if err := gw.DeliverMessageToUser(r.Context(), sessionKey, req.Content); err != nil {
+		L_error("http: ghostwrite delivery failed", "session", sessionKey, "error", err)
+	}
 
 	L_info("http: ghostwrite sent", "session", sessionKey, "supervisor", u.ID, "contentLen", len(req.Content))
 
@@ -393,6 +421,73 @@ func parseTime(s string) time.Time {
 		return time.Time{}
 	}
 	return t
+}
+
+// supervisionEventToSSE converts a gateway event to an SSE event for supervision.
+func (s *Server) supervisionEventToSSE(event interface{}) *SSEEvent {
+	switch e := event.(type) {
+	case gateway.EventAgentStart:
+		return &SSEEvent{Event: "start", Data: e}
+
+	case gateway.EventTextDelta:
+		return &SSEEvent{Event: "message", Data: map[string]string{
+			"runId":   e.RunID,
+			"content": e.Delta,
+		}}
+
+	case gateway.EventToolStart:
+		inputStr := string(e.Input)
+		if len(inputStr) > 2048 {
+			inputStr = inputStr[:2048] + "..."
+		}
+		return &SSEEvent{Event: "tool_start", Data: map[string]interface{}{
+			"runId":    e.RunID,
+			"toolName": e.ToolName,
+			"toolId":   e.ToolID,
+			"input":    inputStr,
+		}}
+
+	case gateway.EventToolEnd:
+		result := e.Result
+		if len(result) > 2048 {
+			result = result[:2048] + "..."
+		}
+		return &SSEEvent{Event: "tool_end", Data: map[string]interface{}{
+			"runId":    e.RunID,
+			"toolName": e.ToolName,
+			"toolId":   e.ToolID,
+			"result":   result,
+			"isError":  e.Error != "",
+		}}
+
+	case gateway.EventAgentEnd:
+		return &SSEEvent{Event: "done", Data: map[string]string{
+			"runId":     e.RunID,
+			"finalText": e.FinalText,
+		}}
+
+	case gateway.EventAgentError:
+		return &SSEEvent{Event: "agent_error", Data: map[string]string{
+			"runId": e.RunID,
+			"error": e.Error,
+		}}
+
+	case gateway.EventThinking:
+		return &SSEEvent{Event: "thinking", Data: map[string]string{
+			"runId":   e.RunID,
+			"content": e.Content,
+		}}
+
+	// User message event from gateway
+	case gateway.EventUserMessage:
+		return &SSEEvent{Event: "user_message", Data: map[string]string{
+			"content": e.Content,
+			"source":  e.Source,
+		}}
+
+	default:
+		return nil
+	}
 }
 
 // subscribeToSession subscribes to events from a specific gateway session.

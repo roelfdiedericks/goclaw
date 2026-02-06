@@ -144,6 +144,7 @@ func (c *HTTPChannel) HasUser(u *user.User) bool {
 
 // SendAgentResponse sends an agent response to a user's HTTP sessions.
 // Used by supervision to deliver responses triggered by guidance.
+// Sends start event (typing indicator) then done event (response).
 func (c *HTTPChannel) SendAgentResponse(ctx context.Context, u *user.User, response string) error {
 	if u == nil {
 		return nil
@@ -152,10 +153,21 @@ func (c *HTTPChannel) SendAgentResponse(ctx context.Context, u *user.User, respo
 	c.sessionsMu.RLock()
 	defer c.sessionsMu.RUnlock()
 
-	event := SSEEvent{
-		Event: "agent_response",
+	// Send start event first (triggers typing indicator on client)
+	startEvent := SSEEvent{
+		Event: "start",
 		Data: map[string]string{
-			"content": response,
+			"runId":  "supervision",
+			"source": "supervision",
+		},
+	}
+
+	// Send done event (delivers response, hides typing)
+	doneEvent := SSEEvent{
+		Event: "done",
+		Data: map[string]string{
+			"runId":     "supervision",
+			"finalText": response,
 		},
 	}
 
@@ -164,7 +176,8 @@ func (c *HTTPChannel) SendAgentResponse(ctx context.Context, u *user.User, respo
 		if sess.User == nil || sess.User.ID != u.ID {
 			continue
 		}
-		sess.SendEvent(event)
+		sess.SendEvent(startEvent)
+		sess.SendEvent(doneEvent)
 		sent++
 	}
 

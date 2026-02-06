@@ -989,6 +989,11 @@ func (b *Bot) SendAgentResponse(ctx context.Context, u *user.User, response stri
 		return fmt.Errorf("invalid telegram ID: %s", u.TelegramID)
 	}
 
+	chat := &tele.Chat{ID: chatID}
+
+	// Send typing indicator first
+	_ = b.bot.Notify(chat, tele.Typing)
+
 	L_info("telegram: sending agent response", "user", u.ID, "chatID", chatID, "responseLen", len(response))
 
 	_, err = b.SendText(chatID, response)

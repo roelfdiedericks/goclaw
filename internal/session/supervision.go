@@ -19,6 +19,9 @@ type SupervisionState struct {
 	// Cancel function for interrupting ongoing LLM generation
 	cancelFunc context.CancelFunc
 
+	// Event channel for real-time streaming to supervisor
+	eventChan chan interface{}
+
 	mu sync.RWMutex
 }
 
@@ -148,4 +151,56 @@ func (s *SupervisionState) ClearCancelFunc() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cancelFunc = nil
+}
+
+// Subscribe creates and returns an event channel for real-time streaming.
+// The supervisor SSE handler calls this to receive events.
+func (s *SupervisionState) Subscribe() <-chan interface{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Close existing channel if any
+	if s.eventChan != nil {
+		close(s.eventChan)
+	}
+
+	s.eventChan = make(chan interface{}, 100)
+	return s.eventChan
+}
+
+// Unsubscribe closes the event channel.
+func (s *SupervisionState) Unsubscribe() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.eventChan != nil {
+		close(s.eventChan)
+		s.eventChan = nil
+	}
+}
+
+// SendEvent sends an event to the supervisor if subscribed.
+// Non-blocking - drops event if channel is full or not subscribed.
+func (s *SupervisionState) SendEvent(ev interface{}) {
+	s.mu.RLock()
+	ch := s.eventChan
+	s.mu.RUnlock()
+
+	if ch == nil {
+		return
+	}
+
+	// Non-blocking send
+	select {
+	case ch <- ev:
+	default:
+		// Channel full, drop event
+	}
+}
+
+// HasSubscriber returns whether there's an active event subscriber.
+func (s *SupervisionState) HasSubscriber() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.eventChan != nil
 }
