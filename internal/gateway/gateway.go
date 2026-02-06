@@ -37,6 +37,7 @@ type Channel interface {
 	Name() string
 	Send(ctx context.Context, msg string) error
 	SendMirror(ctx context.Context, source, userMsg, response string) error
+	SendAgentResponse(ctx context.Context, u *user.User, response string) error
 	HasUser(u *user.User) bool
 }
 
@@ -790,16 +791,18 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		messageCountBefore = sess.MessageCount()
 	}
 	
-	// Add user message with images if any
-	if len(req.Images) > 0 {
-		sess.AddUserMessageWithImages(req.UserMsg, req.Source, req.Images)
-	} else {
-		sess.AddUserMessage(req.UserMsg, req.Source)
-	}
-	
-	// Persist user message to SQLite (skip for heartbeat - ephemeral)
-	if !req.IsHeartbeat {
-		g.persistMessage(ctx, sessionKey, "user", req.UserMsg, req.Source, "", "", nil, "", "")
+	// Add user message with images if any (skip if already added by supervision)
+	if !req.SkipAddMessage {
+		if len(req.Images) > 0 {
+			sess.AddUserMessageWithImages(req.UserMsg, req.Source, req.Images)
+		} else {
+			sess.AddUserMessage(req.UserMsg, req.Source)
+		}
+		
+		// Persist user message to SQLite (skip for heartbeat - ephemeral)
+		if !req.IsHeartbeat {
+			g.persistMessage(ctx, sessionKey, "user", req.UserMsg, req.Source, "", "", nil, "", "")
+		}
 	}
 
 	// Build system prompt
@@ -825,6 +828,31 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 	// Append media storage instructions
 	systemPrompt += g.buildMediaInstructions()
+
+	// Check if session is supervised - inject supervision prompt
+	if sess.IsSupervised() {
+		if supervision := sess.GetSupervision(); supervision != nil {
+			systemPrompt += "\n\n" + gcontext.BuildSupervisionSection(supervision.GetSupervisorID())
+			L_debug("supervision: prompt injected", "session", sessionKey, "supervisor", supervision.GetSupervisorID())
+		}
+	}
+
+	// Check if LLM is disabled (ghostwriting mode)
+	if !sess.IsLLMEnabled() {
+		L_info("supervision: LLM disabled, skipping generation", "session", sessionKey)
+		events <- EventAgentEnd{RunID: runID, FinalText: ""}
+		return nil
+	}
+
+	// Consume pending guidance and inject as system messages
+	if supervision := sess.GetSupervision(); supervision != nil && supervision.HasPendingGuidance() {
+		guidance := supervision.ConsumePendingGuidance()
+		for _, g := range guidance {
+			guidanceMsg := fmt.Sprintf("[Supervisor: %s]: %s", g.From, g.Content)
+			sess.AddUserMessage(guidanceMsg, "supervisor")
+			L_info("supervision: guidance injected", "session", sessionKey, "from", g.From, "contentLen", len(g.Content))
+		}
+	}
 
 	// Check if compaction is needed before proceeding
 	if g.compactor != nil && g.compactor.ShouldCompact(sess) {
@@ -863,11 +891,28 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	ctx = context.WithValue(ctx, ContextKeyChannel, req.Source)
 	ctx = context.WithValue(ctx, ContextKeyChatID, req.ChatID)
 
+	// Create cancellable context for supervision interrupt support
+	agentCtx, agentCancel := context.WithCancel(ctx)
+	defer agentCancel()
+
+	// Store cancel function if supervised (for interrupt support)
+	if supervision := sess.GetSupervision(); supervision != nil {
+		supervision.SetCancelFunc(agentCancel)
+		defer supervision.ClearCancelFunc()
+	}
+
 	var finalText string
 	const maxOverflowRetries = 2 // Max times to retry after compaction
 
 	// Agent loop - keep going until no more tool use
 	for {
+		// Check for supervision interrupt request
+		if supervision := sess.GetSupervision(); supervision != nil && supervision.HasInterruptRequest() {
+			L_info("supervision: interrupt requested, stopping generation", "session", sessionKey)
+			agentCancel()
+			events <- EventAgentEnd{RunID: runID, FinalText: ""}
+			return nil
+		}
 		// Build context from session (messages and tool definitions)
 		messages := sess.GetMessages()
 		toolDefs := g.tools.Definitions()
@@ -901,7 +946,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		var response *llm.Response
 		var llmErr error
 		for retry := 0; retry <= maxOverflowRetries; retry++ {
-			response, llmErr = g.llm.StreamMessage(ctx, messages, toolDefs, systemPrompt, func(delta string) {
+			response, llmErr = g.llm.StreamMessage(agentCtx, messages, toolDefs, systemPrompt, func(delta string) {
 				events <- EventTextDelta{RunID: runID, Delta: delta}
 			})
 
@@ -1076,9 +1121,15 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	// Reset flush thresholds if context dropped (e.g., after compaction)
 	session.ResetThresholdsIfNeeded(sess)
 
-	// Mirror to other channels (not for group chats)
+	// Deliver response to channels
 	if !req.IsGroup {
-		g.mirrorToOthers(ctx, req, finalText)
+		if req.Source == "supervision" {
+			// Supervision-triggered run: send response directly to user's channels
+			g.sendAgentResponseToUser(ctx, req.User, finalText)
+		} else {
+			// Normal run: mirror to other channels
+			g.mirrorToOthers(ctx, req, finalText)
+		}
 	}
 
 	return nil
@@ -1258,6 +1309,27 @@ func (g *Gateway) mirrorToOthers(ctx context.Context, req AgentRequest, response
 	}
 }
 
+// sendAgentResponseToUser sends an agent response directly to all channels a user is connected to.
+// Used by supervision to deliver responses triggered by guidance.
+func (g *Gateway) sendAgentResponseToUser(ctx context.Context, u *user.User, response string) {
+	if u == nil || response == "" {
+		return
+	}
+
+	L_info("supervision: delivering response to user channels", "user", u.ID, "responseLen", len(response))
+
+	for name, ch := range g.channels {
+		if !ch.HasUser(u) {
+			continue
+		}
+
+		L_debug("supervision: sending to channel", "channel", name, "user", u.ID)
+		if err := ch.SendAgentResponse(ctx, u, response); err != nil {
+			L_error("supervision: failed to send response", "channel", name, "user", u.ID, "error", err)
+		}
+	}
+}
+
 // Sessions returns info about all sessions
 func (g *Gateway) Sessions() []session.SessionInfo {
 	return g.sessions.List()
@@ -1303,6 +1375,52 @@ func (g *Gateway) Users() *user.Registry {
 // SessionManager returns the session manager
 func (g *Gateway) SessionManager() *session.Manager {
 	return g.sessions
+}
+
+// RunAgentForSession triggers an agent run for a specific session.
+// Used by supervision to trigger agent response after guidance injection.
+// The session should already have the message to respond to.
+func (g *Gateway) RunAgentForSession(ctx context.Context, sessionKey string, events chan<- AgentEvent) error {
+	// Get the session to verify it exists
+	sess := g.sessions.Get(sessionKey)
+	if sess == nil {
+		close(events)
+		return fmt.Errorf("session not found: %s", sessionKey)
+	}
+
+	// Determine the user for this session
+	var reqUser *user.User
+	if sessionKey == session.PrimarySession {
+		// Primary session belongs to owner
+		reqUser = g.users.Owner()
+	} else if strings.HasPrefix(sessionKey, "user:") {
+		// User session - extract user ID and look up
+		userID := strings.TrimPrefix(sessionKey, "user:")
+		reqUser = g.users.Get(userID)
+	} else if strings.HasPrefix(sessionKey, "group:") {
+		// Group session - use owner for now (groups need special handling)
+		reqUser = g.users.Owner()
+	} else {
+		// Unknown format - use owner
+		reqUser = g.users.Owner()
+	}
+
+	if reqUser == nil {
+		close(events)
+		return fmt.Errorf("could not determine user for session: %s", sessionKey)
+	}
+
+	L_info("supervision: triggering agent run", "session", sessionKey, "user", reqUser.ID)
+
+	// Create agent request - message already in session, skip adding
+	req := AgentRequest{
+		User:           reqUser,
+		Source:         "supervision",
+		SessionID:      sessionKey,
+		SkipAddMessage: true, // Message already added by supervision
+	}
+
+	return g.RunAgent(ctx, req, events)
 }
 
 // SessionDB returns the SQLite database for the session store, or nil if not using SQLite

@@ -49,6 +49,9 @@ type Session struct {
 	IsGroupChat bool   `json:"-"` // True for group chats (affects user label display)
 	agentName   string // Agent's display name (set via SetAgentName)
 
+	// Supervision - allows owner to monitor, guide, and ghostwrite in session
+	Supervision *SupervisionState `json:"-"`
+
 	mu sync.RWMutex
 }
 
@@ -332,6 +335,43 @@ func (s *Session) UserMessageCount() int {
 		}
 	}
 	return count
+}
+
+// EnsureSupervision ensures the supervision state is initialized.
+// Call this before accessing Supervision to avoid nil pointer issues.
+func (s *Session) EnsureSupervision() *SupervisionState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Supervision == nil {
+		s.Supervision = NewSupervisionState()
+	}
+	return s.Supervision
+}
+
+// GetSupervision returns the supervision state, or nil if not initialized.
+func (s *Session) GetSupervision() *SupervisionState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Supervision
+}
+
+// IsSupervised returns whether this session is currently being supervised.
+func (s *Session) IsSupervised() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Supervision != nil && s.Supervision.IsSupervised()
+}
+
+// IsLLMEnabled returns whether LLM responses are enabled for this session.
+// Returns true if supervision is not active or LLM is explicitly enabled.
+func (s *Session) IsLLMEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.Supervision == nil {
+		return true // No supervision = LLM always enabled
+	}
+	return s.Supervision.IsLLMEnabled()
 }
 
 // generate a simple message ID using timestamp

@@ -24,6 +24,9 @@ type AgentRequest struct {
 
 	// Heartbeat-specific fields
 	IsHeartbeat bool // If true, run is ephemeral - don't persist to session
+
+	// Supervision-specific fields
+	SkipAddMessage bool // If true, don't add UserMsg to session (already added by supervision)
 }
 
 // HealthStatus provides gateway health information
