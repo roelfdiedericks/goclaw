@@ -350,7 +350,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleAgentEvent processes an agent event
 func handleAgentEvent(m *Model, event gateway.AgentEvent) {
 	switch e := event.(type) {
+	case gateway.EventThinkingDelta:
+		// Show thinking with a prefix indicator if this is the first delta
+		if !strings.Contains(m.currentLine, "💭") {
+			m.currentLine = thinkingStyle.Render("💭 ")
+		}
+		m.currentLine += e.Delta
 	case gateway.EventTextDelta:
+		// If we were showing thinking, finish that line first
+		if strings.Contains(m.currentLine, "💭") {
+			m.finishCurrentLine()
+			m.currentLine = assistantStyle.Render(m.gateway.AgentIdentity().DisplayName() + ": ")
+		}
 		m.currentLine += e.Delta
 	case gateway.EventToolStart:
 		m.finishCurrentLine()
