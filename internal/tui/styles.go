@@ -69,4 +69,9 @@ var (
 	// Mirror message style (for cross-channel visibility)
 	mirrorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("105")) // Purple for mirrored content
+
+	// Thinking style (for extended thinking/reasoning content)
+	thinkingStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("243")). // Dim gray for thinking
+			Italic(true)
 )

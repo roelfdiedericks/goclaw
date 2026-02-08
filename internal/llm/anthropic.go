@@ -322,6 +322,10 @@ func (c *AnthropicProvider) StreamMessage(
 					L_info("llm: thinking started (streaming reasoning content)")
 				}
 				thinkingContent.WriteString(deltaVariant.Thinking)
+				// Stream thinking delta to callback if provided
+				if opts != nil && opts.OnThinkingDelta != nil {
+					opts.OnThinkingDelta(deltaVariant.Thinking)
+				}
 				L_trace("llm: thinking delta received", "length", len(deltaVariant.Thinking))
 			}
 		}

@@ -468,6 +468,12 @@ func (s *Server) supervisionEventToSSE(event interface{}) *SSEEvent {
 			"content": e.Content,
 		}}
 
+	case gateway.EventThinkingDelta:
+		return &SSEEvent{Event: "thinking_delta", Data: map[string]string{
+			"runId":   e.RunID,
+			"content": e.Delta,
+		}}
+
 	// User message event from gateway
 	case gateway.EventUserMessage:
 		return &SSEEvent{Event: "user_message", Data: map[string]interface{}{

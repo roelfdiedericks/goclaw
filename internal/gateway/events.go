@@ -62,13 +62,21 @@ type EventAgentError struct {
 
 func (EventAgentError) agentEvent() {}
 
-// EventThinking is emitted when the agent enters extended thinking mode
+// EventThinking is emitted when thinking completes (batch mode - full content)
 type EventThinking struct {
 	RunID   string `json:"runId"`
 	Content string `json:"content"`
 }
 
 func (EventThinking) agentEvent() {}
+
+// EventThinkingDelta is emitted for each thinking content chunk during streaming
+type EventThinkingDelta struct {
+	RunID string `json:"runId"`
+	Delta string `json:"delta"`
+}
+
+func (EventThinkingDelta) agentEvent() {}
 
 // EventUserMessage is emitted when a user message is received (for supervision)
 type EventUserMessage struct {

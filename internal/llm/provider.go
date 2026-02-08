@@ -72,6 +72,10 @@ type StreamOptions struct {
 
 	// ThinkingBudget is the token budget for thinking (default: 10000)
 	ThinkingBudget int
+
+	// OnThinkingDelta is called for each thinking content delta during streaming.
+	// If nil, thinking content is still captured but not streamed.
+	OnThinkingDelta func(delta string)
 }
 
 // Note: Response type is currently defined in anthropic.go
