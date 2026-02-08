@@ -416,6 +416,13 @@ func (t *Tool) getOrCreateSession(sessionID string, profile string, headed bool)
 
 		// Monitor browser events for close detection
 		go t.monitorBrowserEvents(actualSessionID, session, browser)
+
+		// Sync tabs with actual browser state (picks up initial about:blank)
+		t.sessions[actualSessionID] = session // Store first so syncTabs can find it
+		if err := t.syncTabs(session); err != nil {
+			L_warn("browser: initial tab sync failed", "error", err)
+		}
+		return session, nil
 	}
 
 	t.sessions[actualSessionID] = session
@@ -469,6 +476,105 @@ func (t *Tool) cleanupSessionLocked(sessionID string, session *SessionTabs) {
 	delete(t.sessions, sessionID)
 }
 
+// syncTabs reconciles session.Tabs with the actual browser state.
+// This ensures our internal tracking matches reality, handling:
+// - Initial about:blank tabs from browser launch
+// - Tabs opened/closed externally by user
+// - State drift from any source
+// Must be called with session.mu NOT held (will acquire it).
+func (t *Tool) syncTabs(session *SessionTabs) error {
+	if session == nil {
+		return nil
+	}
+
+	// For headless sessions without dedicated browser, skip sync
+	if !session.Headed || session.Browser == nil {
+		return nil
+	}
+
+	// Get actual pages from browser
+	pages, err := session.Browser.Pages()
+	if err != nil {
+		return fmt.Errorf("failed to enumerate browser pages: %w", err)
+	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	// Build map of existing tracked pages by target ID for matching
+	existingByTarget := make(map[string]*TabInfo)
+	for _, tab := range session.Tabs {
+		if tab.Page != nil {
+			if target := tab.Page.TargetID; target != "" {
+				existingByTarget[string(target)] = tab
+			}
+		}
+	}
+
+	// Rebuild Tabs array from actual pages
+	newTabs := make([]*TabInfo, 0, len(pages))
+	var activePageTarget string
+	if session.ActiveTab >= 0 && session.ActiveTab < len(session.Tabs) {
+		if tab := session.Tabs[session.ActiveTab]; tab.Page != nil {
+			activePageTarget = string(tab.Page.TargetID)
+		}
+	}
+
+	newActiveTab := -1
+	for i, page := range pages {
+		var tab *TabInfo
+
+		// Try to find existing tab info for this page
+		targetID := string(page.TargetID)
+		if existing, ok := existingByTarget[targetID]; ok {
+			tab = existing
+			tab.Index = i
+		} else {
+			// New page we weren't tracking
+			tab = &TabInfo{
+				Index:    i,
+				Page:     page,
+				Elements: make(map[int]*rod.Element),
+			}
+		}
+
+		// Refresh URL and title
+		if info, err := page.Info(); err == nil {
+			tab.URL = info.URL
+			tab.Title = info.Title
+		}
+
+		newTabs = append(newTabs, tab)
+
+		// Track active tab by matching target ID
+		if targetID == activePageTarget {
+			newActiveTab = i
+		}
+	}
+
+	oldCount := len(session.Tabs)
+	session.Tabs = newTabs
+
+	// Clamp ActiveTab to valid range
+	if newActiveTab >= 0 {
+		session.ActiveTab = newActiveTab
+	} else if len(session.Tabs) > 0 {
+		// Previous active tab is gone, default to last tab
+		session.ActiveTab = len(session.Tabs) - 1
+	} else {
+		session.ActiveTab = -1
+	}
+
+	if oldCount != len(newTabs) {
+		L_debug("browser: syncTabs reconciled",
+			"oldCount", oldCount,
+			"newCount", len(newTabs),
+			"activeTab", session.ActiveTab)
+	}
+
+	return nil
+}
+
 // isContextCancelledError checks if an error is due to browser disconnect
 func isContextCancelledError(err error) bool {
 	if err == nil {
@@ -504,6 +610,11 @@ func (t *Tool) getActivePage(sessionID string, profile string, headed bool) (*ro
 	session, err := t.getOrCreateSession(sessionID, profile, headed)
 	if err != nil {
 		return nil, err
+	}
+
+	// Sync with actual browser state before accessing active page
+	if err := t.syncTabs(session); err != nil {
+		L_debug("browser: getActivePage sync failed", "error", err)
 	}
 
 	session.mu.Lock()
@@ -565,6 +676,11 @@ func (t *Tool) listTabs(ctx context.Context, sessionID string, headed bool) (str
 		return "", err
 	}
 
+	// Sync with actual browser state before listing
+	if err := t.syncTabs(session); err != nil {
+		L_debug("browser: listTabs sync failed", "error", err)
+	}
+
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
@@ -601,8 +717,35 @@ func (t *Tool) openTab(ctx context.Context, sessionID string, urlStr string, pro
 		return "", err
 	}
 
+	// Sync with actual browser state before opening
+	if err := t.syncTabs(session); err != nil {
+		L_debug("browser: openTab sync failed", "error", err)
+	}
+
 	session.mu.Lock()
 	defer session.mu.Unlock()
+
+	// Optimization: If there's exactly one about:blank tab and URL is provided,
+	// reuse it instead of creating a new tab (mimics normal browser behavior)
+	if urlStr != "" && len(session.Tabs) == 1 {
+		tab := session.Tabs[0]
+		if tab.URL == "about:blank" && tab.Page != nil {
+			L_debug("browser: reusing about:blank tab for navigation", "url", urlStr)
+			if err := t.navigateToURL(tab.Page, urlStr); err != nil {
+				return "", err
+			}
+			if info, err := tab.Page.Info(); err == nil {
+				tab.URL = info.URL
+				tab.Title = info.Title
+			}
+			session.ActiveTab = 0
+			mode := "headless"
+			if session.Headed {
+				mode = "headed"
+			}
+			return fmt.Sprintf("Navigated in tab [0]: %s\n%s\n[%s mode]", tab.Title, tab.URL, mode), nil
+		}
+	}
 
 	// Create new page - use session's browser if headed, otherwise use manager's pool
 	var page *rod.Page
@@ -653,6 +796,11 @@ func (t *Tool) focusTab(ctx context.Context, sessionID string, index int, headed
 		return "", err
 	}
 
+	// Sync with actual browser state before focusing
+	if err := t.syncTabs(session); err != nil {
+		L_debug("browser: focusTab sync failed", "error", err)
+	}
+
 	session.mu.Lock()
 	defer session.mu.Unlock()
 
@@ -678,6 +826,11 @@ func (t *Tool) closeTab(ctx context.Context, sessionID string, index *int, heade
 	session, err := t.getOrCreateSession(sessionID, "", headed)
 	if err != nil {
 		return "", err
+	}
+
+	// Sync with actual browser state before closing
+	if err := t.syncTabs(session); err != nil {
+		L_debug("browser: closeTab sync failed", "error", err)
 	}
 
 	session.mu.Lock()

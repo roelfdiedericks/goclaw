@@ -70,6 +70,7 @@ func (AgentErrorEvent) IsAgentEvent() {}
 type GatewayRunner interface {
 	RunAgentForCron(ctx context.Context, req AgentRequest, events chan<- AgentEvent)
 	GetOwnerUserID() string // Returns the owner user ID for cron jobs
+	InjectSystemEvent(ctx context.Context, text string) error // Inject system event into primary session
 }
 
 // Channel is the interface for delivery channels.
@@ -143,6 +144,110 @@ func (s *Service) TriggerHeartbeatNow(_ context.Context) error {
 		return fmt.Errorf("heartbeat not enabled")
 	}
 	go s.runHeartbeat(context.Background())
+	return nil
+}
+
+// InvokeAgent runs the agent with a prompt and delivers the response to channels.
+// Unlike heartbeat, this does not check HEARTBEAT.md - it runs unconditionally.
+// If the agent responds with "EVENT_OK", the response is suppressed (not delivered).
+// The invocation is ephemeral - not persisted to session history.
+func (s *Service) InvokeAgent(_ context.Context, prompt string) error {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return fmt.Errorf("prompt is required")
+	}
+	go s.runInvokeAgent(context.Background(), prompt)
+	return nil
+}
+
+// runInvokeAgent executes an agent invocation with the given prompt.
+func (s *Service) runInvokeAgent(ctx context.Context, prompt string) {
+	L_info("invoke: starting", "promptLen", len(prompt))
+
+	// Get owner user for invocation
+	userID := s.gateway.GetOwnerUserID()
+	if userID == "" {
+		L_error("invoke: no owner user configured")
+		return
+	}
+
+	// Build the request - ephemeral (don't persist to session)
+	req := AgentRequest{
+		Source:       "invoke",
+		UserMsg:      prompt,
+		FreshContext: false, // Use main session with history
+		SessionID:    "",    // Empty = main session
+		UserID:       userID,
+		IsHeartbeat:  true,  // Ephemeral - don't persist to session
+	}
+
+	L_debug("invoke: running agent", "prompt", truncateLog(prompt, 100))
+
+	events := make(chan AgentEvent, 100)
+	go s.gateway.RunAgentForCron(ctx, req, events)
+
+	// Collect response
+	var finalContent string
+	for event := range events {
+		switch e := event.(type) {
+		case AgentEndEvent:
+			finalContent = e.FinalText
+		case AgentErrorEvent:
+			L_error("invoke: agent error", "error", e.Error)
+			return
+		}
+	}
+
+	L_info("invoke: completed", "responseLen", len(finalContent))
+
+	// Check if response is EVENT_OK (suppress output)
+	trimmedResponse := strings.TrimSpace(finalContent)
+	if strings.HasPrefix(strings.ToUpper(trimmedResponse), "EVENT_OK") {
+		L_debug("invoke: agent said EVENT_OK, no notification")
+		return
+	}
+
+	// Deliver response to channels
+	if finalContent != "" && s.channelProvider != nil {
+		channels := s.channelProvider.Channels()
+		if len(channels) > 0 {
+			for name, ch := range channels {
+				if err := ch.Send(ctx, finalContent); err != nil {
+					L_error("invoke: failed to deliver to channel", "channel", name, "error", err)
+				} else {
+					L_debug("invoke: delivered to channel", "channel", name)
+				}
+			}
+		}
+	}
+}
+
+// Wake injects a system event into the primary session and optionally triggers heartbeat.
+// mode can be "now" (trigger heartbeat immediately) or "next-heartbeat" (wait for scheduled).
+func (s *Service) Wake(ctx context.Context, text string, mode string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return fmt.Errorf("wake text is required")
+	}
+
+	// Inject system event
+	if s.gateway != nil {
+		if err := s.gateway.InjectSystemEvent(ctx, text); err != nil {
+			return fmt.Errorf("failed to inject system event: %w", err)
+		}
+		L_info("cron: wake event injected", "mode", mode, "textLen", len(text))
+	}
+
+	// If mode is "now", trigger heartbeat immediately
+	if mode == "now" {
+		if s.heartbeatConfig != nil && s.heartbeatConfig.Enabled {
+			go s.runHeartbeat(context.Background())
+			L_debug("cron: wake triggered immediate heartbeat")
+		} else {
+			L_debug("cron: wake mode=now but heartbeat not enabled")
+		}
+	}
+
 	return nil
 }
 

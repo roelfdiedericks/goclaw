@@ -22,12 +22,13 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/bwrap"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
-	"github.com/roelfdiedericks/goclaw/internal/setup"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
+	"github.com/roelfdiedericks/goclaw/internal/hass"
 	goclawhttp "github.com/roelfdiedericks/goclaw/internal/http"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
+	"github.com/roelfdiedericks/goclaw/internal/setup"
 	"github.com/roelfdiedericks/goclaw/internal/supervisor"
 	"github.com/roelfdiedericks/goclaw/internal/telegram"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
@@ -1455,7 +1456,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	regCfg := llm.RegistryConfig{
 		Providers:     make(map[string]llm.ProviderConfig),
 		Agent:         llm.PurposeConfig{Models: cfg.LLM.Agent.Models, MaxTokens: cfg.LLM.Agent.MaxTokens},
-		Summarization: llm.PurposeConfig{Models: cfg.LLM.Summarization.Models, MaxTokens: cfg.LLM.Summarization.MaxTokens},
+		Summarization: llm.PurposeConfig{Models: cfg.LLM.Summarization.Models, MaxTokens: cfg.LLM.Summarization.MaxTokens, MaxInputTokens: cfg.LLM.Summarization.MaxInputTokens},
 		Embeddings:    llm.PurposeConfig{Models: cfg.LLM.Embeddings.Models, MaxTokens: cfg.LLM.Embeddings.MaxTokens},
 	}
 	// Convert provider configs
@@ -1466,8 +1467,10 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 			BaseURL:        pCfg.BaseURL,
 			URL:            pCfg.URL,
 			MaxTokens:      pCfg.MaxTokens,
+			ContextTokens:  pCfg.ContextTokens,
 			TimeoutSeconds: pCfg.TimeoutSeconds,
 			PromptCaching:  pCfg.PromptCaching,
+			EmbeddingOnly:  pCfg.EmbeddingOnly,
 		}
 	}
 	llmRegistry, err := llm.NewRegistry(regCfg)
@@ -1598,6 +1601,36 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	if skillsMgr := gw.SkillManager(); skillsMgr != nil {
 		toolsReg.Register(tools.NewSkillsTool(skillsMgr))
 		L_debug("skills tool registered")
+	}
+
+	// Register Home Assistant tool
+	if cfg.HomeAssistant.Enabled && cfg.HomeAssistant.Token != "" {
+		if mediaStore := gw.MediaStore(); mediaStore != nil {
+			// Create WebSocket client for sync registry queries
+			wsClient := hass.NewWSClient(cfg.HomeAssistant)
+
+			// Create event subscription manager
+			home, _ := os.UserHomeDir()
+			dataDir := filepath.Join(home, ".goclaw")
+			hassManager := hass.NewManager(cfg.HomeAssistant, gw, dataDir)
+			gw.SetHassManager(hassManager)
+
+			// Start the manager (loads persisted subscriptions, connects if needed)
+			if err := gw.StartHassManager(context.Background()); err != nil {
+				L_warn("hass: failed to start manager", "error", err)
+			}
+
+			// Create and register the tool
+			hassTool, err := tools.NewHASSTool(cfg.HomeAssistant, mediaStore, wsClient, hassManager)
+			if err != nil {
+				L_warn("hass tool not registered", "error", err)
+			} else {
+				toolsReg.Register(hassTool)
+				L_info("hass: tool registered", "url", cfg.HomeAssistant.URL)
+			}
+		} else {
+			L_warn("hass tool not registered: no media store")
+		}
 	}
 
 	// Initialize transcript manager (needs SQLite DB from session store)

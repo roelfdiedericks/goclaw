@@ -27,21 +27,22 @@ func isMinimalJSON(data []byte) bool {
 
 // Config represents the merged goclaw configuration
 type Config struct {
-	Gateway      GatewayConfig         `json:"gateway"`
-	Agent        AgentIdentityConfig   `json:"agent"`
-	LLM          LLMConfig             `json:"llm"`
-	Tools        ToolsConfig           `json:"tools"`
-	Telegram     TelegramConfig        `json:"telegram"`
-	HTTP         HTTPConfig            `json:"http"`
-	Session      SessionConfig         `json:"session"`
-	MemorySearch MemorySearchConfig    `json:"memorySearch"`
-	Transcript   TranscriptConfig      `json:"transcript"`
-	PromptCache  PromptCacheConfig     `json:"promptCache"`
-	Media        MediaConfig           `json:"media"`
-	TUI          TUIConfig             `json:"tui"`
-	Skills       SkillsConfig          `json:"skills"`
-	Cron         CronConfig            `json:"cron"`
-	Supervision  SupervisionConfig     `json:"supervision"`
+	Gateway       GatewayConfig         `json:"gateway"`
+	Agent         AgentIdentityConfig   `json:"agent"`
+	LLM           LLMConfig             `json:"llm"`
+	HomeAssistant HomeAssistantConfig   `json:"homeassistant"` // Top-level Home Assistant config
+	Tools         ToolsConfig           `json:"tools"`
+	Telegram      TelegramConfig        `json:"telegram"`
+	HTTP          HTTPConfig            `json:"http"`
+	Session       SessionConfig         `json:"session"`
+	MemorySearch  MemorySearchConfig    `json:"memorySearch"`
+	Transcript    TranscriptConfig      `json:"transcript"`
+	PromptCache   PromptCacheConfig     `json:"promptCache"`
+	Media         MediaConfig           `json:"media"`
+	TUI           TUIConfig             `json:"tui"`
+	Skills        SkillsConfig          `json:"skills"`
+	Cron          CronConfig            `json:"cron"`
+	Supervision   SupervisionConfig     `json:"supervision"`
 }
 
 // AgentIdentityConfig configures the agent's display identity
@@ -137,6 +138,18 @@ type MediaConfig struct {
 	Dir     string `json:"dir"`     // Base directory (empty = <workspace>/media/)
 	TTL     int    `json:"ttl"`     // TTL in seconds (default: 600 = 10 min)
 	MaxSize int    `json:"maxSize"` // Max file size in bytes (default: 5MB)
+}
+
+// HomeAssistantConfig configures Home Assistant integration (REST + WebSocket)
+type HomeAssistantConfig struct {
+	Enabled          bool   `json:"enabled"`                    // Enable Home Assistant integration
+	URL              string `json:"url"`                        // HA base URL (e.g., "https://home.example.com:8123")
+	Token            string `json:"token"`                      // Long-lived access token
+	Insecure         bool   `json:"insecure,omitempty"`         // Skip TLS verification for self-signed certs
+	Timeout          string `json:"timeout,omitempty"`          // Request timeout (default: "10s")
+	EventPrefix      string `json:"eventPrefix,omitempty"`      // Prefix for injected events (default: "[HomeAssistant Event]")
+	SubscriptionFile string `json:"subscriptionFile,omitempty"` // Subscription persistence file (default: "hass-subscriptions.json")
+	ReconnectDelay   string `json:"reconnectDelay,omitempty"`   // WebSocket reconnect delay (default: "5s")
 }
 
 // SessionConfig contains session persistence and context management settings
@@ -293,14 +306,17 @@ type LLMProviderConfig struct {
 	BaseURL        string `json:"baseURL,omitempty"`        // For OpenAI-compatible endpoints
 	URL            string `json:"url,omitempty"`            // For Ollama
 	MaxTokens      int    `json:"maxTokens,omitempty"`      // Default output limit
+	ContextTokens  int    `json:"contextTokens,omitempty"`  // Context window override (0 = auto-detect)
 	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"` // Request timeout
 	PromptCaching  bool   `json:"promptCaching,omitempty"`  // Anthropic-specific
+	EmbeddingOnly  bool   `json:"embeddingOnly,omitempty"`  // For embedding-only models
 }
 
 // LLMPurposeConfig defines the model chain for a specific purpose
 type LLMPurposeConfig struct {
-	Models    []string `json:"models"`              // First = primary, rest = fallbacks
-	MaxTokens int      `json:"maxTokens,omitempty"` // Output limit override (0 = use model default)
+	Models         []string `json:"models"`                    // First = primary, rest = fallbacks
+	MaxTokens      int      `json:"maxTokens,omitempty"`       // Output limit override (0 = use model default)
+	MaxInputTokens int      `json:"maxInputTokens,omitempty"`  // Input limit for summarization (0 = use model context - buffer)
 }
 
 // TelegramConfig contains Telegram channel settings
@@ -333,9 +349,9 @@ type CredentialConfig struct {
 
 // ToolsConfig contains tool-specific settings
 type ToolsConfig struct {
-	Web        WebToolsConfig        `json:"web"`
-	Browser    BrowserToolsConfig    `json:"browser"`
-	Exec       ExecToolsConfig       `json:"exec"`
+	Web        WebToolsConfig         `json:"web"`
+	Browser    BrowserToolsConfig     `json:"browser"`
+	Exec       ExecToolsConfig        `json:"exec"`
 	Bubblewrap BubblewrapGlobalConfig `json:"bubblewrap"`
 }
 
@@ -464,6 +480,13 @@ func Load() (*LoadResult, error) {
 			Thinking: ThinkingConfig{
 				BudgetTokens: 10000, // Default budget for extended thinking
 			},
+		},
+		HomeAssistant: HomeAssistantConfig{
+			Enabled:          false,                        // Disabled by default - requires manual configuration
+			Timeout:          "10s",
+			EventPrefix:      "[HomeAssistant Event]",
+			SubscriptionFile: "hass-subscriptions.json",
+			ReconnectDelay:   "5s",
 		},
 		Tools: ToolsConfig{
 			Browser: BrowserToolsConfig{
@@ -731,8 +754,18 @@ func mergeConfigSelective(dst, src *Config, rawMap map[string]interface{}) error
 			return err
 		}
 	}
+	if _, ok := rawMap["agent"]; ok {
+		if err := mergo.Merge(&dst.Agent, src.Agent, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
 	if _, ok := rawMap["llm"]; ok {
 		if err := mergo.Merge(&dst.LLM, src.LLM, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if _, ok := rawMap["homeassistant"]; ok {
+		if err := mergo.Merge(&dst.HomeAssistant, src.HomeAssistant, mergo.WithOverride); err != nil {
 			return err
 		}
 	}

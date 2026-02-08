@@ -45,8 +45,9 @@ type providerInstance struct {
 
 // PurposeConfig defines the model chain for a specific purpose
 type PurposeConfig struct {
-	Models    []string `json:"models"`    // First = primary, rest = fallbacks
-	MaxTokens int      `json:"maxTokens"` // Output limit override (0 = use model default)
+	Models         []string `json:"models"`         // First = primary, rest = fallbacks
+	MaxTokens      int      `json:"maxTokens"`      // Output limit override (0 = use model default)
+	MaxInputTokens int      `json:"maxInputTokens"` // Input limit for summarization (0 = use model context - buffer)
 }
 
 // RegistryConfig is the configuration for the LLM registry
@@ -180,6 +181,18 @@ func (r *Registry) GetProvider(purpose string) (Provider, error) {
 	}
 
 	return nil, fmt.Errorf("no available provider for %s (tried: %v)", purpose, cfg.Models)
+}
+
+// GetMaxInputTokens returns the configured maxInputTokens for a purpose.
+// Returns 0 if not configured (use model context - buffer instead).
+func (r *Registry) GetMaxInputTokens(purpose string) int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	
+	if cfg, ok := r.purposes[purpose]; ok {
+		return cfg.MaxInputTokens
+	}
+	return 0
 }
 
 // Resolve returns a provider for a specific model reference, no fallback chain.

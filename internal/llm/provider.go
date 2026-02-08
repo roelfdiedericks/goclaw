@@ -150,6 +150,7 @@ type ProviderConfig struct {
 	BaseURL        string `json:"baseURL"`        // For OpenAI-compatible endpoints
 	URL            string `json:"url"`            // For Ollama
 	MaxTokens      int    `json:"maxTokens"`      // Output limit override
+	ContextTokens  int    `json:"contextTokens"`  // Context window size override (0 = auto-detect)
 	TimeoutSeconds int    `json:"timeoutSeconds"` // Request timeout
 	PromptCaching  bool   `json:"promptCaching"`  // Anthropic-specific
 	EmbeddingOnly  bool   `json:"embeddingOnly"`  // For embedding-only models (skip chat availability check)
