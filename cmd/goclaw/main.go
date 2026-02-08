@@ -28,6 +28,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
+	"github.com/roelfdiedericks/goclaw/internal/supervisor"
 	"github.com/roelfdiedericks/goclaw/internal/telegram"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
@@ -37,15 +38,30 @@ import (
 
 const version = "0.0.1"
 
-// Default paths
-func pidFile() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".openclaw", "goclaw.pid")
+// RuntimePaths holds derived paths for daemon operation
+type RuntimePaths struct {
+	DataDir string // Directory for all runtime files
+	PidFile string
+	LogFile string
 }
 
-func logFile() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".openclaw", "goclaw.log")
+// loadRuntimePaths loads config and derives all runtime paths from session.storePath
+func loadRuntimePaths() (*RuntimePaths, error) {
+	loadResult, err := config.Load()
+	if err != nil {
+		// Don't wrap - config.Load() error already includes "Run 'goclaw setup'" hint
+		return nil, err
+	}
+	
+	// Derive data directory from session store path
+	storePath := loadResult.Config.Session.GetStorePath()
+	dataDir := filepath.Dir(storePath)
+	
+	return &RuntimePaths{
+		DataDir: dataDir,
+		PidFile: filepath.Join(dataDir, "goclaw.pid"),
+		LogFile: filepath.Join(dataDir, "goclaw.log"),
+	}, nil
 }
 
 // CLI defines the command-line interface
@@ -92,20 +108,34 @@ func (g *GatewayTUICmd) Run(ctx *Context) error {
 	return runGateway(ctx, true, g.Dev)
 }
 
-// StartCmd daemonizes the gateway
+// StartCmd daemonizes the gateway with supervision
 type StartCmd struct{}
 
 func (s *StartCmd) Run(ctx *Context) error {
+	// Load config to get runtime paths
+	paths, err := loadRuntimePaths()
+	if err != nil {
+		// Print user-friendly message (config.Load already includes setup hint)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return err
+	}
+	
+	// Ensure data directory exists
+	if err := os.MkdirAll(paths.DataDir, 0755); err != nil {
+		L_error("failed to create data directory", "error", err)
+		return err
+	}
+	
 	// Check if already running
-	if isRunning() {
+	if isRunningAt(paths.PidFile) {
 		L_error("gateway already running")
 		return fmt.Errorf("already running")
 	}
 
 	cntxt := &daemon.Context{
-		PidFileName: pidFile(),
+		PidFileName: paths.PidFile,
 		PidFilePerm: 0644,
-		LogFileName: logFile(),
+		LogFileName: paths.LogFile,
 		LogFilePerm: 0640,
 		WorkDir:     "./",
 		Umask:       027,
@@ -117,21 +147,31 @@ func (s *StartCmd) Run(ctx *Context) error {
 	}
 	if d != nil {
 		// Parent process
-		L_info("gateway started", "pid", d.Pid)
+		L_info("gateway started", "pid", d.Pid, "dataDir", paths.DataDir)
 		return nil
 	}
-	// Child process continues
+	// Child process continues as supervisor
 	defer cntxt.Release()
 
-	L_info("daemon started", "pid", os.Getpid())
-	return runGateway(ctx, false, false) // daemon never uses TUI or dev mode
+	L_info("supervisor: started", "pid", os.Getpid(), "dataDir", paths.DataDir)
+	
+	// Run supervisor loop (spawns gateway subprocesses)
+	sup := supervisor.New(paths.DataDir)
+	return sup.Run()
 }
 
 // StopCmd stops the daemon
 type StopCmd struct{}
 
 func (s *StopCmd) Run(ctx *Context) error {
-	pid, running := getPid()
+	// Load config to get runtime paths
+	paths, err := loadRuntimePaths()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return err
+	}
+	
+	pid, running := getPidFromFile(paths.PidFile)
 	if !running {
 		L_info("gateway not running")
 		return nil
@@ -148,7 +188,7 @@ func (s *StopCmd) Run(ctx *Context) error {
 	}
 
 	L_info("gateway stopped", "pid", pid)
-	os.Remove(pidFile())
+	os.Remove(paths.PidFile)
 	return nil
 }
 
@@ -156,13 +196,85 @@ func (s *StopCmd) Run(ctx *Context) error {
 type StatusCmd struct{}
 
 func (s *StatusCmd) Run(ctx *Context) error {
-	pid, running := getPid()
-	if running {
-		L_info("gateway running", "pid", pid)
-	} else {
-		L_info("gateway not running")
+	// Load config to get runtime paths
+	paths, err := loadRuntimePaths()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return err
 	}
+	
+	pid, running := getPidFromFile(paths.PidFile)
+	
+	if !running {
+		L_info("gateway not running")
+		return nil
+	}
+	
+	// Load supervisor state
+	state, err := supervisor.LoadState(paths.DataDir)
+	
+	if err != nil {
+		// Fall back to basic status if supervisor.json not available
+		L_info("gateway running", "pid", pid)
+		return nil
+	}
+	
+	// Calculate uptime
+	uptime := time.Since(state.StartedAt).Round(time.Second)
+	
+	// Format status output
+	fmt.Println("Gateway:  running")
+	if state.GatewayPID > 0 {
+		fmt.Printf("PID:      %d (supervisor), %d (gateway)\n", state.PID, state.GatewayPID)
+	} else {
+		fmt.Printf("PID:      %d (supervisor)\n", state.PID)
+	}
+	fmt.Printf("Uptime:   %s\n", formatDuration(uptime))
+	
+	if state.CrashCount > 0 {
+		lastCrash := "unknown"
+		if state.LastCrashAt != nil {
+			lastCrash = formatTimeAgo(*state.LastCrashAt)
+		}
+		fmt.Printf("Crashes:  %d this session (last: %s)\n", state.CrashCount, lastCrash)
+	} else {
+		fmt.Println("Crashes:  0 this session")
+	}
+	
 	return nil
+}
+
+// formatDuration formats a duration in human-readable form
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	hours := int(d.Hours())
+	mins := int(d.Minutes()) % 60
+	if hours >= 24 {
+		days := hours / 24
+		hours = hours % 24
+		return fmt.Sprintf("%dd%dh%dm", days, hours, mins)
+	}
+	return fmt.Sprintf("%dh%dm", hours, mins)
+}
+
+// formatTimeAgo formats a time as "X ago"
+func formatTimeAgo(t time.Time) string {
+	d := time.Since(t)
+	if d < time.Minute {
+		return "just now"
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 }
 
 // VersionCmd shows version info
@@ -1732,14 +1844,14 @@ func runTUI(ctx context.Context, gw *gateway.Gateway, users *user.Registry, show
 	return tui.Run(ctx, gw, owner, showLogs)
 }
 
-// getPid returns the pid and whether the process is running
-func getPid() (int, bool) {
-	pidBytes, err := os.ReadFile(pidFile())
+// getPidFromFile returns the pid and whether the process is running
+func getPidFromFile(pidFile string) (int, bool) {
+	pidBytes, err := os.ReadFile(pidFile)
 	if err != nil {
 		return 0, false
 	}
 
-	pid, err := strconv.Atoi(string(pidBytes))
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
 	if err != nil {
 		return 0, false
 	}
@@ -1752,16 +1864,16 @@ func getPid() (int, bool) {
 
 	err = process.Signal(syscall.Signal(0))
 	if err != nil {
-		os.Remove(pidFile())
+		os.Remove(pidFile)
 		return pid, false
 	}
 
 	return pid, true
 }
 
-// isRunning checks if gateway is already running
-func isRunning() bool {
-	_, running := getPid()
+// isRunningAt checks if gateway is already running using the given pid file
+func isRunningAt(pidFile string) bool {
+	_, running := getPidFromFile(pidFile)
 	return running
 }
 

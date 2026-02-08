@@ -27,6 +27,10 @@ type Message struct {
 	ToolInput json.RawMessage   `json:"toolInput,omitempty"`   // for tool_use
 	Images    []ImageAttachment `json:"images,omitempty"`      // Image attachments (for multimodal)
 	Thinking  string            `json:"thinking,omitempty"`    // Reasoning/thinking content (Kimi, Deepseek, etc.)
+
+	// Supervision metadata (for guidance/ghostwriting interventions)
+	Supervisor       string `json:"supervisor,omitempty"`       // Username/ID of supervisor who intervened
+	InterventionType string `json:"interventionType,omitempty"` // "guidance" or "ghostwrite"
 }
 
 // HasImages returns true if the message contains any images

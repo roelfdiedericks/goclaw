@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
@@ -28,6 +29,7 @@ type HTTPChannel struct {
 type GatewayRunner interface {
 	RunAgent(ctx context.Context, req gateway.AgentRequest, events chan<- gateway.AgentEvent) error
 	AgentIdentity() *config.AgentIdentityConfig
+	SupervisionConfig() *config.SupervisionConfig
 }
 
 const maxEventBuffer = 200 // Keep last N events per session for replay
@@ -142,10 +144,8 @@ func (c *HTTPChannel) HasUser(u *user.User) bool {
 	return u != nil && u.HasHTTPAuth()
 }
 
-// SendAgentResponse sends an agent response to a user's HTTP sessions.
-// Used by supervision to deliver responses triggered by guidance.
-// Sends start event (typing indicator) then done event (response).
-func (c *HTTPChannel) SendAgentResponse(ctx context.Context, u *user.User, response string) error {
+// getSessionsForUser returns all SSE sessions for a given user
+func (c *HTTPChannel) getSessionsForUser(u *user.User) []*SSESession {
 	if u == nil {
 		return nil
 	}
@@ -153,37 +153,121 @@ func (c *HTTPChannel) SendAgentResponse(ctx context.Context, u *user.User, respo
 	c.sessionsMu.RLock()
 	defer c.sessionsMu.RUnlock()
 
-	// Send start event first (triggers typing indicator on client)
-	startEvent := SSEEvent{
-		Event: "start",
-		Data: map[string]string{
-			"runId":  "supervision",
-			"source": "supervision",
-		},
-	}
-
-	// Send done event (delivers response, hides typing)
-	doneEvent := SSEEvent{
-		Event: "done",
-		Data: map[string]string{
-			"runId":     "supervision",
-			"finalText": response,
-		},
-	}
-
-	sent := 0
+	var sessions []*SSESession
 	for _, sess := range c.sessions {
-		if sess.User == nil || sess.User.ID != u.ID {
-			continue
+		if sess.User != nil && sess.User.ID == u.ID {
+			sessions = append(sessions, sess)
 		}
-		sess.SendEvent(startEvent)
-		sess.SendEvent(doneEvent)
-		sent++
+	}
+	return sessions
+}
+
+// InjectMessage handles message injection for supervision (guidance/ghostwriting).
+//
+// If invokeLLM is true (guidance):
+//   - Triggers agent run, streams events through normal SSE path
+//   - User sees typing indicator, streaming text, tool calls, final response
+//
+// If invokeLLM is false (ghostwrite):
+//   - Delivers message directly with typing delay
+//   - No LLM invocation
+func (c *HTTPChannel) InjectMessage(ctx context.Context, u *user.User, sessionKey, message string, invokeLLM bool) error {
+	if c.gateway == nil {
+		return fmt.Errorf("gateway not configured")
+	}
+	if u == nil {
+		return nil
 	}
 
-	if sent > 0 {
-		L_info("http: sent agent response", "user", u.ID, "sessions", sent, "responseLen", len(response))
+	// Find all SSE sessions for this user
+	sessions := c.getSessionsForUser(u)
+	if len(sessions) == 0 {
+		L_debug("http: inject: no active sessions for user", "user", u.ID, "invokeLLM", invokeLLM)
+		return nil // No active sessions, nothing to deliver
 	}
+
+	L_info("http: inject message", "user", u.ID, "sessionKey", sessionKey, "invokeLLM", invokeLLM, "sessions", len(sessions), "messageLen", len(message))
+
+	if invokeLLM {
+		// Guidance: run agent and stream events to user's sessions
+		// The message is already in the session context (added by gateway)
+		events := make(chan gateway.AgentEvent, 100)
+
+		// Create agent request - no UserMsg since it's already in session
+		req := gateway.AgentRequest{
+			User:           u,
+			Source:         "http",
+			SessionID:      sessionKey,      // Explicit session key
+			SkipAddMessage: true,            // Message already added by gateway.InjectMessage
+			// UserMsg intentionally empty - message already in session
+		}
+
+		// Use background context so agent keeps running after this returns
+		agentCtx, agentCancel := context.WithCancel(context.Background())
+
+		// Run agent in background
+		go func() {
+			defer agentCancel()
+			err := c.gateway.RunAgent(agentCtx, req, events)
+			if err != nil {
+				L_error("http: inject agent run failed", "user", u.ID, "error", err)
+			}
+		}()
+
+		// Stream events to all user's sessions
+		go func() {
+			for event := range events {
+				sseEvent := c.convertEvent(event)
+				if sseEvent != nil {
+					for _, sess := range sessions {
+						sess.SendEvent(*sseEvent)
+					}
+				}
+			}
+			L_debug("http: inject event stream ended", "user", u.ID)
+		}()
+
+	} else {
+		// Ghostwrite: deliver message directly with typing simulation
+		runID := fmt.Sprintf("run_%d", time.Now().UnixNano())
+
+		// Get typing delay from config
+		typingDelay := 500 * time.Millisecond // default
+		if cfg := c.gateway.SupervisionConfig(); cfg != nil && cfg.Ghostwriting.TypingDelayMs > 0 {
+			typingDelay = time.Duration(cfg.Ghostwriting.TypingDelayMs) * time.Millisecond
+		}
+
+		// Send start event (typing indicator)
+		startEvent := SSEEvent{
+			Event: "start",
+			Data: gateway.EventAgentStart{
+				RunID:      runID,
+				Source:     "http",
+				SessionKey: sessionKey,
+			},
+		}
+		for _, sess := range sessions {
+			sess.SendEvent(startEvent)
+		}
+
+		// Wait for typing delay (simulates thinking/typing)
+		time.Sleep(typingDelay)
+
+		// Send done event with message
+		doneEvent := SSEEvent{
+			Event: "done",
+			Data: gateway.EventAgentEnd{
+				RunID:     runID,
+				FinalText: message,
+			},
+		}
+		for _, sess := range sessions {
+			sess.SendEvent(doneEvent)
+		}
+
+		L_info("http: inject ghostwrite delivered", "user", u.ID, "sessions", len(sessions), "messageLen", len(message))
+	}
+
 	return nil
 }
 

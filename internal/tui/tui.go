@@ -649,14 +649,16 @@ func truncateMsg(s string, maxLen int) string {
 type TUIChannel struct {
 	mirrorChan chan<- mirrorMsg
 	user       *user.User
+	gateway    *gateway.Gateway
 	mu         sync.Mutex
 }
 
 // NewTUIChannel creates a Channel wrapper for the TUI
-func NewTUIChannel(mirrorChan chan<- mirrorMsg, u *user.User) *TUIChannel {
+func NewTUIChannel(mirrorChan chan<- mirrorMsg, u *user.User, gw *gateway.Gateway) *TUIChannel {
 	return &TUIChannel{
 		mirrorChan: mirrorChan,
 		user:       u,
+		gateway:    gw,
 	}
 }
 
@@ -702,15 +704,73 @@ func (c *TUIChannel) HasUser(u *user.User) bool {
 	return c.user != nil && u != nil && c.user.ID == u.ID
 }
 
-// SendAgentResponse sends an agent response to the TUI.
-// Used by supervision to deliver responses triggered by guidance.
-func (c *TUIChannel) SendAgentResponse(ctx context.Context, u *user.User, response string) error {
+// InjectMessage handles message injection for supervision (guidance/ghostwriting).
+//
+// If invokeLLM is true (guidance):
+//   - Triggers agent run, waits for completion, displays response
+//
+// If invokeLLM is false (ghostwrite):
+//   - Displays message directly
+func (c *TUIChannel) InjectMessage(ctx context.Context, u *user.User, sessionKey, message string, invokeLLM bool) error {
 	if c.user == nil || u == nil || c.user.ID != u.ID {
 		return nil // Not the TUI user
 	}
 
-	// Send as a mirror (TUI handles display)
-	return c.SendMirror(ctx, "supervision", "", response)
+	logging.L_info("tui: inject message", "user", u.ID, "sessionKey", sessionKey, "invokeLLM", invokeLLM, "messageLen", len(message))
+
+	if invokeLLM {
+		// Guidance: run agent and display response
+		if c.gateway == nil {
+			logging.L_warn("tui: inject with invokeLLM=true but no gateway")
+			return nil
+		}
+
+		events := make(chan gateway.AgentEvent, 100)
+
+		// Create agent request - no UserMsg since it's already in session
+		req := gateway.AgentRequest{
+			User:           u,
+			Source:         "tui",
+			SessionID:      sessionKey,      // Explicit session key
+			SkipAddMessage: true,            // Message already added by gateway.InjectMessage
+			// UserMsg intentionally empty - message already in session
+		}
+
+		// Collect final text from events
+		var finalText string
+		done := make(chan struct{})
+
+		go func() {
+			defer close(done)
+			for event := range events {
+				if e, ok := event.(gateway.EventAgentEnd); ok {
+					finalText = e.FinalText
+				}
+			}
+		}()
+
+		// Run agent (blocking)
+		err := c.gateway.RunAgent(ctx, req, events)
+		if err != nil {
+			logging.L_error("tui: inject agent run failed", "user", u.ID, "error", err)
+			return err
+		}
+
+		// Wait for event processing to complete
+		<-done
+
+		// Display the response
+		if finalText != "" {
+			return c.SendMirror(ctx, "guidance", "", finalText)
+		}
+
+	} else {
+		// Ghostwrite: display message directly
+		// TUI doesn't need typing delay - it's not a real-time chat interface
+		return c.SendMirror(ctx, "ghostwrite", "", message)
+	}
+
+	return nil
 }
 
 // Run starts the TUI and returns a Channel that can receive mirrors
@@ -719,7 +779,7 @@ func Run(ctx context.Context, gw *gateway.Gateway, u *user.User, showLogs bool) 
 	m := New(gw, u, showLogs)
 
 	// Create TUI channel for receiving mirrors and register it with gateway
-	tuiChannel := NewTUIChannel(m.mirrorChan, u)
+	tuiChannel := NewTUIChannel(m.mirrorChan, u, gw)
 	gw.RegisterChannel(tuiChannel)
 
 	// Set up log hook to forward logs to TUI (exclusive - suppresses stderr)

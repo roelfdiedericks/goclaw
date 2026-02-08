@@ -51,26 +51,17 @@ func ValidateUsername(username string) error {
 	return nil
 }
 
-// LoadUsers loads users from users.json with same priority as goclaw.json:
-// 1. ./users.json (current directory - highest priority, for development)
-// 2. ~/.goclaw/users.json (fresh install location)
-// 3. ~/.openclaw/goclaw/users.json (side-by-side with OpenClaw)
-// 4. ~/.openclaw/workspace/goclaw/users.json (legacy workspace location)
-// 5. ~/.openclaw/users.json (legacy global fallback)
+// LoadUsers loads users from users.json
+// Search order (highest priority first):
+// 1. ./users.json (current directory - for development)
+// 2. ~/.goclaw/users.json (primary location)
 func LoadUsers() (UsersConfig, error) {
 	home, _ := os.UserHomeDir()
 	goclawDir := filepath.Join(home, ".goclaw")
-	openclawDir := filepath.Join(home, ".openclaw")
-	openclawGoclawDir := filepath.Join(openclawDir, "goclaw")
-	workspaceGoclaw := filepath.Join(openclawDir, "workspace", "goclaw")
 
-	// Priority order (highest first) - mirrors goclaw.json search
 	paths := []string{
-		"users.json",                                  // current directory
-		filepath.Join(goclawDir, "users.json"),        // ~/.goclaw/ (fresh install)
-		filepath.Join(openclawGoclawDir, "users.json"), // ~/.openclaw/goclaw/ (side-by-side)
-		filepath.Join(workspaceGoclaw, "users.json"),  // ~/.openclaw/workspace/goclaw/ (legacy)
-		filepath.Join(openclawDir, "users.json"),      // ~/.openclaw/ (legacy global)
+		"users.json",                           // current directory
+		filepath.Join(goclawDir, "users.json"), // ~/.goclaw/
 	}
 
 	var users UsersConfig
@@ -151,21 +142,14 @@ func SaveUsers(users UsersConfig, path string) error {
 }
 
 // GetUsersFilePath returns the path where users.json should be saved
-// Checks same locations as LoadUsers, returns first existing or default
 func GetUsersFilePath() string {
 	home, _ := os.UserHomeDir()
 	goclawDir := filepath.Join(home, ".goclaw")
-	openclawDir := filepath.Join(home, ".openclaw")
-	openclawGoclawDir := filepath.Join(openclawDir, "goclaw")
-	workspaceGoclaw := filepath.Join(openclawDir, "workspace", "goclaw")
 
-	// Check existing files in priority order
+	// Check existing files
 	paths := []string{
-		"users.json",                                  // current directory
-		filepath.Join(goclawDir, "users.json"),        // ~/.goclaw/
-		filepath.Join(openclawGoclawDir, "users.json"), // ~/.openclaw/goclaw/
-		filepath.Join(workspaceGoclaw, "users.json"),  // ~/.openclaw/workspace/goclaw/
-		filepath.Join(openclawDir, "users.json"),      // ~/.openclaw/
+		"users.json",                           // current directory
+		filepath.Join(goclawDir, "users.json"), // ~/.goclaw/
 	}
 
 	for _, path := range paths {
@@ -175,10 +159,7 @@ func GetUsersFilePath() string {
 		}
 	}
 
-	// Default: if OpenClaw exists, use side-by-side path; otherwise fresh install path
-	if _, err := os.Stat(filepath.Join(openclawDir, "openclaw.json")); err == nil {
-		return filepath.Join(openclawGoclawDir, "users.json")
-	}
+	// Default: ~/.goclaw/
 	return filepath.Join(goclawDir, "users.json")
 }
 

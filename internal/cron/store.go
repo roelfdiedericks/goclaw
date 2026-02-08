@@ -12,16 +12,20 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
-// DefaultJobsPath returns the default path for jobs.json.
+// DefaultJobsPath returns the fallback path for jobs.json.
+// Note: The gateway resolves cron paths based on workspace location:
+//   - Side-by-side with OpenClaw: ~/.openclaw/cron/jobs.json
+//   - Standalone: ~/.goclaw/cron/jobs.json
 func DefaultJobsPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".openclaw", "cron", "jobs.json")
+	return filepath.Join(home, ".goclaw", "cron", "jobs.json")
 }
 
-// DefaultRunsDir returns the default directory for run logs.
+// DefaultRunsDir returns the fallback directory for run logs.
+// Note: The gateway resolves cron paths based on workspace location.
 func DefaultRunsDir() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".openclaw", "cron", "runs")
+	return filepath.Join(home, ".goclaw", "cron", "runs")
 }
 
 // Store manages cron job persistence.

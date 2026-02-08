@@ -176,7 +176,12 @@ $(document).ready(function() {
         try {
             var history = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
             history.forEach(function(msg) {
-                renderMessage(msg.role, msg.content, false);
+                // Pass supervision metadata if present
+                renderMessage(msg.role, msg.content, false, null, {
+                    supervisor: msg.supervisor,
+                    interventionType: msg.interventionType,
+                    source: msg.source
+                });
             });
             $messages.scrollTop($messages[0].scrollHeight);
         } catch (e) {
@@ -195,14 +200,27 @@ $(document).ready(function() {
                 else if ($msg.hasClass('error')) role = 'error';
                 else if ($msg.hasClass('mirror-user')) role = 'mirror-user';
                 else if ($msg.hasClass('mirror-assistant')) role = 'mirror-assistant';
+                else if ($msg.hasClass('guidance')) role = 'guidance';
+                else if ($msg.hasClass('ghostwrite')) role = 'ghostwrite';
                 // Get raw text content (strip HTML for storage)
                 var content = $msg.find('.bubble').text();
                 // Also store raw content in data attribute for markdown messages
                 var rawContent = $msg.data('raw-content');
-                messages.push({
+                
+                var msgData = {
                     role: role,
                     content: rawContent || content
-                });
+                };
+                
+                // Store supervision metadata if present
+                var supervisor = $msg.data('supervisor');
+                var interventionType = $msg.data('intervention-type');
+                var source = $msg.data('source');
+                if (supervisor) msgData.supervisor = supervisor;
+                if (interventionType) msgData.interventionType = interventionType;
+                if (source) msgData.source = source;
+                
+                messages.push(msgData);
             });
             // Keep only last MAX_MESSAGES
             if (messages.length > MAX_MESSAGES) {
@@ -221,10 +239,15 @@ $(document).ready(function() {
     }
 
     // Render a message (without saving - used for loading history)
-    function renderMessage(role, content, save, imageUrl) {
+    // metadata: { supervisor, interventionType, source } - optional supervision metadata
+    function renderMessage(role, content, save, imageUrl, metadata) {
+        metadata = metadata || {};
+        
         var roleClass = 'assistant';
         if (role === 'user') roleClass = 'user';
         else if (role === 'error') roleClass = 'error';
+        else if (role === 'guidance') roleClass = 'supervision guidance';
+        else if (role === 'ghostwrite') roleClass = 'supervision ghostwrite';
         else if (role.startsWith('mirror-')) roleClass = 'mirror ' + role;
         
         var $msg = $('<div class="message ' + roleClass + '">' +
@@ -234,6 +257,11 @@ $(document).ready(function() {
         // Store raw content for history saving
         $msg.data('raw-content', content);
         
+        // Store supervision metadata for history saving
+        if (metadata.supervisor) $msg.data('supervisor', metadata.supervisor);
+        if (metadata.interventionType) $msg.data('intervention-type', metadata.interventionType);
+        if (metadata.source) $msg.data('source', metadata.source);
+        
         var $bubble = $msg.find('.bubble');
         
         // Add inline image if provided
@@ -241,12 +269,24 @@ $(document).ready(function() {
             $bubble.append('<img src="' + imageUrl + '" class="inline-image" style="max-width: 300px; max-height: 200px; border-radius: 0.5rem; display: block; margin-bottom: 0.5rem;">');
         }
         
-        // Render markdown for all messages (users can send code snippets too)
+        // Render content with supervision label if applicable
         if (content) {
+            var displayContent = content;
+            
+            // For supervision messages, prepend the label if not already present
+            if ((role === 'guidance' || role === 'ghostwrite') && metadata.supervisor) {
+                var label = role === 'guidance' ? 'Guidance' : 'Ghostwrite';
+                var prefix = '[' + label + ':' + metadata.supervisor + '] ';
+                // Only add prefix if content doesn't already start with it
+                if (!content.startsWith('[' + label + ':')) {
+                    displayContent = prefix + content;
+                }
+            }
+            
             if (role === 'error') {
-                $bubble.append($('<span>').text(content));
+                $bubble.append($('<span>').text(displayContent));
             } else {
-                $bubble.append(renderMarkdown(content));
+                $bubble.append(renderMarkdown(displayContent));
             }
         }
         $messages.append($msg);
@@ -295,11 +335,26 @@ $(document).ready(function() {
             if (!isSupervising) return;
             var data = JSON.parse(e.data);
             
-            // Render based on role
-            if (data.role === 'user') {
-                renderMessage('user', data.content, false);
+            // Build metadata for supervision tracking
+            var metadata = {
+                supervisor: data.supervisor,
+                interventionType: data.interventionType,
+                source: data.source
+            };
+            
+            // Detect supervision messages by interventionType or source
+            var isGuidance = data.interventionType === 'guidance' || data.source === 'guidance';
+            var isGhostwrite = data.interventionType === 'ghostwrite' || data.source === 'ghostwrite';
+            
+            // Render based on role and supervision status
+            if (isGuidance) {
+                renderMessage('guidance', data.content, false, null, metadata);
+            } else if (isGhostwrite) {
+                renderMessage('ghostwrite', data.content, false, null, metadata);
+            } else if (data.role === 'user') {
+                renderMessage('user', data.content, false, null, metadata);
             } else if (data.role === 'assistant') {
-                renderMessage('assistant', data.content, false);
+                renderMessage('assistant', data.content, false, null, metadata);
             } else if (data.role === 'tool_use' || data.role === 'tool_result') {
                 // Tool messages are debug content
                 var $tool = $('<div class="tool-call debug-content">' +
@@ -434,24 +489,29 @@ $(document).ready(function() {
             appendMessage('system', data.message);
         });
         
-        // Handle agent_response (direct delivery from supervision/guidance)
-        eventSource.addEventListener('agent_response', function(e) {
-            var data = JSON.parse(e.data);
-            if (data.content) {
-                appendMessage('assistant', data.content);
-                saveHistory();
-            }
-        });
-        
         // Handle user_message (real-time user messages in supervision mode)
         eventSource.addEventListener('user_message', function(e) {
             if (!isSupervising) return;
             var data = JSON.parse(e.data);
             if (data.content) {
-                // Show as user message with source indicator
-                var displayContent = data.source ? '[' + data.source + '] ' + data.content : data.content;
-                appendMessage('user', displayContent);
-                saveHistory();
+                // Build metadata for supervision tracking
+                var metadata = {
+                    supervisor: data.supervisor,
+                    interventionType: data.source, // source field contains intervention type for supervision events
+                    source: data.source
+                };
+                
+                // Check if this is a supervision intervention (guidance or ghostwrite)
+                if (data.source === 'guidance' || data.source === 'ghostwrite') {
+                    var roleClass = data.source; // 'guidance' or 'ghostwrite'
+                    // Content will get the label prefix in renderMessage based on metadata
+                    appendMessage(roleClass, data.content, null, metadata);
+                } else {
+                    // Regular user message with source indicator
+                    var displayContent = data.source ? '[' + data.source + '] ' + data.content : data.content;
+                    appendMessage('user', displayContent, null, metadata);
+                }
+                // saveHistory is called by appendMessage -> renderMessage
             }
         });
         
@@ -545,8 +605,8 @@ $(document).ready(function() {
         };
     }
     
-    function appendMessage(role, content, imageUrl) {
-        renderMessage(role, content, true, imageUrl);
+    function appendMessage(role, content, imageUrl, metadata) {
+        renderMessage(role, content, true, imageUrl, metadata);
         $messages.scrollTop($messages[0].scrollHeight);
     }
     
