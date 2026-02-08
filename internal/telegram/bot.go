@@ -442,6 +442,15 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 			L_debug("telegram: tool started", "tool", e.ToolName)
 			_ = c.Notify(tele.Typing)
 			
+			// Flush thinking buffer before showing tool (ensures thinking is complete)
+			if prefs.ShowThinking && thinkingBuf.Len() > 0 && thinkingMsg != nil {
+				thinkingText := fmt.Sprintf("💭 <i>%s</i>", html.EscapeString(thinkingBuf.String()))
+				_, err := b.bot.Edit(thinkingMsg, thinkingText, &tele.SendOptions{ParseMode: tele.ModeHTML})
+				if err != nil {
+					L_trace("telegram: thinking flush on tool start failed", "error", err)
+				}
+			}
+			
 			// Show tool start if thinking mode is on
 			if prefs.ShowThinking {
 				inputStr := string(e.Input)
@@ -510,12 +519,24 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 		case gateway.EventThinking:
 			L_debug("telegram: thinking", "contentLen", len(e.Content))
 			
-			// Final thinking content (batch mode) - show if thinking mode is on
-			// Only show if we didn't already stream deltas
-			if prefs.ShowThinking && e.Content != "" && thinkingBuf.Len() == 0 {
-				// Format as italic with thinking emoji prefix
+			// Final thinking content - always update/send with complete content
+			if prefs.ShowThinking && e.Content != "" {
 				thinkingText := fmt.Sprintf("💭 <i>%s</i>", html.EscapeString(e.Content))
-				_, _ = b.bot.Send(c.Chat(), thinkingText, &tele.SendOptions{ParseMode: tele.ModeHTML})
+				if thinkingMsg != nil {
+					// Update existing message with complete content
+					_, err := b.bot.Edit(thinkingMsg, thinkingText, &tele.SendOptions{ParseMode: tele.ModeHTML})
+					if err != nil {
+						L_trace("telegram: thinking final edit failed", "error", err)
+					}
+				} else {
+					// No streaming message exists, send new one
+					msg, err := b.bot.Send(c.Chat(), thinkingText, &tele.SendOptions{ParseMode: tele.ModeHTML})
+					if err != nil {
+						L_trace("telegram: thinking final send failed", "error", err)
+					} else {
+						thinkingMsg = msg
+					}
+				}
 			}
 
 		case gateway.EventAgentEnd:

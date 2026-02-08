@@ -144,6 +144,21 @@ func (s *Session) AddAssistantMessage(content string) {
 	s.UpdatedAt = time.Now()
 }
 
+// AddSystemMessage adds a system message to the session (for wake events, etc.)
+func (s *Session) AddSystemMessage(content string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.Messages = append(s.Messages, Message{
+		ID:        generateMessageID(),
+		Role:      "system",
+		Content:   content,
+		Source:    "wake",
+		Timestamp: time.Now(),
+	})
+	s.UpdatedAt = time.Now()
+}
+
 // AddSupervisionUserMessage adds a user message with supervision metadata (for guidance)
 func (s *Session) AddSupervisionUserMessage(content, source, supervisor, interventionType string) {
 	s.mu.Lock()

@@ -152,12 +152,18 @@ func (g *CheckpointGenerator) Generate(ctx context.Context, sess *Session, sessi
 	messages := sess.GetMessages()
 	usedModel := client.Model()
 
+	// Get configured maxInputTokens from registry (0 = use model context)
+	maxInputTokens := 0
+	if reg := llm.GetRegistry(); reg != nil {
+		maxInputTokens = reg.GetMaxInputTokens("summarization")
+	}
+
 	L_info("generating checkpoint",
 		"model", usedModel,
 		"tokens", sess.GetTotalTokens(),
 		"messages", len(sess.Messages))
 
-	checkpoint, err := GenerateCheckpointWithClient(ctx, client, messages, sess.GetTotalTokens())
+	checkpoint, err := GenerateCheckpointWithClient(ctx, client, messages, maxInputTokens)
 	if err != nil {
 		return fmt.Errorf("failed to generate checkpoint: %w", err)
 	}
@@ -341,6 +347,8 @@ func BuildMessagesForSummary(messages []Message, maxTokens int) string {
 	// Rough estimate: 1 token ≈ 4 characters
 	maxChars := maxTokens * 4
 	
+	L_info("compaction: building summary input", "messages", len(messages), "maxTokens", maxTokens, "maxChars", maxChars)
+	
 	// First pass: filter and truncate messages
 	type summaryMsg struct {
 		index   int
@@ -388,6 +396,7 @@ func BuildMessagesForSummary(messages []Message, maxTokens int) string {
 		for _, m := range filtered {
 			result += fmt.Sprintf("[%d] %s: %s\n\n", m.index+1, m.role, m.content)
 		}
+		L_info("compaction: summary input built (all messages)", "keptMessages", len(filtered), "resultChars", len(result))
 		return result
 	}
 	
@@ -417,6 +426,7 @@ func BuildMessagesForSummary(messages []Message, maxTokens int) string {
 		result += fmt.Sprintf("[%d] %s: %s\n\n", m.index+1, m.role, m.content)
 	}
 	
+	L_info("compaction: summary input built (truncated)", "keptMessages", len(kept), "totalMessages", len(filtered), "resultChars", len(result))
 	return result
 }
 

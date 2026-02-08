@@ -15,6 +15,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	gcontext "github.com/roelfdiedericks/goclaw/internal/context"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
+	"github.com/roelfdiedericks/goclaw/internal/hass"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
@@ -88,7 +89,8 @@ type Gateway struct {
 	commandHandler      *commands.Handler
 	skillManager        *skills.Manager
 	cronService         *cron.Service
-	lastOpenClawUserMsg string // Track user messages for mirroring
+	hassManager         *hass.Manager // Home Assistant event subscription manager
+	lastOpenClawUserMsg string        // Track user messages for mirroring
 }
 
 // Regex for detecting context overflow errors
@@ -191,6 +193,74 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 
 	// Summarization uses llm.GetRegistry() directly - no setup needed here
 	L_info("summarization: will use registry for lazy provider resolution")
+
+	// Set MaxTokens on primary session from agent provider and run proactive compaction if needed
+	// This MUST happen before any user messages are processed to prevent context overflow
+	if primary := g.sessions.GetPrimary(); primary != nil {
+		contextTokens := agentProvider.ContextTokens()
+		primary.SetMaxTokens(contextTokens)
+		L_debug("session: set context window from agent provider",
+			"contextTokens", contextTokens,
+			"totalTokens", primary.GetTotalTokens())
+
+		// Proactive startup compaction: if estimated tokens exceed 50% of context, compact immediately
+		// We use 50% because internal token estimates undercount by ~40% compared to actual API usage
+		// (e.g., internal 141k tokens = ~200k actual Anthropic tokens)
+		// This prevents the "first message fails" scenario when inheriting large sessions
+		proactiveThreshold := (contextTokens * 50) / 100
+		currentTokens := primary.GetTotalTokens()
+		if currentTokens > proactiveThreshold {
+			L_info("session: proactive startup compaction needed",
+				"currentTokens", currentTokens,
+				"threshold", proactiveThreshold,
+				"contextWindow", contextTokens,
+				"usage", fmt.Sprintf("%.1f%%", float64(currentTokens)/float64(contextTokens)*100))
+
+			// Keep compacting until we're under the target threshold
+			// This handles the case where 50% compaction isn't enough
+			targetTokens := (contextTokens * 40) / 100 // Target 40% of context after compaction
+			compactionRounds := 0
+			maxRounds := 3
+
+			for currentTokens > targetTokens && compactionRounds < maxRounds {
+				compactionRounds++
+				result, err := g.compactor.Compact(context.Background(), primary, primary.SessionFile)
+				if err != nil {
+					L_error("session: proactive startup compaction failed",
+						"round", compactionRounds,
+						"error", err)
+					break
+				}
+
+				newTokens := primary.GetTotalTokens()
+				L_info("session: proactive startup compaction round completed",
+					"round", compactionRounds,
+					"tokensBefore", currentTokens,
+					"tokensAfter", newTokens,
+					"messagesAfter", len(primary.Messages),
+					"model", result.Model)
+
+				if newTokens >= currentTokens {
+					// Compaction didn't reduce tokens - break to avoid infinite loop
+					L_warn("session: compaction didn't reduce tokens, stopping", "tokens", newTokens)
+					break
+				}
+				currentTokens = newTokens
+			}
+
+			if currentTokens <= targetTokens {
+				L_info("session: proactive compaction completed",
+					"finalTokens", currentTokens,
+					"targetTokens", targetTokens,
+					"rounds", compactionRounds)
+			} else {
+				L_warn("session: proactive compaction incomplete, tokens still high",
+					"finalTokens", currentTokens,
+					"targetTokens", targetTokens,
+					"rounds", compactionRounds)
+			}
+		}
+	}
 
 	// Initialize memory manager if enabled
 	// Memory manager now calls llm.GetRegistry() directly (cycle broken by types.ToolDefinition)
@@ -346,6 +416,24 @@ func (g *Gateway) MediaStore() *media.MediaStore {
 // MemoryManager returns the memory manager
 func (g *Gateway) MemoryManager() *memory.Manager {
 	return g.memoryManager
+}
+
+// HassManager returns the Home Assistant event subscription manager
+func (g *Gateway) HassManager() *hass.Manager {
+	return g.hassManager
+}
+
+// SetHassManager sets the Home Assistant event subscription manager
+func (g *Gateway) SetHassManager(m *hass.Manager) {
+	g.hassManager = m
+}
+
+// StartHassManager starts the Home Assistant event subscription manager
+func (g *Gateway) StartHassManager(ctx context.Context) error {
+	if g.hassManager == nil {
+		return fmt.Errorf("Home Assistant manager not configured")
+	}
+	return g.hassManager.Start(ctx)
 }
 
 // AgentIdentity returns the agent identity configuration
@@ -760,9 +848,39 @@ func (g *Gateway) GetOwnerUserID() string {
 	return owner.ID
 }
 
+// InjectSystemEvent implements cron.GatewayRunner interface.
+// It injects a system event message into the primary session.
+func (g *Gateway) InjectSystemEvent(ctx context.Context, text string) error {
+	primary := g.sessions.GetPrimary()
+	if primary == nil {
+		return fmt.Errorf("no primary session")
+	}
+
+	// Add as a system message (role=system, source=wake)
+	primary.AddSystemMessage(text)
+	L_info("gateway: system event injected", "textLen", len(text))
+	return nil
+}
+
+// InvokeAgent implements types.EventInjector interface.
+// It runs the agent with a prompt and delivers the response to channels.
+// The invocation is ephemeral and not persisted to session history.
+// If the agent responds with "EVENT_OK", the response is suppressed.
+func (g *Gateway) InvokeAgent(ctx context.Context, prompt string) error {
+	if g.cronService == nil {
+		return fmt.Errorf("cron service not initialized")
+	}
+	return g.cronService.InvokeAgent(ctx, prompt)
+}
+
 // Shutdown gracefully shuts down the gateway
 func (g *Gateway) Shutdown() {
 	L_info("gateway: shutting down")
+
+	// Stop Home Assistant manager
+	if g.hassManager != nil {
+		g.hassManager.Stop()
+	}
 
 	// Stop cron service
 	g.StopCron()
