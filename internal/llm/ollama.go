@@ -486,7 +486,9 @@ func (p *OllamaProvider) StreamMessage(
 	toolDefs []types.ToolDefinition,
 	systemPrompt string,
 	onDelta func(delta string),
+	opts *StreamOptions,
 ) (*Response, error) {
+	_ = opts // Ollama doesn't support streaming chat
 	return nil, ErrNotSupported{Provider: p.name, Operation: "StreamMessage (use Anthropic or OpenAI for agent)"}
 }
 

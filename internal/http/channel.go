@@ -199,6 +199,7 @@ func (c *HTTPChannel) InjectMessage(ctx context.Context, u *user.User, sessionKe
 			Source:         "http",
 			SessionID:      sessionKey,      // Explicit session key
 			SkipAddMessage: true,            // Message already added by gateway.InjectMessage
+			EnableThinking: u.Thinking,      // Extended thinking based on user preference
 			// UserMsg intentionally empty - message already in session
 		}
 
@@ -458,10 +459,11 @@ func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *
 
 	// Create agent request
 	req := gateway.AgentRequest{
-		User:    u,
-		Source:  "http",
-		UserMsg: message,
-		Images:  images,
+		User:           u,
+		Source:         "http",
+		UserMsg:        message,
+		Images:         images,
+		EnableThinking: u.Thinking, // Extended thinking based on user preference
 	}
 
 	// Create events channel

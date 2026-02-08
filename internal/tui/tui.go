@@ -472,11 +472,12 @@ func (m Model) View() string {
 // startAgent starts an agent run and returns the command to wait for events
 func (m *Model) startAgent(text string) tea.Cmd {
 	req := gateway.AgentRequest{
-		User:    m.user,
-		Source:  "tui",
-		ChatID:  "",
-		IsGroup: false,
-		UserMsg: text,
+		User:           m.user,
+		Source:         "tui",
+		ChatID:         "",
+		IsGroup:        false,
+		UserMsg:        text,
+		EnableThinking: m.user.Thinking, // Extended thinking based on user preference
 	}
 
 	events := make(chan gateway.AgentEvent, 100)
@@ -733,6 +734,7 @@ func (c *TUIChannel) InjectMessage(ctx context.Context, u *user.User, sessionKey
 			Source:         "tui",
 			SessionID:      sessionKey,      // Explicit session key
 			SkipAddMessage: true,            // Message already added by gateway.InjectMessage
+			EnableThinking: u.Thinking,      // Extended thinking based on user preference
 			// UserMsg intentionally empty - message already in session
 		}
 
