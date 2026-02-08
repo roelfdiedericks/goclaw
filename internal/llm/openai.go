@@ -19,16 +19,17 @@ import (
 // Supports streaming, native tool calling, vision (images), and embeddings.
 // Works with OpenAI, Kimi, LM Studio, OpenRouter, and other compatible APIs via BaseURL.
 type OpenAIProvider struct {
-	name         string // Provider instance name (e.g., "openai", "kimi", "lmstudio")
-	client       *openai.Client
-	model        string
-	maxTokens    int
-	apiKey       string // Stored for cloning
-	baseURL      string // Custom API base URL
-	metricPrefix string // e.g., "llm/openai/kimi/kimi-k2.5"
+	name          string // Provider instance name (e.g., "openai", "kimi", "lmstudio")
+	client        *openai.Client
+	model         string
+	maxTokens     int
+	contextTokens int    // Context window size override (0 = auto-detect from model name)
+	apiKey        string // Stored for cloning
+	baseURL       string // Custom API base URL
+	metricPrefix  string // e.g., "llm/openai/kimi/kimi-k2.5"
 
 	// Embedding support
-	embeddingOnly      bool // If true, only used for embeddings (not chat)
+	embeddingOnly       bool // If true, only used for embeddings (not chat)
 	embeddingDimensions int  // Cached embedding dimensions (detected on first use)
 
 	// Thread-safe availability tracking
@@ -73,15 +74,16 @@ func NewOpenAIProvider(name string, cfg ProviderConfig) (*OpenAIProvider, error)
 	if displayURL == "" {
 		displayURL = "(default)"
 	}
-	L_debug("openai provider created", "name", name, "baseURL", displayURL, "maxTokens", maxTokens)
+	L_debug("openai provider created", "name", name, "baseURL", displayURL, "maxTokens", maxTokens, "contextTokens", cfg.ContextTokens)
 
 	return &OpenAIProvider{
-		name:      name,
-		client:    client,
-		model:     "", // Model set via WithModel()
-		maxTokens: maxTokens,
-		apiKey:    cfg.APIKey,
-		baseURL:   baseURL,
+		name:          name,
+		client:        client,
+		model:         "", // Model set via WithModel()
+		maxTokens:     maxTokens,
+		contextTokens: cfg.ContextTokens,
+		apiKey:        cfg.APIKey,
+		baseURL:       baseURL,
 	}, nil
 }
 
@@ -179,8 +181,12 @@ func (p *OpenAIProvider) IsAvailable() bool {
 	return true
 }
 
-// ContextTokens returns the model's context window size in tokens
+// ContextTokens returns the model's context window size in tokens.
+// Uses configured contextTokens if set, otherwise auto-detects from model name.
 func (p *OpenAIProvider) ContextTokens() int {
+	if p.contextTokens > 0 {
+		return p.contextTokens
+	}
 	return getOpenAIModelContextWindow(p.model)
 }
 
@@ -304,8 +310,9 @@ func getOpenAIModelContextWindow(model string) int {
 	if strings.Contains(model, "gpt-3.5") {
 		return 16385 // GPT-3.5 Turbo
 	}
-	// Default
-	return 128000
+	// Default: conservative limit for unknown/local models
+	// Use contextTokens in provider config to override for specific models
+	return 4096
 }
 
 // SimpleMessage sends a simple user message and returns the response text.

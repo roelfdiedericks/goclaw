@@ -171,6 +171,12 @@ func (m *CompactionManager) ShouldCompact(sess *Session) bool {
 	// Check token threshold
 	maxTokens := sess.GetMaxTokens()
 	if maxTokens == 0 {
+		// MaxTokens should be set at startup for primary session
+		// If it's 0 here, we can only rely on message count compaction
+		L_debug("compaction: maxTokens not set, skipping token-based check",
+			"session", sess.Key,
+			"messages", messageCount,
+			"totalTokens", sess.GetTotalTokens())
 		return false
 	}
 
@@ -369,11 +375,17 @@ func (m *CompactionManager) generateSummary(ctx context.Context, messages []Mess
 		return "", false, "", fmt.Errorf("no LLM client available for summary generation")
 	}
 
+	// Get configured maxInputTokens from registry (0 = use model context)
+	maxInputTokens := 0
+	if reg := llm.GetRegistry(); reg != nil {
+		maxInputTokens = reg.GetMaxInputTokens("summarization")
+	}
+
 	model := client.Model()
 	L_info("compaction: generating summary", "model", model, "messages", len(messages))
 	startTime := time.Now()
 
-	summary, err := GenerateSummaryWithClient(ctx, client, messages, 4000)
+	summary, err := GenerateSummaryWithClient(ctx, client, messages, maxInputTokens)
 	elapsed := time.Since(startTime)
 
 	if err != nil {

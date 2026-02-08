@@ -26,13 +26,14 @@ func (t *CronTool) Name() string {
 func (t *CronTool) Description() string {
 	return `Manage scheduled tasks (cron jobs). Actions:
 - status: Get cron service status
-- list: List all jobs (shows running state)
+- list: List all jobs as JSON (includes full payload)
 - add: Create a new job
 - update: Modify an existing job
 - remove: Delete a job
 - run: Execute a job immediately
 - runs: View job execution history
-- kill: Clear stuck running state for a job`
+- kill: Clear stuck running state for a job
+- wake: Send wake event (injects text as system event, optionally triggers immediate heartbeat)`
 }
 
 func (t *CronTool) Schema() map[string]interface{} {
@@ -41,7 +42,7 @@ func (t *CronTool) Schema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{"status", "list", "add", "update", "remove", "run", "runs", "kill"},
+				"enum":        []string{"status", "list", "add", "update", "remove", "run", "runs", "kill", "wake"},
 				"description": "Action to perform",
 			},
 			"id": map[string]interface{}{
@@ -94,6 +95,15 @@ func (t *CronTool) Schema() map[string]interface{} {
 				"type":        "boolean",
 				"description": "Whether to deliver output to channels",
 			},
+			"mode": map[string]interface{}{
+				"type":        "string",
+				"enum":        []string{"now", "next-heartbeat"},
+				"description": "Wake mode: 'now' triggers immediate heartbeat, 'next-heartbeat' waits for next scheduled heartbeat",
+			},
+			"text": map[string]interface{}{
+				"type":        "string",
+				"description": "Text to inject as system event (for wake action)",
+			},
 		},
 		"required": []string{"action"},
 	}
@@ -113,6 +123,8 @@ type cronInput struct {
 	SessionTarget string `json:"sessionTarget"`
 	Message       string `json:"message"`
 	Deliver       *bool  `json:"deliver"`
+	Mode          string `json:"mode"` // For wake: "now" or "next-heartbeat"
+	Text          string `json:"text"` // For wake: system event text
 }
 
 func (t *CronTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
@@ -159,6 +171,8 @@ func (t *CronTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 		result, err = t.handleRuns(service, in)
 	case "kill":
 		result, err = t.handleKill(service, in)
+	case "wake":
+		result, err = t.handleWake(service, in)
 	default:
 		err = fmt.Errorf("unknown action: %s", in.Action)
 	}
@@ -189,40 +203,15 @@ func (t *CronTool) handleList(service *cron.Service) (string, error) {
 	store := service.Store()
 	jobs := store.GetAllJobs()
 
-	if len(jobs) == 0 {
-		return "No cron jobs configured.", nil
+	// Return JSON like OpenClaw for parity
+	result := map[string]interface{}{
+		"jobs": jobs,
 	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d job(s):\n\n", len(jobs)))
-
-	for _, job := range jobs {
-		status := "enabled"
-		if !job.Enabled {
-			status = "disabled"
-		}
-
-		sb.WriteString(fmt.Sprintf("**%s** (%s)\n", job.Name, status))
-		sb.WriteString(fmt.Sprintf("  ID: %s\n", job.ID))
-		sb.WriteString(fmt.Sprintf("  Session: %s\n", job.SessionTarget))
-		sb.WriteString(fmt.Sprintf("  Schedule: %s\n", formatSchedule(&job.Schedule)))
-
-		if job.IsRunning() {
-			runningFor := time.Since(time.UnixMilli(*job.State.RunningAtMs))
-			sb.WriteString(fmt.Sprintf("  ⚠️ RUNNING: for %s (use kill action to clear)\n", runningFor.Round(time.Second)))
-		}
-		if job.State.NextRunAtMs != nil {
-			next := time.UnixMilli(*job.State.NextRunAtMs)
-			sb.WriteString(fmt.Sprintf("  Next run: %s\n", next.Format(time.RFC3339)))
-		}
-		if job.State.LastRunAtMs != nil {
-			last := time.UnixMilli(*job.State.LastRunAtMs)
-			sb.WriteString(fmt.Sprintf("  Last run: %s (%s)\n", last.Format(time.RFC3339), job.State.LastStatus))
-		}
-		sb.WriteString("\n")
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal jobs: %w", err)
 	}
-
-	return sb.String(), nil
+	return string(data), nil
 }
 
 func (t *CronTool) handleAdd(service *cron.Service, in cronInput) (string, error) {
@@ -439,6 +428,29 @@ func (t *CronTool) handleKill(service *cron.Service, in cronInput) (string, erro
 
 	return fmt.Sprintf("Cleared running state for job '%s' (was running for %s).\nNote: If the job is actually still executing, it will continue until completion or timeout.",
 		job.Name, runningFor.Round(time.Second)), nil
+}
+
+func (t *CronTool) handleWake(service *cron.Service, in cronInput) (string, error) {
+	if in.Text == "" {
+		return "", fmt.Errorf("text is required for wake action")
+	}
+
+	mode := in.Mode
+	if mode == "" {
+		mode = "next-heartbeat" // Default mode
+	}
+	if mode != "now" && mode != "next-heartbeat" {
+		return "", fmt.Errorf("invalid mode: %s (must be 'now' or 'next-heartbeat')", mode)
+	}
+
+	if err := service.Wake(context.Background(), in.Text, mode); err != nil {
+		return "", fmt.Errorf("wake failed: %w", err)
+	}
+
+	if mode == "now" {
+		return fmt.Sprintf("Wake event sent (mode: now). Text injected and heartbeat triggered.\nText: %s", truncateForLog(in.Text, 100)), nil
+	}
+	return fmt.Sprintf("Wake event sent (mode: next-heartbeat). Text will be processed on next heartbeat.\nText: %s", truncateForLog(in.Text, 100)), nil
 }
 
 func (t *CronTool) buildSchedule(in cronInput) (cron.Schedule, error) {
