@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -24,6 +25,23 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
+// isOpenClawWorkspace returns true if the workspace path is under ~/.openclaw/
+// This is used to detect side-by-side operation with OpenClaw and determine
+// which paths to use for shared resources (skills, media, cron).
+func isOpenClawWorkspace(workspacePath string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	openclawRoot := filepath.Join(home, ".openclaw")
+	// Normalize both paths for comparison
+	absWorkspace, err := filepath.Abs(workspacePath)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(absWorkspace, openclawRoot)
+}
+
 // Context keys for session info
 type contextKey string
 
@@ -37,8 +55,18 @@ type Channel interface {
 	Name() string
 	Send(ctx context.Context, msg string) error
 	SendMirror(ctx context.Context, source, userMsg, response string) error
-	SendAgentResponse(ctx context.Context, u *user.User, response string) error
 	HasUser(u *user.User) bool
+
+	// InjectMessage handles message injection for supervision (guidance/ghostwriting).
+	//
+	// If invokeLLM is true (guidance):
+	//   - Triggers agent run, streams events through normal channel path
+	//   - User sees typing indicator, streaming text, tool calls, final response
+	//
+	// If invokeLLM is false (ghostwrite):
+	//   - Delivers message directly (typing indicator + message)
+	//   - No LLM invocation
+	InjectMessage(ctx context.Context, u *user.User, sessionKey, message string, invokeLLM bool) error
 }
 
 // Gateway is the central service layer that coordinates the agent loop
@@ -189,9 +217,12 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 	}
 
 	// Initialize media store
-	// Resolve relative media dir against workspace
+	// Resolve media dir: if not set, default to <workspace>/media
 	mediaDir := cfg.Media.Dir
-	if mediaDir != "" && !filepath.IsAbs(mediaDir) && !strings.HasPrefix(mediaDir, "~") {
+	if mediaDir == "" {
+		mediaDir = filepath.Join(cfg.Gateway.WorkingDir, "media")
+	} else if !filepath.IsAbs(mediaDir) && !strings.HasPrefix(mediaDir, "~") {
+		// Relative path - resolve against workspace
 		mediaDir = filepath.Join(cfg.Gateway.WorkingDir, mediaDir)
 	}
 	mediaStore, err := media.NewMediaStore(media.MediaConfig{
@@ -204,7 +235,7 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 	} else {
 		g.mediaStore = mediaStore
 		L_info("media: store initialized",
-			"dir", cfg.Media.Dir,
+			"dir", mediaDir,
 			"ttl", cfg.Media.TTL,
 			"maxSize", cfg.Media.MaxSize)
 	}
@@ -250,7 +281,19 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 
 		// Set default workspace skills dir if not overridden
 		if skillMgrCfg.WorkspaceDir == "" {
-			skillMgrCfg.WorkspaceDir = cfg.Gateway.WorkingDir + "/skills"
+			skillMgrCfg.WorkspaceDir = filepath.Join(cfg.Gateway.WorkingDir, "skills")
+		}
+
+		// Set default managed skills dir based on workspace location
+		// If running side-by-side with OpenClaw, use ~/.openclaw/skills
+		// Otherwise use ~/.goclaw/skills
+		if skillMgrCfg.ManagedDir == "" {
+			home, _ := os.UserHomeDir()
+			if isOpenClawWorkspace(cfg.Gateway.WorkingDir) {
+				skillMgrCfg.ManagedDir = filepath.Join(home, ".openclaw", "skills")
+			} else {
+				skillMgrCfg.ManagedDir = filepath.Join(home, ".goclaw", "skills")
+			}
 		}
 
 		skillMgr, err := skills.NewManager(skillMgrCfg)
@@ -308,6 +351,16 @@ func (g *Gateway) MemoryManager() *memory.Manager {
 // AgentIdentity returns the agent identity configuration
 func (g *Gateway) AgentIdentity() *config.AgentIdentityConfig {
 	return &g.config.Agent
+}
+
+// SupervisionConfig returns the supervision configuration
+func (g *Gateway) SupervisionConfig() *config.SupervisionConfig {
+	return &g.config.Supervision
+}
+
+// Config returns the full configuration
+func (g *Gateway) Config() *config.Config {
+	return g.config
 }
 
 // SetRegistry sets the LLM provider registry
@@ -568,8 +621,21 @@ func (g *Gateway) StartCron(ctx context.Context) error {
 		return fmt.Errorf("cron service already running")
 	}
 
-	// Create store with default paths
-	store := cron.NewStore("", "")
+	// Determine cron paths based on workspace location
+	// If running side-by-side with OpenClaw, use ~/.openclaw/cron/
+	// Otherwise use ~/.goclaw/cron/
+	var cronJobsPath, cronRunsDir string
+	home, _ := os.UserHomeDir()
+	if isOpenClawWorkspace(g.config.Gateway.WorkingDir) {
+		cronJobsPath = filepath.Join(home, ".openclaw", "cron", "jobs.json")
+		cronRunsDir = filepath.Join(home, ".openclaw", "cron", "runs")
+	} else {
+		cronJobsPath = filepath.Join(home, ".goclaw", "cron", "jobs.json")
+		cronRunsDir = filepath.Join(home, ".goclaw", "cron", "runs")
+	}
+
+	// Create store with resolved paths
+	store := cron.NewStore(cronJobsPath, cronRunsDir)
 
 	// Create and start service
 	g.cronService = cron.NewService(store, g)
@@ -814,7 +880,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		
 		// Persist user message to SQLite (skip for heartbeat - ephemeral)
 		if !req.IsHeartbeat {
-			g.persistMessage(ctx, sessionKey, "user", req.UserMsg, req.Source, "", "", nil, "", "")
+			g.persistMessage(ctx, sessionKey, "user", req.UserMsg, req.Source, "", "", nil, "", "", "", "")
 		}
 	} else {
 		L_debug("RunAgent: skipping message add (already in session)", "session", sessionKey, "source", req.Source)
@@ -1032,8 +1098,8 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			sess.AddToolResult(response.ToolUseID, result)
 			// Persist denied tool use/result (skip for heartbeat - ephemeral)
 			if !req.IsHeartbeat {
-				g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking)
-				g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, "", "")
+				g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
+				g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, "", "", "", "")
 			}
 			continue
 		}
@@ -1091,8 +1157,8 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			sess.AddToolResult(response.ToolUseID, result)
 			// Persist tool use and result to SQLite (skip for heartbeat - ephemeral)
 			if !req.IsHeartbeat {
-				g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking)
-				g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, errStr, "")
+				g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
+				g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, errStr, "", "", "")
 			}
 			continue
 		}
@@ -1102,7 +1168,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		sess.AddAssistantMessage(finalText)
 		// Persist assistant message (skip for heartbeat - ephemeral)
 		if !req.IsHeartbeat {
-			g.persistMessage(ctx, sessionKey, "assistant", finalText, "", "", "", nil, "", "")
+			g.persistMessage(ctx, sessionKey, "assistant", finalText, "", "", "", nil, "", "", "", "")
 		}
 		break
 	}
@@ -1139,15 +1205,9 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	// Reset flush thresholds if context dropped (e.g., after compaction)
 	session.ResetThresholdsIfNeeded(sess)
 
-	// Deliver response to channels
+	// Mirror response to other channels (not for group chats)
 	if !req.IsGroup {
-		if req.Source == "supervision" {
-			// Supervision-triggered run: send response directly to user's channels
-			g.sendAgentResponseToUser(ctx, req.User, finalText)
-		} else {
-			// Normal run: mirror to other channels
-			g.mirrorToOthers(ctx, req, finalText)
-		}
+		g.mirrorToOthers(ctx, req, finalText)
 	}
 
 	return nil
@@ -1327,32 +1387,21 @@ func (g *Gateway) mirrorToOthers(ctx context.Context, req AgentRequest, response
 	}
 }
 
-// sendAgentResponseToUser sends an agent response directly to all channels a user is connected to.
-// Used by supervision to deliver responses triggered by guidance.
-func (g *Gateway) sendAgentResponseToUser(ctx context.Context, u *user.User, response string) {
-	if u == nil || response == "" {
-		return
-	}
-
-	L_info("supervision: delivering response to user channels", "user", u.ID, "responseLen", len(response))
-
-	for name, ch := range g.channels {
-		if !ch.HasUser(u) {
-			continue
-		}
-
-		L_debug("supervision: sending to channel", "channel", name, "user", u.ID)
-		if err := ch.SendAgentResponse(ctx, u, response); err != nil {
-			L_error("supervision: failed to send response", "channel", name, "user", u.ID, "error", err)
-		}
-	}
-}
-
-// DeliverMessageToUser sends a message to all channels a user is connected to.
-// Used by ghostwriting to deliver messages directly.
-func (g *Gateway) DeliverMessageToUser(ctx context.Context, sessionKey string, message string) error {
+// InjectMessage injects a message into a user's session and delivers appropriately.
+//
+// If invokeLLM is true (guidance):
+//   - Message is added as user message with configured prefix
+//   - Agent run is triggered through user's channels
+//   - Response streams to all user's active channels
+//
+// If invokeLLM is false (ghostwrite):
+//   - Message is added as assistant message
+//   - Delivered directly to all user's active channels
+//
+// The supervisor parameter identifies who performed the injection (for audit logging).
+func (g *Gateway) InjectMessage(ctx context.Context, sessionKey, message string, invokeLLM bool, supervisor *user.User) error {
 	if message == "" {
-		return nil
+		return fmt.Errorf("empty message")
 	}
 
 	// Determine the user from session key
@@ -1370,8 +1419,80 @@ func (g *Gateway) DeliverMessageToUser(ctx context.Context, sessionKey string, m
 		return fmt.Errorf("could not determine user for session: %s", sessionKey)
 	}
 
-	L_info("supervision: delivering ghostwrite to user", "session", sessionKey, "user", u.ID, "messageLen", len(message))
-	g.sendAgentResponseToUser(ctx, u, message)
+	// Get the session
+	sess := g.sessions.Get(sessionKey)
+	if sess == nil {
+		return fmt.Errorf("session not found: %s", sessionKey)
+	}
+
+	// Get supervisor name for logging/events
+	supervisorName := ""
+	if supervisor != nil {
+		supervisorName = supervisor.Name
+		if supervisorName == "" {
+			supervisorName = supervisor.ID
+		}
+	}
+
+	L_info("gateway: inject message",
+		"session", sessionKey,
+		"user", u.ID,
+		"invokeLLM", invokeLLM,
+		"supervisor", supervisorName,
+		"messageLen", len(message))
+
+	if invokeLLM {
+		// Guidance: add message as user message with prefix and supervision metadata
+		prefix := g.config.Supervision.Guidance.Prefix
+		prefixedMessage := prefix + message
+		sess.AddSupervisionUserMessage(prefixedMessage, "guidance", supervisorName, "guidance")
+		L_debug("gateway: added guidance to session", "session", sessionKey, "prefixedLen", len(prefixedMessage))
+
+		// Persist with supervision metadata
+		g.persistMessage(ctx, sessionKey, "user", prefixedMessage, "guidance", "", "", nil, "", "", supervisorName, "guidance")
+
+		// Send to supervision stream so supervisor sees the guidance they sent
+		if supervision := sess.GetSupervision(); supervision != nil {
+			supervision.SendEvent(EventUserMessage{
+				Content:    prefixedMessage,
+				Source:     "guidance",
+				Supervisor: supervisorName,
+			})
+		}
+	} else {
+		// Ghostwrite: add message as assistant message with supervision metadata
+		sess.AddSupervisionAssistantMessage(message, supervisorName, "ghostwrite")
+		L_debug("gateway: added ghostwrite to session", "session", sessionKey, "messageLen", len(message))
+
+		// Persist with supervision metadata
+		g.persistMessage(ctx, sessionKey, "assistant", message, "ghostwrite", "", "", nil, "", "", supervisorName, "ghostwrite")
+
+		// Send to supervision stream so supervisor sees the ghostwrite they sent
+		if supervision := sess.GetSupervision(); supervision != nil {
+			supervision.SendEvent(EventUserMessage{
+				Content:    message,
+				Source:     "ghostwrite",
+				Supervisor: supervisorName,
+			})
+		}
+	}
+
+	// Deliver to all channels serving this user
+	delivered := 0
+	for name, ch := range g.channels {
+		if !ch.HasUser(u) {
+			continue
+		}
+
+		L_debug("gateway: injecting to channel", "channel", name, "user", u.ID, "invokeLLM", invokeLLM)
+		if err := ch.InjectMessage(ctx, u, sessionKey, message, invokeLLM); err != nil {
+			L_error("gateway: inject to channel failed", "channel", name, "user", u.ID, "error", err)
+		} else {
+			delivered++
+		}
+	}
+
+	L_info("gateway: inject complete", "session", sessionKey, "channels", delivered, "invokeLLM", invokeLLM)
 	return nil
 }
 
@@ -1509,23 +1630,25 @@ func (g *Gateway) SessionDB() *sql.DB {
 }
 
 // persistMessage writes a message to SQLite storage for audit trail
-func (g *Gateway) persistMessage(ctx context.Context, sessionKey, role, content, source, toolCallID, toolName string, toolInput []byte, toolError, thinking string) {
+func (g *Gateway) persistMessage(ctx context.Context, sessionKey, role, content, source, toolCallID, toolName string, toolInput []byte, toolError, thinking, supervisor, interventionType string) {
 	store := g.sessions.GetStore()
 	if store == nil {
 		return // No store configured
 	}
 
 	msg := &session.StoredMessage{
-		ID:         session.GenerateRecordID(),
-		SessionKey: sessionKey,
-		Timestamp:  time.Now(),
-		Role:       role,
-		Content:    content,
-		Source:     source,
-		ToolCallID: toolCallID,
-		ToolName:   toolName,
-		ToolInput:  toolInput,
-		Thinking:   thinking,
+		ID:               session.GenerateRecordID(),
+		SessionKey:       sessionKey,
+		Timestamp:        time.Now(),
+		Role:             role,
+		Content:          content,
+		Source:           source,
+		ToolCallID:       toolCallID,
+		ToolName:         toolName,
+		ToolInput:        toolInput,
+		Thinking:         thinking,
+		Supervisor:       supervisor,
+		InterventionType: interventionType,
 	}
 
 	// For tool_result, store the result in ToolResult field and mark errors
@@ -1540,7 +1663,7 @@ func (g *Gateway) persistMessage(ctx context.Context, sessionKey, role, content,
 	if err := store.AppendMessage(ctx, sessionKey, msg); err != nil {
 		L_warn("failed to persist message to SQLite", "role", role, "error", err)
 	} else {
-		L_trace("message persisted to SQLite", "role", role, "toolName", toolName)
+		L_trace("message persisted to SQLite", "role", role, "toolName", toolName, "supervisor", supervisor)
 	}
 }
 

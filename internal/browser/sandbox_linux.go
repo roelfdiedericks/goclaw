@@ -48,7 +48,7 @@ func CreateSandboxedLauncher(browserBin, workspace, profileDir string, cfg Brows
 	}
 
 	// Add browser binary directory (read-only) so chromium can execute
-	// browserBin is something like /home/user/.openclaw/goclaw/browser/bin/chromium-XXX/chrome
+	// browserBin is something like /home/user/.goclaw/browser/bin/chromium-XXX/chrome
 	// We need to bind the parent directories up to the bin/ level
 	browserBinDir := filepath.Dir(browserBin) // chromium-XXX directory
 	browserBaseDir := filepath.Dir(browserBinDir) // bin directory
@@ -75,7 +75,7 @@ func CreateSandboxedLauncher(browserBin, workspace, profileDir string, cfg Brows
 
 	// Create a wrapper script that runs bwrap with the browser
 	// The wrapper passes through all arguments to the browser
-	wrapperDir := filepath.Join(home, ".openclaw", "goclaw", "browser-sandbox")
+	wrapperDir := filepath.Join(home, ".goclaw", "browser-sandbox")
 	if err := os.MkdirAll(wrapperDir, 0755); err != nil {
 		return "", err
 	}
@@ -128,7 +128,7 @@ func shellQuote(s string) string {
 // CleanupSandboxWrapper removes the sandbox wrapper script
 func CleanupSandboxWrapper() {
 	home, _ := os.UserHomeDir()
-	wrapperPath := filepath.Join(home, ".openclaw", "goclaw", "browser-sandbox", "chromium-wrapper.sh")
+	wrapperPath := filepath.Join(home, ".goclaw", "browser-sandbox", "chromium-wrapper.sh")
 	_ = os.Remove(wrapperPath)
 }
 

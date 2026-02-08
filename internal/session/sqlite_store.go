@@ -20,7 +20,7 @@ type SQLiteStore struct {
 }
 
 // Schema version for migrations
-const currentSchemaVersion = 4
+const currentSchemaVersion = 5
 
 // NewSQLiteStore creates a new SQLite store
 func NewSQLiteStore(cfg StoreConfig) (*SQLiteStore, error) {
@@ -85,6 +85,7 @@ func (s *SQLiteStore) Migrate() error {
 		migrateV2,
 		migrateV3,
 		migrateV4,
+		migrateV5,
 	}
 
 	for i := version; i < len(migrations); i++ {
@@ -265,6 +266,26 @@ func migrateV4(db *sql.DB) error {
 	return err
 }
 
+// migrateV5 adds supervision fields for tracking guidance and ghostwriting interventions
+func migrateV5(db *sql.DB) error {
+	schema := `
+	-- Add supervisor column to track who performed supervision intervention
+	ALTER TABLE messages ADD COLUMN supervisor TEXT DEFAULT NULL;
+	
+	-- Add intervention_type column: "guidance" or "ghostwrite"
+	ALTER TABLE messages ADD COLUMN intervention_type TEXT DEFAULT NULL;
+	
+	-- Index for querying supervision interventions
+	CREATE INDEX IF NOT EXISTS idx_messages_supervision ON messages(supervisor) WHERE supervisor IS NOT NULL;
+	
+	-- Update schema version
+	INSERT INTO schema_version (version, applied_at) VALUES (5, ?);
+	`
+
+	_, err := db.Exec(schema, time.Now().Unix())
+	return err
+}
+
 // Close closes the database connection
 func (s *SQLiteStore) Close() error {
 	L_debug("sqlite: closing store")
@@ -396,13 +417,15 @@ func (s *SQLiteStore) AppendMessage(ctx context.Context, sessionKey string, msg 
 		INSERT INTO messages (id, session_key, parent_id, timestamp,
 		                      role, content, tool_call_id, tool_name, tool_input,
 		                      tool_result, tool_is_error, source, channel_id, user_id,
-		                      input_tokens, output_tokens, raw_json, thinking)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                      input_tokens, output_tokens, raw_json, thinking,
+		                      supervisor, intervention_type)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		msg.ID, sessionKey, nullString(msg.ParentID), msg.Timestamp.Unix(),
 		msg.Role, msg.Content, nullString(msg.ToolCallID), nullString(msg.ToolName), msg.ToolInput,
 		nullString(msg.ToolResult), msg.ToolIsError, nullString(msg.Source), nullString(msg.ChannelID), nullString(msg.UserID),
 		msg.InputTokens, msg.OutputTokens, msg.RawJSON, nullString(msg.Thinking),
+		nullString(msg.Supervisor), nullString(msg.InterventionType),
 	)
 
 	if err != nil {
@@ -421,7 +444,8 @@ func (s *SQLiteStore) GetMessages(ctx context.Context, sessionKey string, opts M
 	query := `
 		SELECT id, session_key, parent_id, timestamp, role, content,
 		       tool_call_id, tool_name, tool_input, tool_result, tool_is_error,
-		       source, channel_id, user_id, input_tokens, output_tokens, raw_json, thinking
+		       source, channel_id, user_id, input_tokens, output_tokens, raw_json, thinking,
+		       supervisor, intervention_type
 		FROM messages
 		WHERE session_key = ?
 	`
@@ -461,12 +485,14 @@ func (s *SQLiteStore) GetMessages(ctx context.Context, sessionKey string, opts M
 		var msg StoredMessage
 		var ts int64
 		var parentID, toolCallID, toolName, toolResult, source, channelID, userID, thinking sql.NullString
+		var supervisor, interventionType sql.NullString
 		var toolInput, rawJSON []byte
 
 		if err := rows.Scan(
 			&msg.ID, &msg.SessionKey, &parentID, &ts, &msg.Role, &msg.Content,
 			&toolCallID, &toolName, &toolInput, &toolResult, &msg.ToolIsError,
 			&source, &channelID, &userID, &msg.InputTokens, &msg.OutputTokens, &rawJSON, &thinking,
+			&supervisor, &interventionType,
 		); err != nil {
 			return nil, err
 		}
@@ -481,6 +507,8 @@ func (s *SQLiteStore) GetMessages(ctx context.Context, sessionKey string, opts M
 		msg.ChannelID = channelID.String
 		msg.UserID = userID.String
 		msg.Thinking = thinking.String
+		msg.Supervisor = supervisor.String
+		msg.InterventionType = interventionType.String
 		if opts.IncludeRaw {
 			msg.RawJSON = rawJSON
 		}

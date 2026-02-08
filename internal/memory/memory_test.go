@@ -235,7 +235,7 @@ func TestManagerIntegration(t *testing.T) {
 
 	// Override default db path for testing
 	home, _ := os.UserHomeDir()
-	testDbDir := filepath.Join(home, ".openclaw", "goclaw", "test")
+	testDbDir := filepath.Join(home, ".goclaw", "test")
 	os.MkdirAll(testDbDir, 0755)
 	defer os.RemoveAll(testDbDir)
 

@@ -382,9 +382,17 @@ You have two search tools for different purposes:
 **transcript** — Searches raw conversation history (sessions.db)
 - Use for: "When did we discuss X?", "What was the exact wording?"
 - Contains: All conversations, unfiltered (excluding tool use and heartbeats)
-- Actions: semantic (vector search), search (keyword), recent, gaps (sleep patterns), stats
+- Actions:
+  - semantic: vector similarity search on chunks
+  - search: flexible search with matchType: exact (substring), semantic (vector), hybrid (default, best of both)
+  - recent: latest N messages
+  - gaps: time gaps (sleep patterns)
+  - stats: indexing status
+- Filters: source, excludeSources, humanOnly, after/before/lastDays, role
+- Output includes source field (telegram, tui, http, cron, etc.)
 - Best for: Finding when topics came up, reviewing recent exchanges, detecting patterns
 - Permissions: Owners see all transcripts; users see only their own conversations
+- Tip: Use matchType: "exact" for short phrases like "nite" or "ok" that semantic search misses
 
 **When to use which:**
 - Looking for a decision or preference? → memory_search first

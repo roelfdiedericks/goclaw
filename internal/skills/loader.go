@@ -20,7 +20,7 @@ type skillsData struct {
 // Loader discovers and loads skills from multiple directories.
 type Loader struct {
 	bundledDir   string   // GoClaw bundled skills directory
-	managedDir   string   // User-installed skills (~/.openclaw/skills)
+	managedDir   string   // User-installed skills (resolved by gateway based on workspace)
 	workspaceDir string   // Current workspace skills
 	extraDirs    []string // Additional directories from config
 

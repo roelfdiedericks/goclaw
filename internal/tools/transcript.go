@@ -26,7 +26,7 @@ func (t *TranscriptTool) Name() string {
 }
 
 func (t *TranscriptTool) Description() string {
-	return "Search and query conversation history. Use 'semantic' for natural language search, 'recent' for latest messages, 'search' for keyword search, 'gaps' for time gaps between messages (breaks, sleep periods, pauses - most recent gap = time since last conversation), 'stats' for indexing status."
+	return "Search and query conversation history. Actions: 'semantic' (natural language search), 'recent' (latest messages), 'search' (supports matchType: 'exact' for substring, 'semantic' for vector, 'hybrid' default), 'gaps' (time gaps/breaks), 'stats' (indexing status). Filters: source, excludeSources, humanOnly (exclude cron/heartbeat), after/before/lastDays (time range), role (user/assistant). Output includes source field."
 }
 
 func (t *TranscriptTool) Schema() map[string]any {
@@ -36,7 +36,7 @@ func (t *TranscriptTool) Schema() map[string]any {
 			"action": map[string]any{
 				"type":        "string",
 				"enum":        []string{"semantic", "recent", "search", "gaps", "stats"},
-				"description": "Action to perform: 'semantic' (natural language search), 'recent' (last N messages), 'search' (keyword search), 'gaps' (conversation time gaps), 'stats' (indexing status)",
+				"description": "Action to perform: 'semantic' (natural language search on chunks), 'recent' (last N messages), 'search' (flexible search with matchType: exact/semantic/hybrid), 'gaps' (conversation time gaps), 'stats' (indexing status)",
 			},
 			"query": map[string]any{
 				"type":        "string",
@@ -50,6 +50,42 @@ func (t *TranscriptTool) Schema() map[string]any {
 				"type":        "number",
 				"description": "For 'gaps' action: minimum gap duration in hours (default: 1)",
 			},
+			// Filter parameters
+			"source": map[string]any{
+				"type":        "string",
+				"description": "Filter by message source (e.g., 'telegram', 'tui', 'http')",
+			},
+			"excludeSources": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Exclude messages from these sources (e.g., ['cron', 'heartbeat'])",
+			},
+			"humanOnly": map[string]any{
+				"type":        "boolean",
+				"description": "Exclude automated messages (cron, heartbeat). Shorthand for excludeSources.",
+			},
+			"after": map[string]any{
+				"type":        "string",
+				"description": "Filter messages after this date (ISO 8601 format, e.g., '2026-02-01')",
+			},
+			"before": map[string]any{
+				"type":        "string",
+				"description": "Filter messages before this date (ISO 8601 format)",
+			},
+			"lastDays": map[string]any{
+				"type":        "integer",
+				"description": "Filter to messages from the last N days",
+			},
+			"role": map[string]any{
+				"type":        "string",
+				"enum":        []string{"user", "assistant"},
+				"description": "Filter by message role",
+			},
+			"matchType": map[string]any{
+				"type":        "string",
+				"enum":        []string{"exact", "semantic", "hybrid"},
+				"description": "For 'search' action: 'exact' (substring match on messages), 'semantic' (vector search on chunks), 'hybrid' (both with exact boost, default)",
+			},
 		},
 		"required": []string{"action"},
 	}
@@ -60,6 +96,18 @@ type transcriptInput struct {
 	Query    string  `json:"query"`
 	Limit    int     `json:"limit"`
 	MinHours float64 `json:"minHours"`
+
+	// Filter parameters
+	Source         string   `json:"source"`
+	ExcludeSources []string `json:"excludeSources"`
+	HumanOnly      bool     `json:"humanOnly"`
+	After          string   `json:"after"`
+	Before         string   `json:"before"`
+	LastDays       int      `json:"lastDays"`
+	Role           string   `json:"role"`
+
+	// Search mode
+	MatchType string `json:"matchType"` // "exact", "semantic", "hybrid" (default)
 }
 
 func (t *TranscriptTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
@@ -145,7 +193,8 @@ func (t *TranscriptTool) executeRecent(ctx context.Context, params transcriptInp
 		limit = 10
 	}
 
-	entries, err := t.manager.Recent(ctx, userID, isOwner, limit)
+	filter := buildQueryFilter(params)
+	entries, err := t.manager.Recent(ctx, userID, isOwner, limit, filter)
 	if err != nil {
 		L_error("transcript: recent query failed", "error", err)
 		return marshalOutput(map[string]any{
@@ -165,35 +214,106 @@ func (t *TranscriptTool) executeSearch(ctx context.Context, params transcriptInp
 		return "", fmt.Errorf("query is required for search")
 	}
 
-	// For keyword search, use lower vector weight
-	opts := transcript.SearchOptions{
-		MaxResults:    10,
-		MinScore:      0.1,
-		VectorWeight:  0.3,
-		KeywordWeight: 0.7,
-	}
-	if params.Limit > 0 {
-		opts.MaxResults = params.Limit
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 10
 	}
 
-	results, err := t.manager.Search(ctx, params.Query, userID, isOwner, opts)
-	if err != nil {
-		L_error("transcript: keyword search failed", "error", err)
-		return marshalOutput(map[string]any{
-			"error":   err.Error(),
-			"results": []any{},
-		})
+	matchType := params.MatchType
+	if matchType == "" {
+		matchType = "hybrid" // Default
 	}
 
-	L_info("transcript: keyword search completed",
+	L_debug("transcript: search",
 		"query", truncateQuery(params.Query, 30),
-		"results", len(results),
+		"matchType", matchType,
+		"limit", limit,
 	)
 
-	return marshalOutput(map[string]any{
-		"results": formatSearchResults(results),
-		"count":   len(results),
-	})
+	switch matchType {
+	case "exact":
+		// Exact substring search on messages table
+		filter := buildQueryFilter(params)
+		entries, err := t.manager.ExactSearch(ctx, params.Query, userID, isOwner, limit, filter)
+		if err != nil {
+			L_error("transcript: exact search failed", "error", err)
+			return marshalOutput(map[string]any{
+				"error":   err.Error(),
+				"results": []any{},
+			})
+		}
+
+		L_info("transcript: exact search completed",
+			"query", truncateQuery(params.Query, 30),
+			"results", len(entries),
+		)
+
+		return marshalOutput(map[string]any{
+			"results":   formatRecentEntries(entries), // Same format as recent
+			"count":     len(entries),
+			"matchType": "exact",
+		})
+
+	case "semantic":
+		// Pure vector search on chunks
+		opts := transcript.SearchOptions{
+			MaxResults:    limit,
+			MinScore:      0.3,
+			VectorWeight:  1.0, // Vector only
+			KeywordWeight: 0.0,
+		}
+
+		results, err := t.manager.Search(ctx, params.Query, userID, isOwner, opts)
+		if err != nil {
+			L_error("transcript: semantic search failed", "error", err)
+			return marshalOutput(map[string]any{
+				"error":   err.Error(),
+				"results": []any{},
+			})
+		}
+
+		L_info("transcript: semantic search completed",
+			"query", truncateQuery(params.Query, 30),
+			"results", len(results),
+		)
+
+		return marshalOutput(map[string]any{
+			"results":   formatSearchResults(results),
+			"count":     len(results),
+			"matchType": "semantic",
+		})
+
+	default: // "hybrid"
+		// Hybrid search with exact match boost
+		opts := transcript.SearchOptions{
+			MaxResults:      limit,
+			MinScore:        0.1,
+			VectorWeight:    0.5,
+			KeywordWeight:   0.5,
+			ExactBoost:      true, // Boost chunks containing exact query
+			ExactBoostQuery: params.Query,
+		}
+
+		results, err := t.manager.Search(ctx, params.Query, userID, isOwner, opts)
+		if err != nil {
+			L_error("transcript: hybrid search failed", "error", err)
+			return marshalOutput(map[string]any{
+				"error":   err.Error(),
+				"results": []any{},
+			})
+		}
+
+		L_info("transcript: hybrid search completed",
+			"query", truncateQuery(params.Query, 30),
+			"results", len(results),
+		)
+
+		return marshalOutput(map[string]any{
+			"results":   formatSearchResults(results),
+			"count":     len(results),
+			"matchType": "hybrid",
+		})
+	}
 }
 
 func (t *TranscriptTool) executeGaps(ctx context.Context, params transcriptInput, userID string, isOwner bool) (string, error) {
@@ -206,7 +326,8 @@ func (t *TranscriptTool) executeGaps(ctx context.Context, params transcriptInput
 		limit = 10
 	}
 
-	gaps, err := t.manager.Gaps(ctx, userID, isOwner, minHours, limit)
+	filter := buildQueryFilter(params)
+	gaps, err := t.manager.Gaps(ctx, userID, isOwner, minHours, limit, filter)
 	if err != nil {
 		L_error("transcript: gaps query failed", "error", err)
 		return marshalOutput(map[string]any{
@@ -224,6 +345,35 @@ func (t *TranscriptTool) executeGaps(ctx context.Context, params transcriptInput
 func (t *TranscriptTool) executeStats(ctx context.Context) (string, error) {
 	stats := t.manager.Stats()
 	return marshalOutput(stats)
+}
+
+// buildQueryFilter creates a QueryFilter from transcript input parameters
+func buildQueryFilter(params transcriptInput) *transcript.QueryFilter {
+	filter := &transcript.QueryFilter{
+		Source:         params.Source,
+		ExcludeSources: params.ExcludeSources,
+		HumanOnly:      params.HumanOnly,
+		LastDays:       params.LastDays,
+		Role:           params.Role,
+	}
+
+	// Parse time filters
+	if params.After != "" {
+		if t, err := time.Parse("2006-01-02", params.After); err == nil {
+			filter.After = t
+		} else if t, err := time.Parse(time.RFC3339, params.After); err == nil {
+			filter.After = t
+		}
+	}
+	if params.Before != "" {
+		if t, err := time.Parse("2006-01-02", params.Before); err == nil {
+			filter.Before = t
+		} else if t, err := time.Parse(time.RFC3339, params.Before); err == nil {
+			filter.Before = t
+		}
+	}
+
+	return filter
 }
 
 // formatSearchResults formats search results for output
@@ -244,11 +394,15 @@ func formatSearchResults(results []transcript.SearchResult) []map[string]any {
 func formatRecentEntries(entries []transcript.RecentEntry) []map[string]any {
 	formatted := make([]map[string]any, len(entries))
 	for i, e := range entries {
-		formatted[i] = map[string]any{
+		entry := map[string]any{
 			"timestamp": e.Timestamp.Format(time.RFC3339),
 			"role":      e.Role,
 			"preview":   e.Preview,
 		}
+		if e.Source != "" {
+			entry["source"] = e.Source
+		}
+		formatted[i] = entry
 	}
 	return formatted
 }
@@ -257,12 +411,16 @@ func formatRecentEntries(entries []transcript.RecentEntry) []map[string]any {
 func formatGapEntries(gaps []transcript.GapEntry) []map[string]any {
 	formatted := make([]map[string]any, len(gaps))
 	for i, g := range gaps {
-		formatted[i] = map[string]any{
+		entry := map[string]any{
 			"from":        g.From.Format(time.RFC3339),
 			"to":          g.To.Format(time.RFC3339),
 			"gapHours":    fmt.Sprintf("%.1f", g.GapHours),
 			"lastMessage": g.LastMessage,
 		}
+		if g.Source != "" {
+			entry["source"] = g.Source
+		}
+		formatted[i] = entry
 	}
 	return formatted
 }

@@ -38,13 +38,22 @@ func NewManager(cfg config.MemorySearchConfig, workspaceDir string) (*Manager, e
 	L_info("memory: initializing manager", "workspace", workspaceDir)
 
 	// Determine database path
-	home, _ := os.UserHomeDir()
-	dbPath := filepath.Join(home, ".openclaw", "goclaw", "memory.db")
+	dbPath := cfg.DbPath
+	if dbPath == "" {
+		home, _ := os.UserHomeDir()
+		dbPath = filepath.Join(home, ".goclaw", "memory.db")
+	} else if strings.HasPrefix(dbPath, "~") {
+		// Expand ~ to home directory
+		home, _ := os.UserHomeDir()
+		dbPath = filepath.Join(home, dbPath[1:])
+	}
 
 	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, fmt.Errorf("create db directory: %w", err)
 	}
+	
+	L_debug("memory: using database", "path", dbPath)
 
 	// Open database
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")

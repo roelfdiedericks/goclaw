@@ -41,6 +41,7 @@ type Config struct {
 	TUI          TUIConfig             `json:"tui"`
 	Skills       SkillsConfig          `json:"skills"`
 	Cron         CronConfig            `json:"cron"`
+	Supervision  SupervisionConfig     `json:"supervision"`
 }
 
 // AgentIdentityConfig configures the agent's display identity
@@ -87,6 +88,30 @@ type HeartbeatConfig struct {
 	Prompt          string `json:"prompt"`          // Custom heartbeat prompt (optional)
 }
 
+// SupervisionConfig configures session supervision features
+type SupervisionConfig struct {
+	Guidance     GuidanceConfig     `json:"guidance"`
+	Ghostwriting GhostwritingConfig `json:"ghostwriting"`
+}
+
+// GuidanceConfig configures supervisor guidance injection
+type GuidanceConfig struct {
+	// Prefix prepended to guidance messages (default: "[Supervisor]: ")
+	// The LLM sees this prefix and knows the message is from the supervisor
+	Prefix string `json:"prefix"`
+
+	// SystemNote is an optional system message injected with guidance (future use)
+	// Could contain instructions like "Respond to this guidance naturally"
+	SystemNote string `json:"systemNote,omitempty"`
+}
+
+// GhostwritingConfig configures supervisor ghostwriting
+type GhostwritingConfig struct {
+	// TypingDelayMs is the delay before delivering the message (default: 500)
+	// Simulates natural typing so message doesn't appear instantly
+	TypingDelayMs int `json:"typingDelayMs"`
+}
+
 // SkillsConfig configures the skills system
 type SkillsConfig struct {
 	Enabled       bool                        `json:"enabled"`
@@ -109,7 +134,7 @@ type SkillEntryConfig struct {
 
 // MediaConfig configures media file storage
 type MediaConfig struct {
-	Dir     string `json:"dir"`     // Base directory (default: ~/.openclaw/media)
+	Dir     string `json:"dir"`     // Base directory (empty = <workspace>/media/)
 	TTL     int    `json:"ttl"`     // TTL in seconds (default: 600 = 10 min)
 	MaxSize int    `json:"maxSize"` // Max file size in bytes (default: 5MB)
 }
@@ -201,6 +226,7 @@ type TUIConfig struct {
 // MemorySearchConfig configures the memory search tool
 type MemorySearchConfig struct {
 	Enabled bool                    `json:"enabled"` // Enable memory search tools
+	DbPath  string                  `json:"dbPath"`  // Database path (default: ~/.goclaw/memory.db)
 	Query   MemorySearchQueryConfig `json:"query"`   // Search query settings
 	Paths   []string                `json:"paths"`   // Additional paths to index (besides memory/ and MEMORY.md)
 }
@@ -342,7 +368,7 @@ type WebToolsConfig struct {
 // BrowserToolsConfig contains browser tool settings
 type BrowserToolsConfig struct {
 	Enabled        bool                     `json:"enabled"`        // Enable headless browser tool (requires Chrome/Chromium)
-	Dir            string                   `json:"dir"`            // Browser data directory (empty = ~/.openclaw/goclaw/browser)
+	Dir            string                   `json:"dir"`            // Browser data directory (empty = ~/.goclaw/browser)
 	AutoDownload   bool                     `json:"autoDownload"`   // Download Chromium if missing (default: true)
 	Revision       string                   `json:"revision"`       // Chromium revision (empty = latest)
 	Headless       bool                     `json:"headless"`       // Run browser in headless mode (default: true)
@@ -367,12 +393,12 @@ type BrowserBubblewrapConfig struct {
 // If no config file exists, returns an error directing user to run 'goclaw setup'.
 func Load() (*LoadResult, error) {
 	home, _ := os.UserHomeDir()
-	openclawDir := filepath.Join(home, ".openclaw")
+	goclawDir := filepath.Join(home, ".goclaw")
 
-	goclawGlobalPath := filepath.Join(openclawDir, "goclaw.json")
+	goclawGlobalPath := filepath.Join(goclawDir, "goclaw.json")
 	goclawLocalPath := "goclaw.json" // current working directory
 
-	logging.L_debug("config: checking files", "openclawDir", openclawDir, "cwd", mustGetwd())
+	logging.L_debug("config: checking files", "goclawDir", goclawDir, "cwd", mustGetwd())
 
 	// Determine which goclaw.json to use (local takes priority)
 	var goclawPath string
@@ -407,9 +433,9 @@ func Load() (*LoadResult, error) {
 	// Build defaults
 	cfg := &Config{
 		Gateway: GatewayConfig{
-			LogFile:    filepath.Join(openclawDir, "goclaw.log"),
-			PIDFile:    filepath.Join(openclawDir, "goclaw.pid"),
-			WorkingDir: filepath.Join(openclawDir, "workspace"),
+			LogFile:    filepath.Join(goclawDir, "goclaw.log"),
+			PIDFile:    filepath.Join(goclawDir, "goclaw.pid"),
+			WorkingDir: filepath.Join(goclawDir, "workspace"),
 		},
 		Agent: AgentIdentityConfig{
 			Name:  "GoClaw",
@@ -437,7 +463,7 @@ func Load() (*LoadResult, error) {
 		Tools: ToolsConfig{
 			Browser: BrowserToolsConfig{
 				Enabled:        true,
-				Dir:            "",        // Default: ~/.openclaw/goclaw/browser
+				Dir:            "",        // Default: ~/.goclaw/browser
 				AutoDownload:   true,
 				Revision:       "",        // Latest
 				Headless:       true,
@@ -471,8 +497,8 @@ func Load() (*LoadResult, error) {
 		},
 		Session: SessionConfig{
 			Store:       "sqlite", // Default to SQLite
-			StorePath:   filepath.Join(openclawDir, "goclaw", "sessions.db"),
-			InheritPath: filepath.Join(openclawDir, "agents", "main", "sessions"), // OpenClaw sessions directory
+			StorePath:   filepath.Join(goclawDir, "sessions.db"),
+			InheritPath: filepath.Join(home, ".openclaw", "agents", "main", "sessions"), // OpenClaw sessions (for inherit)
 			Inherit:     true,
 			InheritFrom: "agent:main:main",
 			Summarization: SummarizationConfig{
@@ -574,6 +600,15 @@ func Load() (*LoadResult, error) {
 				IntervalMinutes: 30,
 			},
 		},
+		Supervision: SupervisionConfig{
+			Guidance: GuidanceConfig{
+				Prefix:     "[Supervisor]: ",
+				SystemNote: "",
+			},
+			Ghostwriting: GhostwritingConfig{
+				TypingDelayMs: 500,
+			},
+		},
 	}
 
 	// Load from goclaw.json
@@ -643,7 +678,7 @@ func (s *SessionConfig) GetStorePath() string {
 	}
 	// Default SQLite path
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".openclaw", "goclaw", "sessions.db")
+	return filepath.Join(home, ".goclaw", "sessions.db")
 }
 
 // mustGetwd returns the current working directory or "unknown" on error
@@ -747,6 +782,11 @@ func mergeConfigSelective(dst, src *Config, rawMap map[string]interface{}) error
 	}
 	if _, ok := rawMap["cron"]; ok {
 		if err := mergo.Merge(&dst.Cron, src.Cron, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if _, ok := rawMap["supervision"]; ok {
+		if err := mergo.Merge(&dst.Supervision, src.Supervision, mergo.WithOverride); err != nil {
 			return err
 		}
 	}

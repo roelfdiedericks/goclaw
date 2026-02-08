@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	// DefaultMediaDir is the default media storage directory (shared with OpenClaw)
-	DefaultMediaDir = "~/.openclaw/media"
+	// DefaultMediaDir is the fallback media storage directory.
+	// Note: The gateway resolves media.dir to <workspace>/media/ when not explicitly set.
+	// This constant is only used when MediaStore is created directly without gateway.
+	DefaultMediaDir = "~/.goclaw/media"
 
 	// DefaultTTL is the default time-to-live for media files (10 minutes)
 	DefaultTTL = 10 * time.Minute
@@ -42,7 +44,7 @@ type MediaStore struct {
 
 // MediaConfig configures the MediaStore
 type MediaConfig struct {
-	Dir     string `json:"dir"`     // Base directory (default: ~/.openclaw/media)
+	Dir     string `json:"dir"`     // Base directory (gateway defaults to <workspace>/media/)
 	TTL     int    `json:"ttl"`     // TTL in seconds (default: 600 = 10 min)
 	MaxSize int    `json:"maxSize"` // Max file size in bytes (default: 5MB)
 }

@@ -13,7 +13,7 @@ import (
 // ResolveMediaPath converts various path formats to an absolute path.
 // Supported formats:
 //   - Relative to media root: "browser/screenshot.png" or "./media/browser/screenshot.png"
-//   - Absolute paths in allowed directories: "/home/user/.openclaw/media/..."
+//   - Absolute paths in allowed directories: "/home/user/.goclaw/media/..."
 //
 // Returns error if path is invalid, outside allowed directories, or doesn't exist.
 func ResolveMediaPath(mediaRoot, path string) (string, error) {
