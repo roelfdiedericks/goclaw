@@ -261,11 +261,12 @@ func (b *Bot) handleMessage(c tele.Context) error {
 
 	// Create agent request with media callback
 	req := gateway.AgentRequest{
-		User:    u,
-		Source:  "telegram",
-		ChatID:  fmt.Sprintf("%d", chatID),
-		IsGroup: isGroup,
-		UserMsg: c.Text(),
+		User:           u,
+		Source:         "telegram",
+		ChatID:         fmt.Sprintf("%d", chatID),
+		IsGroup:        isGroup,
+		UserMsg:        c.Text(),
+		EnableThinking: u.Thinking, // Extended thinking based on user preference
 		OnMediaToSend: func(path, caption string) error {
 			return b.SendPhoto(chatID, path, caption)
 		},
@@ -351,12 +352,13 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 
 	// Create agent request with image and media callback
 	req := gateway.AgentRequest{
-		User:    u,
-		Source:  "telegram",
-		ChatID:  fmt.Sprintf("%d", chatID),
-		IsGroup: isGroup,
-		UserMsg: caption,
-		Images:  []session.ImageAttachment{imageAttachment},
+		User:           u,
+		Source:         "telegram",
+		ChatID:         fmt.Sprintf("%d", chatID),
+		IsGroup:        isGroup,
+		UserMsg:        caption,
+		Images:         []session.ImageAttachment{imageAttachment},
+		EnableThinking: u.Thinking, // Extended thinking based on user preference
 		OnMediaToSend: func(path, caption string) error {
 			return b.SendPhoto(chatID, path, caption)
 		},
@@ -1012,6 +1014,7 @@ func (b *Bot) InjectMessage(ctx context.Context, u *user.User, sessionKey, messa
 			Source:         "telegram",
 			SessionID:      sessionKey,      // Explicit session key
 			SkipAddMessage: true,            // Message already added by gateway.InjectMessage
+			EnableThinking: u.Thinking,      // Extended thinking based on user preference
 			// UserMsg intentionally empty - message already in session
 		}
 

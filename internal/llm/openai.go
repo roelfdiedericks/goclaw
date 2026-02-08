@@ -318,7 +318,7 @@ func (p *OpenAIProvider) SimpleMessage(ctx context.Context, userMessage, systemP
 	var result string
 	_, err := p.StreamMessage(ctx, messages, nil, systemPrompt, func(delta string) {
 		result += delta
-	})
+	}, nil)
 	if err != nil {
 		return "", err
 	}
@@ -328,13 +328,18 @@ func (p *OpenAIProvider) SimpleMessage(ctx context.Context, userMessage, systemP
 
 // StreamMessage sends a message to the LLM and streams the response
 // onDelta is called for each text chunk received
+// opts is currently unused for OpenAI but accepted for interface compliance
 func (p *OpenAIProvider) StreamMessage(
 	ctx context.Context,
 	messages []types.Message,
 	toolDefs []types.ToolDefinition,
 	systemPrompt string,
 	onDelta func(delta string),
+	opts *StreamOptions,
 ) (*Response, error) {
+	// Note: OpenAI reasoning models (o1, etc.) handle thinking differently
+	// The ReasoningContent field is already captured from the response
+	_ = opts // Currently unused, reasoning is automatic for compatible models
 	startTime := time.Now()
 	L_info("llm: request started", "provider", p.name, "model", p.model, "messages", len(messages), "tools", len(toolDefs))
 	L_debug("preparing OpenAI request", "messages", len(messages), "tools", len(toolDefs))
