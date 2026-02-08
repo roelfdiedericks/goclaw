@@ -33,12 +33,14 @@ type SupervisionGateway interface {
 	Users() *user.Registry
 
 	// RunAgentForSession triggers an agent run for a specific session.
-	// Used by supervision to trigger agent response after guidance injection.
+	// DEPRECATED: Use InjectMessage instead. Will be removed.
 	RunAgentForSession(ctx context.Context, sessionKey string, events chan<- gateway.AgentEvent) error
 
-	// DeliverMessageToUser sends a message to all channels a user is connected to.
-	// Used by ghostwriting to deliver messages directly.
-	DeliverMessageToUser(ctx context.Context, sessionKey string, message string) error
+	// InjectMessage injects a message into a user's session and delivers appropriately.
+	// If invokeLLM is true: adds as user message with prefix, triggers agent run
+	// If invokeLLM is false: adds as assistant message, delivers directly
+	// The supervisor parameter identifies who performed the injection (for audit logging).
+	InjectMessage(ctx context.Context, sessionKey, message string, invokeLLM bool, supervisor *user.User) error
 }
 
 // GatewaySessionInfo contains information about a gateway session for supervision.
@@ -166,6 +168,15 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, ses
 		if msg.ToolUseID != "" {
 			msgData["toolId"] = msg.ToolUseID
 		}
+		if msg.Source != "" {
+			msgData["source"] = msg.Source
+		}
+		if msg.Supervisor != "" {
+			msgData["supervisor"] = msg.Supervisor
+		}
+		if msg.InterventionType != "" {
+			msgData["interventionType"] = msg.InterventionType
+		}
 		data, _ := json.Marshal(msgData)
 		fmt.Fprintf(w, "event: history\ndata: %s\n\n", data)
 	}
@@ -241,37 +252,15 @@ func (s *Server) handleSessionGuidance(w http.ResponseWriter, r *http.Request, s
 	supervision := sess.EnsureSupervision()
 	L_debug("http: guidance: session found, supervision state ensured", "session", sessionKey, "llmEnabled", supervision.IsLLMEnabled())
 
-	// If agent is currently generating, request interrupt first
-	L_debug("http: guidance: requesting interrupt (in case agent is mid-generation)", "session", sessionKey)
-	supervision.RequestInterrupt()
-
-	// Add guidance message directly to the session as a user message
-	// This ensures the agent sees it and responds
-	guidanceMsg := fmt.Sprintf("[Supervisor: %s]: %s", u.ID, req.Content)
-	L_debug("http: guidance: adding message to session", "session", sessionKey, "msg", guidanceMsg)
-	sess.AddUserMessage(guidanceMsg, "supervisor")
-
 	L_info("http: guidance sent", "session", sessionKey, "supervisor", u.ID, "contentLen", len(req.Content))
 
-	// Trigger agent run in background to respond to the guidance
+	// Use InjectMessage to add message to session and trigger agent run through user's channels
+	// This ensures proper event streaming to the user
+	// Pass supervisor for audit logging
 	go func() {
-		L_debug("http: guidance: about to invoke RunAgentForSession", "session", sessionKey)
-		events := make(chan gateway.AgentEvent, 100)
-		
-		// Drain events (they'll be sent via the supervision SSE stream)
-		go func() {
-			for ev := range events {
-				L_trace("http: guidance: event from agent", "session", sessionKey, "eventType", fmt.Sprintf("%T", ev))
-			}
-			L_debug("http: guidance: event channel drained", "session", sessionKey)
-		}()
-
-		L_debug("http: guidance: calling RunAgentForSession now", "session", sessionKey)
-		err := gw.RunAgentForSession(context.Background(), sessionKey, events)
+		err := gw.InjectMessage(context.Background(), sessionKey, req.Content, true, u) // invokeLLM=true, supervisor=u
 		if err != nil {
-			L_error("http: guidance agent run failed", "session", sessionKey, "error", err)
-		} else {
-			L_debug("http: guidance: RunAgentForSession completed successfully", "session", sessionKey)
+			L_error("http: guidance inject failed", "session", sessionKey, "error", err)
 		}
 	}()
 
@@ -357,12 +346,13 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request, se
 		return
 	}
 
-	// Add message to session as assistant
-	sess.AddAssistantMessage(req.Content)
-
-	// Deliver message to all channels the user is connected to
-	if err := gw.DeliverMessageToUser(r.Context(), sessionKey, req.Content); err != nil {
-		L_error("http: ghostwrite delivery failed", "session", sessionKey, "error", err)
+	// Use InjectMessage to add message to session and deliver to user's channels
+	// invokeLLM=false means this is a ghostwrite (no LLM response)
+	// Pass supervisor for audit logging
+	if err := gw.InjectMessage(r.Context(), sessionKey, req.Content, false, u); err != nil {
+		L_error("http: ghostwrite inject failed", "session", sessionKey, "error", err)
+		http.Error(w, "Failed to deliver message", http.StatusInternalServerError)
+		return
 	}
 
 	L_info("http: ghostwrite sent", "session", sessionKey, "supervisor", u.ID, "contentLen", len(req.Content))
@@ -480,9 +470,10 @@ func (s *Server) supervisionEventToSSE(event interface{}) *SSEEvent {
 
 	// User message event from gateway
 	case gateway.EventUserMessage:
-		return &SSEEvent{Event: "user_message", Data: map[string]string{
-			"content": e.Content,
-			"source":  e.Source,
+		return &SSEEvent{Event: "user_message", Data: map[string]interface{}{
+			"content":    e.Content,
+			"source":     e.Source,
+			"supervisor": e.Supervisor,
 		}}
 
 	default:

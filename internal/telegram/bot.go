@@ -976,9 +976,14 @@ func (b *Bot) HasUser(u *user.User) bool {
 	return u.HasTelegramAuth()
 }
 
-// SendAgentResponse sends an agent response directly to a user's Telegram chat.
-// Used by supervision to deliver responses triggered by guidance.
-func (b *Bot) SendAgentResponse(ctx context.Context, u *user.User, response string) error {
+// InjectMessage handles message injection for supervision (guidance/ghostwriting).
+//
+// If invokeLLM is true (guidance):
+//   - Triggers agent run, waits for completion, sends final response
+//
+// If invokeLLM is false (ghostwrite):
+//   - Sends typing indicator, waits, then delivers message
+func (b *Bot) InjectMessage(ctx context.Context, u *user.User, sessionKey, message string, invokeLLM bool) error {
 	if u == nil || u.TelegramID == "" {
 		return nil // User doesn't have Telegram
 	}
@@ -991,13 +996,77 @@ func (b *Bot) SendAgentResponse(ctx context.Context, u *user.User, response stri
 
 	chat := &tele.Chat{ID: chatID}
 
-	// Send typing indicator first
+	L_info("telegram: inject message", "user", u.ID, "chatID", chatID, "sessionKey", sessionKey, "invokeLLM", invokeLLM, "messageLen", len(message))
+
+	// Send typing indicator
 	_ = b.bot.Notify(chat, tele.Typing)
 
-	L_info("telegram: sending agent response", "user", u.ID, "chatID", chatID, "responseLen", len(response))
+	if invokeLLM {
+		// Guidance: run agent and send final response
+		// The message is already in the session context (added by gateway)
+		events := make(chan gateway.AgentEvent, 100)
 
-	_, err = b.SendText(chatID, response)
-	return err
+		// Create agent request - no UserMsg since it's already in session
+		req := gateway.AgentRequest{
+			User:           u,
+			Source:         "telegram",
+			SessionID:      sessionKey,      // Explicit session key
+			SkipAddMessage: true,            // Message already added by gateway.InjectMessage
+			// UserMsg intentionally empty - message already in session
+		}
+
+		// Collect final text from events
+		var finalText string
+		done := make(chan struct{})
+
+		go func() {
+			defer close(done)
+			for event := range events {
+				if e, ok := event.(gateway.EventAgentEnd); ok {
+					finalText = e.FinalText
+				}
+			}
+		}()
+
+		// Run agent (blocking)
+		err := b.gateway.RunAgent(ctx, req, events)
+		if err != nil {
+			L_error("telegram: inject agent run failed", "user", u.ID, "error", err)
+			return err
+		}
+
+		// Wait for event processing to complete
+		<-done
+
+		// Send the response
+		if finalText != "" {
+			_, err = b.SendText(chatID, finalText)
+			if err != nil {
+				return fmt.Errorf("failed to send response: %w", err)
+			}
+			L_info("telegram: inject guidance delivered", "user", u.ID, "responseLen", len(finalText))
+		}
+
+	} else {
+		// Ghostwrite: deliver message directly with typing simulation
+		// Get typing delay from config
+		typingDelay := 500 * time.Millisecond // default
+		if cfg := b.gateway.Config(); cfg != nil && cfg.Supervision.Ghostwriting.TypingDelayMs > 0 {
+			typingDelay = time.Duration(cfg.Supervision.Ghostwriting.TypingDelayMs) * time.Millisecond
+		}
+
+		// Wait for typing delay (simulates thinking/typing)
+		time.Sleep(typingDelay)
+
+		// Send the message
+		_, err = b.SendText(chatID, message)
+		if err != nil {
+			return fmt.Errorf("failed to send ghostwrite: %w", err)
+		}
+		L_info("telegram: inject ghostwrite delivered", "user", u.ID, "messageLen", len(message))
+	}
+
+	return nil
 }
 
 // SendText sends a text message to a chat.

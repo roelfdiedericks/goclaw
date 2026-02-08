@@ -36,7 +36,7 @@ type Manager struct {
 type ManagerConfig struct {
 	Enabled       bool
 	BundledDir    string   // GoClaw bundled skills (default: <exe_dir>/skills)
-	ManagedDir    string   // User-installed skills (default: ~/.openclaw/skills)
+	ManagedDir    string   // User-installed skills (gateway: ~/.openclaw/skills or ~/.goclaw/skills based on workspace)
 	WorkspaceDir  string   // Workspace skills (default: <workspace>/skills)
 	ExtraDirs     []string // Additional directories
 	WatchEnabled  bool
@@ -63,7 +63,7 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	if managedDir == "" {
 		home, err := os.UserHomeDir()
 		if err == nil {
-			managedDir = filepath.Join(home, ".openclaw", "skills")
+			managedDir = filepath.Join(home, ".goclaw", "skills")
 		}
 	}
 

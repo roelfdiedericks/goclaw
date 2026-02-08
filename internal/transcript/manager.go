@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/roelfdiedericks/goclaw/internal/config"
@@ -97,31 +98,41 @@ func (m *Manager) Stats() TranscriptStats {
 }
 
 // Recent returns recent transcript entries for a user
-func (m *Manager) Recent(ctx context.Context, userID string, isOwner bool, limit int) ([]RecentEntry, error) {
+func (m *Manager) Recent(ctx context.Context, userID string, isOwner bool, limit int, filter *QueryFilter) ([]RecentEntry, error) {
 	if limit <= 0 {
 		limit = 10
 	}
+	if filter == nil {
+		filter = &QueryFilter{}
+	}
 
-	// Build WHERE clause for user scoping
-	whereClause := "WHERE role IN ('user', 'assistant')"
+	// Build WHERE clause
+	conditions := []string{"role IN ('user', 'assistant')"}
 	var args []interface{}
 
+	// User scoping
 	if !isOwner && userID != "" {
-		whereClause += " AND user_id = ?"
+		conditions = append(conditions, "user_id = ?")
 		args = append(args, userID)
 	}
 
-	// Exclude system messages
-	whereClause += " AND content NOT LIKE '%HEARTBEAT%'"
-	whereClause += " AND content NOT LIKE '%heartbeat%'"
-	whereClause += " AND content NOT LIKE '%Memory checkpoint%'"
+	// Apply filters
+	conditions, args = applyQueryFilters(conditions, args, filter)
 
+	// Legacy content-based filtering (only if not using humanOnly)
+	if !filter.HumanOnly {
+		conditions = append(conditions, "content NOT LIKE '%HEARTBEAT%'")
+		conditions = append(conditions, "content NOT LIKE '%heartbeat%'")
+		conditions = append(conditions, "content NOT LIKE '%Memory checkpoint%'")
+	}
+
+	whereClause := "WHERE " + strings.Join(conditions, " AND ")
 	args = append(args, limit)
 
 	query := fmt.Sprintf(`
 		SELECT id, session_key, timestamp, role, 
 			   CASE WHEN LENGTH(content) > 200 THEN SUBSTR(content, 1, 200) || '...' ELSE content END as preview,
-			   user_id
+			   user_id, source
 		FROM messages
 		%s
 		ORDER BY timestamp DESC
@@ -137,14 +148,17 @@ func (m *Manager) Recent(ctx context.Context, userID string, isOwner bool, limit
 	var entries []RecentEntry
 	for rows.Next() {
 		var e RecentEntry
-		var userIDNull sql.NullString
+		var userIDNull, sourceNull sql.NullString
 		var ts int64
-		if err := rows.Scan(&e.ID, &e.SessionKey, &ts, &e.Role, &e.Preview, &userIDNull); err != nil {
+		if err := rows.Scan(&e.ID, &e.SessionKey, &ts, &e.Role, &e.Preview, &userIDNull, &sourceNull); err != nil {
 			continue
 		}
 		e.Timestamp = time.Unix(ts, 0)
 		if userIDNull.Valid {
 			e.UserID = userIDNull.String
+		}
+		if sourceNull.Valid {
+			e.Source = sourceNull.String
 		}
 		entries = append(entries, e)
 	}
@@ -152,42 +166,177 @@ func (m *Manager) Recent(ctx context.Context, userID string, isOwner bool, limit
 	return entries, nil
 }
 
+// applyQueryFilters adds filter conditions to a query
+func applyQueryFilters(conditions []string, args []interface{}, filter *QueryFilter) ([]string, []interface{}) {
+	if filter == nil {
+		return conditions, args
+	}
+
+	// Source filter
+	if filter.Source != "" {
+		conditions = append(conditions, "source = ?")
+		args = append(args, filter.Source)
+	}
+
+	// Exclude sources
+	if len(filter.ExcludeSources) > 0 {
+		placeholders := make([]string, len(filter.ExcludeSources))
+		for i, s := range filter.ExcludeSources {
+			placeholders[i] = "?"
+			args = append(args, s)
+		}
+		conditions = append(conditions, fmt.Sprintf("(source IS NULL OR source NOT IN (%s))", strings.Join(placeholders, ",")))
+	}
+
+	// HumanOnly - exclude cron and heartbeat sources
+	if filter.HumanOnly {
+		conditions = append(conditions, "(source IS NULL OR source NOT IN ('cron', 'heartbeat'))")
+	}
+
+	// Time filters
+	if !filter.After.IsZero() {
+		conditions = append(conditions, "timestamp > ?")
+		args = append(args, filter.After.Unix())
+	}
+	if !filter.Before.IsZero() {
+		conditions = append(conditions, "timestamp < ?")
+		args = append(args, filter.Before.Unix())
+	}
+	if filter.LastDays > 0 {
+		cutoff := time.Now().AddDate(0, 0, -filter.LastDays).Unix()
+		conditions = append(conditions, "timestamp > ?")
+		args = append(args, cutoff)
+	}
+
+	// Role filter
+	if filter.Role != "" {
+		conditions = append(conditions, "role = ?")
+		args = append(args, filter.Role)
+	}
+
+	return conditions, args
+}
+
+// ExactSearch performs substring search on message content
+// Returns message-level results (not chunks)
+func (m *Manager) ExactSearch(ctx context.Context, query string, userID string, isOwner bool, limit int, filter *QueryFilter) ([]RecentEntry, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	if filter == nil {
+		filter = &QueryFilter{}
+	}
+
+	// Build WHERE clause
+	conditions := []string{
+		"role IN ('user', 'assistant')",
+		"content LIKE ?", // Substring match
+	}
+	args := []interface{}{
+		"%" + query + "%",
+	}
+
+	// User scoping
+	if !isOwner && userID != "" {
+		conditions = append(conditions, "user_id = ?")
+		args = append(args, userID)
+	}
+
+	// Apply filters
+	conditions, args = applyQueryFilters(conditions, args, filter)
+
+	whereClause := "WHERE " + strings.Join(conditions, " AND ")
+	args = append(args, limit)
+
+	sqlQuery := fmt.Sprintf(`
+		SELECT id, session_key, timestamp, role,
+		       CASE WHEN LENGTH(content) > 200 THEN SUBSTR(content, 1, 200) || '...' ELSE content END as preview,
+		       user_id, source
+		FROM messages
+		%s
+		ORDER BY timestamp DESC
+		LIMIT ?
+	`, whereClause)
+
+	rows, err := m.db.QueryContext(ctx, sqlQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("exact search: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []RecentEntry
+	for rows.Next() {
+		var e RecentEntry
+		var userIDNull, sourceNull sql.NullString
+		var ts int64
+		if err := rows.Scan(&e.ID, &e.SessionKey, &ts, &e.Role, &e.Preview, &userIDNull, &sourceNull); err != nil {
+			continue
+		}
+		e.Timestamp = time.Unix(ts, 0)
+		if userIDNull.Valid {
+			e.UserID = userIDNull.String
+		}
+		if sourceNull.Valid {
+			e.Source = sourceNull.String
+		}
+		entries = append(entries, e)
+	}
+
+	L_debug("transcript: exact search",
+		"query", query,
+		"results", len(entries),
+	)
+
+	return entries, nil
+}
+
 // Gaps returns time gaps in conversation history (potential sleep/away periods)
-func (m *Manager) Gaps(ctx context.Context, userID string, isOwner bool, minHours float64, limit int) ([]GapEntry, error) {
+func (m *Manager) Gaps(ctx context.Context, userID string, isOwner bool, minHours float64, limit int, filter *QueryFilter) ([]GapEntry, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 	if minHours <= 0 {
 		minHours = 1.0
 	}
+	if filter == nil {
+		filter = &QueryFilter{}
+	}
 	minSeconds := int64(minHours * 3600)
 
-	// Build WHERE clause for user scoping
-	whereClause := "WHERE role = 'user'"
+	// Build WHERE clause - gaps are based on user messages
+	conditions := []string{"role = 'user'"}
 	var args []interface{}
 
+	// User scoping
 	if !isOwner && userID != "" {
-		whereClause += " AND user_id = ?"
+		conditions = append(conditions, "user_id = ?")
 		args = append(args, userID)
 	}
 
-	// Exclude system messages
-	whereClause += " AND content NOT LIKE '%HEARTBEAT%'"
-	whereClause += " AND content NOT LIKE '%heartbeat%'"
-	whereClause += " AND content NOT LIKE '%Memory checkpoint%'"
+	// Apply filters (especially humanOnly for excluding cron/heartbeat)
+	conditions, args = applyQueryFilters(conditions, args, filter)
 
+	// Legacy content-based filtering (only if not using humanOnly)
+	if !filter.HumanOnly {
+		conditions = append(conditions, "content NOT LIKE '%HEARTBEAT%'")
+		conditions = append(conditions, "content NOT LIKE '%heartbeat%'")
+		conditions = append(conditions, "content NOT LIKE '%Memory checkpoint%'")
+	}
+
+	whereClause := "WHERE " + strings.Join(conditions, " AND ")
 	args = append(args, minSeconds, limit)
 
 	query := fmt.Sprintf(`
 		WITH user_msgs AS (
-			SELECT timestamp, content,
+			SELECT timestamp, content, source,
 				   LEAD(timestamp) OVER (ORDER BY timestamp) as next_timestamp
 			FROM messages
 			%s
 		)
 		SELECT timestamp, next_timestamp,
 			   (next_timestamp - timestamp) as gap_seconds,
-			   CASE WHEN LENGTH(content) > 100 THEN SUBSTR(content, 1, 100) || '...' ELSE content END as last_msg
+			   CASE WHEN LENGTH(content) > 100 THEN SUBSTR(content, 1, 100) || '...' ELSE content END as last_msg,
+			   source
 		FROM user_msgs
 		WHERE next_timestamp IS NOT NULL
 		  AND (next_timestamp - timestamp) > ?
@@ -205,12 +354,16 @@ func (m *Manager) Gaps(ctx context.Context, userID string, isOwner bool, minHour
 	for rows.Next() {
 		var e GapEntry
 		var fromTs, toTs, gapSecs int64
-		if err := rows.Scan(&fromTs, &toTs, &gapSecs, &e.LastMessage); err != nil {
+		var sourceNull sql.NullString
+		if err := rows.Scan(&fromTs, &toTs, &gapSecs, &e.LastMessage, &sourceNull); err != nil {
 			continue
 		}
 		e.From = time.Unix(fromTs, 0)
 		e.To = time.Unix(toTs, 0)
 		e.GapHours = float64(gapSecs) / 3600.0
+		if sourceNull.Valid {
+			e.Source = sourceNull.String
+		}
 		entries = append(entries, e)
 	}
 
@@ -236,6 +389,7 @@ type RecentEntry struct {
 	Role       string    `json:"role"`
 	Preview    string    `json:"preview"`
 	UserID     string    `json:"userId,omitempty"`
+	Source     string    `json:"source,omitempty"`
 }
 
 // GapEntry represents a time gap in conversation
@@ -244,4 +398,21 @@ type GapEntry struct {
 	To          time.Time `json:"to"`
 	GapHours    float64   `json:"gapHours"`
 	LastMessage string    `json:"lastMessage"`
+	Source      string    `json:"source,omitempty"`
+}
+
+// QueryFilter contains common filter options for transcript queries
+type QueryFilter struct {
+	// Source filters
+	Source         string   // Include only this source (e.g., "telegram")
+	ExcludeSources []string // Exclude these sources
+	HumanOnly      bool     // Exclude cron and heartbeat sources
+
+	// Time filters
+	After    time.Time // Messages after this time
+	Before   time.Time // Messages before this time
+	LastDays int       // Messages from last N days (alternative to After)
+
+	// Role filter
+	Role string // Filter by role ("user" or "assistant")
 }

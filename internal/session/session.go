@@ -144,6 +144,39 @@ func (s *Session) AddAssistantMessage(content string) {
 	s.UpdatedAt = time.Now()
 }
 
+// AddSupervisionUserMessage adds a user message with supervision metadata (for guidance)
+func (s *Session) AddSupervisionUserMessage(content, source, supervisor, interventionType string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.Messages = append(s.Messages, Message{
+		ID:               generateMessageID(),
+		Role:             "user",
+		Content:          content,
+		Source:           source,
+		Timestamp:        time.Now(),
+		Supervisor:       supervisor,
+		InterventionType: interventionType,
+	})
+	s.UpdatedAt = time.Now()
+}
+
+// AddSupervisionAssistantMessage adds an assistant message with supervision metadata (for ghostwriting)
+func (s *Session) AddSupervisionAssistantMessage(content, supervisor, interventionType string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.Messages = append(s.Messages, Message{
+		ID:               generateMessageID(),
+		Role:             "assistant",
+		Content:          content,
+		Timestamp:        time.Now(),
+		Supervisor:       supervisor,
+		InterventionType: interventionType,
+	})
+	s.UpdatedAt = time.Now()
+}
+
 // AddToolUse adds a tool use message to the session
 func (s *Session) AddToolUse(toolUseID, toolName string, input json.RawMessage, thinking string) {
 	s.mu.Lock()

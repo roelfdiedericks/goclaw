@@ -120,10 +120,9 @@ func ShowConfigPath() error {
 	if configPath == "" {
 		fmt.Println("No GoClaw configuration found.")
 		fmt.Println()
-		fmt.Println("Default locations searched:")
+		fmt.Println("Locations searched:")
 		fmt.Println("  ./goclaw.json")
 		fmt.Println("  ~/.goclaw/goclaw.json")
-		fmt.Println("  ~/.openclaw/goclaw/goclaw.json")
 		return nil
 	}
 
@@ -135,11 +134,10 @@ func ShowConfigPath() error {
 func findExistingConfig() string {
 	home, _ := os.UserHomeDir()
 
-	// Priority order (highest first)
+	// Search locations
 	paths := []string{
-		"goclaw.json",                                        // current directory
-		filepath.Join(home, ".goclaw", "goclaw.json"),        // ~/.goclaw/
-		filepath.Join(home, ".openclaw", "goclaw", "goclaw.json"), // ~/.openclaw/goclaw/
+		"goclaw.json",                                 // current directory
+		filepath.Join(home, ".goclaw", "goclaw.json"), // ~/.goclaw/
 	}
 
 	for _, path := range paths {
@@ -153,16 +151,11 @@ func findExistingConfig() string {
 }
 
 // GetConfigPath returns the path where config should be saved
-// based on whether OpenClaw exists (side-by-side) or fresh install
+// GoClaw always uses its own directory, regardless of OpenClaw presence
 func GetConfigPath(openclawImport bool) string {
 	home, _ := os.UserHomeDir()
-
-	if openclawImport {
-		// Side-by-side with OpenClaw
-		return filepath.Join(home, ".openclaw", "goclaw", "goclaw.json")
-	}
-
-	// Fresh install
+	// Always use ~/.goclaw/ for GoClaw's own config
+	// OpenClaw integration is via config options (inherit), not directory nesting
 	return filepath.Join(home, ".goclaw", "goclaw.json")
 }
 

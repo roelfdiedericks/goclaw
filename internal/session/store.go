@@ -108,6 +108,10 @@ type StoredMessage struct {
 	ChannelID string // Channel-specific ID (e.g., telegram message ID)
 	UserID    string // User who sent the message
 
+	// Supervision metadata (for guidance/ghostwriting interventions)
+	Supervisor       string // Username/ID of supervisor who intervened (empty if none)
+	InterventionType string // "guidance" or "ghostwrite" (empty if none)
+
 	// Token tracking
 	InputTokens  int
 	OutputTokens int

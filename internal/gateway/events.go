@@ -72,8 +72,9 @@ func (EventThinking) agentEvent() {}
 
 // EventUserMessage is emitted when a user message is received (for supervision)
 type EventUserMessage struct {
-	Content string `json:"content"`
-	Source  string `json:"source"`
+	Content    string `json:"content"`
+	Source     string `json:"source"`               // "http", "telegram", "guidance", "ghostwrite"
+	Supervisor string `json:"supervisor,omitempty"` // Supervisor username (for guidance/ghostwrite)
 }
 
 func (EventUserMessage) agentEvent() {}

@@ -69,7 +69,7 @@ func (a ToolsConfigAdapter) ToConfig() BrowserConfig {
 
 // BrowserConfig holds browser configuration
 type BrowserConfig struct {
-	Dir                string            `json:"dir"`                // Browser data directory (empty = ~/.openclaw/goclaw/browser)
+	Dir                string            `json:"dir"`                // Browser data directory (empty = ~/.goclaw/browser)
 	AutoDownload       bool              `json:"autoDownload"`       // Download Chromium if missing
 	Revision           string            `json:"revision"`           // Chromium revision (empty = latest)
 	Headless           bool              `json:"headless"`           // Run in headless mode
@@ -90,7 +90,7 @@ type BrowserConfig struct {
 // DefaultBrowserConfig returns the default browser configuration
 func DefaultBrowserConfig() BrowserConfig {
 	return BrowserConfig{
-		Dir:            "",      // Will resolve to ~/.openclaw/goclaw/browser
+		Dir:            "",      // Will resolve to ~/.goclaw/browser
 		AutoDownload:   true,
 		Revision:       "",      // Latest
 		Headless:       true,
@@ -103,12 +103,12 @@ func DefaultBrowserConfig() BrowserConfig {
 	}
 }
 
-// ResolveDir returns the browser directory, defaulting to ~/.openclaw/goclaw/browser
+// ResolveDir returns the browser directory, defaulting to ~/.goclaw/browser
 func (c *BrowserConfig) ResolveDir(homeDir string) string {
 	if c.Dir != "" {
 		return c.Dir
 	}
-	return filepath.Join(homeDir, ".openclaw", "goclaw", "browser")
+	return filepath.Join(homeDir, ".goclaw", "browser")
 }
 
 // ResolveBinDir returns the chromium binary directory

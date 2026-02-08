@@ -16,11 +16,13 @@ import (
 
 // SearchOptions configures search behavior
 type SearchOptions struct {
-	MaxResults    int
-	MinScore      float64
-	VectorWeight  float64
-	KeywordWeight float64
-	SessionKey    string // Optional: limit to specific session
+	MaxResults      int
+	MinScore        float64
+	VectorWeight    float64
+	KeywordWeight   float64
+	SessionKey      string // Optional: limit to specific session
+	ExactBoost      bool   // If true, boost chunks containing exact query substring
+	ExactBoostQuery string // The exact query string to look for (for boosting)
 }
 
 // DefaultSearchOptions returns sensible defaults
@@ -95,6 +97,11 @@ func (s *Searcher) Search(ctx context.Context, query string, userID string, isOw
 
 	// Merge results
 	merged := s.mergeResults(keywordResults, vectorResults, opts.VectorWeight, opts.KeywordWeight)
+
+	// Apply exact match boost if enabled
+	if opts.ExactBoost && opts.ExactBoostQuery != "" {
+		merged = s.applyExactBoost(ctx, merged, opts.ExactBoostQuery)
+	}
 
 	// Fetch full chunk data for top results
 	results, err := s.fetchChunks(ctx, merged, opts.MaxResults, opts.MinScore)
@@ -264,6 +271,88 @@ func (s *Searcher) mergeResults(keyword, vector map[string]float64, vectorWeight
 	}
 
 	return merged
+}
+
+// applyExactBoost boosts scores for chunks that contain the exact query substring
+func (s *Searcher) applyExactBoost(ctx context.Context, scores map[string]float64, exactQuery string) map[string]float64 {
+	if len(scores) == 0 || exactQuery == "" {
+		return scores
+	}
+
+	// Build list of chunk IDs
+	var ids []string
+	for id := range scores {
+		ids = append(ids, id)
+	}
+
+	// Query for chunks containing exact match (case-insensitive)
+	// Use placeholders for all IDs
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids)+1)
+	args[0] = "%" + exactQuery + "%"
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i+1] = id
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id FROM transcript_chunks
+		WHERE id IN (%s)
+		AND LOWER(content) LIKE LOWER(?)
+	`, strings.Join(placeholders, ","))
+
+	// SQLite LIKE with placeholder for pattern first
+	// Reorder: pattern at end for LIKE
+	reorderedArgs := make([]interface{}, len(args))
+	for i, id := range ids {
+		reorderedArgs[i] = id
+	}
+	reorderedArgs[len(ids)] = "%" + exactQuery + "%"
+
+	query = fmt.Sprintf(`
+		SELECT id FROM transcript_chunks
+		WHERE id IN (%s)
+		AND LOWER(content) LIKE LOWER(?)
+	`, strings.Join(placeholders, ","))
+
+	rows, err := s.db.QueryContext(ctx, query, reorderedArgs...)
+	if err != nil {
+		L_warn("transcript: exact boost query failed", "error", err)
+		return scores
+	}
+	defer rows.Close()
+
+	// Collect IDs with exact matches
+	exactMatches := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		exactMatches[id] = true
+	}
+
+	if len(exactMatches) == 0 {
+		return scores
+	}
+
+	L_debug("transcript: exact boost applied",
+		"query", exactQuery,
+		"boostedChunks", len(exactMatches),
+	)
+
+	// Apply boost to matching chunks
+	boosted := make(map[string]float64)
+	for id, score := range scores {
+		if exactMatches[id] {
+			// Significant boost for exact matches - ensures they rank near top
+			boosted[id] = score + 0.5
+		} else {
+			boosted[id] = score
+		}
+	}
+
+	return boosted
 }
 
 // fetchChunks fetches full chunk data for the top scored results
