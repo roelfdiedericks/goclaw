@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
@@ -44,7 +45,15 @@ func GenerateSummaryWithClient(ctx context.Context, client SummarizationClient, 
 	}
 
 	// Build a condensed conversation for the summary prompt
-	conversationText := BuildMessagesForCheckpoint(messages)
+	// Use truncated version that fits within model context limits (150k tokens ≈ 600k chars)
+	conversationText := BuildMessagesForSummary(messages, 150000)
+	
+	// Estimate tokens in final prompt
+	estimatedTokens := len(conversationText) / 4
+	L_debug("compaction: summary input prepared", 
+		"messages", len(messages), 
+		"textChars", len(conversationText),
+		"estimatedTokens", estimatedTokens)
 
 	userMessage := fmt.Sprintf("%s\n\nConversation to summarize:\n%s", CompactionSummaryPrompt, conversationText)
 	systemPrompt := "You are a helpful assistant that creates concise conversation summaries."

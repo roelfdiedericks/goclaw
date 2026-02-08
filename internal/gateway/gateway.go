@@ -1035,6 +1035,9 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			streamOpts = &llm.StreamOptions{
 				EnableThinking: true,
 				ThinkingBudget: g.config.LLM.Thinking.BudgetTokens,
+				OnThinkingDelta: func(delta string) {
+					sendEvent(EventThinkingDelta{RunID: runID, Delta: delta})
+				},
 			}
 		}
 		

@@ -456,8 +456,7 @@ func Load() (*LoadResult, error) {
 				MaxTokens: 8192,
 			},
 			Summarization: LLMPurposeConfig{
-				Models:    []string{}, // Empty = use agent fallback
-				MaxTokens: 4096,
+				Models: []string{}, // Empty = use agent fallback
 			},
 			Embeddings: LLMPurposeConfig{
 				Models: []string{}, // Empty = disabled

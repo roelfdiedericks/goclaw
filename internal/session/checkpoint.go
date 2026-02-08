@@ -334,6 +334,92 @@ func BuildMessagesForCheckpoint(messages []Message) string {
 	return result
 }
 
+// BuildMessagesForSummary builds a condensed message list for compaction summary,
+// ensuring the output fits within the specified token limit.
+// Keeps recent messages (more relevant) and filters tool_result content.
+func BuildMessagesForSummary(messages []Message, maxTokens int) string {
+	// Rough estimate: 1 token ≈ 4 characters
+	maxChars := maxTokens * 4
+	
+	// First pass: filter and truncate messages
+	type summaryMsg struct {
+		index   int
+		role    string
+		content string
+	}
+	
+	var filtered []summaryMsg
+	for i, msg := range messages {
+		role := msg.Role
+		content := msg.Content
+		
+		// Skip tool_result messages (often large JSON, less useful for summary)
+		if role == "tool_result" {
+			// Include a brief marker instead
+			filtered = append(filtered, summaryMsg{
+				index:   i,
+				role:    role,
+				content: "[tool result]",
+			})
+			continue
+		}
+		
+		// Truncate very long messages
+		if len(content) > 2000 {
+			content = content[:2000] + "... [truncated]"
+		}
+		
+		filtered = append(filtered, summaryMsg{
+			index:   i,
+			role:    role,
+			content: content,
+		})
+	}
+	
+	// Estimate total size
+	totalChars := 0
+	for _, m := range filtered {
+		totalChars += len(m.content) + 50 // overhead for formatting
+	}
+	
+	// If within limit, use all messages
+	if totalChars <= maxChars {
+		var result string
+		for _, m := range filtered {
+			result += fmt.Sprintf("[%d] %s: %s\n\n", m.index+1, m.role, m.content)
+		}
+		return result
+	}
+	
+	// Over limit: drop older messages, keep recent ones
+	// Recent messages are more relevant for understanding current context
+	var result string
+	currentChars := 0
+	
+	// Build from end (most recent) backwards
+	var kept []summaryMsg
+	for i := len(filtered) - 1; i >= 0; i-- {
+		m := filtered[i]
+		msgChars := len(m.content) + 50
+		if currentChars+msgChars > maxChars {
+			break
+		}
+		kept = append([]summaryMsg{m}, kept...) // prepend
+		currentChars += msgChars
+	}
+	
+	// Add note about truncation
+	if len(kept) < len(filtered) {
+		result = fmt.Sprintf("[Note: Showing %d of %d messages (recent messages only)]\n\n", len(kept), len(filtered))
+	}
+	
+	for _, m := range kept {
+		result += fmt.Sprintf("[%d] %s: %s\n\n", m.index+1, m.role, m.content)
+	}
+	
+	return result
+}
+
 // CompactionSummaryPrompt is the prompt for generating compaction summaries
 const CompactionSummaryPrompt = `Summarize this conversation for context preservation. Include:
 1. Main topics discussed

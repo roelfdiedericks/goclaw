@@ -385,6 +385,11 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 	var editCount int
 	updateInterval := 500 * time.Millisecond // Don't update too frequently
 
+	// Thinking delta tracking
+	var thinkingBuf strings.Builder
+	var thinkingMsg *tele.Message
+	var lastThinkingUpdate time.Time
+
 	// Get thinking mode preference upfront
 	userID := fmt.Sprintf("%d", c.Sender().ID)
 	u := b.users.FromIdentity("telegram", userID)
@@ -477,11 +482,37 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 				_, _ = b.bot.Send(c.Chat(), toolMsg, &tele.SendOptions{ParseMode: tele.ModeHTML})
 			}
 		
+		case gateway.EventThinkingDelta:
+			// Accumulate thinking deltas if thinking mode is on
+			if prefs.ShowThinking {
+				thinkingBuf.WriteString(e.Delta)
+				
+				// Update thinking message periodically
+				if time.Since(lastThinkingUpdate) > updateInterval {
+					thinkingText := fmt.Sprintf("💭 <i>%s</i>", html.EscapeString(thinkingBuf.String()))
+					if thinkingMsg == nil {
+						msg, err := b.bot.Send(c.Chat(), thinkingText, &tele.SendOptions{ParseMode: tele.ModeHTML})
+						if err != nil {
+							L_error("telegram: failed to send thinking message", "error", err)
+						} else {
+							thinkingMsg = msg
+						}
+					} else {
+						_, err := b.bot.Edit(thinkingMsg, thinkingText, &tele.SendOptions{ParseMode: tele.ModeHTML})
+						if err != nil {
+							L_trace("telegram: thinking edit failed", "error", err)
+						}
+					}
+					lastThinkingUpdate = time.Now()
+				}
+			}
+
 		case gateway.EventThinking:
 			L_debug("telegram: thinking", "contentLen", len(e.Content))
 			
-			// Show reasoning content if thinking mode is on
-			if prefs.ShowThinking && e.Content != "" {
+			// Final thinking content (batch mode) - show if thinking mode is on
+			// Only show if we didn't already stream deltas
+			if prefs.ShowThinking && e.Content != "" && thinkingBuf.Len() == 0 {
 				// Format as italic with thinking emoji prefix
 				thinkingText := fmt.Sprintf("💭 <i>%s</i>", html.EscapeString(e.Content))
 				_, _ = b.bot.Send(c.Chat(), thinkingText, &tele.SendOptions{ParseMode: tele.ModeHTML})
