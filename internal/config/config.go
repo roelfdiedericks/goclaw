@@ -271,16 +271,19 @@ type GatewayConfig struct {
 }
 
 // LLMConfig contains LLM provider settings
-// LLMConfig configures LLM providers and model selection.
-// Providers are aliased instances; models reference them via "alias/model" format.
-// LLMConfig configures LLM providers and model selection.
 // Providers are aliased instances; models reference them via "alias/model" format.
 type LLMConfig struct {
 	Providers     map[string]LLMProviderConfig `json:"providers"`
 	Agent         LLMPurposeConfig             `json:"agent"`         // Main chat
 	Summarization LLMPurposeConfig             `json:"summarization"` // Checkpoint/compaction
 	Embeddings    LLMPurposeConfig             `json:"embeddings"`    // Memory/transcript
+	Thinking      ThinkingConfig               `json:"thinking"`      // Extended thinking settings
 	SystemPrompt  string                       `json:"systemPrompt"`  // System prompt for agent
+}
+
+// ThinkingConfig configures extended thinking for models that support it
+type ThinkingConfig struct {
+	BudgetTokens int `json:"budgetTokens"` // Token budget for thinking (default: 10000)
 }
 
 // LLMProviderConfig is the configuration for a single provider instance
@@ -458,6 +461,9 @@ func Load() (*LoadResult, error) {
 			},
 			Embeddings: LLMPurposeConfig{
 				Models: []string{}, // Empty = disabled
+			},
+			Thinking: ThinkingConfig{
+				BudgetTokens: 10000, // Default budget for extended thinking
 			},
 		},
 		Tools: ToolsConfig{

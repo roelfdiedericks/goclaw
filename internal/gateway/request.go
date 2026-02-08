@@ -27,6 +27,9 @@ type AgentRequest struct {
 
 	// Supervision-specific fields
 	SkipAddMessage bool // If true, don't add UserMsg to session (already added by supervision)
+
+	// Thinking mode
+	EnableThinking bool // If true, enable extended thinking for models that support it
 }
 
 // HealthStatus provides gateway health information

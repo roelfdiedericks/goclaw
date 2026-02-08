@@ -35,6 +35,7 @@ type Provider interface {
 		toolDefs []types.ToolDefinition,
 		systemPrompt string,
 		onDelta func(delta string),
+		opts *StreamOptions,
 	) (*Response, error)
 
 	// Embeddings
@@ -60,6 +61,17 @@ type Image struct {
 	MimeType string `json:"mimeType"` // "image/jpeg", "image/png", etc.
 	Data     string `json:"data"`     // Base64-encoded data
 	Source   string `json:"source"`   // Original source path (for logging)
+}
+
+// StreamOptions contains optional parameters for StreamMessage
+type StreamOptions struct {
+	// EnableThinking enables extended thinking for models that support it.
+	// When true, the provider will try to enable thinking mode.
+	// If the model doesn't support it, the request is retried without thinking.
+	EnableThinking bool
+
+	// ThinkingBudget is the token budget for thinking (default: 10000)
+	ThinkingBudget int
 }
 
 // Note: Response type is currently defined in anthropic.go

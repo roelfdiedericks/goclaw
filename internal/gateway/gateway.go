@@ -722,12 +722,13 @@ func (g *Gateway) RunAgentForCron(ctx context.Context, cronReq cron.AgentRequest
 
 	// Convert cron request to gateway request
 	req := AgentRequest{
-		Source:       cronReq.Source,
-		UserMsg:      cronReq.UserMsg,
-		SessionID:    cronReq.SessionID,
-		FreshContext: cronReq.FreshContext,
-		User:         reqUser,
-		IsHeartbeat:  cronReq.IsHeartbeat,
+		Source:         cronReq.Source,
+		UserMsg:        cronReq.UserMsg,
+		SessionID:      cronReq.SessionID,
+		FreshContext:   cronReq.FreshContext,
+		User:           reqUser,
+		IsHeartbeat:    cronReq.IsHeartbeat,
+		EnableThinking: cronReq.EnableThinking || reqUser.Thinking, // Use cron setting or user preference
 	}
 
 	// Create internal events channel
@@ -1026,13 +1027,23 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		}
 
 		// Stream from LLM with overflow retry logic
-		L_debug("RunAgent: about to call LLM.StreamMessage", "session", sessionKey, "messageCount", len(messages), "toolCount", len(toolDefs))
+		L_debug("RunAgent: about to call LLM.StreamMessage", "session", sessionKey, "messageCount", len(messages), "toolCount", len(toolDefs), "thinking", req.EnableThinking)
+		
+		// Build stream options
+		var streamOpts *llm.StreamOptions
+		if req.EnableThinking {
+			streamOpts = &llm.StreamOptions{
+				EnableThinking: true,
+				ThinkingBudget: g.config.LLM.Thinking.BudgetTokens,
+			}
+		}
+		
 		var response *llm.Response
 		var llmErr error
 		for retry := 0; retry <= maxOverflowRetries; retry++ {
 			response, llmErr = g.llm.StreamMessage(agentCtx, messages, toolDefs, systemPrompt, func(delta string) {
 				sendEvent(EventTextDelta{RunID: runID, Delta: delta})
-			})
+			}, streamOpts)
 
 			if llmErr == nil {
 				break // Success

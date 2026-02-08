@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -16,6 +17,10 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
+
+// thinkingUnsupportedModels caches models that don't support extended thinking.
+// This is populated when a thinking request fails with an unsupported error.
+var thinkingUnsupportedModels sync.Map // map[modelName]bool
 
 // AnthropicProvider implements the Provider interface for Anthropic's Claude API.
 // Supports streaming, native tool calling, and prompt caching.
@@ -175,7 +180,7 @@ func (c *AnthropicProvider) SimpleMessage(ctx context.Context, userMessage, syst
 	var result string
 	_, err := c.StreamMessage(ctx, messages, nil, systemPrompt, func(delta string) {
 		result += delta
-	})
+	}, nil)
 	if err != nil {
 		return "", err
 	}
@@ -185,15 +190,33 @@ func (c *AnthropicProvider) SimpleMessage(ctx context.Context, userMessage, syst
 
 // StreamMessage sends a message to the LLM and streams the response
 // onDelta is called for each text chunk received
+// opts can be nil for default behavior
 func (c *AnthropicProvider) StreamMessage(
 	ctx context.Context,
 	messages []types.Message,
 	toolDefs []types.ToolDefinition,
 	systemPrompt string,
 	onDelta func(delta string),
+	opts *StreamOptions,
 ) (*Response, error) {
 	startTime := time.Now()
-	L_info("llm: request started", "provider", c.name, "model", c.model, "messages", len(messages), "tools", len(toolDefs))
+	
+	// Determine if we should try extended thinking
+	enableThinking := false
+	thinkingBudget := 10000 // default
+	if opts != nil && opts.EnableThinking {
+		// Check if model is known to not support thinking
+		if _, unsupported := thinkingUnsupportedModels.Load(c.model); unsupported {
+			L_info("llm: thinking requested but model doesn't support it", "model", c.model)
+		} else {
+			enableThinking = true
+			if opts.ThinkingBudget > 0 {
+				thinkingBudget = opts.ThinkingBudget
+			}
+		}
+	}
+	
+	L_info("llm: request started", "provider", c.name, "model", c.model, "messages", len(messages), "tools", len(toolDefs), "thinking", enableThinking)
 	L_debug("preparing LLM request", "messages", len(messages), "tools", len(toolDefs))
 
 	// Convert session messages to Anthropic format
@@ -216,11 +239,30 @@ func (c *AnthropicProvider) StreamMessage(
 	// Convert tool definitions
 	anthropicTools := convertTools(toolDefs)
 
+	// Determine max tokens - may need adjustment for thinking
+	maxTokens := c.maxTokens
+	
+	// Add extended thinking if enabled
+	// max_tokens must be greater than thinking.budget_tokens
+	if enableThinking {
+		minRequired := thinkingBudget + 4096 // budget + buffer for actual output
+		if maxTokens < minRequired {
+			L_debug("llm: adjusting max_tokens for thinking", "original", maxTokens, "required", minRequired)
+			maxTokens = minRequired
+		}
+	}
+
 	// Build request params
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(c.model),
-		MaxTokens: int64(c.maxTokens),
+		MaxTokens: int64(maxTokens),
 		Messages:  anthropicMessages,
+	}
+
+	// Add extended thinking if enabled
+	if enableThinking {
+		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(thinkingBudget))
+		L_info("llm: extended thinking enabled", "model", c.model, "budget", thinkingBudget, "maxTokens", maxTokens)
 	}
 
 	// Add system prompt if provided
@@ -251,6 +293,7 @@ func (c *AnthropicProvider) StreamMessage(
 	response := &Response{}
 	message := anthropic.Message{}
 	var firstTokenTime time.Time
+	var thinkingContent strings.Builder
 
 	for stream.Next() {
 		event := stream.Current()
@@ -273,11 +316,32 @@ func (c *AnthropicProvider) StreamMessage(
 					onDelta(deltaVariant.Text)
 				}
 				response.Text += deltaVariant.Text
+			case anthropic.ThinkingDelta:
+				// Accumulate thinking content
+				if thinkingContent.Len() == 0 {
+					L_info("llm: thinking started (streaming reasoning content)")
+				}
+				thinkingContent.WriteString(deltaVariant.Thinking)
+				L_trace("llm: thinking delta received", "length", len(deltaVariant.Thinking))
 			}
 		}
 	}
 
 	if err := stream.Err(); err != nil {
+		errStr := err.Error()
+		
+		// Check if this is a "thinking not supported" error
+		// Anthropic returns errors like "thinking is not supported for this model"
+		if enableThinking && isThinkingNotSupportedError(errStr) {
+			L_warn("llm: model doesn't support extended thinking, disabling for future requests", 
+				"model", c.model, "error", errStr)
+			thinkingUnsupportedModels.Store(c.model, true)
+			
+			// Retry without thinking
+			disabledOpts := &StreamOptions{EnableThinking: false}
+			return c.StreamMessage(ctx, messages, toolDefs, systemPrompt, onDelta, disabledOpts)
+		}
+		
 		L_error("stream error", "error", err)
 		// Dump full error to file for debugging
 		dumpAPIError(err, c.model, len(anthropicMessages), len(anthropicTools))
@@ -313,7 +377,7 @@ func (c *AnthropicProvider) StreamMessage(
 		)
 	}
 
-	// Check for tool use in the response
+	// Check for tool use and thinking in the response
 	for _, block := range message.Content {
 		switch variant := block.AsAny().(type) {
 		case anthropic.ToolUseBlock:
@@ -323,7 +387,19 @@ func (c *AnthropicProvider) StreamMessage(
 			inputBytes, _ := json.Marshal(variant.Input)
 			response.ToolInput = inputBytes
 			L_info("llm: tool use", "tool", variant.Name, "id", variant.ID)
+		case anthropic.ThinkingBlock:
+			// Capture thinking content from final block
+			if variant.Thinking != "" {
+				response.Thinking = variant.Thinking
+				L_info("llm: thinking completed", "length", len(variant.Thinking))
+			}
 		}
+	}
+	
+	// If we accumulated thinking from deltas but didn't get a final block, use that
+	if response.Thinking == "" && thinkingContent.Len() > 0 {
+		response.Thinking = thinkingContent.String()
+		L_info("llm: thinking completed (from stream)", "length", len(response.Thinking))
 	}
 
 	// Log request completion with timing and token stats
@@ -757,22 +833,14 @@ func repairToolPairing(messages []anthropic.MessageParam) ([]anthropic.MessagePa
 						// Already placed by the assistant message handler
 						continue
 					}
-					// Orphaned result - no matching tool_use exists
-					if _, hasToolUse := allToolUses[sanitizedID]; !hasToolUse {
-						stats.droppedOrphans++
-						stats.modified = true
-						L_trace("dropped orphaned tool_result", "toolID", sanitizedID)
-						continue
-					}
-					// This shouldn't happen - result exists but wasn't used?
-					// Keep it to avoid data loss (with sanitized ID)
-					L_warn("unexpected tool_result not yet placed", "toolID", sanitizedID)
-					toolResult := *block.OfToolResult
-					toolResult.ToolUseID = sanitizedID
-					nonToolResultBlocks = append(nonToolResultBlocks, anthropic.ContentBlockParamUnion{
-						OfToolResult: &toolResult,
-					})
-					usedToolResultIDs[sanitizedID] = true
+					// If we get here, the tool_result wasn't placed by the assistant handler.
+					// This means the assistant message containing the matching tool_use
+					// isn't in the output (likely removed by compaction).
+					// Drop it - it's orphaned from Anthropic's API perspective.
+					stats.droppedOrphans++
+					stats.modified = true
+					L_debug("dropped orphaned tool_result (tool_use not in output)", "toolID", sanitizedID)
+					continue
 				} else {
 					nonToolResultBlocks = append(nonToolResultBlocks, block)
 				}
@@ -844,4 +912,29 @@ func extractToolUseIDs(msg anthropic.MessageParam) map[string]bool {
 		}
 	}
 	return ids
+}
+
+// isThinkingNotSupportedError checks if an error indicates the model doesn't support thinking
+// Uses specific phrase matching to avoid false positives from generic errors
+func isThinkingNotSupportedError(errStr string) bool {
+	errLower := strings.ToLower(errStr)
+	// Only match very specific error phrases about thinking not being supported
+	// Avoid broad patterns that could match unrelated errors
+	specificPhrases := []string{
+		"thinking is not supported",
+		"thinking not supported",
+		"thinking is not available",
+		"thinking not available",
+		"does not support thinking",
+		"doesn't support thinking",
+		"model does not support extended thinking",
+		"extended thinking is not supported",
+		"extended thinking not supported",
+	}
+	for _, phrase := range specificPhrases {
+		if strings.Contains(errLower, phrase) {
+			return true
+		}
+	}
+	return false
 }

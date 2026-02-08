@@ -37,12 +37,13 @@ func GetService() *Service {
 
 // AgentRequest is the request to run an agent (mirrors gateway.AgentRequest).
 type AgentRequest struct {
-	Source       string
-	UserMsg      string
-	SessionID    string
-	FreshContext bool
-	UserID       string // User ID to run as (typically owner for cron jobs)
-	IsHeartbeat  bool   // If true, run is ephemeral - don't persist to session
+	Source         string
+	UserMsg        string
+	SessionID      string
+	FreshContext   bool
+	UserID         string // User ID to run as (typically owner for cron jobs)
+	IsHeartbeat    bool   // If true, run is ephemeral - don't persist to session
+	EnableThinking bool   // If true, enable extended thinking for models that support it
 }
 
 // AgentEvent is a marker interface for agent events.
