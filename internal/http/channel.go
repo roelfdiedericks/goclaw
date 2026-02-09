@@ -112,6 +112,27 @@ func (c *HTTPChannel) Stop() error {
 
 // Send sends a message (not used - HTTP responses go via SSE)
 func (c *HTTPChannel) Send(ctx context.Context, msg string) error {
+	c.sessionsMu.RLock()
+	defer c.sessionsMu.RUnlock()
+
+	event := SSEEvent{
+		Event: "message",
+		Data:  msg,
+	}
+
+	for _, sess := range c.sessions {
+		if sess.User != nil && sess.User.IsOwner() {
+			sess.connMu.Lock()
+			if sess.activeConn != nil {
+				select {
+				case sess.activeConn.Events <- event:
+				default:
+					// Channel full, skip
+				}
+			}
+			sess.connMu.Unlock()
+		}
+	}
 	return nil
 }
 

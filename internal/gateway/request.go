@@ -30,6 +30,9 @@ type AgentRequest struct {
 
 	// Thinking mode
 	EnableThinking bool // If true, enable extended thinking for models that support it
+
+	// Mirroring control
+	SkipMirror bool // If true, don't mirror to other channels (caller handles delivery)
 }
 
 // HealthStatus provides gateway health information

@@ -634,8 +634,15 @@ func (b *Bot) Name() string {
 
 // Send sends a message to the default chat (not implemented for Telegram)
 func (b *Bot) Send(ctx context.Context, msg string) error {
-	// Telegram requires a specific chat ID, so this is a no-op
-	return nil
+	// Send to owner's chat
+	owner := b.users.Owner()
+	if owner == nil || owner.TelegramID == "" {
+		return nil
+	}
+	var chatID int64
+	fmt.Sscanf(owner.TelegramID, "%d", &chatID)
+	_, err := b.SendText(chatID, msg)
+	return err
 }
 
 // sendWithHTMLFallback sends a message with HTML formatting, falling back to plain text
