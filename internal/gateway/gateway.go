@@ -863,14 +863,91 @@ func (g *Gateway) InjectSystemEvent(ctx context.Context, text string) error {
 }
 
 // InvokeAgent implements types.EventInjector interface.
-// It runs the agent with a prompt and delivers the response to channels.
-// The invocation is ephemeral and not persisted to session history.
-// If the agent responds with "EVENT_OK", the response is suppressed.
-func (g *Gateway) InvokeAgent(ctx context.Context, prompt string) error {
-	if g.cronService == nil {
-		return fmt.Errorf("cron service not initialized")
+// It runs the agent with a message and delivers the response to channels.
+// Uses owner user and primary session. For other users/sessions, use invokeAgentInternal.
+func (g *Gateway) InvokeAgent(ctx context.Context, source, message, suppressPrefix string) error {
+	u := g.users.Owner()
+	if u == nil {
+		return fmt.Errorf("no owner user configured")
 	}
-	return g.cronService.InvokeAgent(ctx, prompt)
+	return g.invokeAgentInternal(ctx, u, session.PrimarySession, source, message, suppressPrefix)
+}
+
+// invokeAgentInternal runs the agent with a message and delivers the response.
+// Works even without channels configured - agent always runs.
+// suppressPrefix, if non-empty, suppresses delivery if response starts with it (case-insensitive).
+func (g *Gateway) invokeAgentInternal(ctx context.Context, u *user.User, sessionKey, source, message, suppressPrefix string) error {
+	if message == "" {
+		return fmt.Errorf("empty message")
+	}
+	if u == nil {
+		return fmt.Errorf("no user specified")
+	}
+
+	L_info("gateway: invoke agent", "source", source, "session", sessionKey, "messageLen", len(message))
+
+	// Run agent with the message
+	req := AgentRequest{
+		User:           u,
+		Source:         source,
+		UserMsg:        message,
+		SessionID:      sessionKey,
+		EnableThinking: u.Thinking,
+	}
+
+	events := make(chan AgentEvent, 100)
+	var finalText string
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		for event := range events {
+			if e, ok := event.(EventAgentEnd); ok {
+				finalText = e.FinalText
+			}
+		}
+	}()
+
+	// Run agent (blocking)
+	err := g.RunAgent(ctx, req, events)
+	if err != nil {
+		L_error("gateway: invoke agent failed", "source", source, "error", err)
+		return err
+	}
+
+	<-done
+
+	L_info("gateway: invoke agent completed", "source", source, "responseLen", len(finalText))
+
+	// Check for suppression
+	if suppressPrefix != "" {
+		trimmed := strings.TrimSpace(finalText)
+		if strings.HasPrefix(strings.ToUpper(trimmed), strings.ToUpper(suppressPrefix)) {
+			L_debug("gateway: response suppressed", "source", source, "prefix", suppressPrefix)
+			return nil
+		}
+	}
+
+	// Deliver response to channels (if any)
+	if finalText != "" {
+		delivered := 0
+		for name, ch := range g.channels {
+			if !ch.HasUser(u) {
+				continue
+			}
+			if err := ch.Send(ctx, finalText); err != nil {
+				L_error("gateway: delivery failed", "source", source, "channel", name, "error", err)
+			} else {
+				delivered++
+				L_debug("gateway: delivered", "source", source, "channel", name)
+			}
+		}
+		if delivered == 0 {
+			L_debug("gateway: no channels to deliver", "source", source, "responseLen", len(finalText))
+		}
+	}
+
+	return nil
 }
 
 // Shutdown gracefully shuts down the gateway

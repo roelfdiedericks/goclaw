@@ -35,6 +35,7 @@ type hassInput struct {
 	Service string          `json:"service,omitempty"` // domain.service for call action
 	Data    json.RawMessage `json:"data,omitempty"`    // service call data
 	Filter  string          `json:"filter,omitempty"`  // glob pattern for states/services filtering
+	Class   string          `json:"class,omitempty"`   // exact device_class filter for states
 	Domain  string          `json:"domain,omitempty"`  // domain filter for services
 
 	// History fields
@@ -50,10 +51,12 @@ type hassInput struct {
 	// Subscription fields
 	Pattern        string `json:"pattern,omitempty"`         // glob pattern for subscribe (e.g., binary_sensor.*)
 	Regex          string `json:"regex,omitempty"`           // regex pattern for subscribe (e.g., ^person\.)
-	Debounce       int    `json:"debounce,omitempty"`        // debounce seconds (default: 5)
+	Debounce       int    `json:"debounce,omitempty"`        // debounce seconds (default: 5), same state suppression
+	Interval       int    `json:"interval,omitempty"`        // interval seconds (default: 0 = disabled), per-entity rate limit
 	Prefix         string `json:"prefix,omitempty"`          // custom prefix for injected messages
+	Prompt         string `json:"prompt,omitempty"`          // instructions for agent when event fires
 	Full           bool   `json:"full,omitempty"`            // include full state object (default: false = brief)
-	Wake           *bool  `json:"wake,omitempty"`            // trigger immediate heartbeat (default: true)
+	Wake           *bool  `json:"wake,omitempty"`            // trigger immediate agent invocation (default: true)
 	SubscriptionID string `json:"subscription_id,omitempty"` // subscription ID for unsubscribe
 }
 
@@ -86,31 +89,38 @@ func (t *HASSTool) Description() string {
 
 REST Actions:
 - state: Get single entity state (requires entity)
-- states: List all entity states (optional filter glob like "light.*")
+- states: List all entity states (optional filter glob, optional class for exact device_class match)
 - call: Call a service (requires service like "light.turn_on", optional entity and data)
 - camera: Get camera snapshot (requires entity, optional filename/timestamp)
 - services: List available services (optional domain filter)
 - history: Get state history (requires entity, optional hours/start/end/minimal)
 
 Registry Actions (WebSocket):
-- devices: List devices (optional pattern/regex filter on name/id)
+- devices: List devices (optional pattern/regex filter on name/id/manufacturer/model/area_id)
 - areas: List areas (optional pattern/regex filter on name/area_id)
-- entities: List entities with metadata (optional pattern/regex filter on entity_id/name)
+- entities: List entities with metadata (optional pattern/regex filter on entity_id/name/device_class/area_id)
 
 Subscription Actions:
-- subscribe: Subscribe to state_changed events (pattern OR regex, optional debounce/prefix/full/wake)
+- subscribe: Subscribe to state_changed events (pattern OR regex, optional debounce/interval/prompt/prefix/full/wake)
 - unsubscribe: Cancel a subscription (requires subscription_id)
 - subscriptions: List all active subscriptions
 
+Rate limiting:
+- debounce: Suppress same entity:state events within window (default 5s)
+- interval: Per-entity rate limit regardless of state (default 0 = disabled)
+
 Examples:
 - hass(action="state", entity="light.kitchen")
-- hass(action="states", filter="sensor.temp*")
+- hass(action="states", filter="*kitchen*")
+- hass(action="states", class="motion")
+- hass(action="states", filter="*driveway*", class="motion")
 - hass(action="call", service="light.turn_on", entity="light.kitchen", data={"brightness": 255})
 - hass(action="camera", entity="camera.driveway")
 - hass(action="devices", pattern="*motion*")
 - hass(action="entities", pattern="binary_sensor.*")
 - hass(action="entities", regex="^light\\.")
-- hass(action="subscribe", pattern="binary_sensor.driveway*", debounce=30)
+- hass(action="subscribe", pattern="binary_sensor.driveway*", prompt="Notify me someone is at the driveway")
+- hass(action="subscribe", pattern="sensor.load*", interval=60, prompt="Alert if load exceeds 1500W")
 - hass(action="unsubscribe", subscription_id="550e8400-e29b-41d4-a716-446655440000")`
 }
 
@@ -138,7 +148,11 @@ func (t *HASSTool) Schema() map[string]any {
 			},
 			"filter": map[string]any{
 				"type":        "string",
-				"description": "Glob pattern to filter entities (e.g., light.*, sensor.temp*)",
+				"description": "Glob pattern to filter states (case-insensitive, matches entity_id, friendly_name, or device_class)",
+			},
+			"class": map[string]any{
+				"type":        "string",
+				"description": "Exact device_class filter for states (e.g., motion, temperature, door, light)",
 			},
 			"domain": map[string]any{
 				"type":        "string",
@@ -180,9 +194,17 @@ func (t *HASSTool) Schema() map[string]any {
 				"type":        "integer",
 				"description": "Debounce seconds between events for same entity:state (default: 5)",
 			},
+			"interval": map[string]any{
+				"type":        "integer",
+				"description": "Interval seconds for per-entity rate limiting, regardless of state (default: 0 = disabled)",
+			},
 			"prefix": map[string]any{
 				"type":        "string",
 				"description": "Custom prefix for injected event messages",
+			},
+			"prompt": map[string]any{
+				"type":        "string",
+				"description": "Instructions for agent when event fires (e.g., 'Alert if load exceeds 1500W')",
 			},
 			"full": map[string]any{
 				"type":        "boolean",
@@ -270,8 +292,8 @@ func (t *HASSTool) getStates(ctx context.Context, in hassInput) (json.RawMessage
 		return nil, err
 	}
 
-	// If no filter, return as-is
-	if in.Filter == "" {
+	// If no filters, return as-is
+	if in.Filter == "" && in.Class == "" {
 		return result, nil
 	}
 
@@ -283,17 +305,61 @@ func (t *HASSTool) getStates(ctx context.Context, in hassInput) (json.RawMessage
 
 	var filtered []map[string]any
 	for _, s := range states {
-		entityID, ok := s["entity_id"].(string)
-		if !ok {
+		// Check class filter (exact match, case-insensitive)
+		if in.Class != "" {
+			deviceClass := t.getStateDeviceClass(s)
+			if !strings.EqualFold(deviceClass, in.Class) {
+				continue
+			}
+		}
+
+		// Check glob filter (if specified)
+		if in.Filter != "" && !t.matchStateFilter(s, in.Filter) {
 			continue
 		}
-		if hass.MatchGlob(in.Filter, entityID) {
-			filtered = append(filtered, s)
+
+		filtered = append(filtered, s)
+	}
+
+	L_debug("hass: states filtered", "filter", in.Filter, "class", in.Class, "total", len(states), "matched", len(filtered))
+	return json.Marshal(filtered)
+}
+
+// matchStateFilter checks if a state object matches the filter pattern.
+// Matches case-insensitively against: entity_id, friendly_name, device_class.
+func (t *HASSTool) matchStateFilter(state map[string]any, filter string) bool {
+	// Check entity_id
+	if entityID, ok := state["entity_id"].(string); ok {
+		if hass.MatchGlobInsensitive(filter, entityID) {
+			return true
 		}
 	}
 
-	L_debug("hass: states filtered", "filter", in.Filter, "total", len(states), "matched", len(filtered))
-	return json.Marshal(filtered)
+	// Check attributes.friendly_name and attributes.device_class
+	if attrs, ok := state["attributes"].(map[string]any); ok {
+		if friendlyName, ok := attrs["friendly_name"].(string); ok {
+			if hass.MatchGlobInsensitive(filter, friendlyName) {
+				return true
+			}
+		}
+		if deviceClass, ok := attrs["device_class"].(string); ok {
+			if hass.MatchGlobInsensitive(filter, deviceClass) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// getStateDeviceClass extracts the device_class from a state object.
+func (t *HASSTool) getStateDeviceClass(state map[string]any) string {
+	if attrs, ok := state["attributes"].(map[string]any); ok {
+		if deviceClass, ok := attrs["device_class"].(string); ok {
+			return deviceClass
+		}
+	}
+	return ""
 }
 
 // callService calls a Home Assistant service.
@@ -547,7 +613,8 @@ func (t *HASSTool) listEntities(ctx context.Context, in hassInput) (json.RawMess
 	return result, nil
 }
 
-// filterDevices filters devices by pattern/regex on name or id fields.
+// filterDevices filters devices by pattern/regex on multiple fields.
+// Matches (case-insensitive): name, name_by_user, id, manufacturer, model, area_id
 func (t *HASSTool) filterDevices(data json.RawMessage, in hassInput) (json.RawMessage, error) {
 	var devices []map[string]any
 	if err := json.Unmarshal(data, &devices); err != nil {
@@ -556,8 +623,7 @@ func (t *HASSTool) filterDevices(data json.RawMessage, in hassInput) (json.RawMe
 
 	var filtered []map[string]any
 	for _, d := range devices {
-		// Match against name, name_by_user, or id
-		if t.matchAny(in, d["name"], d["name_by_user"], d["id"]) {
+		if t.matchAny(in, d["name"], d["name_by_user"], d["id"], d["manufacturer"], d["model"], d["area_id"]) {
 			filtered = append(filtered, d)
 		}
 	}
@@ -585,7 +651,8 @@ func (t *HASSTool) filterAreas(data json.RawMessage, in hassInput) (json.RawMess
 	return json.Marshal(filtered)
 }
 
-// filterEntities filters entities by pattern/regex on entity_id.
+// filterEntities filters entities by pattern/regex on multiple fields.
+// Matches (case-insensitive): entity_id, original_name, name, device_class, area_id
 func (t *HASSTool) filterEntities(data json.RawMessage, in hassInput) (json.RawMessage, error) {
 	var entities []map[string]any
 	if err := json.Unmarshal(data, &entities); err != nil {
@@ -594,8 +661,7 @@ func (t *HASSTool) filterEntities(data json.RawMessage, in hassInput) (json.RawM
 
 	var filtered []map[string]any
 	for _, e := range entities {
-		// Match against entity_id or original_name
-		if t.matchAny(in, e["entity_id"], e["original_name"], e["name"]) {
+		if t.matchAny(in, e["entity_id"], e["original_name"], e["name"], e["device_class"], e["area_id"]) {
 			filtered = append(filtered, e)
 		}
 	}
@@ -604,17 +670,18 @@ func (t *HASSTool) filterEntities(data json.RawMessage, in hassInput) (json.RawM
 	return json.Marshal(filtered)
 }
 
-// matchAny checks if any of the values match the pattern or regex.
+// matchAny checks if any of the values match the pattern or regex (case-insensitive for glob).
 func (t *HASSTool) matchAny(in hassInput, values ...any) bool {
 	for _, v := range values {
 		s, ok := v.(string)
 		if !ok || s == "" {
 			continue
 		}
-		if in.Pattern != "" && hass.MatchGlob(in.Pattern, s) {
+		if in.Pattern != "" && hass.MatchGlobInsensitive(in.Pattern, s) {
 			return true
 		}
 		if in.Regex != "" {
+			// Regex is case-sensitive by default; user can use (?i) if needed
 			if matched, _ := hass.MatchRegex(in.Regex, s); matched {
 				return true
 			}
@@ -649,11 +716,17 @@ func (t *HASSTool) subscribe(ctx context.Context, in hassInput) (string, error) 
 	sub.Pattern = in.Pattern
 	sub.Regex = in.Regex
 	sub.Prefix = in.Prefix
+	sub.Prompt = in.Prompt
 	sub.Full = in.Full
 
 	// Set debounce (default 5)
 	if in.Debounce > 0 {
 		sub.DebounceSeconds = in.Debounce
+	}
+
+	// Set interval (default 0 = disabled)
+	if in.Interval > 0 {
+		sub.IntervalSeconds = in.Interval
 	}
 
 	// Set wake (default true)
@@ -665,7 +738,7 @@ func (t *HASSTool) subscribe(ctx context.Context, in hassInput) (string, error) 
 		return t.errorResult("error", err.Error())
 	}
 
-	L_info("hass: subscription created", "id", sub.ID, "pattern", sub.Pattern, "regex", sub.Regex)
+	L_info("hass: subscription created", "id", sub.ID, "pattern", sub.Pattern, "regex", sub.Regex, "hasPrompt", sub.Prompt != "")
 
 	result := map[string]any{
 		"status":     "subscribed",
@@ -673,6 +746,8 @@ func (t *HASSTool) subscribe(ctx context.Context, in hassInput) (string, error) 
 		"pattern":    sub.Pattern,
 		"regex":      sub.Regex,
 		"debounce":   sub.DebounceSeconds,
+		"interval":   sub.IntervalSeconds,
+		"prompt":     sub.Prompt,
 		"full":       sub.Full,
 		"wake":       sub.Wake,
 		"connected":  t.manager.IsConnected(),
