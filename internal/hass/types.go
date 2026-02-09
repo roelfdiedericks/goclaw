@@ -78,10 +78,12 @@ type Subscription struct {
 	ID              string    `json:"id"`               // UUID
 	Pattern         string    `json:"pattern"`          // glob pattern (mutually exclusive with Regex)
 	Regex           string    `json:"regex"`            // regex pattern (mutually exclusive with Pattern)
-	DebounceSeconds int       `json:"debounce_seconds"` // default: 5
+	DebounceSeconds int       `json:"debounce_seconds"` // default: 5, suppress same entity+state
+	IntervalSeconds int       `json:"interval_seconds"` // default: 0 (disabled), per-entity rate limit
 	Prefix          string    `json:"prefix,omitempty"` // custom message prefix
+	Prompt          string    `json:"prompt,omitempty"` // instructions for agent when event fires
 	Full            bool      `json:"full"`             // true=full state object, false=brief (default)
-	Wake            bool      `json:"wake"`             // trigger immediate heartbeat (default: true)
+	Wake            bool      `json:"wake"`             // trigger immediate agent invocation (default: true)
 	CreatedAt       time.Time `json:"created_at"`
 }
 

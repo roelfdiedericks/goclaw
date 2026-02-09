@@ -25,7 +25,8 @@ type Manager struct {
 	injector      types.EventInjector
 	dataDir       string
 	subscriptions map[string]*Subscription
-	debounce      map[string]time.Time // "entity_id:state" -> last fired
+	debounce      map[string]time.Time // "entity_id:state" -> last fired (same state suppression)
+	interval      map[string]time.Time // "entity_id" -> last fired (per-entity rate limit)
 	conn          *websocket.Conn
 	msgID         int
 	subscriptionID int // HA subscription ID for state_changed
@@ -45,6 +46,7 @@ func NewManager(cfg config.HomeAssistantConfig, injector types.EventInjector, da
 		dataDir:       dataDir,
 		subscriptions: make(map[string]*Subscription),
 		debounce:      make(map[string]time.Time),
+		interval:      make(map[string]time.Time),
 	}
 }
 
@@ -460,13 +462,27 @@ func (m *Manager) handleEvent(event *HAEvent) {
 	}
 }
 
-// processMatch handles a subscription match with debouncing.
+// processMatch handles a subscription match with interval and debounce checks.
+// Interval is checked first (per-entity rate limit), then debounce (same state suppression).
 func (m *Manager) processMatch(sub *Subscription, event *HAEvent, entityID, newState string) {
-	// Debounce key is entity_id:state
-	debounceKey := entityID + ":" + newState
 	now := time.Now()
 
 	m.mu.Lock()
+
+	// Check interval first (per-entity rate limit)
+	// Only applies if interval > 0
+	if sub.IntervalSeconds > 0 {
+		lastEntityFired, exists := m.interval[entityID]
+		if exists && now.Sub(lastEntityFired) < time.Duration(sub.IntervalSeconds)*time.Second {
+			sinceLast := now.Sub(lastEntityFired)
+			m.mu.Unlock()
+			L_debug("hass: event rate-limited by interval", "entity", entityID, "state", newState, "subID", sub.ID, "sinceLast", sinceLast.String(), "intervalWindow", sub.IntervalSeconds)
+			return
+		}
+	}
+
+	// Check debounce (same entity+state suppression)
+	debounceKey := entityID + ":" + newState
 	lastFired, exists := m.debounce[debounceKey]
 	debounceSeconds := sub.DebounceSeconds
 	if debounceSeconds <= 0 {
@@ -480,7 +496,11 @@ func (m *Manager) processMatch(sub *Subscription, event *HAEvent, entityID, newS
 		return
 	}
 
+	// Update both trackers
 	m.debounce[debounceKey] = now
+	if sub.IntervalSeconds > 0 {
+		m.interval[entityID] = now
+	}
 	m.mu.Unlock()
 
 	// Format the event message
@@ -492,18 +512,25 @@ func (m *Manager) processMatch(sub *Subscription, event *HAEvent, entityID, newS
 	defer cancel()
 
 	if sub.Wake {
-		// wake=true: Invoke the agent immediately with the event as a prompt
-		// Wrap with instructions for agent processing
-		prompt := message + "\n\nProcess this event. Reply EVENT_OK if no action needed."
+		// wake=true: Inject message and run agent via guidance path (clean output)
+		// Build prompt with instructions
+		var prompt string
+		if sub.Prompt != "" {
+			// Use subscription-specific instructions
+			prompt = message + "\n\nInstructions: " + sub.Prompt + "\n\nReply EVENT_OK if no action needed."
+		} else {
+			// Generic fallback
+			prompt = message + "\n\nProcess this event. Reply EVENT_OK if no action needed."
+		}
 
-		L_debug("hass: invoking agent for wake event", "entity", entityID, "subID", sub.ID, "promptLen", len(prompt))
+		L_debug("hass: invoking agent", "entity", entityID, "subID", sub.ID, "promptLen", len(prompt), "hasPrompt", sub.Prompt != "")
 
-		if err := m.injector.InvokeAgent(ctx, prompt); err != nil {
+		if err := m.injector.InvokeAgent(ctx, "hass_event", prompt, "EVENT_OK"); err != nil {
 			L_error("hass: failed to invoke agent", "error", err, "entity", entityID, "subID", sub.ID)
 			return
 		}
 
-		L_debug("hass: agent invocation started", "entity", entityID, "state", newState, "subID", sub.ID)
+		L_debug("hass: agent invoked", "entity", entityID, "state", newState, "subID", sub.ID)
 	} else {
 		// wake=false: Inject as system event, agent sees it on next user interaction
 		L_debug("hass: injecting passive event", "entity", entityID, "subID", sub.ID, "messageLen", len(message))
