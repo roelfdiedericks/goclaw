@@ -7,9 +7,25 @@ import (
 
 // MatchGlob performs simple glob matching (* matches any characters).
 func MatchGlob(pattern, s string) bool {
+	return matchGlobInternal(pattern, s, false)
+}
+
+// MatchGlobInsensitive performs case-insensitive glob matching.
+func MatchGlobInsensitive(pattern, s string) bool {
+	return matchGlobInternal(pattern, s, true)
+}
+
+// matchGlobInternal is the shared implementation for glob matching.
+func matchGlobInternal(pattern, s string, caseInsensitive bool) bool {
 	// Handle empty pattern
 	if pattern == "" {
 		return s == ""
+	}
+
+	// For case-insensitive matching, lowercase both
+	if caseInsensitive {
+		pattern = strings.ToLower(pattern)
+		s = strings.ToLower(s)
 	}
 
 	// Convert glob pattern to match logic

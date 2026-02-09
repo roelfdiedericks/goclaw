@@ -1653,7 +1653,8 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 					transcriptMgr.SetAgentName(cfg.Agent.Name)
 				}
 				transcriptMgr.Start()
-				defer transcriptMgr.Stop()
+				// Note: transcriptMgr.Stop() is called in signal handler before gw.Shutdown()
+				// to ensure it stops before the SQLite database is closed
 				toolsReg.Register(tools.NewTranscriptTool(transcriptMgr))
 				L_info("transcript: manager started and tool registered")
 			}
@@ -1684,6 +1685,10 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	go func() {
 		sig := <-sigCh
 		L_info("received signal", "signal", sig)
+		// Stop transcript manager BEFORE gateway shutdown (uses gateway's SQLite DB)
+		if transcriptMgr != nil {
+			transcriptMgr.Stop()
+		}
 		gw.Shutdown()
 		cancel()
 	}()

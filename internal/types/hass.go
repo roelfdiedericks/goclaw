@@ -9,8 +9,8 @@ type EventInjector interface {
 	// The message will be visible to the agent on the next turn (wake=false).
 	InjectSystemEvent(ctx context.Context, text string) error
 
-	// InvokeAgent runs the agent with a prompt and delivers response to channels.
-	// The response is suppressed if it starts with "EVENT_OK".
-	// Used for wake=true events that need immediate agent processing.
-	InvokeAgent(ctx context.Context, prompt string) error
+	// InvokeAgent runs the agent with a message and delivers the response.
+	// source identifies the caller (e.g. "hass_event", "guidance").
+	// suppressPrefix, if non-empty, suppresses delivery if response starts with it.
+	InvokeAgent(ctx context.Context, source, message, suppressPrefix string) error
 }

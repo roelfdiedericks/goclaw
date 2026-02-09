@@ -1093,13 +1093,20 @@ func (b *Bot) InjectMessage(ctx context.Context, u *user.User, sessionKey, messa
 		// Wait for event processing to complete
 		<-done
 
+		// Check for EVENT_OK suppression (used by HASS events)
+		trimmed := strings.TrimSpace(finalText)
+		if strings.HasPrefix(strings.ToUpper(trimmed), "EVENT_OK") {
+			L_debug("telegram: inject response suppressed (EVENT_OK)", "user", u.ID)
+			return nil
+		}
+
 		// Send the response
 		if finalText != "" {
 			_, err = b.SendText(chatID, finalText)
 			if err != nil {
 				return fmt.Errorf("failed to send response: %w", err)
 			}
-			L_info("telegram: inject guidance delivered", "user", u.ID, "responseLen", len(finalText))
+			L_info("telegram: inject delivered", "user", u.ID, "responseLen", len(finalText))
 		}
 
 	} else {
