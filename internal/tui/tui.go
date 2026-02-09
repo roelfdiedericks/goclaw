@@ -62,6 +62,9 @@ type Model struct {
 	// Mirror channel for receiving mirrored messages from other channels
 	mirrorChan chan mirrorMsg
 
+	// System channel for receiving direct messages (HASS events, etc.)
+	systemChan chan string
+
 	// Dependencies
 	gateway *gateway.Gateway
 	user    *user.User
@@ -78,6 +81,7 @@ type mirrorMsg struct {
 	userMsg  string
 	response string
 }
+type systemMsg string
 
 // New creates a new TUI model
 // showLogs controls whether the log panel is visible by default (true = normal layout, false = logs hidden)
@@ -104,6 +108,7 @@ func New(gw *gateway.Gateway, u *user.User, showLogs bool) Model {
 	// Create channels
 	logChan := make(chan string, 100)
 	mirrorChan := make(chan mirrorMsg, 10)
+	systemChan := make(chan string, 10)
 
 	m := Model{
 		chatViewport: chatVP,
@@ -114,6 +119,7 @@ func New(gw *gateway.Gateway, u *user.User, showLogs bool) Model {
 		logsLines:    []string{},
 		logChan:      logChan,
 		mirrorChan:   mirrorChan,
+		systemChan:   systemChan,
 		gateway:      gw,
 		user:         u,
 		ctx:          ctx,
@@ -138,6 +144,7 @@ func (m Model) Init() tea.Cmd {
 		tea.EnterAltScreen,
 		m.waitForLog(),
 		m.waitForMirror(),
+		m.waitForSystem(),
 	)
 }
 
@@ -165,6 +172,21 @@ func (m *Model) waitForMirror() tea.Cmd {
 				return nil
 			}
 			return msg
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
+}
+
+// waitForSystem returns a command that waits for the next system message
+func (m *Model) waitForSystem() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case msg, ok := <-m.systemChan:
+			if !ok {
+				return nil
+			}
+			return systemMsg(msg)
 		case <-m.ctx.Done():
 			return nil
 		}
@@ -328,6 +350,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatViewport.GotoBottom()
 		// Continue listening for more mirrors
 		cmds = append(cmds, m.waitForMirror())
+
+	case systemMsg:
+		// Display system message (HASS events, etc.) - clean format like agent response
+		m.chatLines = append(m.chatLines,
+			assistantStyle.Render(m.gateway.AgentIdentity().DisplayName()+": ")+string(msg),
+			"",
+		)
+		m.chatViewport.SetContent(m.getChatContent())
+		m.chatViewport.GotoBottom()
+		// Continue listening for more system messages
+		cmds = append(cmds, m.waitForSystem())
 	}
 
 	// Update focused component
@@ -660,15 +693,17 @@ func truncateMsg(s string, maxLen int) string {
 // TUIChannel wraps the TUI to implement the Channel interface
 type TUIChannel struct {
 	mirrorChan chan<- mirrorMsg
+	systemChan chan<- string
 	user       *user.User
 	gateway    *gateway.Gateway
 	mu         sync.Mutex
 }
 
 // NewTUIChannel creates a Channel wrapper for the TUI
-func NewTUIChannel(mirrorChan chan<- mirrorMsg, u *user.User, gw *gateway.Gateway) *TUIChannel {
+func NewTUIChannel(mirrorChan chan<- mirrorMsg, systemChan chan<- string, u *user.User, gw *gateway.Gateway) *TUIChannel {
 	return &TUIChannel{
 		mirrorChan: mirrorChan,
+		systemChan: systemChan,
 		user:       u,
 		gateway:    gw,
 	}
@@ -689,9 +724,19 @@ func (c *TUIChannel) Stop() error {
 	return nil
 }
 
-// Send sends a message (not used for TUI, messages go through the model)
+// Send sends a direct message to the TUI (HASS events, etc.)
 func (c *TUIChannel) Send(ctx context.Context, msg string) error {
-	return nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	select {
+	case c.systemChan <- msg:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil // Channel full, drop
+	}
 }
 
 // SendMirror sends a mirrored conversation to the TUI
@@ -791,8 +836,8 @@ func (c *TUIChannel) InjectMessage(ctx context.Context, u *user.User, sessionKey
 func Run(ctx context.Context, gw *gateway.Gateway, u *user.User, showLogs bool) error {
 	m := New(gw, u, showLogs)
 
-	// Create TUI channel for receiving mirrors and register it with gateway
-	tuiChannel := NewTUIChannel(m.mirrorChan, u, gw)
+	// Create TUI channel for receiving mirrors/system messages and register it with gateway
+	tuiChannel := NewTUIChannel(m.mirrorChan, m.systemChan, u, gw)
 	gw.RegisterChannel(tuiChannel)
 
 	// Set up log hook to forward logs to TUI (exclusive - suppresses stderr)

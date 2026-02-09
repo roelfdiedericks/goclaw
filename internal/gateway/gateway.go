@@ -893,6 +893,7 @@ func (g *Gateway) invokeAgentInternal(ctx context.Context, u *user.User, session
 		UserMsg:        message,
 		SessionID:      sessionKey,
 		EnableThinking: u.Thinking,
+		SkipMirror:     true, // We handle delivery ourselves
 	}
 
 	events := make(chan AgentEvent, 100)
@@ -918,6 +919,7 @@ func (g *Gateway) invokeAgentInternal(ctx context.Context, u *user.User, session
 	<-done
 
 	L_info("gateway: invoke agent completed", "source", source, "responseLen", len(finalText))
+	L_trace("gateway: raw response", "source", source, "response", finalText)
 
 	// Check for suppression
 	if suppressPrefix != "" {
@@ -935,6 +937,7 @@ func (g *Gateway) invokeAgentInternal(ctx context.Context, u *user.User, session
 			if !ch.HasUser(u) {
 				continue
 			}
+			L_debug("gateway: sending to channel", "source", source, "channel", name, "content", finalText)
 			if err := ch.Send(ctx, finalText); err != nil {
 				L_error("gateway: delivery failed", "source", source, "channel", name, "error", err)
 			} else {
@@ -1414,8 +1417,8 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	// Reset flush thresholds if context dropped (e.g., after compaction)
 	session.ResetThresholdsIfNeeded(sess)
 
-	// Mirror response to other channels (not for group chats)
-	if !req.IsGroup {
+	// Mirror response to other channels (not for group chats, not if caller handles delivery)
+	if !req.IsGroup && !req.SkipMirror {
 		g.mirrorToOthers(ctx, req, finalText)
 	}
 
