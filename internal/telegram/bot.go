@@ -122,6 +122,13 @@ func (b *Bot) setupHandlers() {
 		chatID := c.Chat().ID
 		userID := fmt.Sprintf("%d", c.Sender().ID)
 		u := b.users.FromIdentity("telegram", userID)
+
+		// Check command permission
+		if !b.canUserUseCommands(u) {
+			L_debug("telegram: commands disabled for user", "user", u.Name, "command", "/thinking")
+			return nil // Silently ignore - treat as if they sent a message
+		}
+
 		prefs := b.getChatPrefs(chatID, u)
 		
 		// Parse subcommand
@@ -163,6 +170,14 @@ func (b *Bot) setupHandlers() {
 		// Special handling for long-running commands
 		if cmdName == "/compact" {
 			b.bot.Handle(cmdName, func(c tele.Context) error {
+				// Check command permission
+				userID := fmt.Sprintf("%d", c.Sender().ID)
+				u := b.users.FromIdentity("telegram", userID)
+				if !b.canUserUseCommands(u) {
+					L_debug("telegram: commands disabled for user", "user", u.Name, "command", "/compact")
+					return nil // Silently ignore
+				}
+
 				sessionKey, err := b.getSessionKey(c)
 				if err != nil {
 					return c.Send(err.Error())
@@ -188,6 +203,14 @@ func (b *Bot) setupHandlers() {
 
 		// Standard command handler
 		b.bot.Handle(cmdName, func(c tele.Context) error {
+			// Check command permission
+			userID := fmt.Sprintf("%d", c.Sender().ID)
+			u := b.users.FromIdentity("telegram", userID)
+			if !b.canUserUseCommands(u) {
+				L_debug("telegram: commands disabled for user", "user", u.Name, "command", cmdName)
+				return nil // Silently ignore
+			}
+
 			sessionKey, err := b.getSessionKey(c)
 			if err != nil {
 				return c.Send(err.Error())
@@ -222,6 +245,19 @@ func (b *Bot) getSessionKey(c tele.Context) (string, error) {
 		return session.PrimarySession, nil
 	}
 	return fmt.Sprintf("user:%s", u.ID), nil
+}
+
+// canUserUseCommands checks if the user has permission to use slash commands
+func (b *Bot) canUserUseCommands(u *user.User) bool {
+	if u == nil {
+		return false
+	}
+	resolvedRole, err := b.users.ResolveUserRole(u)
+	if err != nil {
+		L_warn("telegram: failed to resolve role for command permission check", "user", u.Name, "error", err)
+		return false
+	}
+	return resolvedRole.CanUseCommands()
 }
 
 // handleMessage handles incoming text messages
@@ -1100,12 +1136,8 @@ func (b *Bot) InjectMessage(ctx context.Context, u *user.User, sessionKey, messa
 		// Wait for event processing to complete
 		<-done
 
-		// Check for EVENT_OK suppression (used by HASS events)
-		trimmed := strings.TrimSpace(finalText)
-		if strings.HasPrefix(strings.ToUpper(trimmed), "EVENT_OK") {
-			L_debug("telegram: inject response suppressed (EVENT_OK)", "user", u.ID)
-			return nil
-		}
+		// Note: Suppression tokens (EVENT_OK, etc.) are handled centrally in gateway.RunAgent
+		// finalText will be empty if suppressed
 
 		// Send the response
 		if finalText != "" {

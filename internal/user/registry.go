@@ -4,24 +4,38 @@ import (
 	"sync"
 
 	"github.com/roelfdiedericks/goclaw/internal/config"
+	"github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
 // Registry maintains the set of known users and provides lookup by identity
 type Registry struct {
-	users      map[string]*User  // by username (user ID)
-	telegramID map[string]string // telegram user ID -> username
-	ownerID    string            // cached owner username
-	mu         sync.RWMutex
+	users       map[string]*User       // by username (user ID)
+	telegramID  map[string]string      // telegram user ID -> username
+	ownerID     string                 // cached owner username
+	rolesConfig config.RolesConfig     // role definitions from goclaw.json
+	mu          sync.RWMutex
 }
 
-// NewRegistryFromUsers creates a user registry from UsersConfig (new format)
-func NewRegistryFromUsers(users config.UsersConfig) *Registry {
+// NewRegistryFromUsers creates a user registry from UsersConfig
+// The rolesConfig is used to validate user roles and resolve permissions
+func NewRegistryFromUsers(users config.UsersConfig, rolesConfig config.RolesConfig) *Registry {
 	r := &Registry{
-		users:      make(map[string]*User),
-		telegramID: make(map[string]string),
+		users:       make(map[string]*User),
+		telegramID:  make(map[string]string),
+		rolesConfig: rolesConfig,
 	}
 
 	for username, entry := range users {
+		// Validate that the user's role can be resolved
+		_, err := ResolveRole(entry.Role, rolesConfig)
+		if err != nil {
+			logging.L_error("user: skipping user with unresolvable role",
+				"username", username,
+				"role", entry.Role,
+				"error", err)
+			continue
+		}
+
 		user := &User{
 			ID:               username,
 			Name:             entry.Name,
@@ -46,6 +60,19 @@ func NewRegistryFromUsers(users config.UsersConfig) *Registry {
 	}
 
 	return r
+}
+
+// GetRolesConfig returns the roles configuration
+func (r *Registry) GetRolesConfig() config.RolesConfig {
+	return r.rolesConfig
+}
+
+// ResolveUserRole resolves a user's role to its permissions
+func (r *Registry) ResolveUserRole(u *User) (*ResolvedRole, error) {
+	if u == nil {
+		return nil, nil
+	}
+	return ResolveRole(string(u.Role), r.rolesConfig)
 }
 
 // FromIdentity looks up a user by their external identity

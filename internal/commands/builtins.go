@@ -51,6 +51,12 @@ func registerBuiltins(m *Manager) {
 		Description: "Trigger heartbeat check",
 		Handler:     handleHeartbeat,
 	})
+
+	m.Register(&Command{
+		Name:        "/hass",
+		Description: "Home Assistant status and debug",
+		Handler:     handleHass,
+	})
 }
 
 // handleStatus returns session status and compaction health
@@ -423,4 +429,181 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%d min", int(d.Minutes()))
 	}
 	return fmt.Sprintf("%d hr", int(d.Hours()))
+}
+
+// handleHass handles the /hass command and subcommands
+func handleHass(ctx context.Context, args *CommandArgs) *CommandResult {
+	info := args.Provider.GetHassInfo()
+	if !info.Configured {
+		return &CommandResult{
+			Text:     "Home Assistant not configured",
+			Markdown: "Home Assistant not configured",
+		}
+	}
+
+	parts := strings.Fields(args.RawArgs)
+	if len(parts) == 0 {
+		// Default to info
+		return hassInfo(info)
+	}
+
+	switch parts[0] {
+	case "debug":
+		return hassDebug(args, parts[1:])
+	case "info":
+		return hassInfo(info)
+	case "subs":
+		return hassSubs(args)
+	default:
+		return &CommandResult{
+			Text:     fmt.Sprintf("Unknown subcommand: %s\nUsage: /hass [debug|info|subs]", parts[0]),
+			Markdown: fmt.Sprintf("Unknown subcommand: `%s`\nUsage: `/hass [debug|info|subs]`", parts[0]),
+		}
+	}
+}
+
+// hassInfo shows Home Assistant connection status
+func hassInfo(info *HassInfo) *CommandResult {
+	var text strings.Builder
+	var md strings.Builder
+
+	text.WriteString("Home Assistant Status\n")
+	md.WriteString("**Home Assistant Status**\n\n")
+
+	text.WriteString(fmt.Sprintf("  State: %s\n", info.State))
+	md.WriteString(fmt.Sprintf("State: %s\n", info.State))
+
+	text.WriteString(fmt.Sprintf("  Endpoint: %s\n", info.Endpoint))
+	md.WriteString(fmt.Sprintf("Endpoint: %s\n", info.Endpoint))
+
+	if info.Uptime > 0 {
+		text.WriteString(fmt.Sprintf("  Uptime: %s\n", formatDuration(info.Uptime)))
+		md.WriteString(fmt.Sprintf("Uptime: %s\n", formatDuration(info.Uptime)))
+	}
+
+	if info.LastError != "" {
+		text.WriteString(fmt.Sprintf("  Last Error: %s\n", info.LastError))
+		md.WriteString(fmt.Sprintf("Last Error: %s\n", info.LastError))
+	}
+
+	text.WriteString(fmt.Sprintf("  Reconnects: %d\n", info.Reconnects))
+	md.WriteString(fmt.Sprintf("Reconnects: %d\n", info.Reconnects))
+
+	text.WriteString(fmt.Sprintf("  Subscriptions: %d\n", info.Subscriptions))
+	md.WriteString(fmt.Sprintf("Subscriptions: %d\n", info.Subscriptions))
+
+	debugStr := "off"
+	if info.Debug {
+		debugStr = "on"
+	}
+	text.WriteString(fmt.Sprintf("  Debug: %s\n", debugStr))
+	md.WriteString(fmt.Sprintf("Debug: %s\n", debugStr))
+
+	return &CommandResult{
+		Text:     text.String(),
+		Markdown: md.String(),
+	}
+}
+
+// hassDebug toggles or sets HASS debug mode
+func hassDebug(args *CommandArgs, subArgs []string) *CommandResult {
+	info := args.Provider.GetHassInfo()
+	currentDebug := info.Debug
+
+	if len(subArgs) == 0 {
+		// Toggle
+		newState := !currentDebug
+		args.Provider.SetHassDebug(newState)
+		if newState {
+			return &CommandResult{
+				Text:     "HASS debug enabled - will show status for events",
+				Markdown: "HASS debug **enabled** - will show status for events",
+			}
+		}
+		return &CommandResult{
+			Text:     "HASS debug disabled",
+			Markdown: "HASS debug **disabled**",
+		}
+	}
+
+	switch strings.ToLower(subArgs[0]) {
+	case "on", "true", "1":
+		args.Provider.SetHassDebug(true)
+		return &CommandResult{
+			Text:     "HASS debug enabled",
+			Markdown: "HASS debug **enabled**",
+		}
+	case "off", "false", "0":
+		args.Provider.SetHassDebug(false)
+		return &CommandResult{
+			Text:     "HASS debug disabled",
+			Markdown: "HASS debug **disabled**",
+		}
+	default:
+		return &CommandResult{
+			Text:     "Usage: /hass debug [on|off]",
+			Markdown: "Usage: `/hass debug [on|off]`",
+		}
+	}
+}
+
+// hassSubs lists active HASS subscriptions
+func hassSubs(args *CommandArgs) *CommandResult {
+	subs := args.Provider.ListHassSubscriptions()
+
+	if len(subs) == 0 {
+		return &CommandResult{
+			Text:     "No subscriptions",
+			Markdown: "No subscriptions",
+		}
+	}
+
+	var text strings.Builder
+	var md strings.Builder
+
+	text.WriteString(fmt.Sprintf("Subscriptions (%d)\n\n", len(subs)))
+	md.WriteString(fmt.Sprintf("**Subscriptions** (%d)\n\n", len(subs)))
+
+	for _, sub := range subs {
+		pattern := sub.Pattern
+		if pattern == "" {
+			pattern = sub.Regex
+		}
+		shortID := sub.ID
+		if len(shortID) > 8 {
+			shortID = shortID[:8]
+		}
+
+		// Show enabled/disabled status
+		statusIcon := "✓"
+		statusText := ""
+		if !sub.Enabled {
+			statusIcon = "○"
+			statusText = " [disabled]"
+		}
+
+		text.WriteString(fmt.Sprintf("%s %s (ID: %s)%s\n", statusIcon, pattern, shortID, statusText))
+		md.WriteString(fmt.Sprintf("%s **%s** (ID: `%s`)%s\n", statusIcon, pattern, shortID, statusText))
+
+		if sub.Prompt != "" {
+			promptPreview := sub.Prompt
+			if len(promptPreview) > 50 {
+				promptPreview = promptPreview[:50] + "..."
+			}
+			text.WriteString(fmt.Sprintf("    Prompt: %s\n", promptPreview))
+			md.WriteString(fmt.Sprintf("  Prompt: %s\n", promptPreview))
+		}
+
+		wakeStr := "no"
+		if sub.Wake {
+			wakeStr = "yes"
+		}
+		text.WriteString(fmt.Sprintf("    Wake: %s, Interval: %ds, Debounce: %ds\n", wakeStr, sub.Interval, sub.Debounce))
+		md.WriteString(fmt.Sprintf("  Wake: %s, Interval: %ds, Debounce: %ds\n", wakeStr, sub.Interval, sub.Debounce))
+	}
+
+	return &CommandResult{
+		Text:     text.String(),
+		Markdown: md.String(),
+	}
 }

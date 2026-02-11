@@ -29,6 +29,11 @@ type PromptParams struct {
 	WorkspaceFiles []WorkspaceFile
 	// Skills prompt section (pre-formatted XML)
 	SkillsPrompt   string
+	// Memory access control (true = include MEMORY.md, false = exclude)
+	IncludeMemory  bool
+	// Role-specific system prompt customization
+	RoleSystemPrompt     string // Inline system prompt text from role config
+	RoleSystemPromptFile string // Path to system prompt file (relative to workspace)
 }
 
 // BuildSystemPrompt builds the full system prompt with workspace context injection
@@ -81,6 +86,14 @@ func BuildSystemPrompt(params PromptParams) string {
 		sections = append(sections, buildUserIdentitySection(params.User))
 	}
 
+	// 7b. Role-specific system prompt (main agent only)
+	if !isMinimal {
+		rolePrompt := buildRolePromptSection(params)
+		if rolePrompt != "" {
+			sections = append(sections, rolePrompt)
+		}
+	}
+
 	// 8. Time section
 	sections = append(sections, buildTimeSection(params.UserTimezone))
 
@@ -91,9 +104,13 @@ func BuildSystemPrompt(params PromptParams) string {
 		files = params.WorkspaceFiles
 		logging.L_trace("context: using cached workspace files", "count", len(files))
 	} else {
-		files = LoadWorkspaceFiles(params.WorkspaceDir)
+		files = LoadWorkspaceFiles(params.WorkspaceDir, params.IncludeMemory)
 	}
 	files = FilterForSession(files, params.IsSubagent)
+	// Filter out memory if not included (when using cached files)
+	if !params.IncludeMemory {
+		files = FilterMemory(files)
+	}
 	if len(files) > 0 {
 		sections = append(sections, buildProjectContextSection(files, params.IsSubagent))
 	}
@@ -112,6 +129,11 @@ func BuildSystemPrompt(params PromptParams) string {
 	// 11. Heartbeats (main agent only)
 	if !isMinimal {
 		sections = append(sections, buildHeartbeatSection())
+	}
+
+	// 11b. Cron Jobs (main agent only)
+	if !isMinimal {
+		sections = append(sections, buildCronJobsSection())
 	}
 
 	// 12. Memory flush instructions (main agent only)
@@ -339,6 +361,32 @@ GoClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may disc
 If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.`
 }
 
+func buildCronJobsSection() string {
+	return `## Cron Jobs
+
+Cron jobs execute with a specific prompt/task. Respond to the prompt directly.
+
+**Message tool usage:**
+- If you use the message tool to send cron output directly, respond HEARTBEAT_OK to avoid duplicate delivery
+- OR just respond with content and let cron delivery handle it (recommended)
+- Don't do both (results in duplicate messages)
+
+**Delivery:**
+- If delivery is enabled, your response is sent to channels
+- HEARTBEAT_OK suppresses delivery — use when there's nothing worth sending
+- Never append tokens to actual content — they must be the entire response
+
+**Response rules:**
+- Something to report → just say it
+- Conditional prompt ("alert if X"), condition not met → HEARTBEAT_OK
+- HEARTBEAT_OK is also valid for cron jobs (not just heartbeats) when nothing needs attention
+
+**Examples:**
+- Price alert, threshold not met → HEARTBEAT_OK (no message delivered)
+- Price alert, threshold exceeded → "⚠️ XRP/ZAR hit R25.50!"
+- Morning brief → just the brief (no suppression token)`
+}
+
 func buildMemoryFlushSection() string {
 	return `## Memory Flush Protocol
 
@@ -369,7 +417,17 @@ After compaction, your context will be summarized. Memories you wrote will persi
 }
 
 func buildMemoryVsTranscriptSection() string {
-	return `## Memory vs Transcript Search
+	return `## Memory & Recall
+
+**Internal knowledge first, external knowledge second.**
+
+When user references past discussions ("we discussed", "remember when", "didn't we", 
+"a while ago", "you mentioned", "I told you", "what did we decide"), use transcript 
+or memory_search BEFORE web search. Your context window is limited — these tools 
+are your extended memory.
+
+For recent context, use what's in your window. For anything older or uncertain, 
+search first rather than assuming or confabulating.
 
 You have two search tools for different purposes:
 
@@ -427,6 +485,42 @@ func buildContextStatusSection(totalTokens, maxTokens int) string {
 	}
 
 	return fmt.Sprintf("## Context Status\n\n%s", status)
+}
+
+// buildRolePromptSection loads and combines role-specific system prompts.
+// Returns empty string if no role prompts are configured.
+func buildRolePromptSection(params PromptParams) string {
+	var parts []string
+
+	// Add inline system prompt if present
+	if params.RoleSystemPrompt != "" {
+		parts = append(parts, strings.TrimSpace(params.RoleSystemPrompt))
+	}
+
+	// Load and add file-based prompt if specified
+	if params.RoleSystemPromptFile != "" {
+		filePath := params.RoleSystemPromptFile
+		// If relative path, resolve against workspace
+		if !strings.HasPrefix(filePath, "/") {
+			filePath = fmt.Sprintf("%s/%s", params.WorkspaceDir, filePath)
+		}
+
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			logging.L_warn("context: failed to load role system prompt file",
+				"path", params.RoleSystemPromptFile,
+				"resolved", filePath,
+				"error", err)
+		} else {
+			parts = append(parts, strings.TrimSpace(string(content)))
+		}
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("## Role Instructions\n\n%s", strings.Join(parts, "\n\n"))
 }
 
 func buildRuntimeSection(params PromptParams) string {

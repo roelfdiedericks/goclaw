@@ -44,6 +44,8 @@ type AgentRequest struct {
 	UserID         string // User ID to run as (typically owner for cron jobs)
 	IsHeartbeat    bool   // If true, run is ephemeral - don't persist to session
 	EnableThinking bool   // If true, enable extended thinking for models that support it
+	SkipMirror     bool   // If true, don't mirror to other channels (caller handles delivery)
+	JobName        string // Name of the cron job (for status messages)
 }
 
 // AgentEvent is a marker interface for agent events.
@@ -573,6 +575,8 @@ func (s *Service) executeJob(ctx context.Context, job *CronJob) {
 		FreshContext: job.IsIsolated(),
 		SessionID:    sessionID,
 		UserID:       userID,
+		SkipMirror:   true, // We handle delivery via ch.Send()
+		JobName:      job.Name,
 	}
 
 	L_debug("cron: invoking agent",
@@ -667,6 +671,13 @@ func (s *Service) executeJob(ctx context.Context, job *CronJob) {
 func (s *Service) deliverToChannels(ctx context.Context, job *CronJob, content string) {
 	if s.channelProvider == nil {
 		L_debug("cron: no channel provider, skipping delivery", "job", job.Name)
+		return
+	}
+
+	// Note: Suppression tokens (HEARTBEAT_OK, etc.) are handled centrally in gateway.RunAgent
+	// If content is empty, nothing to deliver
+	if content == "" {
+		L_debug("cron: empty content, skipping delivery", "job", job.Name)
 		return
 	}
 
@@ -807,6 +818,7 @@ func (s *Service) runHeartbeat(ctx context.Context) {
 		SessionID:    "",    // Empty = main session
 		UserID:       userID,
 		IsHeartbeat:  true,  // Ephemeral - don't persist to session
+		SkipMirror:   true,  // We handle delivery via ch.Send()
 	}
 
 	L_debug("heartbeat: invoking agent", "prompt", truncateLog(prompt, 100))
@@ -828,12 +840,8 @@ func (s *Service) runHeartbeat(ctx context.Context) {
 
 	L_info("heartbeat: completed", "responseLen", len(finalContent))
 
-	// Check if response is HEARTBEAT_OK (suppress output)
-	trimmedResponse := strings.TrimSpace(finalContent)
-	if strings.HasPrefix(strings.ToUpper(trimmedResponse), "HEARTBEAT_OK") {
-		L_debug("heartbeat: agent said OK, no notification")
-		return
-	}
+	// Note: Suppression tokens (HEARTBEAT_OK, etc.) are handled centrally in gateway.RunAgent
+	// finalContent will be empty if suppressed
 
 	// Deliver response to channels
 	if finalContent != "" && s.channelProvider != nil {

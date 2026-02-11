@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	"github.com/go-rod/rod/lib/proto"
 	"github.com/sevlyar/go-daemon"
 	"golang.org/x/term"
 
@@ -945,42 +946,27 @@ func (b *BrowserSetupCmd) Run(ctx *Context) error {
 	fmt.Println()
 	fmt.Println("Starting browser, please wait...")
 
-	// Launch headed browser
-	browserInstance, _, err := mgr.LaunchHeaded(profile, b.URL)
+	// Launch headed browser via the manager's unified API
+	browserInstance, err := mgr.GetBrowser(profile, true)
 	if err != nil {
 		return fmt.Errorf("failed to launch browser: %w", err)
 	}
 
-	// Wait for browser window to close or Ctrl+C
+	// Navigate to start URL if provided
+	if b.URL != "" {
+		_, err := browserInstance.Page(proto.TargetCreateTarget{URL: b.URL})
+		if err != nil {
+			L_warn("browser setup: failed to open start URL", "url", b.URL, "error", err)
+		}
+	}
+
+	// Wait for browser to close (user closes window) or Ctrl+C
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	doneChan := make(chan struct{})
-	go func() {
-		// Poll for all pages closed (workaround: go-rod doesn't have window close event)
-		// Initial delay to let the first page open
-		time.Sleep(2 * time.Second)
-
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				pages, err := browserInstance.Pages()
-				if err != nil {
-					L_debug("browser setup: error getting pages", "error", err)
-					close(doneChan)
-					return
-				}
-				if len(pages) == 0 {
-					L_debug("browser setup: all pages closed")
-					close(doneChan)
-					return
-				}
-			}
-		}
-	}()
+	// Use the browser's context to detect when it dies (user closes window)
+	browserCtx := browserInstance.GetContext()
+	doneChan := browserCtx.Done()
 
 	select {
 	case <-sigChan:
@@ -1443,8 +1429,8 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		return err
 	}
 
-	// Create user registry from users.json
-	users := user.NewRegistryFromUsers(usersConfig)
+	// Create user registry from users.json with roles from config
+	users := user.NewRegistryFromUsers(usersConfig, cfg.Roles)
 	L_debug("user registry created", "users", users.Count())
 
 	// Create LLM registry from config
@@ -1601,6 +1587,12 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	if skillsMgr := gw.SkillManager(); skillsMgr != nil {
 		toolsReg.Register(tools.NewSkillsTool(skillsMgr))
 		L_debug("skills tool registered")
+	}
+
+	// Register user_auth tool (for role elevation)
+	if cfg.Auth.Enabled && cfg.Auth.Script != "" {
+		toolsReg.Register(tools.NewUserAuthTool(cfg.Auth, cfg.Roles))
+		L_info("user_auth: tool registered", "allowedRoles", cfg.Auth.AllowedRoles)
 	}
 
 	// Register Home Assistant tool

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"time"
 
 	"github.com/roelfdiedericks/goclaw/internal/session"
 )
@@ -16,6 +17,11 @@ type SessionProvider interface {
 	GetSkillsStatusSection() string
 	GetSkillsListForCommand() *SkillsListResult
 	TriggerHeartbeat(ctx context.Context) error
+
+	// HASS commands
+	GetHassInfo() *HassInfo
+	SetHassDebug(enabled bool)
+	ListHassSubscriptions() []HassSubscriptionInfo
 }
 
 // SkillsListResult contains skill listing for /skills command
@@ -55,4 +61,28 @@ type CommandResult struct {
 	Markdown string // Markdown formatted output
 	Error    error  // Error if command failed
 	ExitCode int    // For CLI usage (0 = success)
+}
+
+// HassInfo contains Home Assistant connection status
+type HassInfo struct {
+	Configured    bool
+	State         string        // "disconnected", "connecting", "connected"
+	Endpoint      string
+	Uptime        time.Duration
+	LastError     string
+	Reconnects    int
+	Subscriptions int
+	Debug         bool
+}
+
+// HassSubscriptionInfo contains info about a HASS subscription
+type HassSubscriptionInfo struct {
+	ID       string
+	Pattern  string
+	Regex    string
+	Prompt   string
+	Wake     bool
+	Interval int
+	Debounce int
+	Enabled  bool
 }

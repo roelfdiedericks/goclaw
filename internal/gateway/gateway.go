@@ -482,6 +482,14 @@ func (g *Gateway) GetSkillsPrompt() string {
 	return g.skillManager.FormatPrompt()
 }
 
+// GetSkillsPromptForUser returns the formatted skills section filtered by user's role
+func (g *Gateway) GetSkillsPromptForUser(u *user.User) string {
+	if g.skillManager == nil {
+		return ""
+	}
+	return g.skillManager.FormatPromptForUser(u, g.users.GetRolesConfig())
+}
+
 // GetSkillsStatusSection returns the skills section for /status output
 func (g *Gateway) GetSkillsStatusSection() string {
 	if g.skillManager == nil {
@@ -497,7 +505,7 @@ func (g *Gateway) GetSkillsListForCommand() *commands.SkillsListResult {
 	}
 
 	allSkills := g.skillManager.GetAllSkills()
-	eligibleSkills := g.skillManager.GetEligibleSkills()
+	eligibleSkills := g.skillManager.GetEligibleSkills(nil, nil) // No user filtering for stats
 	flaggedSkills := g.skillManager.GetFlaggedSkills()
 
 	// Count whitelisted skills (eligible but have audit flags)
@@ -808,6 +816,18 @@ func (g *Gateway) RunAgentForCron(ctx context.Context, cronReq cron.AgentRequest
 		return
 	}
 
+	// If thinking enabled, send status message to channels
+	if reqUser.Thinking && len(g.channels) > 0 {
+		jobDesc := cronReq.JobName
+		if jobDesc == "" {
+			jobDesc = cronReq.Source
+		}
+		statusMsg := fmt.Sprintf("💭 Running cron: %s...", jobDesc)
+		for _, ch := range g.channels {
+			ch.Send(ctx, statusMsg)
+		}
+	}
+
 	// Convert cron request to gateway request
 	req := AgentRequest{
 		Source:         cronReq.Source,
@@ -817,6 +837,7 @@ func (g *Gateway) RunAgentForCron(ctx context.Context, cronReq cron.AgentRequest
 		User:           reqUser,
 		IsHeartbeat:    cronReq.IsHeartbeat,
 		EnableThinking: cronReq.EnableThinking || reqUser.Thinking, // Use cron setting or user preference
+		SkipMirror:     cronReq.SkipMirror,
 	}
 
 	// Create internal events channel
@@ -886,6 +907,14 @@ func (g *Gateway) invokeAgentInternal(ctx context.Context, u *user.User, session
 
 	L_info("gateway: invoke agent", "source", source, "session", sessionKey, "messageLen", len(message))
 
+	// If HASS debug enabled, send status message to channels for HASS events
+	if strings.HasPrefix(source, "hass:") && g.hassManager != nil && g.hassManager.IsDebug() && len(g.channels) > 0 {
+		statusMsg := fmt.Sprintf("💭 Running %s...", source)
+		for _, ch := range g.channels {
+			ch.Send(ctx, statusMsg)
+		}
+	}
+
 	// Run agent with the message
 	req := AgentRequest{
 		User:           u,
@@ -921,14 +950,8 @@ func (g *Gateway) invokeAgentInternal(ctx context.Context, u *user.User, session
 	L_info("gateway: invoke agent completed", "source", source, "responseLen", len(finalText))
 	L_trace("gateway: raw response", "source", source, "response", finalText)
 
-	// Check for suppression
-	if suppressPrefix != "" {
-		trimmed := strings.TrimSpace(finalText)
-		if strings.HasPrefix(strings.ToUpper(trimmed), strings.ToUpper(suppressPrefix)) {
-			L_debug("gateway: response suppressed", "source", source, "prefix", suppressPrefix)
-			return nil
-		}
-	}
+	// Note: Suppression tokens (EVENT_OK, HEARTBEAT_OK, etc.) are already handled
+	// centrally in RunAgent - finalText will be empty if suppressed
 
 	// Deliver response to channels (if any)
 	if finalText != "" {
@@ -1017,6 +1040,90 @@ func isContextOverflowError(err error) bool {
 	return false
 }
 
+// suppressionTokens are response markers indicating agent has nothing meaningful to deliver.
+// If a response contains any of these, it should not be sent to the user.
+var suppressionTokens = []string{
+	"SILENT_OK",    // Agent has nothing to say (regular chat)
+	"HEARTBEAT_OK", // Heartbeat/cron - nothing needs attention
+	"NO_REPLY",     // Memory flush - nothing to save
+	"EVENT_OK",     // HASS event - no action needed
+}
+
+// shouldSuppressResponse returns true if the response contains any suppression token.
+// Agents are instructed to use these tokens as the ENTIRE response, but often add
+// extra text. Using Contains catches "blah blah HEARTBEAT_OK" patterns.
+func shouldSuppressResponse(response string) bool {
+	upper := strings.ToUpper(response)
+	for _, token := range suppressionTokens {
+		if strings.Contains(upper, token) {
+			return true
+		}
+	}
+	return false
+}
+
+// filterToolsForUser returns tool definitions filtered by the user's role permissions.
+// Tools not allowed by the role are excluded from the list (never shown to LLM).
+func (g *Gateway) filterToolsForUser(u *user.User) []tools.ToolDefinition {
+	allDefs := g.tools.Definitions()
+
+	// No user = no filtering (shouldn't happen, but be safe)
+	if u == nil {
+		return allDefs
+	}
+
+	// Resolve user's role
+	resolvedRole, err := g.users.ResolveUserRole(u)
+	if err != nil {
+		L_error("filterToolsForUser: failed to resolve role, returning all tools", "user", u.Name, "role", u.Role, "error", err)
+		return allDefs
+	}
+
+	// AllTools = no filtering needed
+	if resolvedRole.AllTools {
+		return allDefs
+	}
+
+	// Filter to only allowed tools
+	filtered := make([]tools.ToolDefinition, 0, len(resolvedRole.Tools))
+	for _, def := range allDefs {
+		if resolvedRole.CanUseTool(def.Name) {
+			// Additional filter: if memory=none, exclude memory tools
+			if resolvedRole.Memory == "none" && isMemoryTool(def.Name) {
+				L_debug("filterToolsForUser: excluding memory tool", "user", u.Name, "tool", def.Name)
+				continue
+			}
+			// If transcripts=none, exclude transcript tool
+			if resolvedRole.Transcripts == "none" && def.Name == "transcript" {
+				L_debug("filterToolsForUser: excluding transcript tool", "user", u.Name)
+				continue
+			}
+			filtered = append(filtered, def)
+		}
+	}
+
+	L_debug("filterToolsForUser: filtered tools", "user", u.Name, "role", resolvedRole.Name, "total", len(allDefs), "allowed", len(filtered))
+	return filtered
+}
+
+// isMemoryTool returns true if the tool is a memory-related tool
+func isMemoryTool(name string) bool {
+	return name == "memory_search" || name == "memory_get"
+}
+
+// CanUserUseCommands checks if a user has permission to use slash commands
+func (g *Gateway) CanUserUseCommands(u *user.User) bool {
+	if u == nil {
+		return false
+	}
+	resolvedRole, err := g.users.ResolveUserRole(u)
+	if err != nil {
+		L_warn("gateway: failed to resolve role for command permission check", "user", u.Name, "error", err)
+		return false
+	}
+	return resolvedRole.CanUseCommands()
+}
+
 // RunAgent executes an agent turn, streaming events to the channel
 func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- AgentEvent) error {
 	defer close(events)
@@ -1091,19 +1198,31 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		workspaceFiles = g.promptCache.GetWorkspaceFiles()
 	}
 
-	// Get skills prompt
-	skillsPrompt := g.GetSkillsPrompt()
+	// Get skills prompt (filtered by user's role)
+	skillsPrompt := g.GetSkillsPromptForUser(req.User)
+
+	// Determine memory access and role prompts from resolved role
+	includeMemory := true
+	var roleSystemPrompt, roleSystemPromptFile string
+	if resolvedRole, err := g.users.ResolveUserRole(req.User); err == nil {
+		includeMemory = resolvedRole.HasMemoryAccess()
+		roleSystemPrompt = resolvedRole.SystemPrompt
+		roleSystemPromptFile = resolvedRole.SystemPromptFile
+	}
 
 	systemPrompt := gcontext.BuildSystemPrompt(gcontext.PromptParams{
-		WorkspaceDir:   g.config.Gateway.WorkingDir,
-		Tools:          g.tools,
-		Model:          g.llm.Model(),
-		Channel:        req.Source,
-		User:           req.User,
-		TotalTokens:    sess.GetTotalTokens(),
-		MaxTokens:      sess.GetMaxTokens(),
-		WorkspaceFiles: workspaceFiles,
-		SkillsPrompt:   skillsPrompt,
+		WorkspaceDir:         g.config.Gateway.WorkingDir,
+		Tools:                g.tools,
+		Model:                g.llm.Model(),
+		Channel:              req.Source,
+		User:                 req.User,
+		TotalTokens:          sess.GetTotalTokens(),
+		MaxTokens:            sess.GetMaxTokens(),
+		WorkspaceFiles:       workspaceFiles,
+		SkillsPrompt:         skillsPrompt,
+		IncludeMemory:        includeMemory,
+		RoleSystemPrompt:     roleSystemPrompt,
+		RoleSystemPromptFile: roleSystemPromptFile,
 	})
 
 	// Append media storage instructions
@@ -1197,7 +1316,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		}
 		// Build context from session (messages and tool definitions)
 		messages := sess.GetMessages()
-		toolDefs := g.tools.Definitions()
+		toolDefs := g.filterToolsForUser(req.User)
 
 		// Pre-flight check: estimate if we're approaching context limit
 		estimatedTokens := sess.GetTotalTokens()
@@ -1329,11 +1448,17 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			if owner := g.users.Owner(); owner != nil {
 				ownerChatID = owner.TelegramID
 			}
+			// Get transcript scope from resolved role
+			transcriptScope := "own" // Default to restrictive
+			if resolvedRole, err := g.users.ResolveUserRole(req.User); err == nil {
+				transcriptScope = resolvedRole.GetTranscriptScope()
+			}
 			toolCtx := tools.WithSessionContext(ctx, &tools.SessionContext{
-				Channel:     req.Source,
-				ChatID:      req.ChatID,
-				OwnerChatID: ownerChatID,
-				User:        req.User,
+				Channel:         req.Source,
+				ChatID:          req.ChatID,
+				OwnerChatID:     ownerChatID,
+				User:            req.User,
+				TranscriptScope: transcriptScope,
 			})
 			result, err := g.tools.Execute(toolCtx, response.ToolName, response.ToolInput)
 			toolDuration := time.Since(toolStartTime)
@@ -1397,6 +1522,13 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	if req.IsHeartbeat && messageCountBefore > 0 {
 		sess.TruncateMessages(messageCountBefore)
 		L_debug("heartbeat: rolled back session messages", "before", messageCountBefore, "after", sess.MessageCount())
+	}
+
+	// Check for suppression tokens - if response contains any, suppress delivery
+	// These tokens indicate agent has nothing meaningful to say
+	if shouldSuppressResponse(finalText) {
+		L_debug("gateway: response suppressed (contains suppression token)", "session", sessionKey, "responseLen", len(finalText))
+		finalText = ""
 	}
 
 	sendEvent(EventAgentEnd{RunID: runID, FinalText: finalText})
@@ -1528,6 +1660,52 @@ func (g *Gateway) TriggerHeartbeat(ctx context.Context) error {
 		return fmt.Errorf("cron service not running")
 	}
 	return g.cronService.TriggerHeartbeatNow(ctx)
+}
+
+// GetHassInfo returns Home Assistant connection status for /hass command
+func (g *Gateway) GetHassInfo() *commands.HassInfo {
+	if g.hassManager == nil {
+		return &commands.HassInfo{Configured: false}
+	}
+	return &commands.HassInfo{
+		Configured:    true,
+		State:         g.hassManager.GetState(),
+		Endpoint:      g.hassManager.GetEndpoint(),
+		Uptime:        g.hassManager.GetUptime(),
+		LastError:     g.hassManager.GetLastError(),
+		Reconnects:    g.hassManager.GetReconnects(),
+		Subscriptions: g.hassManager.SubscriptionCount(),
+		Debug:         g.hassManager.IsDebug(),
+	}
+}
+
+// SetHassDebug enables/disables HASS debug status messages
+func (g *Gateway) SetHassDebug(enabled bool) {
+	if g.hassManager != nil {
+		g.hassManager.SetDebug(enabled)
+	}
+}
+
+// ListHassSubscriptions returns active HASS subscriptions for /hass subs command
+func (g *Gateway) ListHassSubscriptions() []commands.HassSubscriptionInfo {
+	if g.hassManager == nil {
+		return nil
+	}
+	subs := g.hassManager.GetSubscriptions()
+	result := make([]commands.HassSubscriptionInfo, len(subs))
+	for i, sub := range subs {
+		result[i] = commands.HassSubscriptionInfo{
+			ID:       sub.ID,
+			Pattern:  sub.Pattern,
+			Regex:    sub.Regex,
+			Prompt:   sub.Prompt,
+			Wake:     sub.Wake,
+			Interval: sub.IntervalSeconds,
+			Debounce: sub.DebounceSeconds,
+			Enabled:  sub.Enabled,
+		}
+	}
+	return result
 }
 
 // CommandHandler returns the unified command handler

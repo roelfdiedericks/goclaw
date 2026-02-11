@@ -26,7 +26,7 @@ func (t *TranscriptTool) Name() string {
 }
 
 func (t *TranscriptTool) Description() string {
-	return "Search and query conversation history. Actions: 'semantic' (natural language search), 'recent' (latest messages), 'search' (supports matchType: 'exact' for substring, 'semantic' for vector, 'hybrid' default), 'gaps' (time gaps/breaks), 'stats' (indexing status). Filters: source, excludeSources, humanOnly (exclude cron/heartbeat), after/before/lastDays (time range), role (user/assistant). Output includes source field."
+	return "Search and query conversation history. USE THIS when user says 'we discussed', 'remember when', 'a while ago', 'you mentioned', 'I told you'. Actions: 'semantic' (natural language search), 'recent' (latest messages), 'search' (supports matchType: 'exact' for substring, 'semantic' for vector, 'hybrid' default), 'gaps' (time gaps/breaks), 'stats' (indexing status). Filters: source, excludeSources, humanOnly (exclude cron/heartbeat), after/before/lastDays (time range), role (user/assistant). Output includes source field."
 }
 
 func (t *TranscriptTool) Schema() map[string]any {
@@ -123,15 +123,24 @@ func (t *TranscriptTool) Execute(ctx context.Context, input json.RawMessage) (st
 	// Get user context for scoping
 	sessionCtx := GetSessionContext(ctx)
 	userID := ""
-	isOwner := false
+	transcriptScope := "own" // Default to own (restrictive)
 	if sessionCtx != nil && sessionCtx.User != nil {
 		userID = sessionCtx.User.ID
-		isOwner = sessionCtx.User.IsOwner()
+		// Use TranscriptScope from session context if set, otherwise fall back to owner check
+		if sessionCtx.TranscriptScope != "" {
+			transcriptScope = sessionCtx.TranscriptScope
+		} else if sessionCtx.User.IsOwner() {
+			transcriptScope = "all" // Legacy: owner gets all access
+		}
 	}
+
+	// Convert scope to isOwner for existing code (all = owner-like access)
+	isOwner := transcriptScope == "all"
 
 	L_debug("transcript: executing",
 		"action", params.Action,
 		"userID", userID,
+		"transcriptScope", transcriptScope,
 		"isOwner", isOwner,
 	)
 

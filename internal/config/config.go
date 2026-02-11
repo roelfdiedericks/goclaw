@@ -43,6 +43,71 @@ type Config struct {
 	Skills        SkillsConfig          `json:"skills"`
 	Cron          CronConfig            `json:"cron"`
 	Supervision   SupervisionConfig     `json:"supervision"`
+	Roles         RolesConfig           `json:"roles"`         // Role-based access control
+	Auth          AuthConfig            `json:"auth"`          // Role elevation authentication
+}
+
+// RolesConfig maps role names to their permission configurations
+type RolesConfig map[string]RoleConfig
+
+// RoleConfig defines permissions for a role
+type RoleConfig struct {
+	Tools            interface{} `json:"tools"`                      // "*" for all, or []string of allowed tools
+	Skills           interface{} `json:"skills"`                     // "*" for all, or []string of allowed skills
+	Memory           string      `json:"memory"`                     // "full" or "none"
+	Transcripts      string      `json:"transcripts"`                // "all", "own", or "none"
+	Commands         bool        `json:"commands"`                   // Whether slash commands are enabled
+	SystemPrompt     string      `json:"systemPrompt,omitempty"`     // Inline system prompt text
+	SystemPromptFile string      `json:"systemPromptFile,omitempty"` // Path to system prompt file (relative to workspace)
+}
+
+// GetToolsList returns the tools as a string slice, or nil if "*" (all tools)
+func (r *RoleConfig) GetToolsList() ([]string, bool) {
+	if r.Tools == nil {
+		return nil, false
+	}
+	if s, ok := r.Tools.(string); ok && s == "*" {
+		return nil, true // All tools allowed
+	}
+	if arr, ok := r.Tools.([]interface{}); ok {
+		result := make([]string, 0, len(arr))
+		for _, v := range arr {
+			if s, ok := v.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result, false
+	}
+	return nil, false
+}
+
+// GetSkillsList returns the skills as a string slice, or nil if "*" (all skills)
+func (r *RoleConfig) GetSkillsList() ([]string, bool) {
+	if r.Skills == nil {
+		return nil, false
+	}
+	if s, ok := r.Skills.(string); ok && s == "*" {
+		return nil, true // All skills allowed
+	}
+	if arr, ok := r.Skills.([]interface{}); ok {
+		result := make([]string, 0, len(arr))
+		for _, v := range arr {
+			if s, ok := v.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result, false
+	}
+	return nil, false
+}
+
+// AuthConfig configures role elevation via external authentication
+type AuthConfig struct {
+	Enabled      bool     `json:"enabled"`      // Enable user_auth tool
+	Script       string   `json:"script"`       // Path to auth script
+	AllowedRoles []string `json:"allowedRoles"` // Roles script can return (empty = disabled)
+	RateLimit    int      `json:"rateLimit"`    // Max attempts per minute (default: 3)
+	Timeout      int      `json:"timeout"`      // Script timeout in seconds (default: 10)
 }
 
 // AgentIdentityConfig configures the agent's display identity
@@ -825,6 +890,15 @@ func mergeConfigSelective(dst, src *Config, rawMap map[string]interface{}) error
 	}
 	if _, ok := rawMap["supervision"]; ok {
 		if err := mergo.Merge(&dst.Supervision, src.Supervision, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if _, ok := rawMap["roles"]; ok {
+		// Roles is a map, just assign directly (mergo doesn't handle maps well)
+		dst.Roles = src.Roles
+	}
+	if _, ok := rawMap["auth"]; ok {
+		if err := mergo.Merge(&dst.Auth, src.Auth, mergo.WithOverride); err != nil {
 			return err
 		}
 	}
