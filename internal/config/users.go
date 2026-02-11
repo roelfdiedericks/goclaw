@@ -105,8 +105,9 @@ func LoadUsers() (UsersConfig, error) {
 		if entry.Role == "owner" {
 			ownerCount++
 		}
-		if entry.Role != "owner" && entry.Role != "user" {
-			return nil, fmt.Errorf("invalid role %q for user %q: must be 'owner' or 'user'", entry.Role, username)
+		// Allow any role string - validation against roles config happens in registry
+		if entry.Role == "" {
+			return nil, fmt.Errorf("user %q has no role defined", username)
 		}
 		// Warn about users without credentials (but don't fail - allows CLI setup flow)
 		if entry.TelegramID == "" && entry.HTTPPasswordHash == "" {

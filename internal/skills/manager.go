@@ -8,7 +8,9 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
 // Manager coordinates skill loading, auditing, and prompt generation.
@@ -249,7 +251,9 @@ func (m *Manager) generateStartupWarning() {
 }
 
 // GetEligibleSkills returns skills that are eligible and enabled.
-func (m *Manager) GetEligibleSkills() []*Skill {
+// If user is nil, all eligible+enabled skills are returned.
+// Otherwise, skills are filtered by the user's role permissions.
+func (m *Manager) GetEligibleSkills(u *user.User, rolesConfig config.RolesConfig) []*Skill {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -267,6 +271,30 @@ func (m *Manager) GetEligibleSkills() []*Skill {
 
 	// Re-check with current context
 	_ = ctx // Context already applied during Reload
+
+	// Filter by user's role if user is provided
+	if u != nil {
+		resolvedRole, err := user.ResolveRole(string(u.Role), rolesConfig)
+		if err != nil {
+			L_warn("skills: failed to resolve role, returning all eligible", "user", u.Name, "error", err)
+			return eligible
+		}
+
+		// If AllSkills, no filtering needed
+		if resolvedRole.AllSkills {
+			return eligible
+		}
+
+		// Filter to allowed skills
+		filtered := make([]*Skill, 0, len(eligible))
+		for _, skill := range eligible {
+			if resolvedRole.CanUseSkill(skill.Name) {
+				filtered = append(filtered, skill)
+			}
+		}
+		L_debug("skills: filtered by role", "user", u.Name, "role", resolvedRole.Name, "total", len(eligible), "allowed", len(filtered))
+		return filtered
+	}
 
 	return eligible
 }
@@ -311,8 +339,15 @@ func (m *Manager) GetFlaggedSkills() []*Skill {
 }
 
 // FormatPrompt generates the skills section for the system prompt.
+// This version returns all eligible skills (no user filtering).
 func (m *Manager) FormatPrompt() string {
-	skills := m.GetEligibleSkills()
+	skills := m.GetEligibleSkills(nil, nil)
+	return FormatSkillsPrompt(skills)
+}
+
+// FormatPromptForUser generates the skills section filtered by user's role.
+func (m *Manager) FormatPromptForUser(u *user.User, rolesConfig config.RolesConfig) string {
+	skills := m.GetEligibleSkills(u, rolesConfig)
 	return FormatSkillsPrompt(skills)
 }
 

@@ -384,7 +384,7 @@
                 </button>
                 <span class="navbar-text">
                     <i class="bi bi-person-circle"></i> {{.User.Name}}
-                    {{if .User.IsOwner}}<span class="badge bg-warning text-dark">Owner</span>{{end}}
+                    {{if .User.Role}}<span class="badge {{if eq .User.Role "owner"}}bg-warning text-dark{{else if eq .User.Role "guest"}}bg-secondary{{else}}bg-info{{end}}">{{.User.Role}}</span>{{end}}
                 </span>
             </div>
         </div>

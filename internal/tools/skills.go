@@ -95,7 +95,7 @@ func (t *SkillsTool) Execute(ctx context.Context, input json.RawMessage) (string
 // executeList returns a list of skills with optional filtering
 func (t *SkillsTool) executeList(filter string, verbose bool) (string, error) {
 	allSkills := t.manager.GetAllSkills()
-	eligibleSkills := t.manager.GetEligibleSkills()
+	eligibleSkills := t.manager.GetEligibleSkills(nil, nil) // No user filtering for listing
 	flaggedSkills := t.manager.GetFlaggedSkills()
 
 	// Build lookup maps
@@ -288,7 +288,7 @@ func (t *SkillsTool) executeInfo(skillName string) (string, error) {
 	installOpts := skill.GetInstallOptions()
 
 	// Determine status
-	eligibleSkills := t.manager.GetEligibleSkills()
+	eligibleSkills := t.manager.GetEligibleSkills(nil, nil) // No user filtering for info
 	flaggedSkills := t.manager.GetFlaggedSkills()
 	eligibleSet := make(map[string]bool)
 	for _, s := range eligibleSkills {

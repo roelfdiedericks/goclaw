@@ -429,6 +429,7 @@ type SessionInfo struct {
 	SessionID   string `json:"sessionId"`
 	UserID      string `json:"userId"`
 	UserName    string `json:"userName"`
+	Role        string `json:"role"`
 	IsOwner     bool   `json:"isOwner"`
 	IsConnected bool   `json:"isConnected"`
 	EventCount  int    `json:"eventCount"`
@@ -450,14 +451,19 @@ func (c *HTTPChannel) GetSessionsInfo() []SessionInfo {
 		sess.bufferMu.Unlock()
 
 		name := sess.UserID
-		if sess.User != nil && sess.User.Name != "" {
-			name = sess.User.Name
+		role := ""
+		if sess.User != nil {
+			if sess.User.Name != "" {
+				name = sess.User.Name
+			}
+			role = string(sess.User.Role)
 		}
 
 		sessions = append(sessions, SessionInfo{
 			SessionID:   sess.SessionID[:8] + "...",
 			UserID:      sess.UserID,
 			UserName:    name,
+			Role:        role,
 			IsOwner:     sess.User != nil && sess.User.IsOwner(),
 			IsConnected: isConnected,
 			EventCount:  eventCount,

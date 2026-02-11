@@ -10,7 +10,7 @@
             </div>
             <div class="card-body">
                 <p class="mb-0"><strong>Agent:</strong> <span id="status-agent" class="badge bg-secondary">Loading...</span></p>
-                <p class="mb-0 mt-2"><strong>User:</strong> {{.User.Name}} ({{.User.Username}})</p>
+                <p class="mb-0 mt-2"><strong>User:</strong> {{.User.Name}} ({{.User.Username}}){{if .User.Role}} <span class="badge {{if eq .User.Role "owner"}}bg-warning text-dark{{else if eq .User.Role "guest"}}bg-secondary{{else}}bg-info{{end}}">{{.User.Role}}</span>{{end}}</p>
             </div>
         </div>
     </div>
@@ -80,10 +80,15 @@ $(document).ready(function() {
                     var statusBadge = sess.isConnected 
                         ? '<span class="badge bg-success">Connected</span>'
                         : '<span class="badge bg-secondary">Disconnected</span>';
-                    var ownerBadge = sess.isOwner ? ' <span class="badge bg-warning text-dark">Owner</span>' : '';
+                    var roleBadge = '';
+                    if (sess.role) {
+                        var badgeClass = sess.role === 'owner' ? 'bg-warning text-dark' :
+                                        sess.role === 'guest' ? 'bg-secondary' : 'bg-info';
+                        roleBadge = ' <span class="badge ' + badgeClass + '">' + escapeHtml(sess.role) + '</span>';
+                    }
                     
                     html += '<tr>' +
-                        '<td>' + escapeHtml(sess.userName) + ownerBadge + '</td>' +
+                        '<td>' + escapeHtml(sess.userName) + roleBadge + '</td>' +
                         '<td><code>' + escapeHtml(sess.sessionId) + '</code></td>' +
                         '<td>' + statusBadge + '</td>' +
                         '<td>' + sess.eventCount + '</td>' +

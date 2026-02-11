@@ -36,6 +36,15 @@ type Manager struct {
 	wg            sync.WaitGroup
 	connected     bool
 	reconnecting  bool
+
+	// Connection tracking for /hass info
+	connState    string    // "disconnected", "connecting", "connected"
+	connSince    time.Time // When current connection established
+	lastError    error     // Last connection error
+	reconnects   int       // Total reconnect attempts
+
+	// Debug mode for status messages
+	debug        bool
 }
 
 // NewManager creates a new HASS event subscription manager.
@@ -93,6 +102,7 @@ func (m *Manager) Stop() {
 		m.conn = nil
 	}
 	m.connected = false
+	m.connState = "disconnected"
 	m.mu.Unlock()
 
 	m.wg.Wait()
@@ -154,6 +164,7 @@ func (m *Manager) Unsubscribe(id string) error {
 			m.conn = nil
 		}
 		m.connected = false
+		m.connState = "disconnected"
 		m.mu.Unlock()
 	}
 
@@ -170,6 +181,44 @@ func (m *Manager) GetSubscriptions() []Subscription {
 		subs = append(subs, *sub)
 	}
 	return subs
+}
+
+// EnableSubscription enables a subscription by ID.
+func (m *Manager) EnableSubscription(id string) error {
+	m.mu.Lock()
+	sub, exists := m.subscriptions[id]
+	if !exists {
+		m.mu.Unlock()
+		return fmt.Errorf("subscription not found: %s", id)
+	}
+	sub.Enabled = true
+	m.mu.Unlock()
+
+	if err := m.saveSubscriptions(); err != nil {
+		L_error("hass: failed to save subscriptions", "error", err)
+	}
+
+	L_info("hass: subscription enabled", "id", id)
+	return nil
+}
+
+// DisableSubscription disables a subscription by ID.
+func (m *Manager) DisableSubscription(id string) error {
+	m.mu.Lock()
+	sub, exists := m.subscriptions[id]
+	if !exists {
+		m.mu.Unlock()
+		return fmt.Errorf("subscription not found: %s", id)
+	}
+	sub.Enabled = false
+	m.mu.Unlock()
+
+	if err := m.saveSubscriptions(); err != nil {
+		L_error("hass: failed to save subscriptions", "error", err)
+	}
+
+	L_info("hass: subscription disabled", "id", id)
+	return nil
 }
 
 // IsConnected returns whether the WebSocket is currently connected.
@@ -263,6 +312,8 @@ func (m *Manager) connectLoop() {
 		// If we get here, connection was lost
 		m.mu.Lock()
 		m.connected = false
+		m.connState = "disconnected"
+		m.reconnects++
 		if m.conn != nil {
 			m.conn.Close()
 			m.conn = nil
@@ -290,6 +341,11 @@ func (m *Manager) connect() error {
 	wsURL := m.buildWebSocketURL()
 	L_debug("hass: connecting to websocket", "url", wsURL, "insecure", m.cfg.Insecure)
 
+	// Track connecting state
+	m.mu.Lock()
+	m.connState = "connecting"
+	m.mu.Unlock()
+
 	// Configure dialer
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 30 * time.Second,
@@ -301,6 +357,10 @@ func (m *Manager) connect() error {
 	// Connect
 	conn, _, err := dialer.DialContext(m.ctx, wsURL, http.Header{})
 	if err != nil {
+		m.mu.Lock()
+		m.connState = "disconnected"
+		m.lastError = err
+		m.mu.Unlock()
 		return fmt.Errorf("dial: %w", err)
 	}
 	L_debug("hass: websocket connected, waiting for auth_required")
@@ -374,6 +434,8 @@ func (m *Manager) connect() error {
 	m.mu.Lock()
 	m.conn = conn
 	m.connected = true
+	m.connState = "connected"
+	m.connSince = time.Now()
 	m.subscriptionID = subMsgID
 	m.mu.Unlock()
 
@@ -438,11 +500,14 @@ func (m *Manager) handleEvent(event *HAEvent) {
 
 	L_trace("hass: event received", "entity", entityID, "oldState", oldState, "newState", newState)
 
-	// Find matching subscriptions
+	// Find matching subscriptions (skip disabled)
 	m.mu.RLock()
 	subCount := len(m.subscriptions)
 	var matches []*Subscription
 	for _, sub := range m.subscriptions {
+		if !sub.Enabled {
+			continue
+		}
 		if MatchSubscription(sub, entityID) {
 			matches = append(matches, sub)
 		}
@@ -525,7 +590,9 @@ func (m *Manager) processMatch(sub *Subscription, event *HAEvent, entityID, newS
 
 		L_debug("hass: invoking agent", "entity", entityID, "subID", sub.ID, "promptLen", len(prompt), "hasPrompt", sub.Prompt != "")
 
-		if err := m.injector.InvokeAgent(ctx, "hass_event", prompt, "EVENT_OK"); err != nil {
+		// Include entity and state in source for status message
+		source := fmt.Sprintf("hass: %s → %s", entityID, newState)
+		if err := m.injector.InvokeAgent(ctx, source, prompt, "EVENT_OK"); err != nil {
 			L_error("hass: failed to invoke agent", "error", err, "entity", entityID, "subID", sub.ID)
 			return
 		}
@@ -634,4 +701,68 @@ func (m *Manager) buildWebSocketURL() string {
 	}
 
 	return url + "/api/websocket"
+}
+
+// SetDebug enables or disables debug status messages for HASS events.
+func (m *Manager) SetDebug(enabled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.debug = enabled
+	L_info("hass: debug mode changed", "enabled", enabled)
+}
+
+// IsDebug returns whether debug mode is enabled.
+func (m *Manager) IsDebug() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.debug
+}
+
+// GetState returns the current connection state.
+func (m *Manager) GetState() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.connState == "" {
+		return "disconnected"
+	}
+	return m.connState
+}
+
+// GetUptime returns how long the current connection has been established.
+func (m *Manager) GetUptime() time.Duration {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.connState != "connected" || m.connSince.IsZero() {
+		return 0
+	}
+	return time.Since(m.connSince)
+}
+
+// GetLastError returns the last connection error, if any.
+func (m *Manager) GetLastError() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.lastError == nil {
+		return ""
+	}
+	return m.lastError.Error()
+}
+
+// GetReconnects returns the total number of reconnect attempts.
+func (m *Manager) GetReconnects() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.reconnects
+}
+
+// GetEndpoint returns the configured Home Assistant URL.
+func (m *Manager) GetEndpoint() string {
+	return m.cfg.URL
+}
+
+// SubscriptionCount returns the number of active subscriptions.
+func (m *Manager) SubscriptionCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.subscriptions)
 }

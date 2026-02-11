@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/roelfdiedericks/goclaw/internal/browser"
@@ -1317,36 +1316,20 @@ func (w *Wizard) launchBrowserSetup(configPath string) error {
 	fmt.Println("Starting browser, please wait...")
 	fmt.Println()
 
-	// Launch headed browser
-	browserInstance, _, err := mgr.LaunchHeaded(profile, "")
+	// Launch headed browser via the manager's unified API
+	browserInstance, err := mgr.GetBrowser(profile, true)
 	if err != nil {
 		return fmt.Errorf("failed to launch browser: %w", err)
 	}
 
-	// Wait for browser window to close or Ctrl+C
+	// Wait for browser to close (user closes window) or Ctrl+C
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigChan)
 
-	doneChan := make(chan struct{})
-	go func() {
-		// Poll for all pages closed
-		time.Sleep(2 * time.Second)
-
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				pages, err := browserInstance.Pages()
-				if err != nil || len(pages) == 0 {
-					close(doneChan)
-					return
-				}
-			}
-		}
-	}()
+	// Use the browser's context to detect when it dies (user closes window)
+	browserCtx := browserInstance.GetContext()
+	doneChan := browserCtx.Done()
 
 	select {
 	case <-sigChan:

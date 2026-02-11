@@ -37,26 +37,33 @@ func cleanupStaleLocks(profileDir string) {
 }
 
 // createLauncher creates a configured Chrome launcher
-// If bubblewrap sandboxing is enabled, it creates a wrapper script and uses that instead
+// Always uses a wrapper script for consistent environment:
+// - bubblewrap enabled: bwrap sandbox wrapper
+// - bubblewrap disabled: clean-environment passthrough wrapper
 func (m *Manager) createLauncher(binPath, profileDir string, headless bool) (*launcher.Launcher, error) {
-	// Check if we should use bubblewrap sandboxing
-	actualBinPath := binPath
-	sandboxed := false
+	var actualBinPath string
+	var err error
 	
 	if m.config.Bubblewrap.Enabled {
-		// Create sandboxed launcher wrapper
-		wrapperPath, err := CreateSandboxedLauncher(binPath, m.config.Workspace, profileDir, m.config.Bubblewrap)
+		// Create bubblewrap sandbox wrapper
+		actualBinPath, err = CreateSandboxedLauncher(binPath, m.config.Workspace, profileDir, m.config.Bubblewrap)
 		if err != nil {
-			L_warn("browser: failed to create sandbox wrapper, running unsandboxed", "error", err)
-		} else if wrapperPath != binPath {
-			actualBinPath = wrapperPath
-			sandboxed = true
-			L_info("browser: using bubblewrap sandbox", "wrapper", wrapperPath)
+			L_warn("browser: failed to create sandbox wrapper, falling back to passthrough", "error", err)
+			actualBinPath, err = CreatePassthroughLauncher(binPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create browser wrapper: %w", err)
+			}
+			L_info("browser: using passthrough wrapper (bwrap failed)")
+		} else {
+			L_info("browser: using bubblewrap sandbox", "wrapper", actualBinPath)
 		}
-	}
-	
-	if !sandboxed {
-		L_debug("browser: running without sandbox")
+	} else {
+		// Create clean-environment passthrough wrapper (same env as bwrap would provide)
+		actualBinPath, err = CreatePassthroughLauncher(binPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create browser wrapper: %w", err)
+		}
+		L_info("browser: using passthrough wrapper (clean environment)")
 	}
 	
 	l := launcher.New().
@@ -75,9 +82,8 @@ func (m *Manager) createLauncher(binPath, profileDir string, headless bool) (*la
 		l = l.Set("disable-blink-features", "AutomationControlled")
 	}
 	
-	if m.config.NoSandbox {
-		l = l.Set("no-sandbox")
-	}
+	// Note: We no longer add --no-sandbox. The passthrough wrapper provides
+	// a clean environment, and Chrome can use its native sandbox.
 	
 	return l, nil
 }
@@ -110,10 +116,13 @@ func (m *Manager) launchWithRetry(binPath, profileDir string, headless bool) (st
 
 // Manager is the singleton browser manager
 // It handles browser download, profiles, and browser instance pooling
+
 // browserInstance tracks a browser and its state
 type browserInstance struct {
-	browser *rod.Browser
-	headed  bool
+	browser   *rod.Browser
+	headed    bool
+	profile   string
+	createdAt time.Time
 }
 
 type Manager struct {
@@ -231,10 +240,16 @@ func (m *Manager) ForceDownload() (string, error) {
 	return m.downloader.ForceDownload()
 }
 
-// GetBrowser returns a browser instance for the given profile.
-// The browser is created lazily and reused for subsequent calls with the same profile.
+// GetBrowser returns a browser instance for the given profile and mode.
+// One browser per profile - mode switching rules:
+//   - Headed exists + headed requested → return headed
+//   - Headed exists + headless requested → return headed anyway (headed wins, never auto-close)
+//   - Headless exists + headed requested → close headless, open headed (safe - headless is invisible)
+//   - Headless exists + headless requested → return headless
+//   - Nothing exists → create what was requested
+//
 // Special case: profile="chrome" connects to an existing Chrome via CDP endpoint.
-func (m *Manager) GetBrowser(profile string) (*rod.Browser, error) {
+func (m *Manager) GetBrowser(profile string, headed bool) (*rod.Browser, error) {
 	if m == nil {
 		return nil, fmt.Errorf("browser manager not initialized")
 	}
@@ -246,27 +261,24 @@ func (m *Manager) GetBrowser(profile string) (*rod.Browser, error) {
 	m.browsersMu.Lock()
 	defer m.browsersMu.Unlock()
 	
-	// Return existing browser if available
+	// Check for existing browser
 	if instance, ok := m.browsers[profile]; ok {
-		// Check if browser is still connected
-		// rod doesn't have a direct "IsConnected" method, so we try a simple operation
-		// Wrap in func to recover from panic if CDP client is nil
-		connected := func() (ok bool) {
-			defer func() {
-				if r := recover(); r != nil {
-					L_debug("browser: connection check panicked, browser is dead", "profile", profile, "panic", r)
-					ok = false
-				}
-			}()
-			_, err := instance.browser.Call(nil, "", "Browser.getVersion", nil)
-			return err == nil
-		}()
-		
-		if connected {
+		// Headed browser always wins - never close it automatically
+		if instance.headed {
+			L_debug("browser: returning existing headed browser", "profile", profile, "requested_headed", headed)
 			return instance.browser, nil
 		}
-		// Browser disconnected, remove and recreate
-		L_debug("browser: existing browser disconnected, recreating", "profile", profile)
+		
+		// Existing is headless
+		if !headed {
+			// Requested headless, have headless - return it
+			L_debug("browser: returning existing headless browser", "profile", profile)
+			return instance.browser, nil
+		}
+		
+		// Requested headed, have headless - safe to close and upgrade
+		L_debug("browser: upgrading headless to headed", "profile", profile)
+		instance.browser.Close()
 		delete(m.browsers, profile)
 	}
 	
@@ -276,10 +288,44 @@ func (m *Manager) GetBrowser(profile string) (*rod.Browser, error) {
 		if err != nil {
 			return nil, err
 		}
-		m.browsers[profile] = &browserInstance{browser: browser, headed: true}
+		m.browsers[profile] = &browserInstance{
+			browser:   browser,
+			headed:    true,
+			profile:   profile,
+			createdAt: time.Now(),
+		}
+		// Monitor for disconnect
+		go m.monitorBrowser(profile, browser)
 		return browser, nil
 	}
 	
+	// Launch new browser with requested mode
+	browser, err := m.launchBrowser(profile, headed)
+	if err != nil {
+		return nil, err
+	}
+	
+	m.browsers[profile] = &browserInstance{
+		browser:   browser,
+		headed:    headed,
+		profile:   profile,
+		createdAt: time.Now(),
+	}
+	
+	// Monitor for browser death - automatically clean up when WebSocket dies
+	go m.monitorBrowser(profile, browser)
+	
+	mode := "headless"
+	if headed {
+		mode = "headed"
+	}
+	L_info("browser: launched", "profile", profile, "mode", mode)
+	
+	return browser, nil
+}
+
+// launchBrowser creates and connects to a new browser instance
+func (m *Manager) launchBrowser(profile string, headed bool) (*rod.Browser, error) {
 	// Ensure browser is downloaded
 	binPath, err := m.downloader.EnsureBrowser()
 	if err != nil {
@@ -293,12 +339,15 @@ func (m *Manager) GetBrowser(profile string) (*rod.Browser, error) {
 	}
 	
 	// Clean up stale Chrome lock files from crashed sessions
-	// Chrome refuses to start if these exist from a previous crash
 	cleanupStaleLocks(profileDir)
 	
-	L_debug("browser: launching browser", "profile", profile, "profileDir", profileDir, "headless", m.config.Headless)
+	mode := "headless"
+	if headed {
+		mode = "headed"
+	}
+	L_debug("browser: launching", "profile", profile, "mode", mode, "profileDir", profileDir)
 	
-	controlURL, err := m.launchWithRetry(binPath, profileDir, m.config.Headless)
+	controlURL, err := m.launchWithRetry(binPath, profileDir, !headed)
 	if err != nil {
 		return nil, fmt.Errorf("failed to launch browser: %w", err)
 	}
@@ -309,24 +358,70 @@ func (m *Manager) GetBrowser(profile string) (*rod.Browser, error) {
 	}
 	
 	// Set device emulation based on config
-	// Rod defaults to LaptopWithMDPIScreen which constrains the viewport
 	browser.DefaultDevice(m.config.ResolveDevice())
-	
-	m.browsers[profile] = &browserInstance{browser: browser, headed: !m.config.Headless}
-	L_info("browser: launched", "profile", profile, "controlURL", controlURL)
 	
 	return browser, nil
 }
 
-// GetStealthPage creates a new stealth page for the given profile
-func (m *Manager) GetStealthPage(profile string) (*rod.Page, error) {
-	browser, err := m.GetBrowser(profile)
+// monitorBrowser watches for browser disconnect and removes from pool
+func (m *Manager) monitorBrowser(profile string, browser *rod.Browser) {
+	<-browser.GetContext().Done()
+	
+	m.browsersMu.Lock()
+	defer m.browsersMu.Unlock()
+	
+	// Only delete if this is still the same browser (not replaced)
+	if instance, ok := m.browsers[profile]; ok && instance.browser == browser {
+		delete(m.browsers, profile)
+		L_info("browser: removed dead browser from pool", "profile", profile, "headed", instance.headed)
+	}
+}
+
+// GetStealthPage creates a new stealth page for the given profile and mode.
+// If stealth mode is enabled in config, uses stealth.Page for anti-detection.
+func (m *Manager) GetStealthPage(profile string, headed bool) (*rod.Page, error) {
+	browser, err := m.GetBrowser(profile, headed)
 	if err != nil {
 		return nil, err
 	}
 	
 	if m.config.Stealth {
 		return stealth.Page(browser)
+	}
+	
+	return browser.Page(proto.TargetCreateTarget{})
+}
+
+// GetBackgroundStealthPage creates a new stealth page in the background (doesn't steal focus).
+// Use this for background operations like web_fetch that shouldn't disturb the user.
+func (m *Manager) GetBackgroundStealthPage(profile string, headed bool) (*rod.Page, error) {
+	browser, err := m.GetBrowser(profile, headed)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Create page in background - won't steal focus from user's active tab
+	page, err := browser.Page(proto.TargetCreateTarget{Background: true})
+	if err != nil {
+		return nil, err
+	}
+	
+	// Apply stealth JS if configured (same as stealth.Page does)
+	if m.config.Stealth {
+		if _, err := page.EvalOnNewDocument(stealth.JS); err != nil {
+			page.Close()
+			return nil, err
+		}
+	}
+	
+	return page, nil
+}
+
+// GetPage creates a new page on the browser for the given profile and mode.
+func (m *Manager) GetPage(profile string, headed bool) (*rod.Page, error) {
+	browser, err := m.GetBrowser(profile, headed)
+	if err != nil {
+		return nil, err
 	}
 	
 	return browser.Page(proto.TargetCreateTarget{})
@@ -358,11 +453,12 @@ func (m *Manager) IsExternalProfile(profile string) bool {
 	return profile == "chrome"
 }
 
-// CloseBrowser closes the browser for a specific profile.
+// CloseBrowser explicitly closes the browser for a specific profile.
 // Does nothing for external profiles like "chrome" (user's browser).
-func (m *Manager) CloseBrowser(profile string) {
+// Returns error if manager not initialized.
+func (m *Manager) CloseBrowser(profile string) error {
 	if m == nil {
-		return
+		return fmt.Errorf("browser manager not initialized")
 	}
 	
 	if profile == "" {
@@ -372,7 +468,7 @@ func (m *Manager) CloseBrowser(profile string) {
 	// Don't close external browsers (user's Chrome)
 	if m.IsExternalProfile(profile) {
 		L_debug("browser: skipping close for external profile", "profile", profile)
-		return
+		return nil
 	}
 	
 	m.browsersMu.Lock()
@@ -381,8 +477,9 @@ func (m *Manager) CloseBrowser(profile string) {
 	if instance, ok := m.browsers[profile]; ok {
 		instance.browser.Close()
 		delete(m.browsers, profile)
-		L_debug("browser: closed", "profile", profile)
+		L_debug("browser: closed", "profile", profile, "headed", instance.headed)
 	}
+	return nil
 }
 
 // CloseAll closes all browser instances (except external profiles like "chrome")
@@ -503,13 +600,11 @@ func (m *Manager) ProfileForDomain(domain string) string {
 	return m.config.ProfileForDomain(domain)
 }
 
-// LaunchHeaded launches a headed (non-headless) browser for interactive setup.
-// This is used by the CLI for profile setup.
-// If a headed browser already exists for this profile, it will be reused.
-// If a headless browser exists, it will be closed and replaced with headed.
-func (m *Manager) LaunchHeaded(profile string, startURL string) (*rod.Browser, *rod.Page, error) {
+// HasBrowser checks if a browser exists for the given profile.
+// Returns whether a browser exists and whether it's headed.
+func (m *Manager) HasBrowser(profile string) (exists bool, headed bool) {
 	if m == nil {
-		return nil, nil, fmt.Errorf("browser manager not initialized")
+		return false, false
 	}
 	
 	if profile == "" {
@@ -517,94 +612,10 @@ func (m *Manager) LaunchHeaded(profile string, startURL string) (*rod.Browser, *
 	}
 	
 	m.browsersMu.Lock()
+	defer m.browsersMu.Unlock()
 	
-	// Check if we already have a browser for this profile
 	if instance, ok := m.browsers[profile]; ok {
-		if instance.headed {
-			// Already headed - reuse it, just navigate to URL
-			m.browsersMu.Unlock()
-			L_debug("browser: reusing existing headed browser", "profile", profile)
-			
-			var page *rod.Page
-			var err error
-			if m.config.Stealth {
-				page, err = stealth.Page(instance.browser)
-			} else {
-				page, err = instance.browser.Page(proto.TargetCreateTarget{})
-			}
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to create page: %w", err)
-			}
-			
-			if startURL != "" {
-				if err := page.Navigate(startURL); err != nil {
-					L_warn("browser: failed to navigate to start URL", "url", startURL, "error", err)
-				}
-			}
-			return instance.browser, page, nil
-		}
-		// Headless exists - close it, we'll launch headed
-		L_debug("browser: closing headless browser to launch headed", "profile", profile)
-		instance.browser.Close()
-		delete(m.browsers, profile)
+		return true, instance.headed
 	}
-	m.browsersMu.Unlock()
-	
-	// Ensure browser is downloaded
-	binPath, err := m.downloader.EnsureBrowser()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to ensure browser: %w", err)
-	}
-	
-	// Ensure profile directory exists
-	profileDir, err := m.profiles.EnsureProfile(profile)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to ensure profile: %w", err)
-	}
-	
-	// Clean up stale Chrome lock files from crashed sessions
-	cleanupStaleLocks(profileDir)
-	
-	L_info("browser: launching headed browser for setup", "profile", profile, "startURL", startURL)
-	
-	controlURL, err := m.launchWithRetry(binPath, profileDir, false)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to launch headed browser: %w", err)
-	}
-	
-	browser := rod.New().ControlURL(controlURL)
-	if err := browser.Connect(); err != nil {
-		return nil, nil, fmt.Errorf("failed to connect to headed browser: %w", err)
-	}
-	
-	// Set device emulation based on config (default "clear" fills window)
-	// Rod defaults to LaptopWithMDPIScreen which constrains the viewport
-	browser.DefaultDevice(m.config.ResolveDevice())
-	
-	// Add to pool as headed
-	m.browsersMu.Lock()
-	m.browsers[profile] = &browserInstance{browser: browser, headed: true}
-	m.browsersMu.Unlock()
-	
-	// Create a page
-	var page *rod.Page
-	if m.config.Stealth {
-		page, err = stealth.Page(browser)
-	} else {
-		page, err = browser.Page(proto.TargetCreateTarget{})
-	}
-	if err != nil {
-		browser.Close()
-		return nil, nil, fmt.Errorf("failed to create page: %w", err)
-	}
-	
-	// Navigate to start URL if provided
-	if startURL != "" {
-		if err := page.Navigate(startURL); err != nil {
-			L_warn("browser: failed to navigate to start URL", "url", startURL, "error", err)
-			// Continue anyway - user can navigate manually
-		}
-	}
-	
-	return browser, page, nil
+	return false, false
 }

@@ -46,7 +46,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Timestamp time.Time
 	}{
 		Title:     "GoClaw",
-		User:      &UserTemplateData{Name: u.Name, Username: u.ID, IsOwner: u.IsOwner()},
+		User:      &UserTemplateData{Name: u.Name, Username: u.ID, Role: string(u.Role), IsOwner: u.IsOwner()},
 		Timestamp: time.Now(),
 	}
 
@@ -106,7 +106,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		IsSupervising    bool
 	}{
 		Title:            "GoClaw - Chat",
-		User:             &UserTemplateData{Name: u.Name, Username: u.ID, IsOwner: u.IsOwner()},
+		User:             &UserTemplateData{Name: u.Name, Username: u.ID, Role: string(u.Role), IsOwner: u.IsOwner()},
 		AgentName:        agentName,
 		TypingText:       typingText,
 		Timestamp:        time.Now(),
@@ -125,6 +125,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 type UserTemplateData struct {
 	Name     string
 	Username string
+	Role     string
 	IsOwner  bool
 }
 
@@ -614,7 +615,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		Timestamp time.Time
 	}{
 		Title:     "GoClaw - Metrics",
-		User:      &UserTemplateData{Name: u.Name, Username: u.ID, IsOwner: u.IsOwner()},
+		User:      &UserTemplateData{Name: u.Name, Username: u.ID, Role: string(u.Role), IsOwner: u.IsOwner()},
 		Timestamp: time.Now(),
 	}
 
