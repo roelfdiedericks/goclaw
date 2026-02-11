@@ -24,7 +24,7 @@ func (t *MemorySearchTool) Name() string {
 }
 
 func (t *MemorySearchTool) Description() string {
-	return "Search MEMORY.md and memory/*.md files semantically. Use to recall prior work, decisions, dates, people, preferences, or todos. Returns matching snippets with file path and line numbers."
+	return "Search MEMORY.md and memory/*.md files semantically. USE THIS when user asks 'what did we decide', 'what's my preference', or references stored decisions/context. Use to recall prior work, decisions, dates, people, preferences, or todos. Returns matching snippets with file path and line numbers."
 }
 
 func (t *MemorySearchTool) Schema() map[string]any {

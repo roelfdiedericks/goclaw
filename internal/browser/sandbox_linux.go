@@ -110,6 +110,86 @@ func CreateSandboxedLauncher(browserBin, workspace, profileDir string, cfg Brows
 	return wrapperPath, nil
 }
 
+// CreatePassthroughLauncher creates a wrapper script that launches the browser with a clean
+// environment matching what bubblewrap would provide, but without the actual sandboxing.
+// This ensures consistent behavior regardless of whether bubblewrap is enabled.
+func CreatePassthroughLauncher(browserBin string) (string, error) {
+	home, _ := os.UserHomeDir()
+
+	wrapperDir := filepath.Join(home, ".goclaw", "browser-sandbox")
+	if err := os.MkdirAll(wrapperDir, 0755); err != nil {
+		return "", err
+	}
+
+	wrapperPath := filepath.Join(wrapperDir, "chromium-wrapper.sh")
+
+	// Build environment variables matching bwrap's DefaultEnv + Display + Wayland
+	// See bwrap.DefaultEnv(), bwrap.Display(), bwrap.Wayland()
+	envVars := []string{}
+
+	// PATH - preserve from host
+	if path := os.Getenv("PATH"); path != "" {
+		envVars = append(envVars, "PATH="+shellQuote(path))
+	}
+
+	// HOME
+	envVars = append(envVars, "HOME="+shellQuote(home))
+
+	// TERM
+	envVars = append(envVars, "TERM='xterm'")
+
+	// LANG - preserve from host or default
+	if lang := os.Getenv("LANG"); lang != "" {
+		envVars = append(envVars, "LANG="+shellQuote(lang))
+	} else {
+		envVars = append(envVars, "LANG='C.UTF-8'")
+	}
+
+	// USER - preserve from host
+	if user := os.Getenv("USER"); user != "" {
+		envVars = append(envVars, "USER="+shellQuote(user))
+	}
+
+	// DISPLAY - for X11 headed mode
+	if display := os.Getenv("DISPLAY"); display != "" {
+		envVars = append(envVars, "DISPLAY="+shellQuote(display))
+	}
+
+	// WAYLAND_DISPLAY - for Wayland headed mode
+	if waylandDisplay := os.Getenv("WAYLAND_DISPLAY"); waylandDisplay != "" {
+		envVars = append(envVars, "WAYLAND_DISPLAY="+shellQuote(waylandDisplay))
+	}
+
+	// XDG_RUNTIME_DIR - needed for Wayland socket access
+	if xdgRuntime := os.Getenv("XDG_RUNTIME_DIR"); xdgRuntime != "" {
+		envVars = append(envVars, "XDG_RUNTIME_DIR="+shellQuote(xdgRuntime))
+	}
+
+	// Build the wrapper script with env -i for clean environment
+	script := "#!/bin/sh\n"
+	script += "# GoClaw browser wrapper (clean environment, no sandbox)\n"
+	script += "# This script runs Chromium with a minimal environment matching bubblewrap\n\n"
+	script += "exec env -i \\\n"
+	for i, env := range envVars {
+		script += "  " + env
+		if i < len(envVars)-1 {
+			script += " \\\n"
+		}
+	}
+	script += " \\\n  " + shellQuote(browserBin) + " \"$@\"\n"
+
+	if err := os.WriteFile(wrapperPath, []byte(script), 0755); err != nil {
+		return "", err
+	}
+
+	L_debug("browser: created passthrough wrapper",
+		"wrapper", wrapperPath,
+		"browser", browserBin,
+	)
+
+	return wrapperPath, nil
+}
+
 // shellQuote properly quotes a string for shell use
 func shellQuote(s string) string {
 	// Simple quoting - wrap in single quotes, escape existing single quotes

@@ -28,7 +28,7 @@ type HASSTool struct {
 // hassInput defines the input schema for the hass tool.
 type hassInput struct {
 	// Common fields
-	Action string `json:"action"` // state, states, call, camera, services, history, devices, areas, entities, subscribe, unsubscribe, subscriptions
+	Action string `json:"action"` // state, states, call, camera, services, history, devices, areas, entities, subscribe, unsubscribe, enable, disable, subscriptions
 
 	// Entity/service fields
 	Entity  string          `json:"entity,omitempty"`  // entity_id
@@ -103,7 +103,9 @@ Registry Actions (WebSocket):
 Subscription Actions:
 - subscribe: Subscribe to state_changed events (pattern OR regex, optional debounce/interval/prompt/prefix/full/wake)
 - unsubscribe: Cancel a subscription (requires subscription_id)
-- subscriptions: List all active subscriptions
+- enable: Enable a disabled subscription (requires subscription_id)
+- disable: Disable a subscription without removing it (requires subscription_id)
+- subscriptions: List all subscriptions with enabled/disabled status
 
 Rate limiting:
 - debounce: Suppress same entity:state events within window (default 5s)
@@ -131,7 +133,7 @@ func (t *HASSTool) Schema() map[string]any {
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"state", "states", "call", "camera", "services", "history", "devices", "areas", "entities", "subscribe", "unsubscribe", "subscriptions"},
+				"enum":        []string{"state", "states", "call", "camera", "services", "history", "devices", "areas", "entities", "subscribe", "unsubscribe", "enable", "disable", "subscriptions"},
 				"description": "The action to perform",
 			},
 			"entity": map[string]any{
@@ -258,6 +260,10 @@ func (t *HASSTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 		return t.subscribe(ctx, in)
 	case "unsubscribe":
 		return t.unsubscribe(ctx, in)
+	case "enable":
+		return t.enableSubscription(ctx, in)
+	case "disable":
+		return t.disableSubscription(ctx, in)
 	case "subscriptions":
 		return t.listSubscriptions(ctx)
 	default:
@@ -776,6 +782,56 @@ func (t *HASSTool) unsubscribe(ctx context.Context, in hassInput) (string, error
 	result := map[string]any{
 		"status": "unsubscribed",
 		"id":     in.SubscriptionID,
+	}
+	jsonResult, _ := json.Marshal(result)
+	return string(jsonResult), nil
+}
+
+// enableSubscription enables a subscription by ID.
+func (t *HASSTool) enableSubscription(ctx context.Context, in hassInput) (string, error) {
+	if t.manager == nil {
+		return t.errorResult("error", "subscription manager not configured")
+	}
+
+	if in.SubscriptionID == "" {
+		return t.errorResult("error", "subscription_id is required for enable")
+	}
+
+	if err := t.manager.EnableSubscription(in.SubscriptionID); err != nil {
+		return t.errorResult("error", err.Error())
+	}
+
+	L_info("hass: subscription enabled", "id", in.SubscriptionID)
+
+	result := map[string]any{
+		"status":  "enabled",
+		"id":      in.SubscriptionID,
+		"enabled": true,
+	}
+	jsonResult, _ := json.Marshal(result)
+	return string(jsonResult), nil
+}
+
+// disableSubscription disables a subscription by ID.
+func (t *HASSTool) disableSubscription(ctx context.Context, in hassInput) (string, error) {
+	if t.manager == nil {
+		return t.errorResult("error", "subscription manager not configured")
+	}
+
+	if in.SubscriptionID == "" {
+		return t.errorResult("error", "subscription_id is required for disable")
+	}
+
+	if err := t.manager.DisableSubscription(in.SubscriptionID); err != nil {
+		return t.errorResult("error", err.Error())
+	}
+
+	L_info("hass: subscription disabled", "id", in.SubscriptionID)
+
+	result := map[string]any{
+		"status":  "disabled",
+		"id":      in.SubscriptionID,
+		"enabled": false,
 	}
 	jsonResult, _ := json.Marshal(result)
 	return string(jsonResult), nil

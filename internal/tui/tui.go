@@ -557,11 +557,20 @@ func (m Model) handleCommand(cmd string) (tea.Model, tea.Cmd) {
 	sessionKey := "user:" + m.user.ID
 	cmdLower := strings.ToLower(strings.TrimSpace(cmd))
 
-	// TUI-specific commands (not in global registry)
+	// TUI-specific commands (not in global registry) - always allowed
 	switch cmdLower {
 	case "/exit", "/quit":
 		m.cancel()
 		return m, tea.Quit
+	}
+
+	// Check command permission via gateway
+	if !m.gateway.CanUserUseCommands(m.user) {
+		logging.L_debug("tui: commands disabled for user", "user", m.user.Name, "command", cmdLower)
+		// Treat as regular message instead
+		m.chatLines = append(m.chatLines, userStyle.Render("You: "+cmd))
+		m.chatViewport.SetContent(m.getChatContent())
+		return m, nil
 	}
 
 	// Check if command exists in registry

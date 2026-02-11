@@ -47,13 +47,20 @@ var subagentAllowlist = map[string]bool{
 	FileTools:  true,
 }
 
-// LoadWorkspaceFiles loads all workspace context files from the given directory
-func LoadWorkspaceFiles(workspaceDir string) []WorkspaceFile {
-	logging.L_debug("context: loading workspace files", "dir", workspaceDir)
+// LoadWorkspaceFiles loads all workspace context files from the given directory.
+// If includeMemory is false, MEMORY.md is excluded (for restricted roles).
+func LoadWorkspaceFiles(workspaceDir string, includeMemory bool) []WorkspaceFile {
+	logging.L_debug("context: loading workspace files", "dir", workspaceDir, "includeMemory", includeMemory)
 
 	var files []WorkspaceFile
 
 	for _, name := range workspaceFileOrder {
+		// Skip MEMORY.md if not included
+		if name == FileMemory && !includeMemory {
+			logging.L_debug("context: skipping memory file (restricted)", "name", name)
+			continue
+		}
+
 		filePath := filepath.Join(workspaceDir, name)
 		content, err := os.ReadFile(filePath)
 
@@ -77,20 +84,22 @@ func LoadWorkspaceFiles(workspaceDir string) []WorkspaceFile {
 		}
 	}
 
-	// Also check for memory.md (lowercase variant)
-	memoryAltPath := filepath.Join(workspaceDir, "memory.md")
-	if content, err := os.ReadFile(memoryAltPath); err == nil {
-		// Only add if MEMORY.md wasn't found
-		for i, f := range files {
-			if f.Name == FileMemory && f.Missing {
-				files[i] = WorkspaceFile{
-					Name:    FileMemory,
-					Path:    memoryAltPath,
-					Content: stripFrontmatter(string(content)),
-					Missing: false,
+	// Also check for memory.md (lowercase variant) - only if memory is included
+	if includeMemory {
+		memoryAltPath := filepath.Join(workspaceDir, "memory.md")
+		if content, err := os.ReadFile(memoryAltPath); err == nil {
+			// Only add if MEMORY.md wasn't found
+			for i, f := range files {
+				if f.Name == FileMemory && f.Missing {
+					files[i] = WorkspaceFile{
+						Name:    FileMemory,
+						Path:    memoryAltPath,
+						Content: stripFrontmatter(string(content)),
+						Missing: false,
+					}
+					logging.L_debug("context: loaded alternate memory file", "path", memoryAltPath)
+					break
 				}
-				logging.L_debug("context: loaded alternate memory file", "path", memoryAltPath)
-				break
 			}
 		}
 	}
@@ -115,6 +124,17 @@ func FilterForSession(files []WorkspaceFile, isSubagent bool) []WorkspaceFile {
 		return FilterForSubagent(files)
 	}
 	return files
+}
+
+// FilterMemory removes MEMORY.md from the workspace files (for restricted roles)
+func FilterMemory(files []WorkspaceFile) []WorkspaceFile {
+	var filtered []WorkspaceFile
+	for _, f := range files {
+		if f.Name != FileMemory {
+			filtered = append(filtered, f)
+		}
+	}
+	return filtered
 }
 
 // stripFrontmatter removes YAML frontmatter from content

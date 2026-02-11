@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/roelfdiedericks/goclaw/internal/types"
+	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
 // Ensure json is available for other code in this file
@@ -48,6 +49,10 @@ type Session struct {
 	// Identity & Display
 	IsGroupChat bool   `json:"-"` // True for group chats (affects user label display)
 	agentName   string // Agent's display name (set via SetAgentName)
+
+	// User & Role Elevation
+	User       *user.User `json:"-"` // Current user (may be elevated during session)
+	ElevatedAt time.Time  `json:"-"` // When role elevation occurred (zero if not elevated)
 
 	// Supervision - allows owner to monitor, guide, and ghostwrite in session
 	Supervision *SupervisionState `json:"-"`
@@ -97,6 +102,42 @@ func (s *Session) AgentLabel() string {
 		return s.agentName
 	}
 	return "GoClaw"
+}
+
+// SetUser sets the current user for this session
+func (s *Session) SetUser(u *user.User) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.User = u
+}
+
+// GetUser returns the current user for this session
+func (s *Session) GetUser() *user.User {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.User
+}
+
+// ElevateUser updates the session's user with authenticated identity.
+// This is used by the user_auth tool to elevate a guest user mid-session.
+func (s *Session) ElevateUser(name, username, role, id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.User == nil {
+		s.User = &user.User{}
+	}
+	s.User.Name = name
+	s.User.ID = id
+	s.User.Role = user.Role(role)
+	s.ElevatedAt = time.Now()
+}
+
+// IsElevated returns true if the user was elevated during this session
+func (s *Session) IsElevated() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return !s.ElevatedAt.IsZero()
 }
 
 // AddUserMessage adds a user message to the session

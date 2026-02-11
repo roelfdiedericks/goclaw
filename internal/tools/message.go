@@ -22,10 +22,11 @@ type MessageChannel interface {
 
 // SessionContext provides current session information for tools.
 type SessionContext struct {
-	Channel     string     // Current channel name (e.g., "telegram", "tui")
-	ChatID      string     // Current chat ID
-	OwnerChatID string     // Owner's telegram chat ID (fallback for cron/heartbeat)
-	User        *user.User // Current user (for permission checks in tools)
+	Channel         string     // Current channel name (e.g., "telegram", "tui")
+	ChatID          string     // Current chat ID
+	OwnerChatID     string     // Owner's telegram chat ID (fallback for cron/heartbeat)
+	User            *user.User // Current user (for permission checks in tools)
+	TranscriptScope string     // Transcript access scope: "all", "own", or "none"
 }
 
 // sessionContextKey is used to store SessionContext in context.Context

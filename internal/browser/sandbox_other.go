@@ -26,6 +26,12 @@ func CreateSandboxedLauncher(browserBin, workspace, profileDir string, cfg Brows
 	return browserBin, nil
 }
 
+// CreatePassthroughLauncher returns the original browser binary on non-Linux platforms.
+// The clean-environment wrapper is Linux-specific.
+func CreatePassthroughLauncher(browserBin string) (string, error) {
+	return browserBin, nil
+}
+
 // CleanupSandboxWrapper is a no-op on non-Linux platforms.
 func CleanupSandboxWrapper() {}
 

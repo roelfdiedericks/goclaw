@@ -283,8 +283,8 @@ func (pc *PromptCache) GetWorkspaceFiles() []WorkspaceFile {
 
 	L_debug("promptcache: cache miss, loading workspace files")
 
-	// Load workspace files from disk
-	files := LoadWorkspaceFiles(pc.workspaceDir)
+	// Load workspace files from disk (always include memory - filtering happens at prompt build time)
+	files := LoadWorkspaceFiles(pc.workspaceDir, true)
 
 	// Update cache
 	pc.cachedFiles = files

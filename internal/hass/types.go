@@ -84,6 +84,7 @@ type Subscription struct {
 	Prompt          string    `json:"prompt,omitempty"` // instructions for agent when event fires
 	Full            bool      `json:"full"`             // true=full state object, false=brief (default)
 	Wake            bool      `json:"wake"`             // trigger immediate agent invocation (default: true)
+	Enabled         bool      `json:"enabled"`          // whether subscription is active (default: true)
 	CreatedAt       time.Time `json:"created_at"`
 }
 
@@ -115,6 +116,7 @@ func NewSubscription(id string) Subscription {
 		ID:              id,
 		DebounceSeconds: 5,    // Default debounce
 		Wake:            true, // Default wake
+		Enabled:         true, // Default enabled
 		CreatedAt:       time.Now(),
 	}
 }

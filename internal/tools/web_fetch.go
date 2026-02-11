@@ -11,7 +11,6 @@ import (
 	"time"
 
 	htmltomd "github.com/JohannesKaufmann/html-to-markdown/v2"
-	"github.com/go-rod/rod"
 	"github.com/go-shiori/go-readability"
 	"github.com/roelfdiedericks/goclaw/internal/browser"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -99,14 +98,15 @@ func (t *WebFetchTool) Execute(ctx context.Context, input json.RawMessage) (stri
 		return "", fmt.Errorf("url is required")
 	}
 
-	// Validate URL
+	// Validate URL for SSRF safety (scheme, private IPs, cloud metadata, etc.)
+	if err := browser.ValidateURLSafety(params.URL); err != nil {
+		return "", err
+	}
+
+	// Parse URL for later use (readability needs it for relative URL resolution)
 	parsedURL, err := url.Parse(params.URL)
 	if err != nil {
 		return "", fmt.Errorf("invalid URL: %w", err)
-	}
-
-	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return "", fmt.Errorf("URL must use http or https scheme")
 	}
 
 	maxLen := params.MaxLength
@@ -233,6 +233,8 @@ func (t *WebFetchTool) fetchWithHTTP(ctx context.Context, urlStr string, maxLen 
 }
 
 // fetchWithBrowser uses the browser to render and fetch the page
+// web_fetch is mode-agnostic - it uses whatever browser exists for the profile
+// (headed or headless). If none exists, GetStealthPage creates a headless one.
 func (t *WebFetchTool) fetchWithBrowser(ctx context.Context, urlStr string, maxLen int) (string, error) {
 	startTotal := time.Now()
 
@@ -241,50 +243,29 @@ func (t *WebFetchTool) fetchWithBrowser(ctx context.Context, urlStr string, maxL
 		return "", fmt.Errorf("browser not available (not initialized)")
 	}
 
-	// Use configured profile
+	// Use configured profile - GetBackgroundStealthPage creates a tab that doesn't steal focus.
+	// If a headed browser exists for this profile, it will be reused but the new tab opens
+	// in the background without disturbing the user's current tab.
 	profile := t.profile
-	mode := "headless"
-	if !t.headless {
-		mode = "headed"
-	}
-	L_debug("web_fetch: using browser", "url", urlStr, "profile", profile, "mode", mode)
+	L_debug("web_fetch: using browser", "url", urlStr, "profile", profile)
 
-	// Create page (headless or headed based on config)
 	startPage := time.Now()
-	var page *rod.Page
-	var browserInstance *rod.Browser
-	var err error
-
-	if t.headless {
-		// Normal headless mode - use pooled stealth page
-		page, err = mgr.GetStealthPage(profile)
-		if err != nil {
-			return "", fmt.Errorf("failed to create page: %w", err)
-		}
-		defer page.Close()
-	} else {
-		// Headed mode for debugging - launch visible browser
-		browserInstance, page, err = mgr.LaunchHeaded(profile, urlStr)
-		if err != nil {
-			return "", fmt.Errorf("failed to launch headed browser: %w", err)
-		}
-		defer page.Close()
-		// Note: browserInstance stays alive for potential reuse
-		_ = browserInstance
+	page, err := mgr.GetBackgroundStealthPage(profile, false) // background tab, prefer headless
+	if err != nil {
+		return "", fmt.Errorf("failed to create page: %w", err)
 	}
-	L_trace("web_fetch: page created", "mode", mode, "took", time.Since(startPage))
+	defer page.Close()
+	L_trace("web_fetch: page created", "took", time.Since(startPage))
 
 	// Set timeout for page operations
 	page = page.Timeout(60 * time.Second)
 
-	// Navigate (only needed for headless - LaunchHeaded already navigated)
-	if t.headless {
-		startNav := time.Now()
-		if err := page.Navigate(urlStr); err != nil {
-			return "", fmt.Errorf("browser navigation failed: %w", err)
-		}
-		L_trace("web_fetch: navigate done", "took", time.Since(startNav))
+	// Navigate to URL
+	startNav := time.Now()
+	if err := page.Navigate(urlStr); err != nil {
+		return "", fmt.Errorf("browser navigation failed: %w", err)
 	}
+	L_trace("web_fetch: navigate done", "took", time.Since(startNav))
 
 	// Wait for page load event
 	startWait := time.Now()

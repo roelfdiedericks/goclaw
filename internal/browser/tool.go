@@ -405,16 +405,16 @@ func (t *Tool) getOrCreateSession(sessionID string, profile string, headed bool)
 		Closed:    false,
 	}
 
-	// If headed mode, create a dedicated browser instance
+	// If headed mode, get/create a headed browser instance
 	if headed {
-		browser, _, err := t.manager.LaunchHeaded(profile, "")
+		browser, err := t.manager.GetBrowser(profile, true)
 		if err != nil {
-			return nil, fmt.Errorf("failed to launch headed browser: %w", err)
+			return nil, fmt.Errorf("failed to get headed browser: %w", err)
 		}
 		session.Browser = browser
-		L_info("browser: launched headed browser", "profile", profile, "sessionID", actualSessionID)
+		L_info("browser: using headed browser", "profile", profile, "sessionID", actualSessionID)
 
-		// Monitor browser events for close detection
+		// Monitor browser events for close detection (tab-level events)
 		go t.monitorBrowserEvents(actualSessionID, session, browser)
 
 		// Sync tabs with actual browser state (picks up initial about:blank)
@@ -645,7 +645,7 @@ func (t *Tool) getActivePage(sessionID string, profile string, headed bool) (*ro
 			L_debug("browser: created new page on existing browser", "sessionID", sessionID)
 		}
 	} else {
-		page, err = t.manager.GetStealthPage(session.Profile)
+		page, err = t.manager.GetStealthPage(session.Profile, session.Headed)
 	}
 	if err != nil {
 		return nil, err
@@ -752,7 +752,7 @@ func (t *Tool) openTab(ctx context.Context, sessionID string, urlStr string, pro
 	if session.Headed && session.Browser != nil {
 		page, err = session.Browser.Page(proto.TargetCreateTarget{})
 	} else {
-		page, err = t.manager.GetStealthPage(session.Profile)
+		page, err = t.manager.GetStealthPage(session.Profile, session.Headed)
 	}
 	if err != nil {
 		return "", fmt.Errorf("failed to create tab: %w", err)
@@ -1713,14 +1713,9 @@ func (t *Tool) evaluate(ctx context.Context, sessionID string, code string, head
 func (t *Tool) navigateToURL(page *rod.Page, urlStr string) error {
 	start := time.Now()
 
-	// Validate URL
-	parsedURL, err := url.Parse(urlStr)
-	if err != nil {
-		return fmt.Errorf("invalid URL: %w", err)
-	}
-
-	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return fmt.Errorf("URL must use http or https scheme")
+	// Validate URL for SSRF safety (scheme, private IPs, cloud metadata, etc.)
+	if err := ValidateURLSafety(urlStr); err != nil {
+		return err
 	}
 
 	L_debug("browser: navigating", "url", urlStr)
