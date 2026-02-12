@@ -1073,14 +1073,13 @@ func (b *Bot) HasUser(u *user.User) bool {
 	return u.HasTelegramAuth()
 }
 
-// InjectMessage handles message injection for supervision (guidance/ghostwriting).
-//
-// If invokeLLM is true (guidance):
-//   - Triggers agent run, waits for completion, sends final response
-//
-// If invokeLLM is false (ghostwrite):
-//   - Sends typing indicator, waits, then delivers message
-func (b *Bot) InjectMessage(ctx context.Context, u *user.User, sessionKey, message string, invokeLLM bool) error {
+// StreamEvent returns false - Telegram is batch-only, doesn't support real-time streaming.
+func (b *Bot) StreamEvent(u *user.User, event gateway.AgentEvent) bool {
+	return false // Telegram doesn't stream events
+}
+
+// DeliverGhostwrite sends a ghostwritten message with typing simulation.
+func (b *Bot) DeliverGhostwrite(ctx context.Context, u *user.User, message string) error {
 	if u == nil || u.TelegramID == "" {
 		return nil // User doesn't have Telegram
 	}
@@ -1093,80 +1092,28 @@ func (b *Bot) InjectMessage(ctx context.Context, u *user.User, sessionKey, messa
 
 	chat := &tele.Chat{ID: chatID}
 
-	L_info("telegram: inject message", "user", u.ID, "chatID", chatID, "sessionKey", sessionKey, "invokeLLM", invokeLLM, "messageLen", len(message))
+	L_info("telegram: ghostwrite", "user", u.ID, "chatID", chatID, "messageLen", len(message))
 
 	// Send typing indicator
 	_ = b.bot.Notify(chat, tele.Typing)
 
-	if invokeLLM {
-		// Guidance: run agent and send final response
-		// The message is already in the session context (added by gateway)
-		events := make(chan gateway.AgentEvent, 100)
-
-		// Create agent request - no UserMsg since it's already in session
-		req := gateway.AgentRequest{
-			User:           u,
-			Source:         "telegram",
-			SessionID:      sessionKey,      // Explicit session key
-			SkipAddMessage: true,            // Message already added by gateway.InjectMessage
-			EnableThinking: u.Thinking,      // Extended thinking based on user preference
-			// UserMsg intentionally empty - message already in session
-		}
-
-		// Collect final text from events
-		var finalText string
-		done := make(chan struct{})
-
-		go func() {
-			defer close(done)
-			for event := range events {
-				if e, ok := event.(gateway.EventAgentEnd); ok {
-					finalText = e.FinalText
-				}
-			}
-		}()
-
-		// Run agent (blocking)
-		err := b.gateway.RunAgent(ctx, req, events)
-		if err != nil {
-			L_error("telegram: inject agent run failed", "user", u.ID, "error", err)
-			return err
-		}
-
-		// Wait for event processing to complete
-		<-done
-
-		// Note: Suppression tokens (EVENT_OK, etc.) are handled centrally in gateway.RunAgent
-		// finalText will be empty if suppressed
-
-		// Send the response
-		if finalText != "" {
-			_, err = b.SendText(chatID, finalText)
-			if err != nil {
-				return fmt.Errorf("failed to send response: %w", err)
-			}
-			L_info("telegram: inject delivered", "user", u.ID, "responseLen", len(finalText))
-		}
-
-	} else {
-		// Ghostwrite: deliver message directly with typing simulation
-		// Get typing delay from config
-		typingDelay := 500 * time.Millisecond // default
+	// Get typing delay from config
+	typingDelay := 500 * time.Millisecond // default
+	if b.gateway != nil {
 		if cfg := b.gateway.Config(); cfg != nil && cfg.Supervision.Ghostwriting.TypingDelayMs > 0 {
 			typingDelay = time.Duration(cfg.Supervision.Ghostwriting.TypingDelayMs) * time.Millisecond
 		}
-
-		// Wait for typing delay (simulates thinking/typing)
-		time.Sleep(typingDelay)
-
-		// Send the message
-		_, err = b.SendText(chatID, message)
-		if err != nil {
-			return fmt.Errorf("failed to send ghostwrite: %w", err)
-		}
-		L_info("telegram: inject ghostwrite delivered", "user", u.ID, "messageLen", len(message))
 	}
 
+	// Wait for typing delay (simulates thinking/typing)
+	time.Sleep(typingDelay)
+
+	// Send the message
+	_, err = b.SendText(chatID, message)
+	if err != nil {
+		return fmt.Errorf("failed to send ghostwrite: %w", err)
+	}
+	L_info("telegram: ghostwrite delivered", "user", u.ID, "messageLen", len(message))
 	return nil
 }
 

@@ -155,6 +155,11 @@ func CreatePassthroughLauncher(browserBin string) (string, error) {
 		envVars = append(envVars, "DISPLAY="+shellQuote(display))
 	}
 
+	// XAUTHORITY - for X11 authentication (WSL2, remote X, etc.)
+	if xauth := os.Getenv("XAUTHORITY"); xauth != "" {
+		envVars = append(envVars, "XAUTHORITY="+shellQuote(xauth))
+	}
+
 	// WAYLAND_DISPLAY - for Wayland headed mode
 	if waylandDisplay := os.Getenv("WAYLAND_DISPLAY"); waylandDisplay != "" {
 		envVars = append(envVars, "WAYLAND_DISPLAY="+shellQuote(waylandDisplay))

@@ -36,8 +36,9 @@ type DeliveryResult struct {
 type DeliveryReport struct {
 	SessionKey string
 	RunID      string
-	Results    []DeliveryResult
-	Suppressed bool // Was the message suppressed entirely?
+	FinalText  string           // Agent's final response text
+	Results    []DeliveryResult // Delivery results per channel (empty in streaming mode)
+	Suppressed bool             // Was the message suppressed entirely?
 }
 
 // Delivered returns true if at least one channel received the message.
