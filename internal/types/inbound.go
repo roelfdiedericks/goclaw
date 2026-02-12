@@ -12,32 +12,39 @@ import (
 // can be expressed in terms of InboundMessage, enabling future refactoring
 // toward a message bus architecture.
 type InboundMessage struct {
-	// Identity
+	// === Identity ===
 	ID         string     // Unique message ID (auto-generated if empty)
 	SessionKey string     // Session key: "primary", "user:alice", "cron:jobid", etc.
-	User       *user.User // Who sent it (required for most operations)
+	User       *user.User // Who sent it (required for agent runs)
 
-	// Source identification
-	Source string // "telegram", "http", "tui", "cron", "hass", "heartbeat", "supervision"
+	// === Source ===
+	Source string // "telegram", "http", "tui", "cron", "hass", "system", "guidance"
 
-	// Content
-	Text   string            // Message text
+	// === Content ===
+	Text   string            // Message text (empty = use existing session)
 	Images []ImageAttachment // Attached images (multimodal)
 
-	// Routing hints (channel-specific)
+	// === Routing ===
 	ReplyTo string            // Channel-specific reply target (chat_id, conn_id)
 	Meta    map[string]string // Channel-specific metadata (message_id, username, etc.)
 
-	// Behavior flags
-	Wake            bool   // Should this trigger agent run? (vs passive inject for context)
-	SkipMirror      bool   // Don't mirror response to other channels
-	SkipAddMessage  bool   // Don't add message to session (already added, e.g., supervision)
-	FreshContext    bool   // Skip prior conversation history (isolated sessions)
-	IsHeartbeat     bool   // Ephemeral run - don't persist to session
-	SuppressPrefix  string // Suppress delivery if response contains this (e.g., "EVENT_OK")
-	EnableThinking  bool   // Enable extended thinking mode
+	// === Agent Targeting ===
+	RunAgent bool   // true = run agent, false = inject to context only
+	AgentID  string // "main" (default), future: "subagent:xyz"
 
-	// Supervision metadata
+	// === Behavior Flags ===
+	SkipMirror     bool // Don't mirror response to other channels
+	FreshContext   bool // Skip prior conversation history (isolated sessions)
+	Ephemeral      bool // No persistence, rollback after run (was: IsHeartbeat)
+	EnableThinking bool // Enable extended thinking mode
+
+	// === Suppression ===
+	SuppressDeliveryOn string // If response contains this, suppress delivery (e.g., "EVENT_OK")
+
+	// === Status Message ===
+	StatusMessage string // Optional status to send before processing (caller decides)
+
+	// === Supervision ===
 	Supervisor       *user.User // Who injected this (for audit)
 	InterventionType string     // "guidance" or "ghostwrite" (supervision only)
 }
@@ -48,7 +55,8 @@ func NewInboundMessage(source string, u *user.User, text string) *InboundMessage
 		Source:         source,
 		User:           u,
 		Text:           text,
-		Wake:           true, // Default: trigger agent
+		RunAgent:       true,   // Default: trigger agent
+		AgentID:        "main", // Default: main agent
 		EnableThinking: u != nil && u.Thinking,
 	}
 }
@@ -74,15 +82,22 @@ func (m *InboundMessage) WithMeta(key, value string) *InboundMessage {
 	return m
 }
 
-// WithSuppression sets the suppression prefix (e.g., "EVENT_OK", "HEARTBEAT_OK").
-func (m *InboundMessage) WithSuppression(prefix string) *InboundMessage {
-	m.SuppressPrefix = prefix
+// WithSuppressDeliveryOn sets the suppression match string.
+// If the agent's response contains this string (case-insensitive), delivery is suppressed.
+func (m *InboundMessage) WithSuppressDeliveryOn(match string) *InboundMessage {
+	m.SuppressDeliveryOn = match
 	return m
 }
 
-// AsPassive marks this as a passive injection (no agent run).
-func (m *InboundMessage) AsPassive() *InboundMessage {
-	m.Wake = false
+// WithStatusMessage sets a status message to send before processing.
+func (m *InboundMessage) WithStatusMessage(msg string) *InboundMessage {
+	m.StatusMessage = msg
+	return m
+}
+
+// WithoutRunAgent marks this as a passive injection (no agent run).
+func (m *InboundMessage) WithoutRunAgent() *InboundMessage {
+	m.RunAgent = false
 	return m
 }
 
@@ -92,9 +107,9 @@ func (m *InboundMessage) AsIsolated() *InboundMessage {
 	return m
 }
 
-// AsHeartbeat marks this as a heartbeat (ephemeral, not persisted).
-func (m *InboundMessage) AsHeartbeat() *InboundMessage {
-	m.IsHeartbeat = true
+// AsEphemeral marks this as ephemeral (not persisted to session history).
+func (m *InboundMessage) AsEphemeral() *InboundMessage {
+	m.Ephemeral = true
 	return m
 }
 
@@ -102,6 +117,6 @@ func (m *InboundMessage) AsHeartbeat() *InboundMessage {
 func (m *InboundMessage) ForSupervision(supervisor *user.User, interventionType string) *InboundMessage {
 	m.Supervisor = supervisor
 	m.InterventionType = interventionType
-	m.Source = "supervision"
+	m.Source = "guidance"
 	return m
 }

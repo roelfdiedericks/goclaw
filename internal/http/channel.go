@@ -183,113 +183,79 @@ func (c *HTTPChannel) getSessionsForUser(u *user.User) []*SSESession {
 	return sessions
 }
 
-// InjectMessage handles message injection for supervision (guidance/ghostwriting).
-//
-// If invokeLLM is true (guidance):
-//   - Triggers agent run, streams events through normal SSE path
-//   - User sees typing indicator, streaming text, tool calls, final response
-//
-// If invokeLLM is false (ghostwrite):
-//   - Delivers message directly with typing delay
-//   - No LLM invocation
-func (c *HTTPChannel) InjectMessage(ctx context.Context, u *user.User, sessionKey, message string, invokeLLM bool) error {
-	if c.gateway == nil {
-		return fmt.Errorf("gateway not configured")
+// StreamEvent streams a single agent event to the user's SSE sessions.
+// Returns true if the event was delivered (HTTP supports streaming).
+func (c *HTTPChannel) StreamEvent(u *user.User, event gateway.AgentEvent) bool {
+	if u == nil {
+		return false
 	}
+
+	sessions := c.getSessionsForUser(u)
+	if len(sessions) == 0 {
+		return false
+	}
+
+	sseEvent := c.convertEvent(event)
+	if sseEvent == nil {
+		return false
+	}
+
+	for _, sess := range sessions {
+		sess.SendEvent(*sseEvent)
+	}
+	return true
+}
+
+// DeliverGhostwrite sends a ghostwritten message with typing simulation.
+func (c *HTTPChannel) DeliverGhostwrite(ctx context.Context, u *user.User, message string) error {
 	if u == nil {
 		return nil
 	}
 
-	// Find all SSE sessions for this user
 	sessions := c.getSessionsForUser(u)
 	if len(sessions) == 0 {
-		L_debug("http: inject: no active sessions for user", "user", u.ID, "invokeLLM", invokeLLM)
-		return nil // No active sessions, nothing to deliver
+		L_debug("http: ghostwrite: no active sessions for user", "user", u.ID)
+		return nil
 	}
 
-	L_info("http: inject message", "user", u.ID, "sessionKey", sessionKey, "invokeLLM", invokeLLM, "sessions", len(sessions), "messageLen", len(message))
+	runID := fmt.Sprintf("run_%d", time.Now().UnixNano())
 
-	if invokeLLM {
-		// Guidance: run agent and stream events to user's sessions
-		// The message is already in the session context (added by gateway)
-		events := make(chan gateway.AgentEvent, 100)
-
-		// Create agent request - no UserMsg since it's already in session
-		req := gateway.AgentRequest{
-			User:           u,
-			Source:         "http",
-			SessionID:      sessionKey,      // Explicit session key
-			SkipAddMessage: true,            // Message already added by gateway.InjectMessage
-			EnableThinking: u.Thinking,      // Extended thinking based on user preference
-			// UserMsg intentionally empty - message already in session
-		}
-
-		// Use background context so agent keeps running after this returns
-		agentCtx, agentCancel := context.WithCancel(context.Background())
-
-		// Run agent in background
-		go func() {
-			defer agentCancel()
-			err := c.gateway.RunAgent(agentCtx, req, events)
-			if err != nil {
-				L_error("http: inject agent run failed", "user", u.ID, "error", err)
-			}
-		}()
-
-		// Stream events to all user's sessions
-		go func() {
-			for event := range events {
-				sseEvent := c.convertEvent(event)
-				if sseEvent != nil {
-					for _, sess := range sessions {
-						sess.SendEvent(*sseEvent)
-					}
-				}
-			}
-			L_debug("http: inject event stream ended", "user", u.ID)
-		}()
-
-	} else {
-		// Ghostwrite: deliver message directly with typing simulation
-		runID := fmt.Sprintf("run_%d", time.Now().UnixNano())
-
-		// Get typing delay from config
-		typingDelay := 500 * time.Millisecond // default
+	// Get typing delay from config
+	typingDelay := 500 * time.Millisecond // default
+	if c.gateway != nil {
 		if cfg := c.gateway.SupervisionConfig(); cfg != nil && cfg.Ghostwriting.TypingDelayMs > 0 {
 			typingDelay = time.Duration(cfg.Ghostwriting.TypingDelayMs) * time.Millisecond
 		}
-
-		// Send start event (typing indicator)
-		startEvent := SSEEvent{
-			Event: "start",
-			Data: gateway.EventAgentStart{
-				RunID:      runID,
-				Source:     "http",
-				SessionKey: sessionKey,
-			},
-		}
-		for _, sess := range sessions {
-			sess.SendEvent(startEvent)
-		}
-
-		// Wait for typing delay (simulates thinking/typing)
-		time.Sleep(typingDelay)
-
-		// Send done event with message
-		doneEvent := SSEEvent{
-			Event: "done",
-			Data: gateway.EventAgentEnd{
-				RunID:     runID,
-				FinalText: message,
-			},
-		}
-		for _, sess := range sessions {
-			sess.SendEvent(doneEvent)
-		}
-
-		L_info("http: inject ghostwrite delivered", "user", u.ID, "sessions", len(sessions), "messageLen", len(message))
 	}
 
+	// Send start event (typing indicator)
+	startEvent := SSEEvent{
+		Event: "start",
+		Data: gateway.EventAgentStart{
+			RunID:  runID,
+			Source: "http",
+		},
+	}
+	for _, sess := range sessions {
+		sess.SendEvent(startEvent)
+	}
+
+	// Wait for typing delay (simulates thinking/typing)
+	time.Sleep(typingDelay)
+
+	// Send done event with message
+	doneEvent := SSEEvent{
+		Event: "done",
+		Data: gateway.EventAgentEnd{
+			RunID:     runID,
+			FinalText: message,
+		},
+	}
+	for _, sess := range sessions {
+		sess.SendEvent(doneEvent)
+	}
+
+	L_info("http: ghostwrite delivered", "user", u.ID, "sessions", len(sessions), "messageLen", len(message))
 	return nil
 }
 
