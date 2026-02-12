@@ -217,6 +217,11 @@ func (b *Builder) Display() *Builder {
 		if pathExists("/tmp/.X11-unix") {
 			b.args = append(b.args, "--ro-bind", "/tmp/.X11-unix", "/tmp/.X11-unix")
 		}
+		// X11 authentication (XAUTHORITY can be anywhere, e.g., /run/user/1000/xauth_*)
+		if xauth := os.Getenv("XAUTHORITY"); xauth != "" && pathExists(xauth) {
+			b.SetEnv("XAUTHORITY", xauth)
+			b.args = append(b.args, "--ro-bind", xauth, xauth)
+		}
 	}
 	return b
 }

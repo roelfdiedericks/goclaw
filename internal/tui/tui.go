@@ -772,72 +772,21 @@ func (c *TUIChannel) HasUser(u *user.User) bool {
 
 // InjectMessage handles message injection for supervision (guidance/ghostwriting).
 //
-// If invokeLLM is true (guidance):
-//   - Triggers agent run, waits for completion, displays response
-//
-// If invokeLLM is false (ghostwrite):
-//   - Displays message directly
-func (c *TUIChannel) InjectMessage(ctx context.Context, u *user.User, sessionKey, message string, invokeLLM bool) error {
+// StreamEvent returns false - TUI is batch-only, doesn't support real-time streaming.
+func (c *TUIChannel) StreamEvent(u *user.User, event gateway.AgentEvent) bool {
+	return false // TUI doesn't stream events
+}
+
+// DeliverGhostwrite displays a ghostwritten message.
+func (c *TUIChannel) DeliverGhostwrite(ctx context.Context, u *user.User, message string) error {
 	if c.user == nil || u == nil || c.user.ID != u.ID {
 		return nil // Not the TUI user
 	}
 
-	logging.L_info("tui: inject message", "user", u.ID, "sessionKey", sessionKey, "invokeLLM", invokeLLM, "messageLen", len(message))
+	logging.L_info("tui: ghostwrite", "user", u.ID, "messageLen", len(message))
 
-	if invokeLLM {
-		// Guidance: run agent and display response
-		if c.gateway == nil {
-			logging.L_warn("tui: inject with invokeLLM=true but no gateway")
-			return nil
-		}
-
-		events := make(chan gateway.AgentEvent, 100)
-
-		// Create agent request - no UserMsg since it's already in session
-		req := gateway.AgentRequest{
-			User:           u,
-			Source:         "tui",
-			SessionID:      sessionKey,      // Explicit session key
-			SkipAddMessage: true,            // Message already added by gateway.InjectMessage
-			EnableThinking: u.Thinking,      // Extended thinking based on user preference
-			// UserMsg intentionally empty - message already in session
-		}
-
-		// Collect final text from events
-		var finalText string
-		done := make(chan struct{})
-
-		go func() {
-			defer close(done)
-			for event := range events {
-				if e, ok := event.(gateway.EventAgentEnd); ok {
-					finalText = e.FinalText
-				}
-			}
-		}()
-
-		// Run agent (blocking)
-		err := c.gateway.RunAgent(ctx, req, events)
-		if err != nil {
-			logging.L_error("tui: inject agent run failed", "user", u.ID, "error", err)
-			return err
-		}
-
-		// Wait for event processing to complete
-		<-done
-
-		// Display the response
-		if finalText != "" {
-			return c.SendMirror(ctx, "guidance", "", finalText)
-		}
-
-	} else {
-		// Ghostwrite: display message directly
-		// TUI doesn't need typing delay - it's not a real-time chat interface
-		return c.SendMirror(ctx, "ghostwrite", "", message)
-	}
-
-	return nil
+	// TUI doesn't need typing delay - it's not a real-time chat interface
+	return c.SendMirror(ctx, "ghostwrite", "", message)
 }
 
 // Run starts the TUI and returns a Channel that can receive mirrors

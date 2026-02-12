@@ -23,6 +23,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
@@ -58,16 +59,14 @@ type Channel interface {
 	SendMirror(ctx context.Context, source, userMsg, response string) error
 	HasUser(u *user.User) bool
 
-	// InjectMessage handles message injection for supervision (guidance/ghostwriting).
-	//
-	// If invokeLLM is true (guidance):
-	//   - Triggers agent run, streams events through normal channel path
-	//   - User sees typing indicator, streaming text, tool calls, final response
-	//
-	// If invokeLLM is false (ghostwrite):
-	//   - Delivers message directly (typing indicator + message)
-	//   - No LLM invocation
-	InjectMessage(ctx context.Context, u *user.User, sessionKey, message string, invokeLLM bool) error
+	// StreamEvent streams a single agent event to the user (for real-time updates).
+	// Returns true if the channel supports streaming and delivered the event.
+	// Batch-only channels (Telegram, TUI) should return false.
+	StreamEvent(u *user.User, event AgentEvent) bool
+
+	// DeliverGhostwrite sends a ghostwritten message with appropriate UX
+	// (typing indicator, delay, etc.). Used for supervision ghostwriting.
+	DeliverGhostwrite(ctx context.Context, u *user.User, message string) error
 }
 
 // Gateway is the central service layer that coordinates the agent loop
@@ -870,110 +869,241 @@ func (g *Gateway) GetOwnerUserID() string {
 }
 
 // InjectSystemEvent implements cron.GatewayRunner interface.
-// It injects a system event message into the primary session.
+// It injects a system event message into the primary session (no agent run).
 func (g *Gateway) InjectSystemEvent(ctx context.Context, text string) error {
-	primary := g.sessions.GetPrimary()
-	if primary == nil {
-		return fmt.Errorf("no primary session")
+	msg := types.NewInboundMessage("system", nil, text).WithoutRunAgent()
+	_, err := g.ProcessMessage(ctx, msg, nil)
+	return err
+}
+
+// ProcessMessage is the unified entry point for agent processing.
+//
+// Parameters:
+//   - msg: The inbound message to process
+//   - events: Optional event channel for streaming (nil = batch mode)
+//
+// Behavior:
+//   - ALWAYS blocks until agent completes
+//   - ALWAYS returns DeliveryReport with FinalText
+//   - If events is nil: batch mode - ProcessMessage delivers to channels
+//   - If events is non-nil: streaming mode - caller handles delivery via events
+//
+// Text handling:
+//   - Text non-empty: add to session, then process
+//   - Text empty + RunAgent=true: process existing session (supervision case)
+//   - Text empty + RunAgent=false: nothing to do
+func (g *Gateway) ProcessMessage(ctx context.Context, msg *types.InboundMessage, events chan<- AgentEvent) (*types.DeliveryReport, error) {
+	// Validate AgentID (only "main" or empty supported for now)
+	if msg.AgentID != "" && msg.AgentID != "main" {
+		return nil, fmt.Errorf("unsupported agent ID: %s (only 'main' supported)", msg.AgentID)
 	}
 
-	// Add as a system message (role=system, source=wake)
-	primary.AddSystemMessage(text)
-	L_info("gateway: system event injected", "textLen", len(text))
-	return nil
+	// Resolve session key
+	sessionKey := msg.SessionKey
+	if sessionKey == "" {
+		if msg.User != nil {
+			sessionKey = "user:" + msg.User.ID
+		} else {
+			sessionKey = session.PrimarySession
+		}
+	}
+
+	// Get session (creates if doesn't exist)
+	sess := g.sessions.Get(sessionKey)
+	if sess == nil {
+		return nil, fmt.Errorf("failed to get session: %s", sessionKey)
+	}
+
+	// Send status message if set
+	if msg.StatusMessage != "" && msg.User != nil {
+		for _, ch := range g.channels {
+			if ch.HasUser(msg.User) {
+				ch.Send(ctx, msg.StatusMessage)
+			}
+		}
+	}
+
+	// If RunAgent == false, just inject to context (no agent run)
+	if !msg.RunAgent {
+		if msg.Text != "" {
+			sess.AddSystemMessage(msg.Text)
+			L_info("gateway: ProcessMessage injected system message", "session", sessionKey, "textLen", len(msg.Text))
+		}
+		return &types.DeliveryReport{SessionKey: sessionKey}, nil
+	}
+
+	// RunAgent == true: run the agent
+	if msg.User == nil {
+		return nil, fmt.Errorf("user required for agent run")
+	}
+
+	// Add message to session if Text is non-empty
+	addedMessage := false
+	if msg.Text != "" {
+		sess.AddUserMessage(msg.Text, msg.Source)
+		addedMessage = true
+		L_debug("gateway: ProcessMessage added user message", "session", sessionKey, "source", msg.Source, "textLen", len(msg.Text))
+
+		// Persist the message
+		g.persistMessage(ctx, sessionKey, "user", msg.Text, msg.Source, "", "", nil, "", "", "", "")
+	}
+
+	// Build AgentRequest
+	req := AgentRequest{
+		User:           msg.User,
+		Source:         msg.Source,
+		UserMsg:        msg.Text,
+		SessionID:      sessionKey,
+		FreshContext:   msg.FreshContext,
+		IsHeartbeat:    msg.Ephemeral,
+		SkipAddMessage: addedMessage, // We already added it above
+		EnableThinking: msg.EnableThinking,
+		SkipMirror:     msg.SkipMirror,
+	}
+
+	// Add images if present (types.ImageAttachment and session.ImageAttachment are the same type)
+	if len(msg.Images) > 0 {
+		req.Images = make([]session.ImageAttachment, len(msg.Images))
+		for i, img := range msg.Images {
+			req.Images[i] = session.ImageAttachment{
+				Data:     img.Data,
+				MimeType: img.MimeType,
+				Source:   img.Source,
+			}
+		}
+	}
+
+	var finalText string
+	var runID string
+
+	if events != nil {
+		// STREAMING MODE: caller handles delivery
+		// Run agent with caller's events channel
+		internalEvents := make(chan AgentEvent, 100)
+
+		// Forward events to caller and collect finalText
+		go func() {
+			for event := range internalEvents {
+				// Forward to caller
+				events <- event
+				// Collect final text
+				if e, ok := event.(EventAgentStart); ok {
+					runID = e.RunID
+				}
+				if e, ok := event.(EventAgentEnd); ok {
+					finalText = e.FinalText
+				}
+			}
+		}()
+
+		// Run agent (blocking)
+		err := g.RunAgent(ctx, req, internalEvents)
+		if err != nil {
+			return nil, fmt.Errorf("agent run failed: %w", err)
+		}
+
+		// Return report without delivery (caller handles it)
+		return &types.DeliveryReport{
+			SessionKey: sessionKey,
+			RunID:      runID,
+			FinalText:  finalText,
+		}, nil
+
+	} else {
+		// BATCH MODE: we handle delivery
+		internalEvents := make(chan AgentEvent, 100)
+		done := make(chan struct{})
+
+		go func() {
+			defer close(done)
+			for event := range internalEvents {
+				if e, ok := event.(EventAgentStart); ok {
+					runID = e.RunID
+				}
+				if e, ok := event.(EventAgentEnd); ok {
+					finalText = e.FinalText
+				}
+			}
+		}()
+
+		// Run agent (blocking)
+		err := g.RunAgent(ctx, req, internalEvents)
+		if err != nil {
+			return nil, fmt.Errorf("agent run failed: %w", err)
+		}
+
+		<-done
+
+		// Check suppression
+		suppressed := false
+
+		// Custom suppression first (caller-specified)
+		if msg.SuppressDeliveryOn != "" {
+			if strings.Contains(strings.ToUpper(finalText), strings.ToUpper(msg.SuppressDeliveryOn)) {
+				suppressed = true
+				L_debug("gateway: custom suppression matched", "match", msg.SuppressDeliveryOn)
+			}
+		}
+
+		// Then central suppression (HEARTBEAT_OK, SILENT_OK, etc.)
+		if !suppressed && shouldSuppressResponse(finalText) {
+			suppressed = true
+			L_debug("gateway: central suppression matched")
+		}
+
+		// Build delivery report
+		report := &types.DeliveryReport{
+			SessionKey: sessionKey,
+			RunID:      runID,
+			FinalText:  finalText,
+			Suppressed: suppressed,
+		}
+
+		// Deliver if not suppressed
+		if !suppressed && finalText != "" {
+			for name, ch := range g.channels {
+				if !ch.HasUser(msg.User) {
+					continue
+				}
+				result := types.DeliveryResult{Channel: name}
+				if err := ch.Send(ctx, finalText); err != nil {
+					L_error("gateway: ProcessMessage delivery failed", "channel", name, "error", err)
+					result.Error = err.Error()
+				} else {
+					result.Success = true
+					L_debug("gateway: ProcessMessage delivered", "channel", name)
+				}
+				report.Results = append(report.Results, result)
+			}
+		}
+
+		return report, nil
+	}
 }
 
 // InvokeAgent implements types.EventInjector interface.
 // It runs the agent with a message and delivers the response to channels.
-// Uses owner user and primary session. For other users/sessions, use invokeAgentInternal.
-func (g *Gateway) InvokeAgent(ctx context.Context, source, message, suppressPrefix string) error {
+// Uses owner user and primary session.
+func (g *Gateway) InvokeAgent(ctx context.Context, source, message, suppressOn string) error {
 	u := g.users.Owner()
 	if u == nil {
 		return fmt.Errorf("no owner user configured")
 	}
-	return g.invokeAgentInternal(ctx, u, session.PrimarySession, source, message, suppressPrefix)
-}
 
-// invokeAgentInternal runs the agent with a message and delivers the response.
-// Works even without channels configured - agent always runs.
-// suppressPrefix, if non-empty, suppresses delivery if response starts with it (case-insensitive).
-func (g *Gateway) invokeAgentInternal(ctx context.Context, u *user.User, sessionKey, source, message, suppressPrefix string) error {
-	if message == "" {
-		return fmt.Errorf("empty message")
-	}
-	if u == nil {
-		return fmt.Errorf("no user specified")
+	msg := types.NewInboundMessage(source, u, message)
+	msg.SkipMirror = true // We handle delivery ourselves
+
+	if suppressOn != "" {
+		msg.WithSuppressDeliveryOn(suppressOn)
 	}
 
-	L_info("gateway: invoke agent", "source", source, "session", sessionKey, "messageLen", len(message))
-
-	// If HASS debug enabled, send status message to channels for HASS events
-	if strings.HasPrefix(source, "hass:") && g.hassManager != nil && g.hassManager.IsDebug() && len(g.channels) > 0 {
-		statusMsg := fmt.Sprintf("💭 Running %s...", source)
-		for _, ch := range g.channels {
-			ch.Send(ctx, statusMsg)
-		}
+	// HASS debug status (backward compat)
+	if strings.HasPrefix(source, "hass:") && g.hassManager != nil && g.hassManager.IsDebug() {
+		msg.StatusMessage = fmt.Sprintf("💭 Running %s...", source)
 	}
 
-	// Run agent with the message
-	req := AgentRequest{
-		User:           u,
-		Source:         source,
-		UserMsg:        message,
-		SessionID:      sessionKey,
-		EnableThinking: u.Thinking,
-		SkipMirror:     true, // We handle delivery ourselves
-	}
-
-	events := make(chan AgentEvent, 100)
-	var finalText string
-	done := make(chan struct{})
-
-	go func() {
-		defer close(done)
-		for event := range events {
-			if e, ok := event.(EventAgentEnd); ok {
-				finalText = e.FinalText
-			}
-		}
-	}()
-
-	// Run agent (blocking)
-	err := g.RunAgent(ctx, req, events)
-	if err != nil {
-		L_error("gateway: invoke agent failed", "source", source, "error", err)
-		return err
-	}
-
-	<-done
-
-	L_info("gateway: invoke agent completed", "source", source, "responseLen", len(finalText))
-	L_trace("gateway: raw response", "source", source, "response", finalText)
-
-	// Note: Suppression tokens (EVENT_OK, HEARTBEAT_OK, etc.) are already handled
-	// centrally in RunAgent - finalText will be empty if suppressed
-
-	// Deliver response to channels (if any)
-	if finalText != "" {
-		delivered := 0
-		for name, ch := range g.channels {
-			if !ch.HasUser(u) {
-				continue
-			}
-			L_debug("gateway: sending to channel", "source", source, "channel", name, "content", finalText)
-			if err := ch.Send(ctx, finalText); err != nil {
-				L_error("gateway: delivery failed", "source", source, "channel", name, "error", err)
-			} else {
-				delivered++
-				L_debug("gateway: delivered", "source", source, "channel", name)
-			}
-		}
-		if delivered == 0 {
-			L_debug("gateway: no channels to deliver", "source", source, "responseLen", len(finalText))
-		}
-	}
-
-	return nil
+	_, err := g.ProcessMessage(ctx, msg, nil) // Batch mode
+	return err
 }
 
 // Shutdown gracefully shuts down the gateway
@@ -1781,12 +1911,12 @@ func (g *Gateway) mirrorToOthers(ctx context.Context, req AgentRequest, response
 //
 // If invokeLLM is true (guidance):
 //   - Message is added as user message with configured prefix
-//   - Agent run is triggered through user's channels
-//   - Response streams to all user's active channels
+//   - Agent run is triggered ONCE via ProcessMessage
+//   - Response is fanned out to all user's channels (streaming for HTTP, batch for others)
 //
 // If invokeLLM is false (ghostwrite):
 //   - Message is added as assistant message
-//   - Delivered directly to all user's active channels
+//   - Delivered directly to all user's channels via DeliverGhostwrite
 //
 // The supervisor parameter identifies who performed the injection (for audit logging).
 func (g *Gateway) InjectMessage(ctx context.Context, sessionKey, message string, invokeLLM bool, supervisor *user.User) error {
@@ -1832,7 +1962,9 @@ func (g *Gateway) InjectMessage(ctx context.Context, sessionKey, message string,
 		"messageLen", len(message))
 
 	if invokeLLM {
-		// Guidance: add message as user message with prefix and supervision metadata
+		// GUIDANCE: Add message to session, run agent ONCE, fan out to channels
+
+		// Add message as user message with prefix and supervision metadata
 		prefix := g.config.Supervision.Guidance.Prefix
 		prefixedMessage := prefix + message
 		sess.AddSupervisionUserMessage(prefixedMessage, "guidance", supervisorName, "guidance")
@@ -1849,8 +1981,74 @@ func (g *Gateway) InjectMessage(ctx context.Context, sessionKey, message string,
 				Supervisor: supervisorName,
 			})
 		}
+
+		// Run agent ONCE via ProcessMessage, fan out to all channels
+		msg := &types.InboundMessage{
+			SessionKey:       sessionKey,
+			User:             u,
+			Source:           "guidance",
+			Text:             "", // Empty = message already in session
+			RunAgent:         true,
+			EnableThinking:   u.Thinking,
+			Supervisor:       supervisor,
+			InterventionType: "guidance",
+			SkipMirror:       true, // We handle delivery ourselves
+		}
+
+		events := make(chan AgentEvent, 100)
+		done := make(chan struct{}) // Signal when fan-out completes
+
+		// Fan out events to channels in background
+		go func() {
+			defer close(done)
+			var finalText string
+			streamedChannels := make(map[string]bool) // Track which channels got streaming
+
+			for event := range events {
+				// Stream to channels that support it
+				for name, ch := range g.channels {
+					if ch.HasUser(u) && ch.StreamEvent(u, event) {
+						streamedChannels[name] = true
+					}
+				}
+				// Collect final text for batch delivery
+				if e, ok := event.(EventAgentEnd); ok {
+					finalText = e.FinalText
+				}
+			}
+
+			// Deliver final text to batch channels (those that didn't stream)
+			if finalText != "" {
+				for name, ch := range g.channels {
+					if !ch.HasUser(u) || streamedChannels[name] {
+						continue // Skip if user not on channel or already streamed
+					}
+					if err := ch.Send(ctx, finalText); err != nil {
+						L_error("gateway: guidance delivery failed", "channel", name, "error", err)
+					} else {
+						L_debug("gateway: guidance delivered", "channel", name)
+					}
+				}
+			}
+		}()
+
+		// Run agent (blocking until complete)
+		_, err := g.ProcessMessage(ctx, msg, events)
+
+		// Wait for fan-out goroutine to finish all deliveries
+		<-done
+
+		if err != nil {
+			L_error("gateway: guidance agent run failed", "session", sessionKey, "error", err)
+			return err
+		}
+
+		L_info("gateway: guidance complete", "session", sessionKey)
+
 	} else {
-		// Ghostwrite: add message as assistant message with supervision metadata
+		// GHOSTWRITE: Add message to session, deliver directly to channels
+
+		// Add message as assistant message with supervision metadata
 		sess.AddSupervisionAssistantMessage(message, supervisorName, "ghostwrite")
 		L_debug("gateway: added ghostwrite to session", "session", sessionKey, "messageLen", len(message))
 
@@ -1865,24 +2063,23 @@ func (g *Gateway) InjectMessage(ctx context.Context, sessionKey, message string,
 				Supervisor: supervisorName,
 			})
 		}
+
+		// Deliver to all channels via DeliverGhostwrite
+		delivered := 0
+		for name, ch := range g.channels {
+			if !ch.HasUser(u) {
+				continue
+			}
+			L_debug("gateway: ghostwriting to channel", "channel", name, "user", u.ID)
+			if err := ch.DeliverGhostwrite(ctx, u, message); err != nil {
+				L_error("gateway: ghostwrite delivery failed", "channel", name, "user", u.ID, "error", err)
+			} else {
+				delivered++
+			}
+		}
+		L_info("gateway: ghostwrite complete", "session", sessionKey, "channels", delivered)
 	}
 
-	// Deliver to all channels serving this user
-	delivered := 0
-	for name, ch := range g.channels {
-		if !ch.HasUser(u) {
-			continue
-		}
-
-		L_debug("gateway: injecting to channel", "channel", name, "user", u.ID, "invokeLLM", invokeLLM)
-		if err := ch.InjectMessage(ctx, u, sessionKey, message, invokeLLM); err != nil {
-			L_error("gateway: inject to channel failed", "channel", name, "user", u.ID, "error", err)
-		} else {
-			delivered++
-		}
-	}
-
-	L_info("gateway: inject complete", "session", sessionKey, "channels", delivered, "invokeLLM", invokeLLM)
 	return nil
 }
 
