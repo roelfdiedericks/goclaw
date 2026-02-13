@@ -51,12 +51,12 @@ func DefaultMemoryFlushConfig() *MemoryFlushConfig {
 			},
 		{
 			Percent: 90,
-			Prompt: `[SYSTEM: pre-compaction memory flush]
-Context at 90%. Compaction imminent.
-Write important context to memory/YYYY-MM-DD.md now (create memory/ if needed).
-After saving: briefly confirm what you saved (e.g. "Saved session notes").
-If nothing worth saving: reply with only NO_REPLY.`,
-			InjectAs:     FlushInjectUser,
+			Prompt: `[Context pressure: 90%] Compaction imminent.
+Before responding, save important session context to memory/YYYY-MM-DD.md (create memory/ if needed).
+Save: key decisions, user-shared context, current work state.
+Skip: secrets, trivial details, info already in files.
+After saving (or if nothing to save), respond to the user's message normally.`,
+			InjectAs:     FlushInjectSystem,
 			OncePerCycle: true,
 		},
 		},

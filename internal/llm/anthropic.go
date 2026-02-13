@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
+	"net/http"
 	"regexp"
 	"strings"
 	"sync"
@@ -35,6 +35,10 @@ type AnthropicProvider struct {
 	baseURL       string // Custom API base URL (for Kimi K2, etc.)
 	metricPrefix  string // e.g., "llm/anthropic/anthropic/claude-opus-4-5"
 	traceEnabled  bool   // Per-provider trace logging control
+
+	// HTTP transport for capturing request/response (for error dumps)
+	transport     *CapturingTransport
+	dumpOnSuccess bool // Keep dumps even on success (for debugging)
 }
 
 // Response represents the LLM response
@@ -69,8 +73,15 @@ func NewAnthropicProvider(name string, cfg ProviderConfig) (*AnthropicProvider, 
 		return nil, fmt.Errorf("anthropic API key not configured")
 	}
 
+	// Create capturing transport for request/response debugging
+	transport := &CapturingTransport{Base: http.DefaultTransport}
+	httpClient := &http.Client{Transport: transport}
+
 	// Build client options
-	opts := []option.RequestOption{option.WithAPIKey(cfg.APIKey)}
+	opts := []option.RequestOption{
+		option.WithAPIKey(cfg.APIKey),
+		option.WithHTTPClient(httpClient),
+	}
 	if cfg.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
 	}
@@ -103,6 +114,8 @@ func NewAnthropicProvider(name string, cfg ProviderConfig) (*AnthropicProvider, 
 		apiKey:        cfg.APIKey,
 		baseURL:       cfg.BaseURL,
 		traceEnabled:  traceEnabled,
+		transport:     transport,
+		dumpOnSuccess: cfg.DumpOnSuccess,
 	}, nil
 }
 
@@ -233,6 +246,7 @@ func (c *AnthropicProvider) StreamMessage(
 		}
 	}
 	
+	contextWindow := c.ContextTokens()
 	L_info("llm: request started", "provider", c.name, "model", c.model, "messages", len(messages), "tools", len(toolDefs), "thinking", enableThinking)
 	L_debug("preparing LLM request", "messages", len(messages), "tools", len(toolDefs))
 
@@ -304,6 +318,9 @@ func (c *AnthropicProvider) StreamMessage(
 
 	L_debug("sending request to Anthropic", "model", c.model)
 
+	// Start dump for debugging (captures request context)
+	dumpCtx := StartDump(c.name, c.model, c.baseURL, anthropicMessages, anthropicTools, systemPrompt, 1)
+
 	// Stream the response
 	stream := c.client.Messages.NewStreaming(ctx, params)
 
@@ -317,6 +334,7 @@ func (c *AnthropicProvider) StreamMessage(
 		
 		// Accumulate the message
 		if err := message.Accumulate(event); err != nil {
+			FinishDumpError(dumpCtx, err, c.transport)
 			return nil, fmt.Errorf("accumulate error: %w", err)
 		}
 
@@ -364,8 +382,8 @@ func (c *AnthropicProvider) StreamMessage(
 		}
 		
 		L_error("stream error", "error", err)
-		// Dump full error to file for debugging
-		dumpAPIError(err, c.model, len(anthropicMessages), len(anthropicTools))
+		// Dump full request/response to file for debugging
+		FinishDumpError(dumpCtx, err, c.transport)
 		// Record metrics for failed request
 		if c.metricPrefix != "" {
 			MetricDuration(c.metricPrefix, "request", time.Since(startTime))
@@ -425,6 +443,10 @@ func (c *AnthropicProvider) StreamMessage(
 
 	// Log request completion with timing and token stats
 	duration := time.Since(startTime)
+	usagePercent := 0.0
+	if contextWindow > 0 {
+		usagePercent = float64(response.InputTokens) / float64(contextWindow) * 100.0
+	}
 	if response.CacheReadTokens > 0 || response.CacheCreationTokens > 0 {
 		L_info("llm: request completed", "provider", c.name, "duration", duration.Round(time.Millisecond),
 			"inputTokens", response.InputTokens, "outputTokens", response.OutputTokens,
@@ -470,13 +492,16 @@ func (c *AnthropicProvider) StreamMessage(
 			MetricOutcome(c.metricPrefix, "tool_requested", response.ToolName)
 		}
 
-		// Context usage as percentage of window (threshold at 80%)
-		contextWindow := c.ContextTokens()
-		if contextWindow > 0 && response.InputTokens > 0 {
-			usagePct := float64(response.InputTokens) / float64(contextWindow) * 100
-			MetricThreshold(c.metricPrefix, "context_usage_pct", usagePct, 80.0)
+		// Context window metrics (contextWindow/usagePercent calculated above)
+		if contextWindow > 0 {
+			MetricSet(c.metricPrefix, "context_window", int64(contextWindow))
+			MetricSet(c.metricPrefix, "context_used", int64(response.InputTokens))
+			MetricThreshold(c.metricPrefix, "context_usage_percent", usagePercent, 100.0)
 		}
 	}
+
+	// Finalize dump (delete on success unless dumpOnSuccess is enabled)
+	FinishDumpSuccess(dumpCtx, c.dumpOnSuccess)
 
 	return response, nil
 }
@@ -630,36 +655,6 @@ func convertTools(defs []types.ToolDefinition) []anthropic.ToolUnionParam {
 	}
 
 	return result
-}
-
-// dumpAPIError writes API error details to apierror.txt for debugging
-func dumpAPIError(err error, model string, messageCount, toolCount int) {
-	content := fmt.Sprintf(`Anthropic API Error
-====================
-Timestamp: %s
-Model: %s
-Messages: %d
-Tools: %d
-
-Error:
-%v
-
-Full Error String:
-%s
-`,
-		time.Now().Format(time.RFC3339),
-		model,
-		messageCount,
-		toolCount,
-		err,
-		err.Error(),
-	)
-
-	if writeErr := os.WriteFile("apierror.txt", []byte(content), 0644); writeErr != nil {
-		L_warn("failed to write apierror.txt", "error", writeErr)
-	} else {
-		L_info("API error dumped to apierror.txt")
-	}
 }
 
 // repairStats contains statistics about tool pairing repairs

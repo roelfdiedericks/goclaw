@@ -32,6 +32,10 @@ type OllamaProvider struct {
 	available     bool
 	mu            sync.RWMutex
 	traceEnabled  bool   // Per-provider trace logging control
+
+	// HTTP transport for capturing request/response (for error dumps)
+	transport     *CapturingTransport
+	dumpOnSuccess bool // Keep dumps even on success (for debugging)
 }
 
 // OllamaClient is an alias for OllamaProvider for backward compatibility.
@@ -93,6 +97,9 @@ func NewOllamaProvider(name string, cfg ProviderConfig) (*OllamaProvider, error)
 		traceEnabled = false
 	}
 
+	// Create capturing transport for request/response debugging
+	transport := &CapturingTransport{Base: http.DefaultTransport}
+
 	p := &OllamaProvider{
 		name:          name,
 		url:           url,
@@ -101,10 +108,13 @@ func NewOllamaProvider(name string, cfg ProviderConfig) (*OllamaProvider, error)
 		contextTokens: 4096, // Conservative default, updated by queryModelInfo
 		embeddingOnly: cfg.EmbeddingOnly,
 		client: &http.Client{
-			Timeout: time.Duration(timeoutSeconds) * time.Second,
+			Timeout:   time.Duration(timeoutSeconds) * time.Second,
+			Transport: transport,
 		},
-		available:    false,
-		traceEnabled: traceEnabled,
+		available:     false,
+		traceEnabled:  traceEnabled,
+		transport:     transport,
+		dumpOnSuccess: cfg.DumpOnSuccess,
 	}
 
 	L_debug("ollama provider created", "name", name, "url", url, "timeout", timeoutSeconds, "embeddingOnly", cfg.EmbeddingOnly, "trace", traceEnabled)
@@ -139,16 +149,21 @@ func NewOllamaClient(url, model string, timeoutSeconds, contextTokensOverride in
 		contextTokens = contextTokensOverride
 	}
 
+	// Create capturing transport for request/response debugging
+	transport := &CapturingTransport{Base: http.DefaultTransport}
+
 	c := &OllamaClient{
 		name:          "ollama",
 		url:           url,
 		model:         model,
 		contextTokens: contextTokens,
 		client: &http.Client{
-			Timeout: time.Duration(timeoutSeconds) * time.Second,
+			Timeout:   time.Duration(timeoutSeconds) * time.Second,
+			Transport: transport,
 		},
 		available:    false,
 		traceEnabled: true, // Always enabled for legacy constructor
+		transport:    transport,
 	}
 
 	if contextTokensOverride > 0 {
@@ -381,9 +396,13 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 		},
 	}
 
+	// Start dump for debugging (captures request context)
+	dumpCtx := StartDump(c.name, c.model, c.url, messages, nil, systemPrompt, 1)
+
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		L_error("ollama: failed to marshal request", "error", err)
+		FinishDumpError(dumpCtx, err, c.transport)
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
@@ -391,6 +410,7 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
 	if err != nil {
 		L_error("ollama: failed to create request", "error", err)
+		FinishDumpError(dumpCtx, err, c.transport)
 		return "", fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -404,6 +424,7 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 		c.available = false
 		c.mu.Unlock()
 		L_error("ollama: request failed, marking unavailable", "error", err)
+		FinishDumpError(dumpCtx, err, c.transport)
 		// Record metrics for failed request
 		if c.metricPrefix != "" {
 			MetricDuration(c.metricPrefix, "request", time.Since(startTime))
@@ -417,6 +438,7 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 		body, _ := io.ReadAll(resp.Body)
 		errMsg := fmt.Sprintf("ollama returned status %d: %s", resp.StatusCode, string(body))
 		L_error("ollama: request failed", "status", resp.StatusCode, "body", string(body))
+		FinishDumpError(dumpCtx, fmt.Errorf(errMsg), c.transport)
 		// Record metrics for failed request
 		if c.metricPrefix != "" {
 			MetricDuration(c.metricPrefix, "request", time.Since(startTime))
@@ -428,6 +450,7 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 	var result ollamaChatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		L_error("ollama: failed to decode response", "error", err)
+		FinishDumpError(dumpCtx, err, c.transport)
 		return "", fmt.Errorf("decode response: %w", err)
 	}
 
@@ -445,7 +468,25 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 	if c.metricPrefix != "" {
 		MetricDuration(c.metricPrefix, "request", duration)
 		MetricSuccess(c.metricPrefix, "request_status")
+
+		// Context window metrics
+		contextWindow := c.ContextTokens()
+		if contextWindow > 0 {
+			MetricSet(c.metricPrefix, "context_window", int64(contextWindow))
+			// Estimate input tokens from message content (rough: 4 chars per token)
+			inputChars := 0
+			for _, m := range messages {
+				inputChars += len(m.Content)
+			}
+			estimatedInputTokens := inputChars / 4
+			MetricSet(c.metricPrefix, "context_used", int64(estimatedInputTokens))
+			usagePercent := float64(estimatedInputTokens) / float64(contextWindow) * 100.0
+			MetricThreshold(c.metricPrefix, "context_usage_percent", usagePercent, 100.0)
+		}
 	}
+
+	// Finalize dump (delete on success unless dumpOnSuccess is enabled)
+	FinishDumpSuccess(dumpCtx, c.dumpOnSuccess)
 
 	return responseText, nil
 }
