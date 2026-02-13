@@ -26,6 +26,10 @@ type SessionProvider interface {
 	// LLM provider commands
 	GetLLMProviderStatus() *LLMProviderStatusResult
 	ResetLLMCooldowns() int
+
+	// Embeddings commands
+	GetEmbeddingsStatus() *EmbeddingsStatusResult
+	TriggerEmbeddingsRebuild() error
 }
 
 // SkillsListResult contains skill listing for /skills command
@@ -105,4 +109,25 @@ type LLMProviderInfo struct {
 	Until      time.Time
 	Reason     string
 	ErrorCount int
+}
+
+// EmbeddingsStatusResult contains embeddings status info
+type EmbeddingsStatusResult struct {
+	Configured               bool
+	PrimaryModel             string
+	AutoRebuild              bool
+	TranscriptTotal          int
+	TranscriptPrimary        int
+	TranscriptNeedsRebuild   int
+	MemoryTotal              int
+	MemoryPrimary            int
+	MemoryNeedsRebuild       int
+	Models                   []EmbeddingsModelInfo
+}
+
+// EmbeddingsModelInfo contains info about embedding model usage
+type EmbeddingsModelInfo struct {
+	Model     string
+	Count     int
+	IsPrimary bool
 }

@@ -385,6 +385,15 @@ type LLMPurposeConfig struct {
 	Models         []string `json:"models"`                    // First = primary, rest = fallbacks
 	MaxTokens      int      `json:"maxTokens,omitempty"`       // Output limit override (0 = use model default)
 	MaxInputTokens int      `json:"maxInputTokens,omitempty"`  // Input limit for summarization (0 = use model context - buffer)
+	AutoRebuild    *bool    `json:"autoRebuild,omitempty"`     // Embeddings: auto-rebuild on model mismatch (default: true)
+}
+
+// GetAutoRebuild returns the AutoRebuild setting, defaulting to true if not set
+func (c *LLMPurposeConfig) GetAutoRebuild() bool {
+	if c.AutoRebuild == nil {
+		return true // Default: auto-rebuild enabled
+	}
+	return *c.AutoRebuild
 }
 
 // TelegramConfig contains Telegram channel settings

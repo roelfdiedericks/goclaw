@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/sevlyar/go-daemon"
 	"golang.org/x/term"
@@ -22,6 +24,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/browser"
 	"github.com/roelfdiedericks/goclaw/internal/bwrap"
 	"github.com/roelfdiedericks/goclaw/internal/config"
+	"github.com/roelfdiedericks/goclaw/internal/embeddings"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/hass"
@@ -72,17 +75,18 @@ type CLI struct {
 	Trace  bool   `help:"Enable trace logging" short:"t"`
 	Config string `help:"Config file path" short:"c" type:"path"`
 
-	Gateway GatewayCmd `cmd:"" help:"Run the gateway (foreground by default)"`
-	Start   StartCmd   `cmd:"" help:"Start gateway as background daemon"`
-	Stop    StopCmd    `cmd:"" help:"Stop the background daemon"`
-	Status  StatusCmd  `cmd:"" help:"Show gateway status"`
-	Version VersionCmd `cmd:"" help:"Show version"`
-	Cron    CronCmd    `cmd:"" help:"Manage cron jobs"`
-	User    UserCmd    `cmd:"" help:"Manage users"`
-	Browser BrowserCmd `cmd:"" help:"Manage browser (download, profiles, setup)"`
-	Setup   SetupCmd   `cmd:"" help:"Interactive setup wizard"`
-	Cfg     ConfigCmd  `cmd:"config" help:"View configuration"`
-	TUI     TUICmd     `cmd:"tui" help:"Run gateway with interactive TUI"`
+	Gateway    GatewayCmd    `cmd:"" help:"Run the gateway (foreground by default)"`
+	Start      StartCmd      `cmd:"" help:"Start gateway as background daemon"`
+	Stop       StopCmd       `cmd:"" help:"Stop the background daemon"`
+	Status     StatusCmd     `cmd:"" help:"Show gateway status"`
+	Version    VersionCmd    `cmd:"" help:"Show version"`
+	Cron       CronCmd       `cmd:"" help:"Manage cron jobs"`
+	User       UserCmd       `cmd:"" help:"Manage users"`
+	Browser    BrowserCmd    `cmd:"" help:"Manage browser (download, profiles, setup)"`
+	Embeddings EmbeddingsCmd `cmd:"" help:"Manage embeddings (status, rebuild)"`
+	Setup      SetupCmd      `cmd:"" help:"Interactive setup wizard"`
+	Cfg        ConfigCmd     `cmd:"config" help:"View configuration"`
+	TUI        TUICmd        `cmd:"tui" help:"Run gateway with interactive TUI"`
 }
 
 // GatewayCmd runs gateway in foreground
@@ -1346,6 +1350,234 @@ func copyDir(src, dst string) error {
 	})
 }
 
+// EmbeddingsCmd manages embeddings (status, rebuild)
+type EmbeddingsCmd struct {
+	Status  EmbeddingsStatusCmd  `cmd:"" help:"Show embeddings status"`
+	Rebuild EmbeddingsRebuildCmd `cmd:"" help:"Rebuild embeddings to primary model"`
+}
+
+// EmbeddingsStatusCmd shows embedding status
+type EmbeddingsStatusCmd struct{}
+
+func (e *EmbeddingsStatusCmd) Run(ctx *Context) error {
+	return runEmbeddingsStatus()
+}
+
+// EmbeddingsRebuildCmd rebuilds embeddings
+type EmbeddingsRebuildCmd struct {
+	BatchSize int `help:"Batch size for processing" default:"50"`
+}
+
+func (e *EmbeddingsRebuildCmd) Run(ctx *Context) error {
+	return runEmbeddingsRebuild(e.BatchSize)
+}
+
+// runEmbeddingsStatus shows detailed embedding status
+func runEmbeddingsStatus() error {
+	// Load config
+	loadResult, err := config.Load()
+	if err != nil {
+		return err
+	}
+	cfg := loadResult.Config
+
+	// Check if embeddings are configured
+	if len(cfg.LLM.Embeddings.Models) == 0 {
+		fmt.Println("Embeddings not configured (no models in llm.embeddings.models)")
+		return nil
+	}
+
+	// Open sessions DB (transcript_chunks)
+	sessionsDB, err := openSessionsDB(cfg)
+	if err != nil {
+		return fmt.Errorf("open sessions DB: %w", err)
+	}
+	defer sessionsDB.Close()
+
+	// Open memory DB if enabled
+	var memoryDB *sql.DB
+	if cfg.MemorySearch.Enabled {
+		memoryDB, err = openMemoryDB(cfg)
+		if err != nil {
+			L_warn("embeddings: failed to open memory DB", "error", err)
+			// Continue without memory DB
+		} else {
+			defer memoryDB.Close()
+		}
+	}
+
+	// Get status
+	status, err := embeddings.GetStatus(sessionsDB, memoryDB, cfg.LLM.Embeddings)
+	if err != nil {
+		return fmt.Errorf("get status: %w", err)
+	}
+
+	// Print status
+	fmt.Println("Embeddings Status")
+	fmt.Println("=================")
+	fmt.Println()
+	fmt.Println("Configuration:")
+	fmt.Printf("  Primary model: %s\n", status.PrimaryModel)
+	fmt.Printf("  Auto-rebuild:  %v\n", status.AutoRebuild)
+	fmt.Println()
+
+	// Models in database
+	fmt.Println("Models in Database:")
+	allModels := make(map[string]int)
+	for _, m := range status.Transcript.Models {
+		allModels[m.Model] += m.Count
+	}
+	for _, m := range status.Memory.Models {
+		allModels[m.Model] += m.Count
+	}
+	for model, count := range allModels {
+		if model == status.PrimaryModel {
+			fmt.Printf("  ✓ %s: %d chunks (primary)\n", model, count)
+		} else {
+			fmt.Printf("  ⚠ %s: %d chunks (needs rebuild)\n", model, count)
+		}
+	}
+	fmt.Println()
+
+	// Transcript status
+	fmt.Println("Transcript Embeddings:")
+	fmt.Printf("  Total chunks:     %d\n", status.Transcript.TotalChunks)
+	if status.Transcript.TotalChunks > 0 {
+		primaryPct := float64(status.Transcript.PrimaryModelCount) / float64(status.Transcript.TotalChunks) * 100
+		fmt.Printf("  Primary model:    %d (%.1f%%)\n", status.Transcript.PrimaryModelCount, primaryPct)
+		fmt.Printf("  Needs rebuild:    %d (%.1f%%)\n", status.Transcript.NeedsRebuildCount, 100-primaryPct)
+	}
+	fmt.Println()
+
+	// Memory status
+	if memoryDB != nil {
+		fmt.Println("Memory Embeddings:")
+		fmt.Printf("  Total chunks:     %d\n", status.Memory.TotalChunks)
+		if status.Memory.TotalChunks > 0 {
+			primaryPct := float64(status.Memory.PrimaryModelCount) / float64(status.Memory.TotalChunks) * 100
+			fmt.Printf("  Primary model:    %d (%.1f%%)\n", status.Memory.PrimaryModelCount, primaryPct)
+			fmt.Printf("  Needs rebuild:    %d (%.1f%%)\n", status.Memory.NeedsRebuildCount, 100-primaryPct)
+		}
+	} else {
+		fmt.Println("Memory Embeddings: disabled")
+	}
+
+	return nil
+}
+
+// buildLLMRegistry creates an LLM registry from config
+func buildLLMRegistry(cfg *config.Config) (*llm.Registry, error) {
+	regCfg := llm.RegistryConfig{
+		Providers:     make(map[string]llm.ProviderConfig),
+		Agent:         llm.PurposeConfig{Models: cfg.LLM.Agent.Models, MaxTokens: cfg.LLM.Agent.MaxTokens},
+		Summarization: llm.PurposeConfig{Models: cfg.LLM.Summarization.Models, MaxTokens: cfg.LLM.Summarization.MaxTokens, MaxInputTokens: cfg.LLM.Summarization.MaxInputTokens},
+		Embeddings:    llm.PurposeConfig{Models: cfg.LLM.Embeddings.Models, MaxTokens: cfg.LLM.Embeddings.MaxTokens},
+	}
+	for name, pCfg := range cfg.LLM.Providers {
+		regCfg.Providers[name] = llm.ProviderConfig{
+			Type:           pCfg.Type,
+			APIKey:         pCfg.APIKey,
+			BaseURL:        pCfg.BaseURL,
+			URL:            pCfg.URL,
+			MaxTokens:      pCfg.MaxTokens,
+			ContextTokens:  pCfg.ContextTokens,
+			TimeoutSeconds: pCfg.TimeoutSeconds,
+			PromptCaching:  pCfg.PromptCaching,
+			EmbeddingOnly:  pCfg.EmbeddingOnly,
+		}
+	}
+	return llm.NewRegistry(regCfg)
+}
+
+// runEmbeddingsRebuild rebuilds all non-primary embeddings
+func runEmbeddingsRebuild(batchSize int) error {
+	// Load config
+	loadResult, err := config.Load()
+	if err != nil {
+		return err
+	}
+	cfg := loadResult.Config
+
+	// Check if embeddings are configured
+	if len(cfg.LLM.Embeddings.Models) == 0 {
+		fmt.Println("Embeddings not configured (no models in llm.embeddings.models)")
+		return nil
+	}
+
+	primaryModel := cfg.LLM.Embeddings.Models[0]
+	fmt.Printf("Rebuilding embeddings to primary model: %s\n", primaryModel)
+
+	// Initialize LLM registry
+	registry, err := buildLLMRegistry(cfg)
+	if err != nil {
+		return fmt.Errorf("create LLM registry: %w", err)
+	}
+	llm.SetGlobalRegistry(registry)
+
+	// Open sessions DB (transcript_chunks)
+	sessionsDB, err := openSessionsDB(cfg)
+	if err != nil {
+		return fmt.Errorf("open sessions DB: %w", err)
+	}
+	defer sessionsDB.Close()
+
+	// Open memory DB if enabled
+	var memoryDB *sql.DB
+	if cfg.MemorySearch.Enabled {
+		memoryDB, err = openMemoryDB(cfg)
+		if err != nil {
+			L_warn("embeddings: failed to open memory DB", "error", err)
+			// Continue without memory DB
+		} else {
+			defer memoryDB.Close()
+		}
+	}
+
+	// Progress callback
+	onProgress := func(processed, total int, err error, done bool) {
+		if err != nil {
+			fmt.Printf("\nError: %v\n", err)
+			return
+		}
+		if done {
+			fmt.Printf("\nRebuild complete. %d chunks processed.\n", processed)
+			return
+		}
+		// Periodic progress update
+		fmt.Printf("  %d/%d (%.1f%%)\n", processed, total, float64(processed)/float64(total)*100)
+	}
+
+	// Run rebuild (CLI always forces full rebuild)
+	ctx := context.Background()
+	fmt.Printf("Processing chunks in batches of %d...\n\n", batchSize)
+
+	err = embeddings.Rebuild(ctx, sessionsDB, memoryDB, cfg.LLM.Embeddings, registry, batchSize, true, onProgress)
+	if err != nil {
+		return fmt.Errorf("rebuild failed: %w", err)
+	}
+
+	return nil
+}
+
+// openSessionsDB opens the sessions database
+func openSessionsDB(cfg *config.Config) (*sql.DB, error) {
+	storePath := cfg.Session.GetStorePath()
+	return sql.Open("sqlite3", storePath+"?_journal_mode=WAL&_busy_timeout=5000")
+}
+
+// openMemoryDB opens the memory database
+func openMemoryDB(cfg *config.Config) (*sql.DB, error) {
+	dbPath := cfg.MemorySearch.DbPath
+	if dbPath == "" {
+		home, _ := os.UserHomeDir()
+		dbPath = filepath.Join(home, ".goclaw", "memory.db")
+	} else if strings.HasPrefix(dbPath, "~") {
+		home, _ := os.UserHomeDir()
+		dbPath = filepath.Join(home, dbPath[1:])
+	}
+	return sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+}
+
 // SetupCmd is the interactive setup wizard
 type SetupCmd struct {
 	Auto   SetupAutoCmd   `cmd:"" default:"withargs" help:"Run setup (auto-detect mode)"`
@@ -1439,27 +1671,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		return fmt.Errorf("llm.providers must be configured in goclaw.json")
 	}
 
-	regCfg := llm.RegistryConfig{
-		Providers:     make(map[string]llm.ProviderConfig),
-		Agent:         llm.PurposeConfig{Models: cfg.LLM.Agent.Models, MaxTokens: cfg.LLM.Agent.MaxTokens},
-		Summarization: llm.PurposeConfig{Models: cfg.LLM.Summarization.Models, MaxTokens: cfg.LLM.Summarization.MaxTokens, MaxInputTokens: cfg.LLM.Summarization.MaxInputTokens},
-		Embeddings:    llm.PurposeConfig{Models: cfg.LLM.Embeddings.Models, MaxTokens: cfg.LLM.Embeddings.MaxTokens},
-	}
-	// Convert provider configs
-	for name, pCfg := range cfg.LLM.Providers {
-		regCfg.Providers[name] = llm.ProviderConfig{
-			Type:           pCfg.Type,
-			APIKey:         pCfg.APIKey,
-			BaseURL:        pCfg.BaseURL,
-			URL:            pCfg.URL,
-			MaxTokens:      pCfg.MaxTokens,
-			ContextTokens:  pCfg.ContextTokens,
-			TimeoutSeconds: pCfg.TimeoutSeconds,
-			PromptCaching:  pCfg.PromptCaching,
-			EmbeddingOnly:  pCfg.EmbeddingOnly,
-		}
-	}
-	llmRegistry, err := llm.NewRegistry(regCfg)
+	llmRegistry, err := buildLLMRegistry(cfg)
 	if err != nil {
 		L_error("failed to create LLM registry", "error", err)
 		return err

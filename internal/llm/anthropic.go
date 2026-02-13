@@ -23,6 +23,11 @@ import (
 // This is populated when a thinking request fails with an unsupported error.
 var thinkingUnsupportedModels sync.Map // map[modelName]bool
 
+// modelMaxOutputTokens caches learned max output token limits for models.
+// Populated when a max_tokens error reveals the model's actual limit.
+// Key: model name, Value: max output tokens (int)
+var modelMaxOutputTokens sync.Map
+
 // AnthropicProvider implements the Provider interface for Anthropic's Claude API.
 // Supports streaming, native tool calling, and prompt caching.
 // Also works with Anthropic-compatible APIs (e.g., Kimi K2) via BaseURL.
@@ -299,7 +304,19 @@ func (c *AnthropicProvider) StreamMessage(
 			"contextWindow", contextWindow,
 			"estimatedInput", estimatedInput)
 	}
-	
+
+	// Check if we have a cached output limit for this model
+	if cachedLimit, ok := modelMaxOutputTokens.Load(c.model); ok {
+		limit := cachedLimit.(int)
+		if maxTokens > limit {
+			L_debug("anthropic: capping max_tokens to cached model limit",
+				"model", c.model,
+				"requested", maxTokens,
+				"limit", limit)
+			maxTokens = limit
+		}
+	}
+
 	// Add extended thinking if enabled
 	// max_tokens must be greater than thinking.budget_tokens
 	if enableThinking {
@@ -356,8 +373,13 @@ func (c *AnthropicProvider) StreamMessage(
 		Buffer:         100,
 	})
 
+	// Create per-request capture for concurrency safety
+	reqCapture := NewRequestCapture()
+	dumpCtx.SetRequestCapture(reqCapture)
+	captureCtx := WithRequestCapture(ctx, reqCapture)
+
 	// Stream the response
-	stream := c.client.Messages.NewStreaming(ctx, params)
+	stream := c.client.Messages.NewStreaming(captureCtx, params)
 
 	response := &Response{}
 	message := anthropic.Message{}
@@ -371,8 +393,8 @@ func (c *AnthropicProvider) StreamMessage(
 		if err := message.Accumulate(event); err != nil {
 			FinishDumpError(dumpCtx, err, c.transport)
 			// Check if response body contains real error (e.g., context overflow)
-			if c.transport != nil {
-				_, respBody, _, _ := c.transport.GetLastCapture()
+			if reqCapture != nil {
+				_, respBody, _, _ := reqCapture.GetData()
 				err = CheckResponseBody(err, respBody)
 			}
 			return nil, fmt.Errorf("accumulate error: %w", err)
@@ -408,25 +430,37 @@ func (c *AnthropicProvider) StreamMessage(
 
 	if err := stream.Err(); err != nil {
 		errStr := err.Error()
-		
+
+		// Check if this is a max_tokens limit error
+		// Parse the limit from the error, cache it, and retry with capped value
+		if isMaxTokens, parsedLimit := ParseMaxTokensLimit(errStr); isMaxTokens && parsedLimit > 0 {
+			L_warn("anthropic: max_tokens exceeds model limit, caching and retrying",
+				"model", c.model,
+				"requestedTokens", maxTokens,
+				"modelLimit", parsedLimit)
+			modelMaxOutputTokens.Store(c.model, parsedLimit)
+			// Retry - the cached limit will be applied on retry
+			return c.StreamMessage(ctx, messages, toolDefs, systemPrompt, onDelta, opts)
+		}
+
 		// Check if this is a "thinking not supported" error
 		// Anthropic returns errors like "thinking is not supported for this model"
 		if enableThinking && isThinkingNotSupportedError(errStr) {
-			L_warn("llm: model doesn't support extended thinking, disabling for future requests", 
+			L_warn("llm: model doesn't support extended thinking, disabling for future requests",
 				"model", c.model, "error", errStr)
 			thinkingUnsupportedModels.Store(c.model, true)
-			
+
 			// Retry without thinking
 			disabledOpts := &StreamOptions{EnableThinking: false}
 			return c.StreamMessage(ctx, messages, toolDefs, systemPrompt, onDelta, disabledOpts)
 		}
-		
+
 		L_error("stream error", "error", err)
 		// Dump full request/response to file for debugging
 		FinishDumpError(dumpCtx, err, c.transport)
 		// Check if response body contains real error (e.g., context overflow)
-		if c.transport != nil {
-			_, respBody, _, _ := c.transport.GetLastCapture()
+		if reqCapture != nil {
+			_, respBody, _, _ := reqCapture.GetData()
 			err = CheckResponseBody(err, respBody)
 		}
 		// Record metrics for failed request

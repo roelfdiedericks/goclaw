@@ -3,6 +3,8 @@ package llm
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -18,6 +20,7 @@ const (
 	ErrorTypeBilling         ErrorType = "billing"
 	ErrorTypeTimeout         ErrorType = "timeout"
 	ErrorTypeFormat          ErrorType = "format"
+	ErrorTypeMaxTokens       ErrorType = "max_tokens" // max_tokens exceeds model limit
 )
 
 // IsContextOverflowError checks if an error indicates context window exceeded.
@@ -77,6 +80,68 @@ func IsFormatError(err error) bool {
 	return IsFormatMessage(err.Error())
 }
 
+// IsMaxTokensError checks if an error indicates max_tokens exceeds model limit.
+// Returns (true, limit) if it's a max_tokens error and the limit could be parsed.
+// Returns (false, 0) otherwise.
+func IsMaxTokensError(err error) (bool, int) {
+	if err == nil {
+		return false, 0
+	}
+	return ParseMaxTokensLimit(err.Error())
+}
+
+// ParseMaxTokensLimit checks if a message indicates max_tokens exceeds model limit.
+// Returns (true, limit) if matched and limit could be parsed.
+// Matches patterns like:
+//   - "max_tokens: 8192 > 4096, which is the maximum allowed"
+//   - "max_tokens must be <= 4096"
+//   - "maximum.*output.*tokens.*4096"
+func ParseMaxTokensLimit(msg string) (bool, int) {
+	if msg == "" {
+		return false, 0
+	}
+
+	// Pattern 1: "max_tokens: X > Y" (Anthropic style)
+	// Example: "max_tokens: 8192 > 4096, which is the maximum allowed number of output tokens"
+	re1 := regexp.MustCompile(`max_tokens:\s*\d+\s*>\s*(\d+)`)
+	if matches := re1.FindStringSubmatch(msg); len(matches) > 1 {
+		if limit, err := strconv.Atoi(matches[1]); err == nil {
+			return true, limit
+		}
+	}
+
+	// Pattern 2: "max_tokens must be <= X" or "max_tokens cannot exceed X"
+	re2 := regexp.MustCompile(`max_tokens\s+(?:must be|cannot exceed|<=)\s*(\d+)`)
+	if matches := re2.FindStringSubmatch(msg); len(matches) > 1 {
+		if limit, err := strconv.Atoi(matches[1]); err == nil {
+			return true, limit
+		}
+	}
+
+	// Pattern 3: Generic "maximum ... output tokens ... N" (fallback)
+	re3 := regexp.MustCompile(`maximum.*?output.*?tokens.*?(\d+)`)
+	if matches := re3.FindStringSubmatch(strings.ToLower(msg)); len(matches) > 1 {
+		if limit, err := strconv.Atoi(matches[1]); err == nil {
+			return true, limit
+		}
+	}
+
+	// Check if it's a max_tokens error even if we can't parse the limit
+	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "max_tokens") &&
+		(strings.Contains(lower, "maximum") || strings.Contains(lower, "exceed") || strings.Contains(lower, ">")) {
+		return true, 0 // It's a max_tokens error but we couldn't parse the limit
+	}
+
+	return false, 0
+}
+
+// IsMaxTokensMessage checks if a message indicates max_tokens error (without parsing limit).
+func IsMaxTokensMessage(msg string) bool {
+	isMaxTokens, _ := ParseMaxTokensLimit(msg)
+	return isMaxTokens
+}
+
 // ClassifyError determines the error type from an error message.
 // Returns ErrorTypeUnknown if the error doesn't match any known pattern.
 func ClassifyError(msg string) ErrorType {
@@ -84,6 +149,11 @@ func ClassifyError(msg string) ErrorType {
 		return ErrorTypeUnknown
 	}
 	// Check in order of specificity
+	// max_tokens must be checked BEFORE auth to avoid misclassification
+	// (400 Bad Request with invalid_request_error was being classified as auth)
+	if IsMaxTokensMessage(msg) {
+		return ErrorTypeMaxTokens
+	}
 	if IsContextOverflowMessage(msg) {
 		return ErrorTypeContextOverflow
 	}
@@ -110,11 +180,14 @@ func ClassifyError(msg string) ErrorType {
 
 // IsFailoverError returns true if the error type should trigger model failover.
 // Failover errors: rate_limit, auth, billing, timeout, overloaded
-// Non-failover: context_overflow (needs compaction), format (session corruption), unknown
+// Non-failover: context_overflow (needs compaction), format (session corruption),
+//               max_tokens (retry with capped value first), unknown
 func IsFailoverError(errType ErrorType) bool {
 	switch errType {
 	case ErrorTypeRateLimit, ErrorTypeAuth, ErrorTypeBilling, ErrorTypeTimeout, ErrorTypeOverloaded:
 		return true
+	case ErrorTypeMaxTokens:
+		return false // Retry with capped tokens first, don't failover immediately
 	default:
 		return false
 	}
@@ -137,6 +210,8 @@ func FormatErrorForUser(msg string, errType ErrorType) string {
 		return "Request timed out. Please try again."
 	case ErrorTypeFormat:
 		return "Message format error - session may be corrupted. Try /new to start fresh."
+	case ErrorTypeMaxTokens:
+		return "Output token limit exceeded for this model. Retrying with adjusted settings."
 	default:
 		// For unknown errors, include the original message
 		return fmt.Sprintf("LLM error: %s", msg)
@@ -171,6 +246,13 @@ func CheckResponseBody(originalErr error, respBody []byte) error {
 
 	// If we found a known error type in the response body, return a clearer error
 	switch errType {
+	case ErrorTypeMaxTokens:
+		// Include the limit in the error if we could parse it
+		_, limit := ParseMaxTokensLimit(body)
+		if limit > 0 {
+			return fmt.Errorf("max_tokens exceeds model limit of %d (original error: %v)", limit, originalErr)
+		}
+		return fmt.Errorf("max_tokens exceeds model limit (original error: %v)", originalErr)
 	case ErrorTypeContextOverflow:
 		return fmt.Errorf("context size has been exceeded (original error: %v)", originalErr)
 	case ErrorTypeRateLimit:
