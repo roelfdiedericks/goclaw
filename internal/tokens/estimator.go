@@ -69,14 +69,22 @@ func Estimate(text string) int {
 	return Get().Count(text)
 }
 
+// SafetyMargin accounts for tokenizer inaccuracies across different models.
+// tiktoken (cl100k_base) may undercount tokens for non-OpenAI models.
+// 1.2 = 20% buffer, same as OpenClaw's approach.
+const SafetyMargin = 1.2
+
 // CapMaxTokens calculates a safe max_tokens value that won't exceed context.
-// Returns min(requestedMax, contextWindow - estimatedInput - buffer).
+// Applies SafetyMargin to estimatedInput to account for tokenizer variance.
+// Returns min(requestedMax, contextWindow - safeInput - buffer).
 func CapMaxTokens(requestedMax, contextWindow, estimatedInput, buffer int) int {
 	if contextWindow <= 0 {
 		return requestedMax // No context info, use requested
 	}
 
-	available := contextWindow - estimatedInput - buffer
+	// Apply safety margin to input estimate
+	safeInput := int(float64(estimatedInput) * SafetyMargin)
+	available := contextWindow - safeInput - buffer
 	if available < 100 {
 		available = 100 // Minimum output
 	}
