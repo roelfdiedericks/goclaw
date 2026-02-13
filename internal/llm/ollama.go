@@ -31,6 +31,7 @@ type OllamaProvider struct {
 	client        *http.Client
 	available     bool
 	mu            sync.RWMutex
+	traceEnabled  bool   // Per-provider trace logging control
 }
 
 // OllamaClient is an alias for OllamaProvider for backward compatibility.
@@ -86,6 +87,12 @@ func NewOllamaProvider(name string, cfg ProviderConfig) (*OllamaProvider, error)
 		timeoutSeconds = 300 // 5 minutes default
 	}
 
+	// Determine trace enabled - default to true if not explicitly set to false
+	traceEnabled := true
+	if cfg.Trace != nil && !*cfg.Trace {
+		traceEnabled = false
+	}
+
 	p := &OllamaProvider{
 		name:          name,
 		url:           url,
@@ -96,12 +103,21 @@ func NewOllamaProvider(name string, cfg ProviderConfig) (*OllamaProvider, error)
 		client: &http.Client{
 			Timeout: time.Duration(timeoutSeconds) * time.Second,
 		},
-		available: false,
+		available:    false,
+		traceEnabled: traceEnabled,
 	}
 
-	L_debug("ollama provider created", "name", name, "url", url, "timeout", timeoutSeconds, "embeddingOnly", cfg.EmbeddingOnly)
+	L_debug("ollama provider created", "name", name, "url", url, "timeout", timeoutSeconds, "embeddingOnly", cfg.EmbeddingOnly, "trace", traceEnabled)
 
 	return p, nil
+}
+
+// trace logs a trace message if tracing is enabled for this provider.
+// Use this instead of L_trace for per-provider trace control.
+func (p *OllamaProvider) trace(msg string, args ...any) {
+	if p.traceEnabled {
+		L_trace(msg, args...)
+	}
 }
 
 // NewOllamaClient creates a new Ollama LLM client for chat completion (legacy constructor).
@@ -131,7 +147,8 @@ func NewOllamaClient(url, model string, timeoutSeconds, contextTokensOverride in
 		client: &http.Client{
 			Timeout: time.Duration(timeoutSeconds) * time.Second,
 		},
-		available: false,
+		available:    false,
+		traceEnabled: true, // Always enabled for legacy constructor
 	}
 
 	if contextTokensOverride > 0 {
@@ -378,7 +395,7 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	L_trace("ollama: request prepared", "url", url, "model", c.model, "messageCount", len(messages))
+	c.trace("ollama: request prepared", "url", url, "model", c.model, "messageCount", len(messages))
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -582,7 +599,7 @@ func (p *OllamaProvider) embedSingle(ctx context.Context, text string) ([]float3
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	L_trace("ollama: sending embed request", "url", url, "model", p.model, "textLength", len(text))
+	p.trace("ollama: sending embed request", "url", url, "model", p.model, "textLength", len(text))
 
 	resp, err := p.client.Do(req)
 	if err != nil {

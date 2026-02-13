@@ -400,7 +400,8 @@ GoClaw monitors context usage and prompts you to save important information befo
 **When you receive a [SYSTEM: pre-compaction memory flush] message:**
 1. Review the conversation for important context that would be lost
 2. Write key decisions, context, and state to ` + "`memory/YYYY-MM-DD.md`" + ` (create if needed)
-3. If nothing important to save, reply with just: NO_REPLY
+3. After saving: briefly confirm what you saved (e.g. "Saved session notes")
+4. If nothing worth saving: reply with only NO_REPLY
 
 **What to save:**
 - Key decisions made during this session

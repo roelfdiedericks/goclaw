@@ -4,7 +4,10 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +17,20 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
+
+// openRouterTransport adds GoClaw attribution headers to OpenRouter requests
+type openRouterTransport struct {
+	base http.RoundTripper
+}
+
+func (t *openRouterTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set("HTTP-Referer", "https://goclaw.org")
+	req.Header.Set("X-Title", "GoClaw")
+	if t.base == nil {
+		return http.DefaultTransport.RoundTrip(req)
+	}
+	return t.base.RoundTrip(req)
+}
 
 // OpenAIProvider implements the Provider interface for OpenAI-compatible APIs.
 // Supports streaming, native tool calling, vision (images), and embeddings.
@@ -31,6 +48,9 @@ type OpenAIProvider struct {
 	// Embedding support
 	embeddingOnly       bool // If true, only used for embeddings (not chat)
 	embeddingDimensions int  // Cached embedding dimensions (detected on first use)
+
+	// Per-provider trace logging control
+	traceEnabled bool // If false, suppress L_trace calls for this provider
 
 	// Thread-safe availability tracking
 	mu        sync.RWMutex
@@ -63,6 +83,14 @@ func NewOpenAIProvider(name string, cfg ProviderConfig) (*OpenAIProvider, error)
 		config.BaseURL = baseURL
 	}
 
+	// Add OpenRouter attribution headers if this is an OpenRouter endpoint
+	if strings.Contains(strings.ToLower(baseURL), "openrouter") {
+		config.HTTPClient = &http.Client{
+			Transport: &openRouterTransport{base: http.DefaultTransport},
+		}
+		L_debug("openai: using OpenRouter headers", "referer", "https://goclaw.org", "title", "GoClaw")
+	}
+
 	client := openai.NewClientWithConfig(config)
 
 	maxTokens := cfg.MaxTokens
@@ -74,7 +102,14 @@ func NewOpenAIProvider(name string, cfg ProviderConfig) (*OpenAIProvider, error)
 	if displayURL == "" {
 		displayURL = "(default)"
 	}
-	L_debug("openai provider created", "name", name, "baseURL", displayURL, "maxTokens", maxTokens, "contextTokens", cfg.ContextTokens)
+
+	// Determine trace enabled - default to true if not explicitly set to false
+	traceEnabled := true
+	if cfg.Trace != nil && !*cfg.Trace {
+		traceEnabled = false
+	}
+
+	L_debug("openai provider created", "name", name, "baseURL", displayURL, "maxTokens", maxTokens, "contextTokens", cfg.ContextTokens, "trace", traceEnabled)
 
 	return &OpenAIProvider{
 		name:          name,
@@ -84,7 +119,16 @@ func NewOpenAIProvider(name string, cfg ProviderConfig) (*OpenAIProvider, error)
 		contextTokens: cfg.ContextTokens,
 		apiKey:        cfg.APIKey,
 		baseURL:       baseURL,
+		traceEnabled:  traceEnabled,
 	}, nil
+}
+
+// trace logs a trace message if tracing is enabled for this provider.
+// Use this instead of L_trace for per-provider trace control.
+func (p *OpenAIProvider) trace(msg string, args ...any) {
+	if p.traceEnabled {
+		L_trace(msg, args...)
+	}
 }
 
 // Name returns the provider instance name
@@ -295,9 +339,25 @@ func (p *OpenAIProvider) SupportsEmbeddings() bool {
 
 // getOpenAIModelContextWindow returns the context window size for a given model
 func getOpenAIModelContextWindow(model string) int {
+	model = strings.ToLower(model)
+
+	// Claude models (including OpenRouter format like "anthropic/claude-opus-4.5")
+	if strings.Contains(model, "claude") {
+		if strings.Contains(model, "opus") || strings.Contains(model, "sonnet") {
+			return 200000 // 200K context for Claude 3+ Opus/Sonnet
+		}
+		if strings.Contains(model, "haiku") {
+			return 200000 // Haiku also has 200K
+		}
+		return 100000 // Conservative default for Claude
+	}
 	// Kimi models
-	if strings.HasPrefix(model, "kimi-k2") {
+	if strings.HasPrefix(model, "kimi-k2") || strings.Contains(model, "kimi-k2") {
 		return 262144 // 256K context (256 * 1024)
+	}
+	// DeepSeek models (OpenRouter format: "deepseek/deepseek-v3.2")
+	if strings.Contains(model, "deepseek") {
+		return 128000 // 128K context
 	}
 	// GPT-4 variants
 	if strings.Contains(model, "gpt-4") {
@@ -364,7 +424,7 @@ func (p *OpenAIProvider) StreamMessage(
 		openaiMessages = append([]openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
 		}, openaiMessages...)
-		L_trace("system prompt set", "length", len(systemPrompt))
+		p.trace("system prompt set", "length", len(systemPrompt))
 	}
 
 	// Convert tool definitions
@@ -384,15 +444,105 @@ func (p *OpenAIProvider) StreamMessage(
 	// Add tools if any
 	if len(openaiTools) > 0 {
 		req.Tools = openaiTools
-		L_trace("tools attached", "count", len(openaiTools))
+		// Log tool names for debugging
+		var toolNames []string
+		for _, t := range openaiTools {
+			if t.Function != nil {
+				toolNames = append(toolNames, t.Function.Name)
+			}
+		}
+		p.trace("tools attached", "count", len(openaiTools), "names", toolNames)
 	}
 
-	L_debug("sending request to OpenAI-compatible API", "model", p.model)
+	// Calculate approximate request size for debugging
+	reqBytes, _ := json.Marshal(req)
+	reqSizeKB := len(reqBytes) / 1024
+
+	// Log request details for debugging (trace level to avoid clutter)
+	p.trace("openai: sending request",
+		"provider", p.name,
+		"model", p.model,
+		"baseURL", p.baseURL,
+		"maxTokens", p.maxTokens,
+		"messageCount", len(openaiMessages),
+		"toolCount", len(openaiTools),
+		"requestSizeKB", reqSizeKB,
+	)
+
+	// Log first few messages for debugging (roles and content lengths)
+	for i, msg := range openaiMessages {
+		if i >= 5 {
+			p.trace("openai: request messages truncated", "shown", 5, "total", len(openaiMessages))
+			break
+		}
+		contentLen := len(msg.Content)
+		if len(msg.MultiContent) > 0 {
+			contentLen = len(msg.MultiContent)
+		}
+		p.trace("openai: request message",
+			"idx", i,
+			"role", msg.Role,
+			"contentLen", contentLen,
+			"toolCallsCount", len(msg.ToolCalls),
+			"toolCallID", msg.ToolCallID,
+		)
+	}
+
+	// Dump request for OpenRouter debugging (always, not just on error)
+	if strings.Contains(strings.ToLower(p.baseURL), "openrouter") {
+		dumpOpenAIRequest(p.name, p.model, p.baseURL, &req)
+	}
 
 	// Stream the response
 	stream, err := p.client.CreateChatCompletionStream(ctx, req)
 	if err != nil {
-		L_error("stream creation failed", "error", err)
+		// Log the full request details on error for debugging
+		L_error("stream creation failed - request details",
+			"provider", p.name,
+			"baseURL", p.baseURL,
+			"model", p.model,
+			"maxTokens", p.maxTokens,
+			"messageCount", len(openaiMessages),
+			"toolCount", len(openaiTools),
+			"requestSizeKB", reqSizeKB,
+			"stream", req.Stream,
+		)
+
+		// Log message roles summary
+		roleCounts := make(map[string]int)
+		for _, msg := range openaiMessages {
+			roleCounts[string(msg.Role)]++
+		}
+		L_error("stream creation failed - message roles", "roles", roleCounts)
+
+		// Try to extract detailed error information
+		var apiErr *openai.APIError
+		var reqErr *openai.RequestError
+		if errors.As(err, &apiErr) {
+			L_error("stream creation failed (APIError)",
+				"provider", p.name,
+				"model", p.model,
+				"statusCode", apiErr.HTTPStatusCode,
+				"status", apiErr.HTTPStatus,
+				"code", apiErr.Code,
+				"message", apiErr.Message,
+				"type", apiErr.Type,
+				"param", apiErr.Param,
+			)
+		} else if errors.As(err, &reqErr) {
+			L_error("stream creation failed (RequestError)",
+				"provider", p.name,
+				"model", p.model,
+				"statusCode", reqErr.HTTPStatusCode,
+				"status", reqErr.HTTPStatus,
+				"error", reqErr.Error(),
+			)
+		} else {
+			L_error("stream creation failed", "provider", p.name, "model", p.model, "error", err)
+		}
+		// Dump full request to file for debugging
+		dumpOpenAIError(err, p.name, p.model, p.baseURL, &req)
+
 		// Record metrics for failed request
 		if p.metricPrefix != "" {
 			MetricDuration(p.metricPrefix, "request", time.Since(startTime))
@@ -405,11 +555,26 @@ func (p *OpenAIProvider) StreamMessage(
 	response := &Response{}
 	var toolCalls []openai.ToolCall
 	var reasoningContent string
+	chunkNum := 0
+
+	// Hybrid logging state tracking
+	const emptyChunkThreshold = 50 // Warn after this many consecutive empty chunks
+	emptyChunkCount := 0
+	firstContentLogged := false
+	toolCallsStarted := make(map[int]bool) // Track which tool call indices we've logged start for
 
 	for {
 		chunk, err := stream.Recv()
 		if err != nil {
 			if err.Error() == "EOF" {
+				// Stream complete - log summary
+				p.trace("openai: stream complete",
+					"provider", p.name,
+					"totalChunks", chunkNum,
+					"duration", time.Since(startTime).Round(time.Millisecond),
+					"textLen", len(response.Text),
+					"toolCallsCount", len(toolCalls),
+				)
 				break
 			}
 			L_error("stream error", "error", err)
@@ -421,20 +586,88 @@ func (p *OpenAIProvider) StreamMessage(
 			return nil, fmt.Errorf("stream error: %w", err)
 		}
 
+		chunkNum++
+
 		if len(chunk.Choices) == 0 {
+			// Empty chunk (no choices) - count it
+			emptyChunkCount++
+			if emptyChunkCount == emptyChunkThreshold {
+				L_warn("openai: potential hang - many consecutive empty chunks",
+					"provider", p.name,
+					"emptyChunks", emptyChunkCount,
+					"chunk", chunkNum,
+				)
+			} else if emptyChunkCount > 0 && emptyChunkCount%100 == 0 {
+				// Periodic update for very long empty stretches
+				L_warn("openai: still waiting - empty chunks continuing",
+					"provider", p.name,
+					"emptyChunks", emptyChunkCount,
+					"chunk", chunkNum,
+					"elapsed", time.Since(startTime).Round(time.Millisecond),
+				)
+			}
 			continue
 		}
 
 		choice := chunk.Choices[0]
 
+		// Determine if this chunk is "empty" (no meaningful content)
+		hasContent := choice.Delta.Content != ""
+		hasReasoning := choice.Delta.ReasoningContent != ""
+		hasToolCalls := len(choice.Delta.ToolCalls) > 0
+		hasFinishReason := choice.FinishReason != ""
+		isEmptyChunk := !hasContent && !hasReasoning && !hasToolCalls && !hasFinishReason
+
+		if isEmptyChunk {
+			emptyChunkCount++
+			if emptyChunkCount == emptyChunkThreshold {
+				L_warn("openai: potential hang - many consecutive empty chunks",
+					"provider", p.name,
+					"emptyChunks", emptyChunkCount,
+					"chunk", chunkNum,
+				)
+			} else if emptyChunkCount > 0 && emptyChunkCount%100 == 0 {
+				L_warn("openai: still waiting - empty chunks continuing",
+					"provider", p.name,
+					"emptyChunks", emptyChunkCount,
+					"chunk", chunkNum,
+					"elapsed", time.Since(startTime).Round(time.Millisecond),
+				)
+			}
+			continue
+		}
+
+		// Non-empty chunk - log transition from empty if applicable
+		if emptyChunkCount > 0 {
+			p.trace("openai: content after empty chunks",
+				"provider", p.name,
+				"emptyChunks", emptyChunkCount,
+				"chunk", chunkNum,
+			)
+			emptyChunkCount = 0
+		}
+
 		// Handle reasoning/thinking content (Kimi, Deepseek, etc.)
-		if choice.Delta.ReasoningContent != "" {
+		if hasReasoning {
 			reasoningContent += choice.Delta.ReasoningContent
-			L_trace("llm: reasoning content received", "length", len(choice.Delta.ReasoningContent))
+			// Don't log every reasoning delta - too verbose
 		}
 
 		// Handle text content
-		if choice.Delta.Content != "" {
+		if hasContent {
+			// Log first content received
+			if !firstContentLogged {
+				preview := choice.Delta.Content
+				if len(preview) > 50 {
+					preview = preview[:50] + "..."
+				}
+				p.trace("openai: first content received",
+					"provider", p.name,
+					"chunk", chunkNum,
+					"preview", preview,
+				)
+				firstContentLogged = true
+			}
 			response.Text += choice.Delta.Content
 			if onDelta != nil {
 				onDelta(choice.Delta.Content)
@@ -443,14 +676,30 @@ func (p *OpenAIProvider) StreamMessage(
 
 		// Handle tool calls
 		for _, tc := range choice.Delta.ToolCalls {
-			// Accumulate tool call data
+			// Determine tool call index
 			idx := 0
 			if tc.Index != nil {
 				idx = *tc.Index
 			}
+
+			// Ensure toolCalls slice is large enough
 			for len(toolCalls) <= idx {
 				toolCalls = append(toolCalls, openai.ToolCall{})
 			}
+
+			// Log tool call start (first time we see this index with an ID or name)
+			if !toolCallsStarted[idx] && (tc.ID != "" || tc.Function.Name != "") {
+				toolCallsStarted[idx] = true
+				p.trace("openai: tool call started",
+					"provider", p.name,
+					"chunk", chunkNum,
+					"idx", idx,
+					"id", tc.ID,
+					"name", tc.Function.Name,
+				)
+			}
+
+			// Accumulate tool call data silently
 			if tc.ID != "" {
 				toolCalls[idx].ID = tc.ID
 			}
@@ -466,14 +715,34 @@ func (p *OpenAIProvider) StreamMessage(
 		}
 
 		// Check finish reason
-		if choice.FinishReason != "" {
+		if hasFinishReason {
 			response.StopReason = string(choice.FinishReason)
+			p.trace("openai: finish_reason received",
+				"provider", p.name,
+				"chunk", chunkNum,
+				"finishReason", choice.FinishReason,
+				"toolCallsCount", len(toolCalls),
+				"textLen", len(response.Text),
+			)
 		}
 
 		// Capture usage from stream (comes with include_usage option)
 		if chunk.Usage != nil {
 			response.InputTokens = chunk.Usage.PromptTokens
 			response.OutputTokens = chunk.Usage.CompletionTokens
+		}
+	}
+
+	// Log each completed tool call (significant event)
+	for i, tc := range toolCalls {
+		if tc.ID != "" {
+			p.trace("openai: tool call complete",
+				"provider", p.name,
+				"idx", i,
+				"id", tc.ID,
+				"name", tc.Function.Name,
+				"argsLen", len(tc.Function.Arguments),
+			)
 		}
 	}
 
@@ -490,7 +759,16 @@ func (p *OpenAIProvider) StreamMessage(
 		response.ToolName = tc.Function.Name
 		response.ToolInput = json.RawMessage(tc.Function.Arguments)
 		response.StopReason = "tool_use"
-		L_info("llm: tool use", "tool", tc.Function.Name, "id", tc.ID)
+		L_info("llm: tool use detected", "provider", p.name, "tool", tc.Function.Name, "id", tc.ID)
+	} else if len(toolCalls) > 0 {
+		// Tool calls exist but first one has empty ID - log this edge case
+		L_warn("openai: tool_calls present but first ID empty",
+			"provider", p.name,
+			"count", len(toolCalls),
+			"firstID", toolCalls[0].ID,
+			"firstName", toolCalls[0].Function.Name,
+			"firstArgs", toolCalls[0].Function.Arguments,
+		)
 	}
 
 	// If API didn't provide token counts, estimate them
@@ -506,6 +784,16 @@ func (p *OpenAIProvider) StreamMessage(
 	elapsed := time.Since(startTime)
 	L_info("llm: request completed", "provider", p.name, "duration", elapsed.Round(time.Millisecond),
 		"inputTokens", response.InputTokens, "outputTokens", response.OutputTokens)
+
+	// Log final response summary (not full text - too verbose)
+	p.trace("openai: response summary",
+		"provider", p.name,
+		"textLen", len(response.Text),
+		"stopReason", response.StopReason,
+		"toolName", response.ToolName,
+		"thinkingLen", len(response.Thinking),
+		"hasToolUse", response.HasToolUse(),
+	)
 
 	// Record metrics
 	if p.metricPrefix != "" {
@@ -698,7 +986,14 @@ func convertToOpenAIMessages(messages []types.Message) ([]openai.ChatCompletionM
 				if len(content) > 1000 {
 					content = content[:1000] + "...[truncated]"
 				}
-				text := fmt.Sprintf("[Tool result for %s]\n%s", msg.ToolName, content)
+				if content == "" {
+					content = "(no output)"
+				}
+				toolName := msg.ToolName
+				if toolName == "" {
+					toolName = "unknown"
+				}
+				text := fmt.Sprintf("[Tool result for %s]\n%s", toolName, content)
 				result = append(result, openai.ChatCompletionMessage{
 					Role:    openai.ChatMessageRoleUser,
 					Content: text,
@@ -707,9 +1002,14 @@ func convertToOpenAIMessages(messages []types.Message) ([]openai.ChatCompletionM
 			}
 
 			// OpenAI uses "tool" role for tool results
+			// Content is required - use placeholder if empty (some providers reject empty content)
+			toolContent := msg.Content
+			if toolContent == "" {
+				toolContent = "(no output)"
+			}
 			result = append(result, openai.ChatCompletionMessage{
 				Role:       openai.ChatMessageRoleTool,
-				Content:    msg.Content,
+				Content:    toolContent,
 				ToolCallID: msg.ToolUseID,
 			})
 
@@ -800,4 +1100,129 @@ func estimateOpenAITokens(messages []openai.ChatCompletionMessage, systemPrompt 
 	}
 	
 	return total
+}
+
+// dumpOpenAIError writes full request details to openaierr.txt for debugging
+func dumpOpenAIError(err error, provider, model, baseURL string, req *openai.ChatCompletionRequest) {
+	// Build comprehensive error dump
+	var sb strings.Builder
+	
+	sb.WriteString("OpenAI API Error\n")
+	sb.WriteString("================\n")
+	sb.WriteString(fmt.Sprintf("Timestamp: %s\n", time.Now().Format(time.RFC3339)))
+	sb.WriteString(fmt.Sprintf("Provider: %s\n", provider))
+	sb.WriteString(fmt.Sprintf("Model: %s\n", model))
+	sb.WriteString(fmt.Sprintf("BaseURL: %s\n", baseURL))
+	sb.WriteString(fmt.Sprintf("MaxTokens: %d\n", req.MaxTokens))
+	sb.WriteString(fmt.Sprintf("Stream: %v\n", req.Stream))
+	sb.WriteString(fmt.Sprintf("Message Count: %d\n", len(req.Messages)))
+	sb.WriteString(fmt.Sprintf("Tool Count: %d\n", len(req.Tools)))
+	
+	// Message role summary
+	roleCounts := make(map[string]int)
+	for _, msg := range req.Messages {
+		roleCounts[string(msg.Role)]++
+	}
+	sb.WriteString(fmt.Sprintf("Message Roles: %v\n", roleCounts))
+	
+	// Tool names
+	if len(req.Tools) > 0 {
+		sb.WriteString("\nTools:\n")
+		for i, t := range req.Tools {
+			if t.Function != nil {
+				sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, t.Function.Name))
+			}
+		}
+	}
+	
+	// Error details
+	sb.WriteString("\n\nError Details\n")
+	sb.WriteString("=============\n")
+	sb.WriteString(fmt.Sprintf("Error Type: %T\n", err))
+	sb.WriteString(fmt.Sprintf("Error: %v\n", err))
+	
+	// Try to extract API error details
+	var apiErr *openai.APIError
+	var reqErr *openai.RequestError
+	if errors.As(err, &apiErr) {
+		sb.WriteString(fmt.Sprintf("\nAPIError Details:\n"))
+		sb.WriteString(fmt.Sprintf("  HTTPStatusCode: %d\n", apiErr.HTTPStatusCode))
+		sb.WriteString(fmt.Sprintf("  HTTPStatus: %s\n", apiErr.HTTPStatus))
+		sb.WriteString(fmt.Sprintf("  Code: %v\n", apiErr.Code))
+		sb.WriteString(fmt.Sprintf("  Message: %s\n", apiErr.Message))
+		sb.WriteString(fmt.Sprintf("  Type: %s\n", apiErr.Type))
+		sb.WriteString(fmt.Sprintf("  Param: %v\n", apiErr.Param))
+	} else if errors.As(err, &reqErr) {
+		sb.WriteString(fmt.Sprintf("\nRequestError Details:\n"))
+		sb.WriteString(fmt.Sprintf("  HTTPStatusCode: %d\n", reqErr.HTTPStatusCode))
+		sb.WriteString(fmt.Sprintf("  HTTPStatus: %s\n", reqErr.HTTPStatus))
+	}
+	
+	// Full request JSON
+	sb.WriteString("\n\nFull Request JSON\n")
+	sb.WriteString("=================\n")
+	reqJSON, jsonErr := json.MarshalIndent(req, "", "  ")
+	if jsonErr != nil {
+		sb.WriteString(fmt.Sprintf("(Failed to marshal: %v)\n", jsonErr))
+	} else {
+		sb.Write(reqJSON)
+	}
+	
+	// Write to file
+	if writeErr := os.WriteFile("openaierr.txt", []byte(sb.String()), 0644); writeErr != nil {
+		L_warn("failed to write openaierr.txt", "error", writeErr)
+	} else {
+		L_info("OpenAI API error dumped to openaierr.txt")
+	}
+}
+
+// dumpOpenAIRequest writes full request details to openai_request.txt for debugging
+// This is called before every OpenRouter request to help debug model behavior
+func dumpOpenAIRequest(provider, model, baseURL string, req *openai.ChatCompletionRequest) {
+	var sb strings.Builder
+	
+	sb.WriteString("OpenAI Request Dump\n")
+	sb.WriteString("===================\n")
+	sb.WriteString(fmt.Sprintf("Timestamp: %s\n", time.Now().Format(time.RFC3339)))
+	sb.WriteString(fmt.Sprintf("Provider: %s\n", provider))
+	sb.WriteString(fmt.Sprintf("Model: %s\n", model))
+	sb.WriteString(fmt.Sprintf("BaseURL: %s\n", baseURL))
+	sb.WriteString(fmt.Sprintf("MaxTokens: %d\n", req.MaxTokens))
+	sb.WriteString(fmt.Sprintf("Stream: %v\n", req.Stream))
+	sb.WriteString(fmt.Sprintf("Message Count: %d\n", len(req.Messages)))
+	sb.WriteString(fmt.Sprintf("Tool Count: %d\n", len(req.Tools)))
+	
+	// Message role summary
+	roleCounts := make(map[string]int)
+	for _, msg := range req.Messages {
+		roleCounts[string(msg.Role)]++
+	}
+	sb.WriteString(fmt.Sprintf("Message Roles: %v\n", roleCounts))
+	
+	// Tool names
+	if len(req.Tools) > 0 {
+		sb.WriteString("\nTools:\n")
+		for i, t := range req.Tools {
+			if t.Function != nil {
+				sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, t.Function.Name))
+			}
+		}
+	}
+	
+	// Full request JSON
+	sb.WriteString("\n\nFull Request JSON\n")
+	sb.WriteString("=================\n")
+	reqJSON, jsonErr := json.MarshalIndent(req, "", "  ")
+	if jsonErr != nil {
+		sb.WriteString(fmt.Sprintf("(Failed to marshal: %v)\n", jsonErr))
+	} else {
+		sb.Write(reqJSON)
+	}
+	
+	// Write to file
+	if writeErr := os.WriteFile("openai_request.txt", []byte(sb.String()), 0644); writeErr != nil {
+		L_warn("failed to write openai_request.txt", "error", writeErr)
+	} else {
+		L_debug("OpenAI request dumped to openai_request.txt", "provider", provider, "model", model)
+	}
 }

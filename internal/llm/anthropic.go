@@ -34,6 +34,7 @@ type AnthropicProvider struct {
 	apiKey        string // Stored for cloning
 	baseURL       string // Custom API base URL (for Kimi K2, etc.)
 	metricPrefix  string // e.g., "llm/anthropic/anthropic/claude-opus-4-5"
+	traceEnabled  bool   // Per-provider trace logging control
 }
 
 // Response represents the LLM response
@@ -84,7 +85,14 @@ func NewAnthropicProvider(name string, cfg ProviderConfig) (*AnthropicProvider, 
 	if baseURL == "" {
 		baseURL = "(default)"
 	}
-	L_debug("anthropic provider created", "name", name, "baseURL", baseURL, "maxTokens", maxTokens, "promptCaching", cfg.PromptCaching)
+
+	// Determine trace enabled - default to true if not explicitly set to false
+	traceEnabled := true
+	if cfg.Trace != nil && !*cfg.Trace {
+		traceEnabled = false
+	}
+
+	L_debug("anthropic provider created", "name", name, "baseURL", baseURL, "maxTokens", maxTokens, "promptCaching", cfg.PromptCaching, "trace", traceEnabled)
 
 	return &AnthropicProvider{
 		name:          name,
@@ -94,7 +102,16 @@ func NewAnthropicProvider(name string, cfg ProviderConfig) (*AnthropicProvider, 
 		promptCaching: cfg.PromptCaching,
 		apiKey:        cfg.APIKey,
 		baseURL:       cfg.BaseURL,
+		traceEnabled:  traceEnabled,
 	}, nil
+}
+
+// trace logs a trace message if tracing is enabled for this provider.
+// Use this instead of L_trace for per-provider trace control.
+func (p *AnthropicProvider) trace(msg string, args ...any) {
+	if p.traceEnabled {
+		L_trace(msg, args...)
+	}
 }
 
 // Name returns the provider instance name
@@ -272,9 +289,9 @@ func (c *AnthropicProvider) StreamMessage(
 			// Enable prompt caching - system prompt is stable and benefits from caching
 			// Cache expires after 5 minutes of inactivity, reducing costs by up to 90%
 			block.CacheControl = anthropic.NewCacheControlEphemeralParam()
-			L_trace("system prompt set with caching", "length", len(systemPrompt))
+			c.trace("system prompt set with caching", "length", len(systemPrompt))
 		} else {
-			L_trace("system prompt set (caching disabled)", "length", len(systemPrompt))
+			c.trace("system prompt set (caching disabled)", "length", len(systemPrompt))
 		}
 		params.System = []anthropic.TextBlockParam{block}
 	}
@@ -282,7 +299,7 @@ func (c *AnthropicProvider) StreamMessage(
 	// Add tools if any
 	if len(anthropicTools) > 0 {
 		params.Tools = anthropicTools
-		L_trace("tools attached", "count", len(anthropicTools))
+		c.trace("tools attached", "count", len(anthropicTools))
 	}
 
 	L_debug("sending request to Anthropic", "model", c.model)
@@ -326,7 +343,7 @@ func (c *AnthropicProvider) StreamMessage(
 				if opts != nil && opts.OnThinkingDelta != nil {
 					opts.OnThinkingDelta(deltaVariant.Thinking)
 				}
-				L_trace("llm: thinking delta received", "length", len(deltaVariant.Thinking))
+				c.trace("llm: thinking delta received", "length", len(deltaVariant.Thinking))
 			}
 		}
 	}

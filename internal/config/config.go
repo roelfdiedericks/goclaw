@@ -635,12 +635,12 @@ func Load() (*LoadResult, error) {
 						InjectAs:     "system",
 						OncePerCycle: true,
 					},
-					{
-						Percent:      90,
-						Prompt:       "[SYSTEM: pre-compaction memory flush]\nContext at 90%. Compaction imminent.\nStore durable memories now (use memory/YYYY-MM-DD.md; create memory/ if needed).\nIf nothing to store, reply with NO_REPLY.",
-						InjectAs:     "user",
-						OncePerCycle: true,
-					},
+				{
+					Percent:      90,
+					Prompt:       "[SYSTEM: pre-compaction memory flush]\nContext at 90%. Compaction imminent.\nWrite important context to memory/YYYY-MM-DD.md now (create memory/ if needed).\nAfter saving: briefly confirm what you saved (e.g. \"Saved session notes\").\nIf nothing worth saving: reply with only NO_REPLY.",
+					InjectAs:     "user",
+					OncePerCycle: true,
+				},
 				},
 			},
 		},

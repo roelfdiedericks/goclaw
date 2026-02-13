@@ -613,27 +613,46 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 					"rawMarkdown", finalText,
 					"formattedHTML", formattedText)
 
-				if currentMsg == nil {
-					// Try HTML first, fallback to plain text
-					_, err := b.bot.Send(c.Chat(), formattedText, &tele.SendOptions{ParseMode: tele.ModeHTML})
+			// Split long messages to fit Telegram's 4096 char limit
+			chunks := splitMessage(finalText, maxTelegramMessage)
+
+			if currentMsg == nil {
+				// Send all chunks as new messages
+				for i, chunk := range chunks {
+					formatted := FormatMessage(chunk)
+					_, err := b.bot.Send(c.Chat(), formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
 					if err != nil {
-						L_debug("telegram: HTML send failed, falling back to plain text", "error", err)
-						_, err = b.bot.Send(c.Chat(), finalText)
+						L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
+						_, err = b.bot.Send(c.Chat(), chunk)
 						if err != nil {
-							L_error("telegram: failed to send final message", "error", err)
-						}
-					}
-				} else {
-					// Try HTML edit first, fallback to plain text
-					_, err := b.bot.Edit(currentMsg, formattedText, &tele.SendOptions{ParseMode: tele.ModeHTML})
-					if err != nil {
-						L_debug("telegram: HTML edit failed, falling back to plain text", "error", err)
-						_, err = b.bot.Edit(currentMsg, finalText)
-						if err != nil {
-							L_debug("telegram: failed to edit final message", "error", err)
+							L_error("telegram: failed to send message chunk", "error", err, "chunk", i+1)
 						}
 					}
 				}
+			} else {
+				// Edit first chunk into existing message, send rest as new
+				formatted := FormatMessage(chunks[0])
+				_, err := b.bot.Edit(currentMsg, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
+				if err != nil {
+					L_debug("telegram: HTML edit failed, falling back to plain text", "error", err)
+					_, err = b.bot.Edit(currentMsg, chunks[0])
+					if err != nil {
+						L_debug("telegram: failed to edit final message", "error", err)
+					}
+				}
+				// Send remaining chunks as new messages
+				for i := 1; i < len(chunks); i++ {
+					formatted := FormatMessage(chunks[i])
+					_, err := b.bot.Send(c.Chat(), formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
+					if err != nil {
+						L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
+						_, err = b.bot.Send(c.Chat(), chunks[i])
+						if err != nil {
+							L_error("telegram: failed to send message chunk", "error", err, "chunk", i+1)
+						}
+					}
+				}
+			}
 			}
 
 		case gateway.EventAgentError:
@@ -1117,25 +1136,31 @@ func (b *Bot) DeliverGhostwrite(ctx context.Context, u *user.User, message strin
 	return nil
 }
 
-// SendText sends a text message to a chat.
-// Returns the sent message for potential editing/deletion.
+// SendText sends a text message to a chat, splitting if necessary.
+// Returns the last sent message for potential editing/deletion.
 func (b *Bot) SendText(chatID int64, text string) (*tele.Message, error) {
 	chat := &tele.Chat{ID: chatID}
-	formatted := FormatMessage(text)
 
-	msg, err := b.bot.Send(chat, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
-	if err != nil {
-		// Fallback to plain text
-		L_debug("telegram: HTML send failed, falling back to plain text", "error", err)
-		msg, err = b.bot.Send(chat, text)
+	// Split long messages
+	chunks := splitMessage(text, maxTelegramMessage)
+	var lastMsg *tele.Message
+
+	for i, chunk := range chunks {
+		formatted := FormatMessage(chunk)
+		msg, err := b.bot.Send(chat, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		if err != nil {
+			// Fallback to plain text
+			L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
+			msg, err = b.bot.Send(chat, chunk)
+		}
+		if err != nil {
+			return lastMsg, fmt.Errorf("failed to send text chunk %d: %w", i+1, err)
+		}
+		lastMsg = msg
+		L_debug("telegram: sent text message", "chatID", chatID, "msgID", msg.ID, "chunk", i+1, "length", len(chunk))
 	}
 
-	if err != nil {
-		return nil, fmt.Errorf("failed to send text: %w", err)
-	}
-
-	L_debug("telegram: sent text message", "chatID", chatID, "msgID", msg.ID, "length", len(text))
-	return msg, nil
+	return lastMsg, nil
 }
 
 // EditMessage edits an existing message.
@@ -1322,4 +1347,67 @@ func escapeHTML(s string) string {
 		">", "&gt;",
 	)
 	return replacer.Replace(s)
+}
+
+// maxTelegramMessage is the maximum message length for Telegram (4096 chars).
+// We use 4000 to leave room for formatting overhead.
+const maxTelegramMessage = 4000
+
+// splitMessage splits a long message into chunks that fit within Telegram's limit.
+// It tries to split at natural boundaries: paragraphs, then sentences, then words.
+func splitMessage(text string, maxLen int) []string {
+	if len(text) <= maxLen {
+		return []string{text}
+	}
+
+	var chunks []string
+	remaining := text
+
+	for len(remaining) > 0 {
+		if len(remaining) <= maxLen {
+			chunks = append(chunks, remaining)
+			break
+		}
+
+		// Find a good split point within maxLen
+		splitAt := findSplitPoint(remaining, maxLen)
+		chunks = append(chunks, strings.TrimSpace(remaining[:splitAt]))
+		remaining = strings.TrimSpace(remaining[splitAt:])
+	}
+
+	return chunks
+}
+
+// findSplitPoint finds the best position to split text, preferring natural boundaries.
+func findSplitPoint(text string, maxLen int) int {
+	if len(text) <= maxLen {
+		return len(text)
+	}
+
+	searchArea := text[:maxLen]
+
+	// Try to split at paragraph boundary (double newline)
+	if idx := strings.LastIndex(searchArea, "\n\n"); idx > maxLen/2 {
+		return idx + 2 // Include the newlines
+	}
+
+	// Try to split at single newline
+	if idx := strings.LastIndex(searchArea, "\n"); idx > maxLen/2 {
+		return idx + 1
+	}
+
+	// Try to split at sentence boundary (. ! ?)
+	for _, sep := range []string{". ", "! ", "? "} {
+		if idx := strings.LastIndex(searchArea, sep); idx > maxLen/2 {
+			return idx + len(sep)
+		}
+	}
+
+	// Try to split at word boundary (space)
+	if idx := strings.LastIndex(searchArea, " "); idx > maxLen/2 {
+		return idx + 1
+	}
+
+	// Fallback: hard split at maxLen
+	return maxLen
 }
