@@ -1442,6 +1442,10 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		contextTokens := sess.GetTotalTokens()
 		contextWindow := sess.GetMaxTokens()
 		contextUsage := sess.GetContextUsage() * 100.0
+		// Resolve thinking level using priority hierarchy
+		thinkingLevel := g.resolveThinkingLevel(req, g.llm.Name())
+		enableThinking := req.EnableThinking || thinkingLevel.IsEnabled()
+
 		L_debug("invoking LLM",
 			"provider", g.llm.Name(),
 			"model", g.llm.Model(),
@@ -1450,15 +1454,17 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			"contextTokens", contextTokens,
 			"contextWindow", contextWindow,
 			"contextUsage", fmt.Sprintf("%.1f%%", contextUsage),
-			"thinking", req.EnableThinking,
+			"thinking", enableThinking,
+			"thinkingLevel", thinkingLevel,
 		)
-		
-		// Build stream options
+
+		// Build stream options with thinking level
 		var streamOpts *llm.StreamOptions
-		if req.EnableThinking {
+		if enableThinking {
 			streamOpts = &llm.StreamOptions{
-				EnableThinking: true,
-				ThinkingBudget: g.config.LLM.Thinking.BudgetTokens,
+				EnableThinking:  true,
+				ThinkingLevel:   thinkingLevel.String(),
+				ThinkingBudget:  thinkingLevel.AnthropicBudgetTokens(), // Computed from level
 				OnThinkingDelta: func(delta string) {
 					sendEvent(EventThinkingDelta{RunID: runID, Delta: delta})
 				},
@@ -2326,6 +2332,41 @@ func (g *Gateway) persistMessage(ctx context.Context, sessionKey, role, content,
 }
 
 // buildMediaInstructions returns media storage instructions for the system prompt.
+// resolveThinkingLevel determines the effective thinking level based on priority hierarchy:
+// Request Override > User Preference > Provider Default > Global Default
+// Note: Request.ThinkingLevel is set by channel handlers based on per-session preferences
+func (g *Gateway) resolveThinkingLevel(req AgentRequest, providerName string) llm.ThinkingLevel {
+	// 1. Request override (set via /thinking command by channel handler)
+	if req.ThinkingLevel != "" {
+		L_trace("thinking: using request override", "level", req.ThinkingLevel)
+		return llm.ParseThinkingLevel(req.ThinkingLevel)
+	}
+
+	// 2. User preference
+	if req.User != nil && req.User.ThinkingLevel != "" {
+		L_trace("thinking: using user preference", "user", req.User.ID, "level", req.User.ThinkingLevel)
+		return llm.ParseThinkingLevel(req.User.ThinkingLevel)
+	}
+
+	// 3. Provider default (from config)
+	if providerName != "" {
+		if providerCfg, ok := g.config.LLM.Providers[providerName]; ok && providerCfg.ThinkingLevel != "" {
+			L_trace("thinking: using provider default", "provider", providerName, "level", providerCfg.ThinkingLevel)
+			return llm.ParseThinkingLevel(providerCfg.ThinkingLevel)
+		}
+	}
+
+	// 4. Global default from config
+	if g.config.LLM.Thinking.DefaultLevel != "" {
+		L_trace("thinking: using global default", "level", g.config.LLM.Thinking.DefaultLevel)
+		return llm.ParseThinkingLevel(g.config.LLM.Thinking.DefaultLevel)
+	}
+
+	// 5. Fallback to hardcoded default
+	L_trace("thinking: using hardcoded default", "level", llm.DefaultThinkingLevel)
+	return llm.DefaultThinkingLevel
+}
+
 func (g *Gateway) buildMediaInstructions() string {
 	if g.mediaStore == nil {
 		return ""
