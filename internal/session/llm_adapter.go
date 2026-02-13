@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
@@ -21,35 +22,56 @@ func GenerateCheckpointWithClient(ctx context.Context, client SummarizationClien
 	// Calculate effective input token limit (same logic as summary generation)
 	modelContext := client.ContextTokens()
 	outputBuffer := 2048 // reserve more tokens for JSON checkpoint output
-	
+
 	effectiveLimit := modelContext - outputBuffer
 	if effectiveLimit < 1000 {
 		effectiveLimit = 1000
 	}
-	
+
 	if maxInputTokens > 0 && maxInputTokens < effectiveLimit {
 		effectiveLimit = maxInputTokens
 	}
 
-	// Build a condensed conversation (reuse summary builder for truncation)
-	conversationText := BuildMessagesForSummary(messages, effectiveLimit)
+	// Try with current limit, retry with reduced limit on context overflow
+	const maxRetries = 2
+	currentLimit := effectiveLimit
 
-	userMessage := fmt.Sprintf("%s\n\nConversation to summarize:\n%s", CheckpointPrompt, conversationText)
-	systemPrompt := "You are a helpful assistant that creates structured conversation summaries. Respond only with valid JSON."
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// Build a condensed conversation (reuse summary builder for truncation)
+		conversationText := BuildMessagesForSummary(messages, currentLimit)
 
-	// Call LLM
-	responseText, err := client.SimpleMessage(ctx, userMessage, systemPrompt)
-	if err != nil {
-		return nil, fmt.Errorf("LLM call failed: %w", err)
+		userMessage := fmt.Sprintf("%s\n\nConversation to summarize:\n%s", CheckpointPrompt, conversationText)
+		systemPrompt := "You are a helpful assistant that creates structured conversation summaries. Respond only with valid JSON."
+
+		// Call LLM
+		responseText, err := client.SimpleMessage(ctx, userMessage, systemPrompt)
+		if err != nil {
+			// Check if this is a context overflow - retry with reduced limit
+			if llm.IsContextOverflowError(err) && attempt < maxRetries {
+				reducedLimit := currentLimit * 3 / 4 // 25% reduction
+				if reducedLimit >= 500 {
+					L_warn("checkpoint: context overflow, retrying with reduced limit",
+						"attempt", attempt+1,
+						"originalLimit", currentLimit,
+						"reducedLimit", reducedLimit,
+						"error", err)
+					currentLimit = reducedLimit
+					continue
+				}
+			}
+			return nil, fmt.Errorf("LLM call failed: %w", err)
+		}
+
+		// Parse the response
+		checkpoint, err := ParseCheckpointResponse(responseText)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse checkpoint response: %w", err)
+		}
+
+		return checkpoint, nil
 	}
 
-	// Parse the response
-	checkpoint, err := ParseCheckpointResponse(responseText)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse checkpoint response: %w", err)
-	}
-
-	return checkpoint, nil
+	return nil, fmt.Errorf("LLM call failed after %d retries", maxRetries+1)
 }
 
 // GenerateSummaryWithClient generates a compaction summary using the provided client.
@@ -63,40 +85,65 @@ func GenerateSummaryWithClient(ctx context.Context, client SummarizationClient, 
 	// Use the smaller of: configured limit OR model context - output buffer
 	modelContext := client.ContextTokens()
 	outputBuffer := 1024 // reserve tokens for summary output
-	
+
 	effectiveLimit := modelContext - outputBuffer
 	if effectiveLimit < 1000 {
 		effectiveLimit = 1000 // minimum reasonable limit
 	}
-	
+
 	// If config specifies a limit, use the smaller of config and model limit
 	if maxInputTokens > 0 && maxInputTokens < effectiveLimit {
 		effectiveLimit = maxInputTokens
 	}
-	
+
 	L_info("compaction: input limit calculated",
 		"modelContext", modelContext,
 		"configLimit", maxInputTokens,
 		"effectiveLimit", effectiveLimit)
 
-	// Build a condensed conversation for the summary prompt
-	conversationText := BuildMessagesForSummary(messages, effectiveLimit)
-	
-	// Estimate tokens in final prompt
-	estimatedTokens := len(conversationText) / 4
-	L_debug("compaction: summary input prepared", 
-		"messages", len(messages), 
-		"textChars", len(conversationText),
-		"estimatedTokens", estimatedTokens)
+	// Try with current limit, retry with reduced limit on context overflow
+	const maxRetries = 2
+	currentLimit := effectiveLimit
 
-	userMessage := fmt.Sprintf("%s\n\nConversation to summarize:\n%s", CompactionSummaryPrompt, conversationText)
-	systemPrompt := "You are a helpful assistant that creates concise conversation summaries."
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// Build a condensed conversation for the summary prompt
+		conversationText := BuildMessagesForSummary(messages, currentLimit)
 
-	// Call LLM
-	responseText, err := client.SimpleMessage(ctx, userMessage, systemPrompt)
-	if err != nil {
+		// Estimate tokens in final prompt
+		estimatedTokens := len(conversationText) / 4
+		L_debug("compaction: summary input prepared",
+			"attempt", attempt+1,
+			"messages", len(messages),
+			"textChars", len(conversationText),
+			"estimatedTokens", estimatedTokens,
+			"inputLimit", currentLimit)
+
+		userMessage := fmt.Sprintf("%s\n\nConversation to summarize:\n%s", CompactionSummaryPrompt, conversationText)
+		systemPrompt := "You are a helpful assistant that creates concise conversation summaries."
+
+		// Call LLM
+		responseText, err := client.SimpleMessage(ctx, userMessage, systemPrompt)
+		if err == nil {
+			return responseText, nil
+		}
+
+		// Check if this is a context overflow - retry with reduced limit
+		if llm.IsContextOverflowError(err) && attempt < maxRetries {
+			reducedLimit := currentLimit * 3 / 4 // 25% reduction
+			if reducedLimit >= 500 {
+				L_warn("compaction: context overflow, retrying with reduced limit",
+					"attempt", attempt+1,
+					"originalLimit", currentLimit,
+					"reducedLimit", reducedLimit,
+					"error", err)
+				currentLimit = reducedLimit
+				continue
+			}
+		}
+
+		// Non-overflow error or max retries reached
 		return "", fmt.Errorf("LLM call failed: %w", err)
 	}
 
-	return responseText, nil
+	return "", fmt.Errorf("LLM call failed after %d retries", maxRetries+1)
 }
