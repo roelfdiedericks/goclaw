@@ -375,6 +375,7 @@ type LLMProviderConfig struct {
 	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"` // Request timeout
 	PromptCaching  bool   `json:"promptCaching,omitempty"`  // Anthropic-specific
 	EmbeddingOnly  bool   `json:"embeddingOnly,omitempty"`  // For embedding-only models
+	DumpOnSuccess  bool   `json:"dumpOnSuccess,omitempty"`  // Keep request dumps even on success (for debugging)
 }
 
 // LLMPurposeConfig defines the model chain for a specific purpose
@@ -637,8 +638,8 @@ func Load() (*LoadResult, error) {
 					},
 				{
 					Percent:      90,
-					Prompt:       "[SYSTEM: pre-compaction memory flush]\nContext at 90%. Compaction imminent.\nWrite important context to memory/YYYY-MM-DD.md now (create memory/ if needed).\nAfter saving: briefly confirm what you saved (e.g. \"Saved session notes\").\nIf nothing worth saving: reply with only NO_REPLY.",
-					InjectAs:     "user",
+					Prompt:       "[Context pressure: 90%] Compaction imminent.\nBefore responding, save important session context to memory/YYYY-MM-DD.md (create memory/ if needed).\nSave: key decisions, user-shared context, current work state.\nSkip: secrets, trivial details, info already in files.\nAfter saving (or if nothing to save), respond to the user's message normally.",
+					InjectAs:     "system",
 					OncePerCycle: true,
 				},
 				},

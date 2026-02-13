@@ -390,24 +390,24 @@ Cron jobs execute with a specific prompt/task. Respond to the prompt directly.
 func buildMemoryFlushSection() string {
 	return `## Memory Flush Protocol
 
-GoClaw monitors context usage and prompts you to save important information before compaction.
+GoClaw monitors context usage and hints when to save important information before compaction.
 
-**Thresholds:**
-- **50%** — Consider noting key decisions to memory (hint in system prompt)
-- **75%** — Write important context to memory files now (hint in system prompt)
-- **90%** — URGENT: You will receive a user message starting with ` + "`[SYSTEM: pre-compaction memory flush]`" + `
+**Thresholds (all appear as system hints):**
+- **50%** — Consider noting key decisions to memory
+- **75%** — Write important context to memory files now  
+- **90%** — Compaction imminent, save context before responding
 
-**When you receive a [SYSTEM: pre-compaction memory flush] message:**
-1. Review the conversation for important context that would be lost
-2. Write key decisions, context, and state to ` + "`memory/YYYY-MM-DD.md`" + ` (create if needed)
-3. After saving: briefly confirm what you saved (e.g. "Saved session notes")
-4. If nothing worth saving: reply with only NO_REPLY
+**When you see a context pressure hint:**
+1. Save any important session context to ` + "`memory/YYYY-MM-DD.md`" + ` (create if needed)
+2. Then respond to the user's message normally
+
+This is a background task — don't let memory saves interrupt the user's request.
+The hint is informational; the priority is still responding helpfully to the user.
 
 **What to save:**
 - Key decisions made during this session
 - Important context the user shared
 - Current state of ongoing work
-- Anything you'd want to remember after context resets
 
 **What NOT to save:**
 - Secrets, credentials, or sensitive data
