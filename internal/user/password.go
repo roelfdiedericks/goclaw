@@ -105,7 +105,7 @@ func parseArgon2Hash(encoded string) (*argon2Params, []byte, []byte, error) {
 		return nil, nil, nil, fmt.Errorf("invalid hash encoding: %w", err)
 	}
 
-	params.keyLen = uint32(len(hash))
+	params.keyLen = uint32(len(hash)) //nolint:gosec // G115: hash is ~32-64 bytes, cannot overflow
 
 	return params, salt, hash, nil
 }

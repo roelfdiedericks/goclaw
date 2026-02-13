@@ -46,7 +46,7 @@ func NewHASSClient(cfg config.HomeAssistantConfig) (*HASSClient, error) {
 	// Configure TLS
 	transport := &http.Transport{}
 	if cfg.Insecure {
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // G402: HASS instances may use private SSL certs
 		L_debug("hass: TLS verification disabled (insecure mode)")
 	}
 

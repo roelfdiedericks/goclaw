@@ -173,7 +173,8 @@ func (p *OpenAIProvider) fetchModelMetadata(baseURL, apiKey string) {
 func (p *OpenAIProvider) fetchOpenAIModels(client *http.Client, baseURL, apiKey string) map[string]int {
 	modelsURL := strings.TrimSuffix(baseURL, "/") + "/models"
 
-	req, err := http.NewRequest("GET", modelsURL, nil)
+	// Use context.Background() - this is startup-time metadata fetch with client timeout
+	req, err := http.NewRequestWithContext(context.Background(), "GET", modelsURL, nil)
 	if err != nil {
 		L_debug("openai: failed to create models request", "provider", p.name, "error", err)
 		return nil
@@ -260,9 +261,10 @@ func (p *OpenAIProvider) fetchLMStudioModels(client *http.Client, baseURL string
 	// Need to strip /v1 suffix if present and add /api/v1/models
 	nativeURL := strings.TrimSuffix(baseURL, "/v1")
 	nativeURL = strings.TrimSuffix(nativeURL, "/")
-	nativeURL = nativeURL + "/api/v1/models"
+	nativeURL += "/api/v1/models"
 
-	req, err := http.NewRequest("GET", nativeURL, nil)
+	// Use context.Background() - this is startup-time metadata fetch with client timeout
+	req, err := http.NewRequestWithContext(context.Background(), "GET", nativeURL, nil)
 	if err != nil {
 		L_debug("openai: failed to create LM Studio native request", "provider", p.name, "error", err)
 		return nil
@@ -355,7 +357,10 @@ func (p *OpenAIProvider) Model() string {
 
 // WithModel returns a clone of the provider configured with a specific model
 func (p *OpenAIProvider) WithModel(model string) Provider {
-	clone := *p
+	clone := *p               //nolint:govet // copylocks: mu is reset immediately below
+	clone.mu = sync.RWMutex{} // Fresh mutex - copying a used mutex is undefined behavior
+	clone.available = false          // New model needs availability check
+	clone.embeddingDimensions = 0    // New model may have different embedding dimensions
 	clone.model = model
 	clone.metricPrefix = fmt.Sprintf("llm/%s/%s/%s", p.Type(), p.Name(), model)
 	return &clone
@@ -363,7 +368,9 @@ func (p *OpenAIProvider) WithModel(model string) Provider {
 
 // WithMaxTokens returns a clone of the provider with a different output limit
 func (p *OpenAIProvider) WithMaxTokens(max int) Provider {
-	clone := *p
+	clone := *p               //nolint:govet // copylocks: mu is reset immediately below
+	clone.mu = sync.RWMutex{} // Fresh mutex - copying a used mutex is undefined behavior
+	// Keep available, embeddingDimensions - same model, just different output limit
 	clone.maxTokens = max
 	return &clone
 }
@@ -372,7 +379,10 @@ func (p *OpenAIProvider) WithMaxTokens(max int) Provider {
 // Initialization is synchronous (blocking) because embeddings are typically
 // needed immediately when GetProvider("embeddings") is called.
 func (p *OpenAIProvider) WithModelForEmbedding(model string) *OpenAIProvider {
-	clone := *p
+	clone := *p               //nolint:govet // copylocks: mu is reset immediately below
+	clone.mu = sync.RWMutex{} // Fresh mutex - copying a used mutex is undefined behavior
+	clone.available = false       // New model needs availability check
+	clone.embeddingDimensions = 0 // New model may have different embedding dimensions
 	clone.model = model
 	clone.embeddingOnly = true
 	clone.metricPrefix = fmt.Sprintf("llm/%s/%s/%s", p.Type(), p.Name(), model)

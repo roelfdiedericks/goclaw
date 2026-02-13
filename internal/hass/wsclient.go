@@ -65,10 +65,11 @@ func (c *WSClient) query(ctx context.Context, cmdType string) (json.RawMessage, 
 		HandshakeTimeout: timeout,
 	}
 	if c.cfg.Insecure {
-		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // G402: HASS instances may use private SSL certs
 	}
 
 	// Connect
+	//nolint:bodyclose // WebSocket upgrade - response body handled by gorilla/websocket
 	conn, _, err := dialer.DialContext(ctx, wsURL, http.Header{})
 	if err != nil {
 		L_error("hass: ws connect failed", "error", err)

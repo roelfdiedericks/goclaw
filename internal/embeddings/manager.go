@@ -147,6 +147,9 @@ func getTableStatusPublic(db *sql.DB, tableName, primaryModel string) (*TableSta
 			s.NeedsRebuildCount += count
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rows: %w", err)
+	}
 
 	return s, nil
 }
@@ -459,6 +462,9 @@ func getTableStatus(db *sql.DB, tableName, primaryModel string) (*tableStatus, e
 			s.NeedsRebuildCount += count
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rows: %w", err)
+	}
 
 	return s, nil
 }
@@ -497,6 +503,10 @@ func rebuildTable(ctx context.Context, db *sql.DB, tableName, textColumn, primar
 				return processed, fmt.Errorf("scan chunk: %w", err)
 			}
 			chunks = append(chunks, c)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return processed, fmt.Errorf("iterate rows: %w", err)
 		}
 		rows.Close()
 

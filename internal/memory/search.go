@@ -150,6 +150,10 @@ func searchKeyword(db *sql.DB, query string, limit int) (map[string]float64, err
 		results[id] = score
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rows: %w", err)
+	}
+
 	L_trace("memory: keyword search results", "count", len(results))
 	return results, nil
 }
@@ -222,6 +226,9 @@ func searchVector(ctx context.Context, db *sql.DB, provider EmbeddingProvider, q
 			continue
 		}
 		entries = append(entries, embeddingEntry{id: id, embedding: embedding})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rows: %w", err)
 	}
 
 	if len(entries) == 0 {

@@ -395,7 +395,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 
 	// Download and optimize the image
 	L_debug("telegram: downloading photo", "fileID", photo.FileID, "width", photo.Width, "height", photo.Height)
-	imageData, err := media.DownloadAndOptimize(b.bot, photo)
+	imageData, err := media.DownloadAndOptimize(b.ctx, b.bot, photo)
 	if err != nil {
 		L_error("telegram: failed to download/optimize photo", "error", err)
 		return c.Send("Sorry, I couldn't process that image.")
