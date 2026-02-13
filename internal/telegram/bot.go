@@ -16,6 +16,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/session"
@@ -24,7 +25,8 @@ import (
 
 // ChatPreferences stores per-chat preferences
 type ChatPreferences struct {
-	ShowThinking bool // Show tool calls and thinking output
+	ShowThinking  bool   // Show tool calls and thinking output
+	ThinkingLevel string // Thinking intensity: off/minimal/low/medium/high/xhigh
 }
 
 // Bot represents the Telegram bot
@@ -45,17 +47,22 @@ type Bot struct {
 }
 
 // getChatPrefs returns preferences for a chat, creating if needed.
-// If user is provided and prefs don't exist, initializes ShowThinking from user preference.
+// If user is provided and prefs don't exist, initializes from user preferences.
 func (b *Bot) getChatPrefs(chatID int64, u *user.User) *ChatPreferences {
 	if prefs, ok := b.chatPrefs.Load(chatID); ok {
 		return prefs.(*ChatPreferences)
 	}
 	// Initialize from user preference if available
 	showThinking := false
+	thinkingLevel := ""
 	if u != nil {
 		showThinking = u.Thinking
+		thinkingLevel = u.ThinkingLevel
 	}
-	prefs := &ChatPreferences{ShowThinking: showThinking}
+	prefs := &ChatPreferences{
+		ShowThinking:  showThinking,
+		ThinkingLevel: thinkingLevel,
+	}
 	b.chatPrefs.Store(chatID, prefs)
 	return prefs
 }
@@ -130,35 +137,58 @@ func (b *Bot) setupHandlers() {
 		}
 
 		prefs := b.getChatPrefs(chatID, u)
-		
+
 		// Parse subcommand
 		arg := strings.ToLower(strings.TrimSpace(c.Message().Payload))
-		
+
 		var resultMsg string
 		switch arg {
 		case "on":
 			prefs.ShowThinking = true
-			resultMsg = "Thinking output enabled. You'll now see tool calls and working output."
+			if prefs.ThinkingLevel == "" || prefs.ThinkingLevel == "off" {
+				prefs.ThinkingLevel = llm.DefaultThinkingLevel.String()
+			}
+			resultMsg = fmt.Sprintf("Thinking output enabled (level: %s).", prefs.ThinkingLevel)
 		case "off":
 			prefs.ShowThinking = false
+			prefs.ThinkingLevel = "off"
 			resultMsg = "Thinking output disabled. You'll only see final responses."
 		case "toggle", "":
 			prefs.ShowThinking = !prefs.ShowThinking
 			if prefs.ShowThinking {
-				resultMsg = "Thinking output enabled."
+				if prefs.ThinkingLevel == "" || prefs.ThinkingLevel == "off" {
+					prefs.ThinkingLevel = llm.DefaultThinkingLevel.String()
+				}
+				resultMsg = fmt.Sprintf("Thinking output enabled (level: %s).", prefs.ThinkingLevel)
 			} else {
 				resultMsg = "Thinking output disabled."
 			}
 		case "status":
 			if prefs.ShowThinking {
-				resultMsg = "Thinking output is currently ON."
+				level := prefs.ThinkingLevel
+				if level == "" {
+					level = llm.DefaultThinkingLevel.String()
+				}
+				resultMsg = fmt.Sprintf("Thinking output: ON, level: %s", level)
 			} else {
-				resultMsg = "Thinking output is currently OFF."
+				resultMsg = "Thinking output: OFF"
 			}
 		default:
-			resultMsg = "Usage: /thinking [on|off|toggle|status]"
+			// Check if arg is a valid thinking level
+			if llm.IsValidThinkingLevel(arg) {
+				prefs.ThinkingLevel = arg
+				if arg == "off" {
+					prefs.ShowThinking = false
+					resultMsg = "Thinking disabled."
+				} else {
+					prefs.ShowThinking = true // Setting a level automatically enables thinking display
+					resultMsg = fmt.Sprintf("Thinking level set to %s (output enabled).", arg)
+				}
+			} else {
+				resultMsg = "Usage: /thinking [on|off|toggle|status|minimal|low|medium|high|xhigh]"
+			}
 		}
-		
+
 		return c.Send(resultMsg)
 	})
 
@@ -295,6 +325,9 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	// Show typing indicator
 	_ = c.Notify(tele.Typing)
 
+	// Get chat preferences for thinking level
+	prefs := b.getChatPrefs(chatID, u)
+
 	// Create agent request with media callback
 	req := gateway.AgentRequest{
 		User:           u,
@@ -302,7 +335,8 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		ChatID:         fmt.Sprintf("%d", chatID),
 		IsGroup:        isGroup,
 		UserMsg:        c.Text(),
-		EnableThinking: u.Thinking, // Extended thinking based on user preference
+		EnableThinking: prefs.ShowThinking,  // Extended thinking based on chat preference
+		ThinkingLevel:  prefs.ThinkingLevel, // Thinking intensity level
 		OnMediaToSend: func(path, caption string) error {
 			return b.SendPhoto(chatID, path, caption)
 		},
@@ -386,6 +420,9 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		caption = "<media:image>" // Placeholder if no caption
 	}
 
+	// Get chat preferences for thinking level
+	prefs := b.getChatPrefs(chatID, u)
+
 	// Create agent request with image and media callback
 	req := gateway.AgentRequest{
 		User:           u,
@@ -394,7 +431,8 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		IsGroup:        isGroup,
 		UserMsg:        caption,
 		Images:         []session.ImageAttachment{imageAttachment},
-		EnableThinking: u.Thinking, // Extended thinking based on user preference
+		EnableThinking: prefs.ShowThinking,  // Extended thinking based on chat preference
+		ThinkingLevel:  prefs.ThinkingLevel, // Thinking intensity level
 		OnMediaToSend: func(path, caption string) error {
 			return b.SendPhoto(chatID, path, caption)
 		},

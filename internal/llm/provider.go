@@ -68,9 +68,18 @@ type StreamOptions struct {
 	// EnableThinking enables extended thinking for models that support it.
 	// When true, the provider will try to enable thinking mode.
 	// If the model doesn't support it, the request is retried without thinking.
+	// Deprecated: Use ThinkingLevel instead. This field is kept for backward compatibility
+	// and will be true if ThinkingLevel is set to anything other than "off".
 	EnableThinking bool
 
-	// ThinkingBudget is the token budget for thinking (default: 10000)
+	// ThinkingLevel is the resolved thinking intensity level.
+	// Values: "off", "minimal", "low", "medium", "high", "xhigh"
+	// Default: "" (treated as "off" if EnableThinking is also false)
+	ThinkingLevel string
+
+	// ThinkingBudget is the token budget for thinking.
+	// For Anthropic, this maps directly to budget_tokens.
+	// Computed from ThinkingLevel if not explicitly set.
 	ThinkingBudget int
 
 	// OnThinkingDelta is called for each thinking content delta during streaming.

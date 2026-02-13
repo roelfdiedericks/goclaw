@@ -414,6 +414,14 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 
 	// Start dump for debugging (captures request context)
 	dumpCtx := StartDump(c.name, c.model, c.url, messages, nil, systemPrompt, 1)
+	dumpCtx.SetTokenInfo(TokenInfo{
+		ContextWindow:  contextTokens,
+		EstimatedInput: estimatedInput,
+		ConfiguredMax:  c.maxTokens,
+		CappedMax:      maxOutput,
+		SafetyMargin:   tokens.SafetyMargin,
+		Buffer:         100,
+	})
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
@@ -454,19 +462,27 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 		body, _ := io.ReadAll(resp.Body)
 		errMsg := fmt.Sprintf("ollama returned status %d: %s", resp.StatusCode, string(body))
 		L_error("ollama: request failed", "status", resp.StatusCode, "body", string(body))
-		FinishDumpError(dumpCtx, fmt.Errorf(errMsg), c.transport)
+		err := fmt.Errorf(errMsg)
+		FinishDumpError(dumpCtx, err, c.transport)
+		// Check if response body contains a known error pattern
+		err = CheckResponseBody(err, body)
 		// Record metrics for failed request
 		if c.metricPrefix != "" {
 			MetricDuration(c.metricPrefix, "request", time.Since(startTime))
 			MetricFailWithReason(c.metricPrefix, "request_status", fmt.Sprintf("http_%d", resp.StatusCode))
 		}
-		return "", fmt.Errorf(errMsg)
+		return "", err
 	}
 
 	var result ollamaChatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		L_error("ollama: failed to decode response", "error", err)
 		FinishDumpError(dumpCtx, err, c.transport)
+		// Check if response body contains real error (e.g., context overflow)
+		if c.transport != nil {
+			_, respBody, _, _ := c.transport.GetLastCapture()
+			err = CheckResponseBody(err, respBody)
+		}
 		return "", fmt.Errorf("decode response: %w", err)
 	}
 

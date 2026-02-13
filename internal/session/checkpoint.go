@@ -144,26 +144,21 @@ func (g *CheckpointGenerator) Generate(ctx context.Context, sess *Session, sessi
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	client := g.getClient()
-	if client == nil || !client.IsAvailable() {
-		return fmt.Errorf("no LLM client available for checkpoint generation")
+	reg := llm.GetRegistry()
+	if reg == nil {
+		return fmt.Errorf("no LLM registry available for checkpoint generation")
 	}
 
 	messages := sess.GetMessages()
-	usedModel := client.Model()
 
 	// Get configured maxInputTokens from registry (0 = use model context)
-	maxInputTokens := 0
-	if reg := llm.GetRegistry(); reg != nil {
-		maxInputTokens = reg.GetMaxInputTokens("summarization")
-	}
+	maxInputTokens := reg.GetMaxInputTokens("summarization")
 
 	L_info("generating checkpoint",
-		"model", usedModel,
 		"tokens", sess.GetTotalTokens(),
 		"messages", len(sess.Messages))
 
-	checkpoint, err := GenerateCheckpointWithClient(ctx, client, messages, maxInputTokens)
+	checkpoint, usedModel, err := GenerateCheckpointWithRegistry(ctx, reg, messages, maxInputTokens)
 	if err != nil {
 		return fmt.Errorf("failed to generate checkpoint: %w", err)
 	}

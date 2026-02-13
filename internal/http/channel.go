@@ -50,7 +50,8 @@ type SSESession struct {
 	connMu     sync.Mutex
 
 	// Preferences
-	ShowThinking bool // Show tool calls and thinking output (default: false)
+	ShowThinking  bool   // Show tool calls and thinking output (default: false)
+	ThinkingLevel string // Thinking intensity: off/minimal/low/medium/high/xhigh
 }
 
 // SSEConnection represents an active SSE connection
@@ -272,15 +273,16 @@ func (c *HTTPChannel) getOrCreateSession(sessionID string, u *user.User) *SSESes
 	}
 
 	sess := &SSESession{
-		SessionID:    sessionID,
-		UserID:       u.ID,
-		User:         u,
-		eventBuffer:  make([]BufferedEvent, 0, maxEventBuffer),
-		nextEventID:  1,
-		ShowThinking: u.Thinking, // Initialize from user preference
+		SessionID:     sessionID,
+		UserID:        u.ID,
+		User:          u,
+		eventBuffer:   make([]BufferedEvent, 0, maxEventBuffer),
+		nextEventID:   1,
+		ShowThinking:  u.Thinking,      // Initialize from user preference
+		ThinkingLevel: u.ThinkingLevel, // Initialize from user preference
 	}
 	c.sessions[sessionID] = sess
-	L_debug("http: session created", "session", sessionID, "user", u.ID, "showThinking", u.Thinking)
+	L_debug("http: session created", "session", sessionID, "user", u.ID, "showThinking", u.Thinking, "thinkingLevel", u.ThinkingLevel)
 	return sess
 }
 
@@ -450,13 +452,14 @@ func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *
 		return fmt.Errorf("no session for %s", sessionID)
 	}
 
-	// Create agent request
+	// Create agent request - use session preferences for thinking
 	req := gateway.AgentRequest{
 		User:           u,
 		Source:         "http",
 		UserMsg:        message,
 		Images:         images,
-		EnableThinking: u.Thinking, // Extended thinking based on user preference
+		EnableThinking: sess.ShowThinking,  // Extended thinking based on session preference
+		ThinkingLevel:  sess.ThinkingLevel, // Thinking intensity level
 	}
 
 	// Create events channel

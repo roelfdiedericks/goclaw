@@ -57,6 +57,12 @@ func registerBuiltins(m *Manager) {
 		Description: "Home Assistant status and debug",
 		Handler:     handleHass,
 	})
+
+	m.Register(&Command{
+		Name:        "/llm",
+		Description: "LLM provider status and cooldown management",
+		Handler:     handleLLM,
+	})
 }
 
 // handleStatus returns session status and compaction health
@@ -605,5 +611,88 @@ func hassSubs(args *CommandArgs) *CommandResult {
 	return &CommandResult{
 		Text:     text.String(),
 		Markdown: md.String(),
+	}
+}
+
+// handleLLM handles the /llm command and subcommands
+func handleLLM(ctx context.Context, args *CommandArgs) *CommandResult {
+	parts := strings.Fields(args.RawArgs)
+
+	if len(parts) == 0 || parts[0] == "status" {
+		return llmStatus(args)
+	}
+
+	switch parts[0] {
+	case "reset":
+		return llmReset(args)
+	default:
+		return &CommandResult{
+			Text:     fmt.Sprintf("Unknown subcommand: %s\nUsage: /llm [status|reset]", parts[0]),
+			Markdown: fmt.Sprintf("Unknown subcommand: `%s`\nUsage: `/llm [status|reset]`", parts[0]),
+		}
+	}
+}
+
+// llmStatus shows LLM provider status
+func llmStatus(args *CommandArgs) *CommandResult {
+	status := args.Provider.GetLLMProviderStatus()
+	if status == nil {
+		return &CommandResult{
+			Text:     "LLM registry not available",
+			Markdown: "LLM registry not available",
+		}
+	}
+
+	var text strings.Builder
+	var md strings.Builder
+
+	text.WriteString("LLM Provider Status\n\n")
+	md.WriteString("**LLM Provider Status**\n\n")
+
+	// Provider status
+	for _, p := range status.Providers {
+		if p.InCooldown {
+			remaining := time.Until(p.Until).Round(time.Second)
+			text.WriteString(fmt.Sprintf("  ❌ %s - cooldown until %s (%s, %d failures)\n",
+				p.Alias, p.Until.Format("15:04:05"), p.Reason, p.ErrorCount))
+			md.WriteString(fmt.Sprintf("❌ **%s** - cooldown until %s (%s, %d failures, %s remaining)\n",
+				p.Alias, p.Until.Format("15:04:05"), p.Reason, p.ErrorCount, remaining))
+		} else {
+			text.WriteString(fmt.Sprintf("  ✓ %s - available\n", p.Alias))
+			md.WriteString(fmt.Sprintf("✓ **%s** - available\n", p.Alias))
+		}
+	}
+
+	// Model chains
+	if len(status.AgentChain) > 0 {
+		text.WriteString(fmt.Sprintf("\nAgent chain: %s\n", strings.Join(status.AgentChain, " → ")))
+		md.WriteString(fmt.Sprintf("\n**Agent chain:** %s\n", strings.Join(status.AgentChain, " → ")))
+	}
+
+	if len(status.SummarizationChain) > 0 {
+		text.WriteString(fmt.Sprintf("Summarization chain: %s\n", strings.Join(status.SummarizationChain, " → ")))
+		md.WriteString(fmt.Sprintf("**Summarization chain:** %s\n", strings.Join(status.SummarizationChain, " → ")))
+	}
+
+	return &CommandResult{
+		Text:     text.String(),
+		Markdown: md.String(),
+	}
+}
+
+// llmReset clears all LLM provider cooldowns
+func llmReset(args *CommandArgs) *CommandResult {
+	count := args.Provider.ResetLLMCooldowns()
+
+	if count == 0 {
+		return &CommandResult{
+			Text:     "No cooldowns to clear.",
+			Markdown: "No cooldowns to clear.",
+		}
+	}
+
+	return &CommandResult{
+		Text:     fmt.Sprintf("Cleared cooldowns for %d providers.", count),
+		Markdown: fmt.Sprintf("Cleared cooldowns for **%d** providers.", count),
 	}
 }

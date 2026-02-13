@@ -22,6 +22,10 @@ type SessionProvider interface {
 	GetHassInfo() *HassInfo
 	SetHassDebug(enabled bool)
 	ListHassSubscriptions() []HassSubscriptionInfo
+
+	// LLM provider commands
+	GetLLMProviderStatus() *LLMProviderStatusResult
+	ResetLLMCooldowns() int
 }
 
 // SkillsListResult contains skill listing for /skills command
@@ -85,4 +89,20 @@ type HassSubscriptionInfo struct {
 	Interval int
 	Debounce int
 	Enabled  bool
+}
+
+// LLMProviderStatusResult contains status of all LLM providers
+type LLMProviderStatusResult struct {
+	Providers        []LLMProviderInfo
+	AgentChain       []string
+	SummarizationChain []string
+}
+
+// LLMProviderInfo contains info about a single LLM provider
+type LLMProviderInfo struct {
+	Alias      string
+	InCooldown bool
+	Until      time.Time
+	Reason     string
+	ErrorCount int
 }
