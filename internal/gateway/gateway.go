@@ -14,6 +14,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	gcontext "github.com/roelfdiedericks/goclaw/internal/context"
+	"github.com/roelfdiedericks/goclaw/internal/embeddings"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/hass"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
@@ -701,7 +702,84 @@ func (g *Gateway) Start(ctx context.Context) {
 		g.compactor.Start(ctx)
 	}
 
+	// Check embeddings model mismatch and auto-rebuild if configured
+	g.checkEmbeddingsMismatch(ctx)
+
 	// NOTE: Cron is NOT started here - call StartCron() after channels are registered
+}
+
+// checkEmbeddingsMismatch checks if any chunks use non-primary embedding models
+// and optionally triggers auto-rebuild based on config.
+func (g *Gateway) checkEmbeddingsMismatch(ctx context.Context) {
+	cfg := g.config.LLM.Embeddings
+	if len(cfg.Models) == 0 {
+		return // Embeddings not configured
+	}
+
+	sessionsDB := g.SessionDB()
+	if sessionsDB == nil {
+		return // No sessions DB
+	}
+
+	var memoryDB *sql.DB
+	if g.memoryManager != nil {
+		memoryDB = g.memoryManager.DB()
+	}
+
+	// Get status
+	status, err := embeddings.GetStatus(sessionsDB, memoryDB, cfg)
+	if err != nil {
+		L_warn("embeddings: failed to get status", "error", err)
+		return
+	}
+
+	// Check if any chunks need rebuild
+	needsRebuild := status.Transcript.NeedsRebuildCount + status.Memory.NeedsRebuildCount
+	if needsRebuild == 0 {
+		L_info("embeddings: all chunks using primary model", "model", status.PrimaryModel)
+		return
+	}
+
+	// Log mismatch details
+	L_info("embeddings: model mismatch detected",
+		"primary", status.PrimaryModel,
+		"transcriptNeedsRebuild", status.Transcript.NeedsRebuildCount,
+		"memoryNeedsRebuild", status.Memory.NeedsRebuildCount,
+		"total", needsRebuild)
+
+	// Check auto-rebuild setting
+	if !cfg.GetAutoRebuild() {
+		L_warn("embeddings: auto-rebuild disabled, run '/embeddings rebuild' or 'goclaw embeddings rebuild' for consistency")
+		return
+	}
+
+	// Start background rebuild
+	L_info("embeddings: starting auto-rebuild", "autoRebuild", true)
+	go g.runEmbeddingsRebuild(ctx, sessionsDB, memoryDB)
+}
+
+// runEmbeddingsRebuild runs the embeddings rebuild in background
+func (g *Gateway) runEmbeddingsRebuild(ctx context.Context, sessionsDB, memoryDB *sql.DB) {
+	cfg := g.config.LLM.Embeddings
+	batchSize := 50 // Default batch size
+
+	// Progress callback - log only (auto-rebuild has no user to notify)
+	onProgress := func(processed, total int, err error, done bool) {
+		if !done {
+			return
+		}
+
+		if err != nil {
+			L_error("embeddings: auto-rebuild failed", "error", err, "processed", processed, "total", total)
+		} else {
+			L_info("embeddings: auto-rebuild completed", "processed", processed)
+		}
+	}
+
+	err := embeddings.Rebuild(ctx, sessionsDB, memoryDB, cfg, g.registry, batchSize, false, onProgress)
+	if err != nil {
+		L_error("embeddings: rebuild failed", "error", err)
+	}
 }
 
 // StartCron initializes and starts the cron scheduler.
@@ -1918,6 +1996,84 @@ func (g *Gateway) ResetLLMCooldowns() int {
 		return 0
 	}
 	return g.registry.ClearAllCooldowns()
+}
+
+// GetEmbeddingsStatus returns embeddings status for /embeddings command
+func (g *Gateway) GetEmbeddingsStatus() *commands.EmbeddingsStatusResult {
+	cfg := g.config.LLM.Embeddings
+	if len(cfg.Models) == 0 {
+		return &commands.EmbeddingsStatusResult{Configured: false}
+	}
+
+	sessionsDB := g.SessionDB()
+	if sessionsDB == nil {
+		return &commands.EmbeddingsStatusResult{Configured: false}
+	}
+
+	var memoryDB *sql.DB
+	if g.memoryManager != nil {
+		memoryDB = g.memoryManager.DB()
+	}
+
+	status, err := embeddings.GetStatus(sessionsDB, memoryDB, cfg)
+	if err != nil {
+		L_warn("embeddings: failed to get status", "error", err)
+		return &commands.EmbeddingsStatusResult{Configured: true, PrimaryModel: cfg.Models[0]}
+	}
+
+	result := &commands.EmbeddingsStatusResult{
+		Configured:               true,
+		PrimaryModel:             status.PrimaryModel,
+		AutoRebuild:              status.AutoRebuild,
+		TranscriptTotal:          status.Transcript.TotalChunks,
+		TranscriptPrimary:        status.Transcript.PrimaryModelCount,
+		TranscriptNeedsRebuild:   status.Transcript.NeedsRebuildCount,
+		MemoryTotal:              status.Memory.TotalChunks,
+		MemoryPrimary:            status.Memory.PrimaryModelCount,
+		MemoryNeedsRebuild:       status.Memory.NeedsRebuildCount,
+	}
+
+	// Combine models from both tables
+	modelCounts := make(map[string]int)
+	for _, m := range status.Transcript.Models {
+		modelCounts[m.Model] += m.Count
+	}
+	for _, m := range status.Memory.Models {
+		modelCounts[m.Model] += m.Count
+	}
+
+	for model, count := range modelCounts {
+		result.Models = append(result.Models, commands.EmbeddingsModelInfo{
+			Model:     model,
+			Count:     count,
+			IsPrimary: model == status.PrimaryModel,
+		})
+	}
+
+	return result
+}
+
+// TriggerEmbeddingsRebuild starts a background embeddings rebuild
+func (g *Gateway) TriggerEmbeddingsRebuild() error {
+	cfg := g.config.LLM.Embeddings
+	if len(cfg.Models) == 0 {
+		return fmt.Errorf("embeddings not configured")
+	}
+
+	sessionsDB := g.SessionDB()
+	if sessionsDB == nil {
+		return fmt.Errorf("sessions DB not available")
+	}
+
+	var memoryDB *sql.DB
+	if g.memoryManager != nil {
+		memoryDB = g.memoryManager.DB()
+	}
+
+	// Run in background
+	go g.runEmbeddingsRebuild(context.Background(), sessionsDB, memoryDB)
+
+	return nil
 }
 
 // buildMemoryFlushConfig builds the memory flush config from gateway config

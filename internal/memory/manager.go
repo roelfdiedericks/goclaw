@@ -94,6 +94,11 @@ func (m *Manager) Provider() EmbeddingProvider {
 	return m.provider
 }
 
+// DB returns the underlying SQLite database for direct queries.
+func (m *Manager) DB() *sql.DB {
+	return m.db
+}
+
 // refreshProvider checks if a better provider is available and updates if so.
 // Now calls llm.GetRegistry() directly (cycle broken by moving ToolDefinition to types).
 func (m *Manager) refreshProvider() {

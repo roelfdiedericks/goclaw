@@ -705,6 +705,18 @@ func (p *OpenAIProvider) StreamMessage(
 			"estimatedInput", estimatedInput)
 	}
 
+	// Check if we have a cached output limit for this model
+	if cachedLimit, ok := modelMaxOutputTokens.Load(p.model); ok {
+		limit := cachedLimit.(int)
+		if maxTokens > limit {
+			L_debug("openai: capping max_tokens to cached model limit",
+				"model", p.model,
+				"requested", maxTokens,
+				"limit", limit)
+			maxTokens = limit
+		}
+	}
+
 	// Build request
 	req := openai.ChatCompletionRequest{
 		Model:     p.model,
@@ -774,9 +786,27 @@ func (p *OpenAIProvider) StreamMessage(
 		Buffer:         100,
 	})
 
+	// Create per-request capture for concurrency safety
+	reqCapture := NewRequestCapture()
+	dumpCtx.SetRequestCapture(reqCapture)
+	captureCtx := WithRequestCapture(ctx, reqCapture)
+
 	// Stream the response
-	stream, err := p.client.CreateChatCompletionStream(ctx, req)
+	stream, err := p.client.CreateChatCompletionStream(captureCtx, req)
 	if err != nil {
+		errStr := err.Error()
+
+		// Check if this is a max_tokens limit error - parse, cache, and retry
+		if isMaxTokens, parsedLimit := ParseMaxTokensLimit(errStr); isMaxTokens && parsedLimit > 0 {
+			L_warn("openai: max_tokens exceeds model limit, caching and retrying",
+				"model", p.model,
+				"requestedTokens", maxTokens,
+				"modelLimit", parsedLimit)
+			modelMaxOutputTokens.Store(p.model, parsedLimit)
+			// Retry - the cached limit will be applied on retry
+			return p.StreamMessage(ctx, messages, toolDefs, systemPrompt, onDelta, opts)
+		}
+
 		// Log the full request details on error for debugging
 		L_error("stream creation failed - request details",
 			"provider", p.name,
@@ -800,6 +830,15 @@ func (p *OpenAIProvider) StreamMessage(
 		var apiErr *openai.APIError
 		var reqErr *openai.RequestError
 		if errors.As(err, &apiErr) {
+			// Also check APIError message for max_tokens
+			if isMaxTokens, parsedLimit := ParseMaxTokensLimit(apiErr.Message); isMaxTokens && parsedLimit > 0 {
+				L_warn("openai: max_tokens exceeds model limit (from APIError), caching and retrying",
+					"model", p.model,
+					"requestedTokens", maxTokens,
+					"modelLimit", parsedLimit)
+				modelMaxOutputTokens.Store(p.model, parsedLimit)
+				return p.StreamMessage(ctx, messages, toolDefs, systemPrompt, onDelta, opts)
+			}
 			L_error("stream creation failed (APIError)",
 				"provider", p.name,
 				"model", p.model,
@@ -825,8 +864,8 @@ func (p *OpenAIProvider) StreamMessage(
 		FinishDumpError(dumpCtx, err, p.transport)
 
 		// Check if the captured response contains the real error
-		if p.transport != nil {
-			_, respBody, _, _ := p.transport.GetLastCapture()
+		if reqCapture != nil {
+			_, respBody, _, _ := reqCapture.GetData()
 			err = CheckResponseBody(err, respBody)
 		}
 
@@ -864,10 +903,34 @@ func (p *OpenAIProvider) StreamMessage(
 				)
 				break
 			}
+
+			// Check if this is a max_tokens limit error - parse, cache, and retry
+			errStr := err.Error()
+			if isMaxTokens, parsedLimit := ParseMaxTokensLimit(errStr); isMaxTokens && parsedLimit > 0 {
+				L_warn("openai: max_tokens exceeds model limit (stream), caching and retrying",
+					"model", p.model,
+					"requestedTokens", maxTokens,
+					"modelLimit", parsedLimit)
+				modelMaxOutputTokens.Store(p.model, parsedLimit)
+				stream.Close()
+				// Retry - the cached limit will be applied on retry
+				return p.StreamMessage(ctx, messages, toolDefs, systemPrompt, onDelta, opts)
+			}
+
 			// Try to extract detailed error information (same as stream creation errors)
 			var apiErr *openai.APIError
 			var reqErr *openai.RequestError
 			if errors.As(err, &apiErr) {
+				// Also check APIError message for max_tokens
+				if isMaxTokens, parsedLimit := ParseMaxTokensLimit(apiErr.Message); isMaxTokens && parsedLimit > 0 {
+					L_warn("openai: max_tokens exceeds model limit (stream APIError), caching and retrying",
+						"model", p.model,
+						"requestedTokens", maxTokens,
+						"modelLimit", parsedLimit)
+					modelMaxOutputTokens.Store(p.model, parsedLimit)
+					stream.Close()
+					return p.StreamMessage(ctx, messages, toolDefs, systemPrompt, onDelta, opts)
+				}
 				L_error("stream recv failed (APIError)",
 					"provider", p.name,
 					"model", p.model,
@@ -899,8 +962,8 @@ func (p *OpenAIProvider) StreamMessage(
 
 			// Check if the captured response contains the real error (e.g., LM Studio SSE error events)
 			// The go-openai library may fail to parse SSE error events, masking the real error
-			if p.transport != nil {
-				_, respBody, _, _ := p.transport.GetLastCapture()
+			if reqCapture != nil {
+				_, respBody, _, _ := reqCapture.GetData()
 				err = CheckResponseBody(err, respBody)
 			}
 

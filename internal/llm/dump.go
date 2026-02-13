@@ -2,6 +2,7 @@ package llm
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -21,6 +23,50 @@ const (
 	dumpDirName   = "llm_dumps"
 	maxDumpFiles  = 20
 )
+
+// requestCaptureKey is the context key for per-request capture data
+type requestCaptureKey struct{}
+
+// RequestCapture holds HTTP capture data for a single request.
+// This provides isolation so concurrent requests don't overwrite each other.
+type RequestCapture struct {
+	RequestBody   []byte
+	ResponseBody  []byte
+	Status        int
+	URL           string
+	StreamCapture *StreamingCapture
+	mu            sync.RWMutex
+}
+
+// GetData returns the captured data thread-safely
+func (rc *RequestCapture) GetData() (reqBody, respBody []byte, status int, url string) {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+
+	// For streaming responses, get captured data from the stream
+	if rc.StreamCapture != nil {
+		return rc.RequestBody, rc.StreamCapture.GetCaptured(), rc.Status, rc.URL
+	}
+	return rc.RequestBody, rc.ResponseBody, rc.Status, rc.URL
+}
+
+// NewRequestCapture creates a new per-request capture context
+func NewRequestCapture() *RequestCapture {
+	return &RequestCapture{}
+}
+
+// WithRequestCapture adds a RequestCapture to the context
+func WithRequestCapture(ctx context.Context, capture *RequestCapture) context.Context {
+	return context.WithValue(ctx, requestCaptureKey{}, capture)
+}
+
+// GetRequestCapture retrieves the RequestCapture from context
+func GetRequestCapture(ctx context.Context) *RequestCapture {
+	if v := ctx.Value(requestCaptureKey{}); v != nil {
+		return v.(*RequestCapture)
+	}
+	return nil
+}
 
 // StreamingCapture wraps a response body to capture data while streaming.
 // Instead of buffering the entire response (which blocks streaming),
@@ -62,6 +108,10 @@ func (s *StreamingCapture) GetCaptured() []byte {
 // CapturingTransport is an http.RoundTripper that captures request/response bodies
 // for debugging purposes. Thread-safe.
 // For streaming responses (SSE), it uses a passthrough reader to avoid blocking.
+//
+// CONCURRENCY: If a RequestCapture is present in the request context, capture data
+// is written there (per-request isolation). Otherwise, falls back to shared buffer
+// (legacy behavior, not safe for concurrent requests).
 type CapturingTransport struct {
 	Base http.RoundTripper
 
@@ -75,12 +125,30 @@ type CapturingTransport struct {
 
 	// Reasoning injection for OpenRouter/Kimi
 	reasoningEffort string // If set, inject {"reasoning":{"effort":"..."}} into request body
+
+	// Request counter for debugging concurrent request issues
+	activeRequests int64
 }
 
 // RoundTrip implements http.RoundTripper, capturing request and response bodies.
 // For streaming responses (SSE), it uses a passthrough reader to avoid blocking.
 // If reasoningEffort is set, injects {"reasoning":{"effort":"..."}} into JSON request bodies.
+//
+// CONCURRENCY: If a RequestCapture is present in the request context, capture data
+// is written there for per-request isolation. Otherwise falls back to shared buffer.
 func (t *CapturingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Track concurrent requests for debugging
+	active := atomic.AddInt64(&t.activeRequests, 1)
+	defer atomic.AddInt64(&t.activeRequests, -1)
+
+	// Check for per-request capture (provides isolation for concurrent requests)
+	reqCapture := GetRequestCapture(req.Context())
+	if active > 1 && reqCapture == nil {
+		L_warn("transport: concurrent requests without per-request capture - data may be corrupted",
+			"activeRequests", active,
+			"url", req.URL.String())
+	}
+
 	// Capture request body
 	var reqBody []byte
 	if req.Body != nil {
@@ -101,11 +169,20 @@ func (t *CapturingTransport) RoundTrip(req *http.Request) (*http.Response, error
 		req.ContentLength = int64(len(reqBody))
 	}
 
+	// Store request data in per-request capture if available
+	if reqCapture != nil {
+		reqCapture.mu.Lock()
+		reqCapture.RequestBody = reqBody
+		reqCapture.URL = req.URL.String()
+		reqCapture.mu.Unlock()
+	}
+
+	// Also store in shared buffer (legacy fallback)
 	t.mu.Lock()
 	t.lastRequest = reqBody
 	t.lastURL = req.URL.String()
-	t.lastResponse = nil      // Clear previous response
-	t.streamCapture = nil     // Clear previous stream capture
+	t.lastResponse = nil
+	t.streamCapture = nil
 	t.mu.Unlock()
 
 	// Execute request
@@ -124,20 +201,42 @@ func (t *CapturingTransport) RoundTrip(req *http.Request) (*http.Response, error
 		strings.Contains(contentType, "application/x-ndjson") ||
 		strings.Contains(contentType, "application/stream+json")
 
+	// Store response data
+	if reqCapture != nil {
+		reqCapture.mu.Lock()
+		reqCapture.Status = resp.StatusCode
+
+		if isStreaming {
+			capture := &StreamingCapture{
+				base:    resp.Body,
+				onChunk: t.onChunk,
+			}
+			reqCapture.StreamCapture = capture
+			resp.Body = capture
+		} else {
+			respBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			reqCapture.ResponseBody = respBody
+		}
+		reqCapture.mu.Unlock()
+	}
+
+	// Also update shared buffer (legacy fallback)
 	t.mu.Lock()
 	t.lastStatus = resp.StatusCode
 
-	if isStreaming {
-		// Use passthrough capture for streaming - data flows through immediately
+	if isStreaming && reqCapture == nil {
+		// Only use shared streaming capture if no per-request capture
 		capture := &StreamingCapture{
 			base:    resp.Body,
 			onChunk: t.onChunk,
 		}
 		t.streamCapture = capture
 		resp.Body = capture
-		L_trace("transport: using streaming capture", "contentType", contentType)
-	} else {
-		// Non-streaming: buffer entire response (existing behavior)
+		L_trace("transport: using streaming capture (shared)", "contentType", contentType)
+	} else if !isStreaming && reqCapture == nil {
+		// Non-streaming without per-request capture
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
@@ -258,12 +357,13 @@ type TokenInfo struct {
 // DumpContext holds the context for a dump operation.
 // Content is buffered in memory and only written to disk on error.
 type DumpContext struct {
-	Content      strings.Builder // Buffered dump content
-	Provider     string
-	Model        string
-	CallerFile   string
-	CallerLine   int
-	StartTime    time.Time
+	Content        strings.Builder  // Buffered dump content
+	Provider       string
+	Model          string
+	CallerFile     string
+	CallerLine     int
+	StartTime      time.Time
+	RequestCapture *RequestCapture  // Per-request HTTP capture (provides isolation)
 }
 
 // SetTokenInfo appends token estimation details to the dump buffer.
@@ -384,8 +484,19 @@ func StartDump(provider, model, baseURL string, messages, tools interface{}, sys
 	return ctx
 }
 
+// SetRequestCapture associates a per-request capture with this dump context.
+// This enables isolated capture for concurrent requests.
+// Call this after StartDump() and before making the HTTP request.
+func (ctx *DumpContext) SetRequestCapture(rc *RequestCapture) {
+	if ctx == nil {
+		return
+	}
+	ctx.RequestCapture = rc
+}
+
 // FinishDumpError writes the buffered content plus error information to disk.
 // This is the only time a dump file is created - only on error.
+// Uses per-request capture if available (ctx.RequestCapture), otherwise falls back to transport.
 func FinishDumpError(ctx *DumpContext, err error, transport *CapturingTransport) {
 	if ctx == nil {
 		return
@@ -398,13 +509,25 @@ func FinishDumpError(ctx *DumpContext, err error, transport *CapturingTransport)
 	ctx.Content.WriteString(fmt.Sprintf("Error Type: %T\n", err))
 	ctx.Content.WriteString(fmt.Sprintf("Error Message: %v\n", err))
 
-	// Add captured HTTP data if available
-	if transport != nil {
-		reqBody, respBody, status, url := transport.GetLastCapture()
-		ctx.Content.WriteString("\n=== HTTP CAPTURE ===\n")
+	// Add captured HTTP data - prefer per-request capture for isolation
+	var reqBody, respBody []byte
+	var status int
+	var url string
+
+	if ctx.RequestCapture != nil {
+		// Use per-request capture (concurrency-safe)
+		reqBody, respBody, status, url = ctx.RequestCapture.GetData()
+		ctx.Content.WriteString("\n=== HTTP CAPTURE (per-request) ===\n")
+	} else if transport != nil {
+		// Fall back to shared transport capture (may be inaccurate with concurrent requests)
+		reqBody, respBody, status, url = transport.GetLastCapture()
+		ctx.Content.WriteString("\n=== HTTP CAPTURE (shared - may be inaccurate) ===\n")
+	}
+
+	if url != "" || status != 0 || len(reqBody) > 0 || len(respBody) > 0 {
 		ctx.Content.WriteString(fmt.Sprintf("URL: %s\n", url))
 		ctx.Content.WriteString(fmt.Sprintf("Status: %d\n", status))
-		
+
 		if len(reqBody) > 0 {
 			ctx.Content.WriteString("\n--- Request Body ---\n")
 			if len(reqBody) > 50000 {
@@ -415,7 +538,7 @@ func FinishDumpError(ctx *DumpContext, err error, transport *CapturingTransport)
 				ctx.Content.WriteString("\n")
 			}
 		}
-		
+
 		if len(respBody) > 0 {
 			ctx.Content.WriteString("\n--- Response Body ---\n")
 			if len(respBody) > 50000 {
