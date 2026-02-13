@@ -15,6 +15,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	. "github.com/roelfdiedericks/goclaw/internal/metrics"
+	"github.com/roelfdiedericks/goclaw/internal/tokens"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
@@ -270,8 +271,22 @@ func (c *AnthropicProvider) StreamMessage(
 	// Convert tool definitions
 	anthropicTools := convertTools(toolDefs)
 
-	// Determine max tokens - may need adjustment for thinking
-	maxTokens := c.maxTokens
+	// Estimate input tokens and cap max_tokens to fit within context window
+	estimator := tokens.Get()
+	estimatedInput := 0
+	for _, m := range messages {
+		estimatedInput += estimator.CountWithOverhead(m.Content, 4)
+	}
+	estimatedInput += estimator.Count(systemPrompt)
+	maxTokens := tokens.CapMaxTokens(c.maxTokens, contextWindow, estimatedInput, 100)
+	if maxTokens != c.maxTokens {
+		L_debug("anthropic: capped max_tokens to fit context",
+			"provider", c.name,
+			"original", c.maxTokens,
+			"capped", maxTokens,
+			"contextWindow", contextWindow,
+			"estimatedInput", estimatedInput)
+	}
 	
 	// Add extended thinking if enabled
 	// max_tokens must be greater than thinking.budget_tokens
