@@ -14,6 +14,7 @@ import (
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	. "github.com/roelfdiedericks/goclaw/internal/metrics"
+	"github.com/roelfdiedericks/goclaw/internal/tokens"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
@@ -62,7 +63,8 @@ type ollamaChatRequest struct {
 
 // ollamaOptions contains model options like context size
 type ollamaOptions struct {
-	NumCtx int `json:"num_ctx,omitempty"` // Context window size
+	NumCtx     int `json:"num_ctx,omitempty"`     // Context window size
+	NumPredict int `json:"num_predict,omitempty"` // Max output tokens
 }
 
 // ollamaChatMessage represents a message in Ollama chat format
@@ -387,12 +389,26 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 		Content: userMessage,
 	})
 
+	// Estimate input tokens and calculate safe output limit
+	estimator := tokens.Get()
+	estimatedInput := estimator.Count(userMessage) + estimator.Count(systemPrompt)
+	maxOutput := tokens.CapMaxTokens(c.maxTokens, contextTokens, estimatedInput, 100)
+	if c.maxTokens > 0 && maxOutput != c.maxTokens {
+		L_debug("ollama: capped num_predict to fit context",
+			"provider", c.name,
+			"original", c.maxTokens,
+			"capped", maxOutput,
+			"contextTokens", contextTokens,
+			"estimatedInput", estimatedInput)
+	}
+
 	reqBody := ollamaChatRequest{
 		Model:    c.model,
 		Messages: messages,
 		Stream:   false, // Non-streaming for simplicity in compaction use case
 		Options: &ollamaOptions{
-			NumCtx: contextTokens, // Use detected context window
+			NumCtx:     contextTokens, // Use detected context window
+			NumPredict: maxOutput,     // Cap output to fit context
 		},
 	}
 

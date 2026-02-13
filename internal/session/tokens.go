@@ -1,73 +1,34 @@
 package session
 
 import (
-	"sync"
-
-	. "github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/pkoukk/tiktoken-go"
+	"github.com/roelfdiedericks/goclaw/internal/tokens"
 )
 
-// TokenEstimator provides token estimation for context tracking
+// TokenEstimator wraps the shared token estimator for session use
 type TokenEstimator struct {
-	encoding *tiktoken.Tiktoken
-	mu       sync.RWMutex
+	estimator *tokens.Estimator
 }
-
-// DefaultEncoding is the encoding used by Claude models
-const DefaultEncoding = "cl100k_base"
-
-// Model context window sizes (tokens)
-var ModelContextWindows = map[string]int{
-	"claude-3-opus-20240229":    200000,
-	"claude-3-sonnet-20240229":  200000,
-	"claude-3-haiku-20240307":   200000,
-	"claude-3-5-sonnet-20240620": 200000,
-	"claude-3-5-sonnet-20241022": 200000,
-	"claude-opus-4-5":           200000,
-	"claude-sonnet-4":           200000,
-	// Default for unknown models
-	"default": 200000,
-}
-
-var (
-	globalEstimator     *TokenEstimator
-	globalEstimatorOnce sync.Once
-)
 
 // GetTokenEstimator returns the global token estimator
 func GetTokenEstimator() *TokenEstimator {
-	globalEstimatorOnce.Do(func() {
-		var err error
-		globalEstimator, err = NewTokenEstimator()
-		if err != nil {
-			L_warn("failed to create token estimator, using fallback", "error", err)
-			globalEstimator = &TokenEstimator{} // fallback to char-based estimation
-		}
-	})
-	return globalEstimator
+	return &TokenEstimator{estimator: tokens.Get()}
 }
 
 // NewTokenEstimator creates a new token estimator
 func NewTokenEstimator() (*TokenEstimator, error) {
-	enc, err := tiktoken.GetEncoding(DefaultEncoding)
+	est, err := tokens.New()
 	if err != nil {
 		return nil, err
 	}
-	return &TokenEstimator{encoding: enc}, nil
+	return &TokenEstimator{estimator: est}, nil
 }
 
 // EstimateTokens estimates the token count for a string
 func (e *TokenEstimator) EstimateTokens(text string) int {
-	if e == nil || e.encoding == nil {
-		// Fallback: roughly 4 chars per token
+	if e == nil || e.estimator == nil {
 		return len(text) / 4
 	}
-
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	tokens := e.encoding.Encode(text, nil, nil)
-	return len(tokens)
+	return e.estimator.Count(text)
 }
 
 // EstimateMessageTokens estimates tokens for a session message
@@ -99,15 +60,6 @@ func (e *TokenEstimator) EstimateSessionTokens(sess *Session) int {
 	}
 	return total
 }
-
-// GetContextWindow returns the context window size for a model
-func GetContextWindow(modelID string) int {
-	if window, ok := ModelContextWindows[modelID]; ok {
-		return window
-	}
-	return ModelContextWindows["default"]
-}
-
 // ContextStats holds context usage statistics
 type ContextStats struct {
 	UsedTokens    int     // Current context size

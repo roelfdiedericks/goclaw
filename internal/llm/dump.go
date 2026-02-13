@@ -145,9 +145,11 @@ func StartDump(provider, model, baseURL string, messages, tools interface{}, sys
 		file = filepath.Base(file)
 	}
 
-	timestamp := time.Now().Format("20060102-150405")
+	now := time.Now()
+	timestamp := now.Format("20060102-150405")
+	millis := now.Nanosecond() / 1000000 // milliseconds
 	sanitizedModel := sanitizeFilename(model)
-	filename := fmt.Sprintf("%s_%s_%s.txt", provider, sanitizedModel, timestamp)
+	filename := fmt.Sprintf("%s_%s_%s_%03d.txt", provider, sanitizedModel, timestamp, millis)
 	path := filepath.Join(dir, filename)
 
 	ctx := &DumpContext{
