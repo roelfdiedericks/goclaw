@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/roelfdiedericks/goclaw/internal/commands"
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/metrics"
@@ -244,33 +245,57 @@ func (s *Server) handleThinkingCommand(w http.ResponseWriter, sessionID string, 
 	switch arg {
 	case "on":
 		sess.ShowThinking = true
-		resultMsg = "Thinking output enabled. You'll now see tool calls and working output."
+		if sess.ThinkingLevel == "" || sess.ThinkingLevel == "off" {
+			sess.ThinkingLevel = llm.DefaultThinkingLevel.String()
+		}
+		resultMsg = fmt.Sprintf("Thinking output enabled (level: %s).", sess.ThinkingLevel)
 	case "off":
 		sess.ShowThinking = false
+		sess.ThinkingLevel = "off"
 		resultMsg = "Thinking output disabled. You'll only see final responses."
 	case "toggle", "":
 		sess.ShowThinking = !sess.ShowThinking
 		if sess.ShowThinking {
-			resultMsg = "Thinking output enabled."
+			if sess.ThinkingLevel == "" || sess.ThinkingLevel == "off" {
+				sess.ThinkingLevel = llm.DefaultThinkingLevel.String()
+			}
+			resultMsg = fmt.Sprintf("Thinking output enabled (level: %s).", sess.ThinkingLevel)
 		} else {
 			resultMsg = "Thinking output disabled."
 		}
 	case "status":
 		if sess.ShowThinking {
-			resultMsg = "Thinking output is currently ON."
+			level := sess.ThinkingLevel
+			if level == "" {
+				level = llm.DefaultThinkingLevel.String()
+			}
+			resultMsg = fmt.Sprintf("Thinking output: ON, level: %s", level)
 		} else {
-			resultMsg = "Thinking output is currently OFF."
+			resultMsg = "Thinking output: OFF"
 		}
 	default:
-		resultMsg = "Usage: /thinking [on|off|toggle|status]"
+		// Check if arg is a valid thinking level
+		if llm.IsValidThinkingLevel(arg) {
+			sess.ThinkingLevel = arg
+			if arg == "off" {
+				sess.ShowThinking = false
+				resultMsg = "Thinking disabled."
+			} else {
+				sess.ShowThinking = true // Setting a level automatically enables thinking display
+				resultMsg = fmt.Sprintf("Thinking level set to %s (output enabled).", arg)
+			}
+		} else {
+			resultMsg = "Usage: /thinking [on|off|toggle|status|minimal|low|medium|high|xhigh]"
+		}
 	}
 
-	// Send preference event to client
+	// Send preference event to client with both thinking enabled and level
 	sess.SendEvent(SSEEvent{
 		Event: "preference",
 		Data: map[string]interface{}{
 			"key":   "thinking",
 			"value": sess.ShowThinking,
+			"level": sess.ThinkingLevel,
 		},
 	})
 

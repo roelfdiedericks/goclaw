@@ -231,18 +231,30 @@ func (c *AnthropicProvider) StreamMessage(
 	opts *StreamOptions,
 ) (*Response, error) {
 	startTime := time.Now()
-	
+
 	// Determine if we should try extended thinking
 	enableThinking := false
 	thinkingBudget := 10000 // default
-	if opts != nil && opts.EnableThinking {
-		// Check if model is known to not support thinking
-		if _, unsupported := thinkingUnsupportedModels.Load(c.model); unsupported {
-			L_info("llm: thinking requested but model doesn't support it", "model", c.model)
-		} else {
-			enableThinking = true
-			if opts.ThinkingBudget > 0 {
-				thinkingBudget = opts.ThinkingBudget
+	if opts != nil {
+		// Use ThinkingLevel if set, fall back to legacy EnableThinking
+		level := ThinkingLevel(opts.ThinkingLevel)
+		if level == "" && opts.EnableThinking {
+			// Legacy: EnableThinking without level
+			level = DefaultThinkingLevel
+		}
+
+		if level.IsEnabled() {
+			// Check if model is known to not support thinking
+			if _, unsupported := thinkingUnsupportedModels.Load(c.model); unsupported {
+				L_info("llm: thinking requested but model doesn't support it", "model", c.model, "level", level)
+			} else {
+				enableThinking = true
+				// Use explicit budget if set, otherwise compute from level
+				if opts.ThinkingBudget > 0 {
+					thinkingBudget = opts.ThinkingBudget
+				} else {
+					thinkingBudget = level.AnthropicBudgetTokens()
+				}
 			}
 		}
 	}
@@ -335,6 +347,14 @@ func (c *AnthropicProvider) StreamMessage(
 
 	// Start dump for debugging (captures request context)
 	dumpCtx := StartDump(c.name, c.model, c.baseURL, anthropicMessages, anthropicTools, systemPrompt, 1)
+	dumpCtx.SetTokenInfo(TokenInfo{
+		ContextWindow:  contextWindow,
+		EstimatedInput: estimatedInput,
+		ConfiguredMax:  c.maxTokens,
+		CappedMax:      maxTokens,
+		SafetyMargin:   tokens.SafetyMargin,
+		Buffer:         100,
+	})
 
 	// Stream the response
 	stream := c.client.Messages.NewStreaming(ctx, params)
@@ -350,6 +370,11 @@ func (c *AnthropicProvider) StreamMessage(
 		// Accumulate the message
 		if err := message.Accumulate(event); err != nil {
 			FinishDumpError(dumpCtx, err, c.transport)
+			// Check if response body contains real error (e.g., context overflow)
+			if c.transport != nil {
+				_, respBody, _, _ := c.transport.GetLastCapture()
+				err = CheckResponseBody(err, respBody)
+			}
 			return nil, fmt.Errorf("accumulate error: %w", err)
 		}
 
@@ -399,6 +424,11 @@ func (c *AnthropicProvider) StreamMessage(
 		L_error("stream error", "error", err)
 		// Dump full request/response to file for debugging
 		FinishDumpError(dumpCtx, err, c.transport)
+		// Check if response body contains real error (e.g., context overflow)
+		if c.transport != nil {
+			_, respBody, _, _ := c.transport.GetLastCapture()
+			err = CheckResponseBody(err, respBody)
+		}
 		// Record metrics for failed request
 		if c.metricPrefix != "" {
 			MetricDuration(c.metricPrefix, "request", time.Since(startTime))

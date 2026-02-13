@@ -909,12 +909,8 @@ func (g *Gateway) ProcessMessage(ctx context.Context, msg *types.InboundMessage,
 	}
 
 	// Send status message if set
-	if msg.StatusMessage != "" && msg.User != nil {
-		for _, ch := range g.channels {
-			if ch.HasUser(msg.User) {
-				ch.Send(ctx, msg.StatusMessage)
-			}
-		}
+	if msg.StatusMessage != "" {
+		g.SendStatusMessage(ctx, msg.User, msg.StatusMessage)
 	}
 
 	// If RunAgent == false, just inject to context (no agent run)
@@ -1442,7 +1438,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			}
 		}
 
-		// Stream from LLM with overflow retry logic
+		// Stream from LLM with failover and overflow retry logic
 		contextTokens := sess.GetTotalTokens()
 		contextWindow := sess.GetMaxTokens()
 		contextUsage := sess.GetContextUsage() * 100.0
@@ -1470,18 +1466,29 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		}
 		
 		var response *llm.Response
+		var failoverResult *llm.FailoverResult
 		var llmErr error
 		for retry := 0; retry <= maxOverflowRetries; retry++ {
-			response, llmErr = g.llm.StreamMessage(agentCtx, messages, toolDefs, systemPrompt, func(delta string) {
-				sendEvent(EventTextDelta{RunID: runID, Delta: delta})
-			}, streamOpts)
+			failoverResult, llmErr = g.registry.StreamMessageWithFailover(
+				agentCtx,
+				"agent",
+				messages,
+				toolDefs,
+				systemPrompt,
+				func(delta string) {
+					sendEvent(EventTextDelta{RunID: runID, Delta: delta})
+				},
+				streamOpts,
+			)
 
 			if llmErr == nil {
+				response = failoverResult.Response
 				break // Success
 			}
 
-			// Check if this is a context overflow error
-			if llm.IsContextOverflowError(llmErr) {
+			// Check if this is a context overflow error (not handled by failover)
+			errType := llm.ClassifyError(llmErr.Error())
+			if errType == llm.ErrorTypeContextOverflow {
 				if retry < maxOverflowRetries && g.compactor != nil {
 					L_warn("context overflow detected, attempting recovery compaction",
 						"retry", retry+1,
@@ -1508,8 +1515,44 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		}
 
 		if llmErr != nil {
-			sendEvent(EventAgentError{RunID: runID, Error: llmErr.Error()})
-			return llmErr
+			// Format user-friendly error message
+			errType := llm.ClassifyError(llmErr.Error())
+			userMsg := llm.FormatErrorForUser(llmErr.Error(), errType)
+			sendEvent(EventAgentError{RunID: runID, Error: userMsg})
+			return fmt.Errorf("%s", userMsg)
+		}
+
+		// Log which model was used (for diagnostics)
+		if failoverResult != nil && failoverResult.ModelUsed != "" {
+			L_debug("llm response",
+				"model", failoverResult.ModelUsed,
+				"failedOver", failoverResult.FailedOver,
+				"stopReason", response.StopReason)
+
+			// Send failover/recovery notifications (only when thinking enabled)
+			if req.User.Thinking {
+				// Failover notification
+				if failoverResult.FailedOver && len(failoverResult.Attempts) > 0 {
+					var reasons []string
+					for _, a := range failoverResult.Attempts {
+						if a.Skipped {
+							reasons = append(reasons, fmt.Sprintf("%s (cooldown)", a.Model))
+						} else if a.Reason != "" {
+							reasons = append(reasons, fmt.Sprintf("%s (%s)", a.Model, a.Reason))
+						}
+					}
+					if len(reasons) > 0 {
+						msg := fmt.Sprintf("[goclaw system] ⚠️ Switched to %s (%s)", failoverResult.ModelUsed, strings.Join(reasons, " → "))
+						g.SendStatusMessage(ctx, req.User, msg)
+					}
+				}
+
+				// Recovery notification
+				if failoverResult.Recovered != nil {
+					msg := fmt.Sprintf("[goclaw system] ✓ %s recovered (was: %s)", failoverResult.Recovered.Provider, failoverResult.Recovered.WasReason)
+					g.SendStatusMessage(ctx, req.User, msg)
+				}
+			}
 		}
 
 		// Update token tracking
@@ -1822,6 +1865,53 @@ func (g *Gateway) ListHassSubscriptions() []commands.HassSubscriptionInfo {
 // CommandHandler returns the unified command handler
 func (g *Gateway) CommandHandler() *commands.Handler {
 	return g.commandHandler
+}
+
+// SendStatusMessage sends a status message to all channels the user is connected to.
+// Used for system notifications like failover, HASS debug status, etc.
+func (g *Gateway) SendStatusMessage(ctx context.Context, u *user.User, msg string) {
+	if u == nil || msg == "" {
+		return
+	}
+	for _, ch := range g.channels {
+		if ch.HasUser(u) {
+			ch.Send(ctx, msg)
+		}
+	}
+}
+
+// GetLLMProviderStatus returns the status of all LLM providers for /llm command
+func (g *Gateway) GetLLMProviderStatus() *commands.LLMProviderStatusResult {
+	if g.registry == nil {
+		return nil
+	}
+
+	statuses := g.registry.GetProviderStatus()
+	result := &commands.LLMProviderStatusResult{
+		Providers:          make([]commands.LLMProviderInfo, len(statuses)),
+		AgentChain:         g.registry.ListModelsForPurpose("agent"),
+		SummarizationChain: g.registry.ListModelsForPurpose("summarization"),
+	}
+
+	for i, s := range statuses {
+		result.Providers[i] = commands.LLMProviderInfo{
+			Alias:      s.Alias,
+			InCooldown: s.InCooldown,
+			Until:      s.Until,
+			Reason:     string(s.Reason),
+			ErrorCount: s.ErrorCount,
+		}
+	}
+
+	return result
+}
+
+// ResetLLMCooldowns clears all provider cooldowns for /llm reset command
+func (g *Gateway) ResetLLMCooldowns() int {
+	if g.registry == nil {
+		return 0
+	}
+	return g.registry.ClearAllCooldowns()
 }
 
 // buildMemoryFlushConfig builds the memory flush config from gateway config

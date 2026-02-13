@@ -367,34 +367,43 @@ func (m *CompactionManager) generateSummaryAsync(ctx context.Context, sessionKey
 		"elapsed", elapsed.Round(time.Second))
 }
 
-// generateSummary generates a summary using the configured client
-// Returns: summary, usedFallback (always false now), modelName, error
+// generateSummary generates a summary using the registry with failover support
+// Returns: summary, usedFallback, modelName, error
 func (m *CompactionManager) generateSummary(ctx context.Context, messages []Message) (string, bool, string, error) {
-	client := m.getClient()
-	if client == nil || !client.IsAvailable() {
-		return "", false, "", fmt.Errorf("no LLM client available for summary generation")
+	reg := llm.GetRegistry()
+	if reg == nil {
+		return "", false, "", fmt.Errorf("no LLM registry available for summary generation")
 	}
 
 	// Get configured maxInputTokens from registry (0 = use model context)
-	maxInputTokens := 0
-	if reg := llm.GetRegistry(); reg != nil {
-		maxInputTokens = reg.GetMaxInputTokens("summarization")
+	maxInputTokens := reg.GetMaxInputTokens("summarization")
+
+	// Get primary model name for logging
+	models := reg.ListModelsForPurpose("summarization")
+	primaryModel := ""
+	if len(models) > 0 {
+		primaryModel = models[0]
 	}
 
-	model := client.Model()
-	L_info("compaction: generating summary", "model", model, "messages", len(messages))
+	L_info("compaction: generating summary", "primaryModel", primaryModel, "messages", len(messages))
 	startTime := time.Now()
 
-	summary, err := GenerateSummaryWithClient(ctx, client, messages, maxInputTokens)
+	summary, modelUsed, err := GenerateSummaryWithRegistry(ctx, reg, messages, maxInputTokens)
 	elapsed := time.Since(startTime)
 
 	if err != nil {
-		L_warn("compaction: summary generation failed", "model", model, "error", err, "elapsed", elapsed.Round(time.Second))
+		L_warn("compaction: summary generation failed", "error", err, "elapsed", elapsed.Round(time.Second))
 		return "", false, "", fmt.Errorf("summary generation failed: %w", err)
 	}
 
-	L_info("compaction: summary completed", "model", model, "elapsed", elapsed.Round(time.Second))
-	return summary, false, model, nil
+	// Check if we used a fallback model
+	usedFallback := modelUsed != primaryModel
+
+	L_info("compaction: summary completed",
+		"model", modelUsed,
+		"usedFallback", usedFallback,
+		"elapsed", elapsed.Round(time.Second))
+	return summary, usedFallback, modelUsed, nil
 }
 
 // runRetryLoop runs the background retry goroutine

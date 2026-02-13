@@ -36,6 +36,12 @@ func NewRegistryFromUsers(users config.UsersConfig, rolesConfig config.RolesConf
 			continue
 		}
 
+		// Resolve thinking level from user config
+		thinkingLevel := ""
+		if entry.ThinkingLevel != nil {
+			thinkingLevel = *entry.ThinkingLevel
+		}
+
 		user := &User{
 			ID:               username,
 			Name:             entry.Name,
@@ -43,6 +49,7 @@ func NewRegistryFromUsers(users config.UsersConfig, rolesConfig config.RolesConf
 			TelegramID:       entry.TelegramID,
 			HTTPPasswordHash: entry.HTTPPasswordHash,
 			Thinking:         entry.Thinking != nil && *entry.Thinking,
+			ThinkingLevel:    thinkingLevel,
 			Sandbox:          entry.Sandbox == nil || *entry.Sandbox, // default true if nil
 		}
 
