@@ -9,6 +9,16 @@ alwaysApply: true
 
 ---
 
+## THINK BEFORE CODING
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
 ## DISCUSS BEFORE IMPLEMENTING
 
 **Always discuss proposed changes before making them.**
@@ -26,6 +36,14 @@ DO NOT:
 The user decides what approach to take. Your job is to present options, not make decisions.
 
 Whenever you output the text "Let me start." or something similar STOP! Do not proceed until given permission.
+
+
+
+## Manager patterns
+We like global singletons, for manager patterns */manager.go must be a singleton, passing references  around is just silly for things that have one global use and instance requirement, if we are the only people eating our own dogfood. This is not a library, this is an application.
+
+## Command patterns
+When adding "/commands" and other things remember that we have global infrastructure to handle this, do NOT add stuff to the channels such as http and telegram bot. Use the global command pattern
 
 ## Logging - USE THE RIGHT FUNCTIONS
 
@@ -68,7 +86,7 @@ L_debug("skills: ineligible", "skill", "bar", "reason", "binary: mytool")
 
 ## Git Commands - RESTRICTED
 
-**You are NOT allowed to run any git commands except `git log`.**
+**You are NOT allowed to run any git commands except `git log, status or diff`.**
 
 Forbidden commands include but are not limited to:
 - `git restore` - DO NOT USE, this wipes uncommitted work
@@ -82,8 +100,7 @@ Forbidden commands include but are not limited to:
 - `git pull`
 - `git merge`
 - `git rebase`
-- `git status`
-- `git diff`
+
 
 The user will handle all git operations manually.
 
@@ -91,6 +108,7 @@ The user will handle all git operations manually.
 
 - **DO NOT run `goclaw gateway` or `make run/debug/tui`** - the user will test manually
 - Running the gateway could interfere with existing instances
+- use "make build" and the makefile to do build testing
 
 ## Why These Rules Exist
 

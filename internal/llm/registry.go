@@ -230,6 +230,11 @@ func (r *Registry) Resolve(ref string) (interface{}, error) {
 	return r.resolve(ref)
 }
 
+// ResolveForPurpose resolves a model reference with purpose context (no failover)
+func (r *Registry) ResolveForPurpose(ref, purpose string) (interface{}, error) {
+	return r.resolveForPurpose(ref, purpose)
+}
+
 // resolve parses a model reference and returns the configured provider
 func (r *Registry) resolve(ref string) (interface{}, error) {
 	return r.resolveForPurpose(ref, "")

@@ -63,6 +63,12 @@ func registerBuiltins(m *Manager) {
 		Description: "LLM provider status and cooldown management",
 		Handler:     handleLLM,
 	})
+
+	m.Register(&Command{
+		Name:        "/embeddings",
+		Description: "Embeddings status and rebuild",
+		Handler:     handleEmbeddings,
+	})
 }
 
 // handleStatus returns session status and compaction health
@@ -694,5 +700,130 @@ func llmReset(args *CommandArgs) *CommandResult {
 	return &CommandResult{
 		Text:     fmt.Sprintf("Cleared cooldowns for %d providers.", count),
 		Markdown: fmt.Sprintf("Cleared cooldowns for **%d** providers.", count),
+	}
+}
+
+// handleEmbeddings handles the /embeddings command and subcommands
+func handleEmbeddings(ctx context.Context, args *CommandArgs) *CommandResult {
+	parts := strings.Fields(args.RawArgs)
+
+	if len(parts) == 0 || parts[0] == "status" {
+		return embeddingsStatus(args)
+	}
+
+	switch parts[0] {
+	case "rebuild":
+		return embeddingsRebuild(args)
+	default:
+		return &CommandResult{
+			Text:     fmt.Sprintf("Unknown subcommand: %s\nUsage: /embeddings [status|rebuild]", parts[0]),
+			Markdown: fmt.Sprintf("Unknown subcommand: `%s`\nUsage: `/embeddings [status|rebuild]`", parts[0]),
+		}
+	}
+}
+
+// embeddingsStatus shows embeddings status
+func embeddingsStatus(args *CommandArgs) *CommandResult {
+	status := args.Provider.GetEmbeddingsStatus()
+	if status == nil || !status.Configured {
+		return &CommandResult{
+			Text:     "Embeddings not configured (no models in llm.embeddings.models)",
+			Markdown: "Embeddings not configured (no models in `llm.embeddings.models`)",
+		}
+	}
+
+	var text strings.Builder
+	var md strings.Builder
+
+	text.WriteString("📊 Embeddings Status\n\n")
+	md.WriteString("**📊 Embeddings Status**\n\n")
+
+	// Configuration
+	autoRebuildStr := "✓ enabled"
+	if !status.AutoRebuild {
+		autoRebuildStr = "disabled"
+	}
+	text.WriteString(fmt.Sprintf("Primary model: %s\n", status.PrimaryModel))
+	text.WriteString(fmt.Sprintf("Auto-rebuild: %s\n\n", autoRebuildStr))
+	md.WriteString(fmt.Sprintf("Primary model: `%s`\n", status.PrimaryModel))
+	md.WriteString(fmt.Sprintf("Auto-rebuild: %s\n\n", autoRebuildStr))
+
+	// Models in DB
+	text.WriteString("In DB:\n")
+	md.WriteString("**In DB:**\n")
+	for _, m := range status.Models {
+		if m.IsPrimary {
+			text.WriteString(fmt.Sprintf("  ✓ %s: %d chunks\n", m.Model, m.Count))
+			md.WriteString(fmt.Sprintf("✓ %s: %d chunks\n", m.Model, m.Count))
+		} else {
+			text.WriteString(fmt.Sprintf("  ⚠ %s: %d chunks (needs rebuild)\n", m.Model, m.Count))
+			md.WriteString(fmt.Sprintf("⚠ %s: %d chunks _(needs rebuild)_\n", m.Model, m.Count))
+		}
+	}
+	text.WriteString("\n")
+	md.WriteString("\n")
+
+	// Transcript
+	text.WriteString(fmt.Sprintf("Transcripts: %d chunks\n", status.TranscriptTotal))
+	md.WriteString(fmt.Sprintf("**Transcripts:** %d chunks\n", status.TranscriptTotal))
+	if status.TranscriptTotal > 0 {
+		text.WriteString(fmt.Sprintf("  ✓ %d primary\n", status.TranscriptPrimary))
+		md.WriteString(fmt.Sprintf("  ✓ %d primary\n", status.TranscriptPrimary))
+		if status.TranscriptNeedsRebuild > 0 {
+			text.WriteString(fmt.Sprintf("  ⚠ %d needs rebuild\n", status.TranscriptNeedsRebuild))
+			md.WriteString(fmt.Sprintf("  ⚠ %d needs rebuild\n", status.TranscriptNeedsRebuild))
+		}
+	}
+	text.WriteString("\n")
+	md.WriteString("\n")
+
+	// Memory
+	text.WriteString(fmt.Sprintf("Memory: %d chunks\n", status.MemoryTotal))
+	md.WriteString(fmt.Sprintf("**Memory:** %d chunks\n", status.MemoryTotal))
+	if status.MemoryTotal > 0 {
+		text.WriteString(fmt.Sprintf("  ✓ %d primary\n", status.MemoryPrimary))
+		md.WriteString(fmt.Sprintf("  ✓ %d primary\n", status.MemoryPrimary))
+		if status.MemoryNeedsRebuild > 0 {
+			text.WriteString(fmt.Sprintf("  ⚠ %d needs rebuild\n", status.MemoryNeedsRebuild))
+			md.WriteString(fmt.Sprintf("  ⚠ %d needs rebuild\n", status.MemoryNeedsRebuild))
+		}
+	}
+
+	return &CommandResult{
+		Text:     text.String(),
+		Markdown: md.String(),
+	}
+}
+
+// embeddingsRebuild triggers a rebuild
+func embeddingsRebuild(args *CommandArgs) *CommandResult {
+	status := args.Provider.GetEmbeddingsStatus()
+	if status == nil || !status.Configured {
+		return &CommandResult{
+			Text:     "Embeddings not configured",
+			Markdown: "Embeddings not configured",
+		}
+	}
+
+	needsRebuild := status.TranscriptNeedsRebuild + status.MemoryNeedsRebuild
+	if needsRebuild == 0 {
+		return &CommandResult{
+			Text:     "Nothing to rebuild - all chunks use primary model.",
+			Markdown: "Nothing to rebuild - all chunks use primary model.",
+		}
+	}
+
+	err := args.Provider.TriggerEmbeddingsRebuild()
+	if err != nil {
+		return &CommandResult{
+			Text:     fmt.Sprintf("Failed to start rebuild: %s", err),
+			Markdown: fmt.Sprintf("Failed to start rebuild: `%s`", err),
+			Error:    err,
+		}
+	}
+
+	return &CommandResult{
+		Text:     fmt.Sprintf("Rebuild starting. %d chunks to process.\nUse /embeddings status to monitor.", needsRebuild),
+		Markdown: fmt.Sprintf("Rebuild starting. **%d** chunks to process.\nUse `/embeddings status` to monitor.", needsRebuild),
 	}
 }
