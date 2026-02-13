@@ -125,21 +125,21 @@ func isBlockedIP(ip net.IP) string {
 // isCloudMetadataHost checks for known cloud metadata hostnames
 func isCloudMetadataHost(host string) bool {
 	host = strings.ToLower(host)
-	
+
 	metadataHosts := []string{
-		"metadata.google.internal",           // GCP
-		"metadata.goog",                      // GCP alternate
-		"kubernetes.default.svc",             // Kubernetes
-		"kubernetes.default",                 // Kubernetes
-		"metadata",                           // Generic
+		"metadata.google.internal", // GCP
+		"metadata.goog",            // GCP alternate
+		"kubernetes.default.svc",   // Kubernetes
+		"kubernetes.default",       // Kubernetes
+		"metadata",                 // Generic
 	}
-	
+
 	for _, mh := range metadataHosts {
 		if host == mh || strings.HasSuffix(host, "."+mh) {
 			return true
 		}
 	}
-	
+
 	return false
 }
 

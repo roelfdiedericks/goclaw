@@ -196,7 +196,7 @@ func (b *Bot) setupHandlers() {
 	mgr := commands.GetManager()
 	for _, cmd := range mgr.List() {
 		cmdName := cmd.Name // capture for closure
-		
+
 		// Special handling for long-running commands
 		if cmdName == "/compact" {
 			b.bot.Handle(cmdName, func(c tele.Context) error {
@@ -515,7 +515,7 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 		case gateway.EventToolStart:
 			L_debug("telegram: tool started", "tool", e.ToolName)
 			_ = c.Notify(tele.Typing)
-			
+
 			// Flush thinking buffer before showing tool (ensures thinking is complete)
 			if prefs.ShowThinking && thinkingBuf.Len() > 0 && thinkingMsg != nil {
 				thinkingText := fmt.Sprintf("💭 <i>%s</i>", html.EscapeString(thinkingBuf.String()))
@@ -524,21 +524,21 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 					L_trace("telegram: thinking flush on tool start failed", "error", err)
 				}
 			}
-			
+
 			// Show tool start if thinking mode is on
 			if prefs.ShowThinking {
 				inputStr := string(e.Input)
 				if len(inputStr) > 1024 {
 					inputStr = inputStr[:1024] + "..."
 				}
-				toolMsg := fmt.Sprintf("⚙️ <b>%s</b>\n<code>%s</code>", 
+				toolMsg := fmt.Sprintf("⚙️ <b>%s</b>\n<code>%s</code>",
 					escapeHTML(e.ToolName), escapeHTML(inputStr))
 				_, _ = b.bot.Send(c.Chat(), toolMsg, &tele.SendOptions{ParseMode: tele.ModeHTML})
 			}
 
 		case gateway.EventToolEnd:
 			L_debug("telegram: tool ended", "tool", e.ToolName, "hasError", e.Error != "")
-			
+
 			// Show tool result if thinking mode is on
 			if prefs.ShowThinking {
 				status := "✓"
@@ -549,7 +549,7 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 				if e.Error != "" {
 					status = "✗"
 				}
-				
+
 				result := e.Result
 				if e.Error != "" {
 					result = e.Error
@@ -557,19 +557,19 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 				if len(result) > 1024 {
 					result = result[:1024] + "..."
 				}
-				
+
 				toolMsg := fmt.Sprintf("%s Completed%s", status, duration)
 				if result != "" {
 					toolMsg += fmt.Sprintf("\n<code>%s</code>", escapeHTML(result))
 				}
 				_, _ = b.bot.Send(c.Chat(), toolMsg, &tele.SendOptions{ParseMode: tele.ModeHTML})
 			}
-		
+
 		case gateway.EventThinkingDelta:
 			// Accumulate thinking deltas if thinking mode is on
 			if prefs.ShowThinking {
 				thinkingBuf.WriteString(e.Delta)
-				
+
 				// Update thinking message periodically
 				if time.Since(lastThinkingUpdate) > updateInterval {
 					thinkingText := fmt.Sprintf("💭 <i>%s</i>", html.EscapeString(thinkingBuf.String()))
@@ -592,7 +592,7 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 
 		case gateway.EventThinking:
 			L_debug("telegram: thinking", "contentLen", len(e.Content))
-			
+
 			// Final thinking content - always update/send with complete content
 			if prefs.ShowThinking && e.Content != "" {
 				thinkingText := fmt.Sprintf("💭 <i>%s</i>", html.EscapeString(e.Content))
@@ -651,46 +651,46 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 					"rawMarkdown", finalText,
 					"formattedHTML", formattedText)
 
-			// Split long messages to fit Telegram's 4096 char limit
-			chunks := splitMessage(finalText, maxTelegramMessage)
+				// Split long messages to fit Telegram's 4096 char limit
+				chunks := splitMessage(finalText, maxTelegramMessage)
 
-			if currentMsg == nil {
-				// Send all chunks as new messages
-				for i, chunk := range chunks {
-					formatted := FormatMessage(chunk)
-					_, err := b.bot.Send(c.Chat(), formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
-					if err != nil {
-						L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
-						_, err = b.bot.Send(c.Chat(), chunk)
+				if currentMsg == nil {
+					// Send all chunks as new messages
+					for i, chunk := range chunks {
+						formatted := FormatMessage(chunk)
+						_, err := b.bot.Send(c.Chat(), formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
 						if err != nil {
-							L_error("telegram: failed to send message chunk", "error", err, "chunk", i+1)
+							L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
+							_, err = b.bot.Send(c.Chat(), chunk)
+							if err != nil {
+								L_error("telegram: failed to send message chunk", "error", err, "chunk", i+1)
+							}
+						}
+					}
+				} else {
+					// Edit first chunk into existing message, send rest as new
+					formatted := FormatMessage(chunks[0])
+					_, err := b.bot.Edit(currentMsg, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
+					if err != nil {
+						L_debug("telegram: HTML edit failed, falling back to plain text", "error", err)
+						_, err = b.bot.Edit(currentMsg, chunks[0])
+						if err != nil {
+							L_debug("telegram: failed to edit final message", "error", err)
+						}
+					}
+					// Send remaining chunks as new messages
+					for i := 1; i < len(chunks); i++ {
+						formatted := FormatMessage(chunks[i])
+						_, err := b.bot.Send(c.Chat(), formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
+						if err != nil {
+							L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
+							_, err = b.bot.Send(c.Chat(), chunks[i])
+							if err != nil {
+								L_error("telegram: failed to send message chunk", "error", err, "chunk", i+1)
+							}
 						}
 					}
 				}
-			} else {
-				// Edit first chunk into existing message, send rest as new
-				formatted := FormatMessage(chunks[0])
-				_, err := b.bot.Edit(currentMsg, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
-				if err != nil {
-					L_debug("telegram: HTML edit failed, falling back to plain text", "error", err)
-					_, err = b.bot.Edit(currentMsg, chunks[0])
-					if err != nil {
-						L_debug("telegram: failed to edit final message", "error", err)
-					}
-				}
-				// Send remaining chunks as new messages
-				for i := 1; i < len(chunks); i++ {
-					formatted := FormatMessage(chunks[i])
-					_, err := b.bot.Send(c.Chat(), formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
-					if err != nil {
-						L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
-						_, err = b.bot.Send(c.Chat(), chunks[i])
-						if err != nil {
-							L_error("telegram: failed to send message chunk", "error", err, "chunk", i+1)
-						}
-					}
-				}
-			}
 			}
 
 		case gateway.EventAgentError:

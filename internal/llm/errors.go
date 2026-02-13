@@ -181,7 +181,8 @@ func ClassifyError(msg string) ErrorType {
 // IsFailoverError returns true if the error type should trigger model failover.
 // Failover errors: rate_limit, auth, billing, timeout, overloaded
 // Non-failover: context_overflow (needs compaction), format (session corruption),
-//               max_tokens (retry with capped value first), unknown
+//
+//	max_tokens (retry with capped value first), unknown
 func IsFailoverError(errType ErrorType) bool {
 	switch errType {
 	case ErrorTypeRateLimit, ErrorTypeAuth, ErrorTypeBilling, ErrorTypeTimeout, ErrorTypeOverloaded:

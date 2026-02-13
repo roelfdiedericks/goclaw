@@ -13,7 +13,7 @@ import (
 
 // Argon2id parameters (OWASP recommendations)
 const (
-	argon2Time    = 3      // iterations
+	argon2Time    = 3         // iterations
 	argon2Memory  = 64 * 1024 // 64MB
 	argon2Threads = 4
 	argon2KeyLen  = 32

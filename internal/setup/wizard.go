@@ -31,10 +31,10 @@ type Wizard struct {
 	skipEmbeddings    bool
 
 	// User setup
-	userName       string
+	userName        string
 	userDisplayName string
-	userRole       string
-	userTelegramID string
+	userRole        string
+	userTelegramID  string
 
 	// Telegram
 	telegramEnabled bool
@@ -64,8 +64,8 @@ func NewWizard() *Wizard {
 	return &Wizard{
 		providerConfigs: make(map[string]ProviderConfig),
 		importedAPIKeys: make(map[string]string),
-		httpEnabled: true,
-		httpListen:  ":1337",
+		httpEnabled:     true,
+		httpListen:      ":1337",
 		userRole:        "owner",
 	}
 }

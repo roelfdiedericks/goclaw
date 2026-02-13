@@ -52,9 +52,9 @@ type ProviderStatus struct {
 // Registry manages LLM provider instances and model resolution.
 // It supports multiple provider instances and purpose-based model selection.
 type Registry struct {
-	providers  map[string]providerInstance   // provider name -> instance
-	purposes   map[string]PurposeConfig      // purpose -> config with models array
-	cooldowns  map[string]*providerCooldown  // provider alias -> cooldown state
+	providers  map[string]providerInstance  // provider name -> instance
+	purposes   map[string]PurposeConfig     // purpose -> config with models array
+	cooldowns  map[string]*providerCooldown // provider alias -> cooldown state
 	mu         sync.RWMutex
 	cooldownMu sync.RWMutex
 }
@@ -211,7 +211,7 @@ func (r *Registry) GetProvider(purpose string) (Provider, error) {
 func (r *Registry) GetMaxInputTokens(purpose string) int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	if cfg, ok := r.purposes[purpose]; ok {
 		return cfg.MaxInputTokens
 	}
@@ -431,7 +431,7 @@ func (r *Registry) ClearAllCooldowns() int {
 
 	count := len(r.cooldowns)
 	r.cooldowns = make(map[string]*providerCooldown)
-	
+
 	if count > 0 {
 		L_info("llm: all cooldowns cleared", "count", count)
 	}

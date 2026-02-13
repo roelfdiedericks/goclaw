@@ -35,9 +35,9 @@ func (e *TokenEstimator) EstimateTokens(text string) int {
 func (e *TokenEstimator) EstimateMessageTokens(msg *Message) int {
 	// Base overhead for message structure
 	overhead := 4 // role, content wrapper, etc.
-	
+
 	contentTokens := e.EstimateTokens(msg.Content)
-	
+
 	// Add tool-related tokens if present
 	if msg.ToolName != "" {
 		overhead += e.EstimateTokens(msg.ToolName) + 2
@@ -45,7 +45,7 @@ func (e *TokenEstimator) EstimateMessageTokens(msg *Message) int {
 	if msg.ToolInput != nil {
 		overhead += e.EstimateTokens(string(msg.ToolInput))
 	}
-	
+
 	return contentTokens + overhead
 }
 
@@ -60,13 +60,14 @@ func (e *TokenEstimator) EstimateSessionTokens(sess *Session) int {
 	}
 	return total
 }
+
 // ContextStats holds context usage statistics
 type ContextStats struct {
-	UsedTokens    int     // Current context size
-	MaxTokens     int     // Model's context window
-	UsagePercent  float64 // UsedTokens / MaxTokens (0.0 to 1.0)
-	MessageCount  int     // Number of messages
-	UserCount     int     // Number of user messages
+	UsedTokens   int     // Current context size
+	MaxTokens    int     // Model's context window
+	UsagePercent float64 // UsedTokens / MaxTokens (0.0 to 1.0)
+	MessageCount int     // Number of messages
+	UserCount    int     // Number of user messages
 }
 
 // GetContextStats returns context statistics for a session
@@ -100,11 +101,11 @@ func FormatContextStatus(stats ContextStats) string {
 	usedK := stats.UsedTokens / 1000
 	maxK := stats.MaxTokens / 1000
 	percent := int(stats.UsagePercent * 100)
-	
+
 	if stats.MaxTokens == 0 {
 		return ""
 	}
-	
+
 	return formatContextString(usedK, maxK, percent)
 }
 
@@ -118,26 +119,26 @@ func itoa(i int) string {
 	if i == 0 {
 		return "0"
 	}
-	
+
 	negative := i < 0
 	if negative {
 		i = -i
 	}
-	
+
 	var buf [20]byte
 	pos := len(buf)
-	
+
 	for i > 0 {
 		pos--
 		buf[pos] = byte('0' + i%10)
 		i /= 10
 	}
-	
+
 	if negative {
 		pos--
 		buf[pos] = '-'
 	}
-	
+
 	return string(buf[pos:])
 }
 

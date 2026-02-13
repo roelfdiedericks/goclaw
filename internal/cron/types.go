@@ -8,20 +8,20 @@ import (
 
 // CronJob represents a scheduled task (OpenClaw compatible).
 type CronJob struct {
-	ID             string       `json:"id"`
-	AgentID        string       `json:"agentId,omitempty"`
-	Name           string       `json:"name"`
-	Description    string       `json:"description,omitempty"`
-	Enabled        bool         `json:"enabled"`
-	CreatedAtMs    int64        `json:"createdAtMs"`
-	UpdatedAtMs    int64        `json:"updatedAtMs"`
-	Schedule       Schedule     `json:"schedule"`
-	SessionTarget  string       `json:"sessionTarget"`      // "main" or "isolated"
-	WakeMode       string       `json:"wakeMode,omitempty"` // Legacy, ignored by GoClaw
-	Payload        Payload      `json:"payload"`
-	DeleteAfterRun bool         `json:"deleteAfterRun,omitempty"`
-	Isolation      *Isolation   `json:"isolation,omitempty"`
-	State          JobState     `json:"state"`
+	ID             string     `json:"id"`
+	AgentID        string     `json:"agentId,omitempty"`
+	Name           string     `json:"name"`
+	Description    string     `json:"description,omitempty"`
+	Enabled        bool       `json:"enabled"`
+	CreatedAtMs    int64      `json:"createdAtMs"`
+	UpdatedAtMs    int64      `json:"updatedAtMs"`
+	Schedule       Schedule   `json:"schedule"`
+	SessionTarget  string     `json:"sessionTarget"`      // "main" or "isolated"
+	WakeMode       string     `json:"wakeMode,omitempty"` // Legacy, ignored by GoClaw
+	Payload        Payload    `json:"payload"`
+	DeleteAfterRun bool       `json:"deleteAfterRun,omitempty"`
+	Isolation      *Isolation `json:"isolation,omitempty"`
+	State          JobState   `json:"state"`
 }
 
 // Schedule defines when a job should run.
@@ -59,7 +59,7 @@ type JobState struct {
 	NextRunAtMs    *int64 `json:"nextRunAtMs,omitempty"`
 	RunningAtMs    *int64 `json:"runningAtMs,omitempty"`
 	LastRunAtMs    *int64 `json:"lastRunAtMs,omitempty"`
-	LastStatus     string `json:"lastStatus,omitempty"`    // "ok", "error"
+	LastStatus     string `json:"lastStatus,omitempty"` // "ok", "error"
 	LastError      string `json:"lastError,omitempty"`
 	LastDurationMs int64  `json:"lastDurationMs,omitempty"`
 }
@@ -72,10 +72,10 @@ type StoreFile struct {
 
 // RunLogEntry represents a single run in the history log.
 type RunLogEntry struct {
-	Ts         int64  `json:"ts"`                   // Unix timestamp (ms) when run started
-	Status     string `json:"status"`               // "ok" or "error"
+	Ts         int64  `json:"ts"`     // Unix timestamp (ms) when run started
+	Status     string `json:"status"` // "ok" or "error"
 	DurationMs int64  `json:"durationMs,omitempty"`
-	Summary    string `json:"summary,omitempty"`    // Agent output, truncated to 2000 chars
+	Summary    string `json:"summary,omitempty"` // Agent output, truncated to 2000 chars
 	Error      string `json:"error,omitempty"`
 }
 

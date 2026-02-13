@@ -95,7 +95,7 @@ func (s *Store) Save() error {
 func (s *Store) saveLocked() error {
 	// Ensure directory exists
 	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create cron directory: %w", err)
 	}
 
@@ -116,7 +116,7 @@ func (s *Store) saveLocked() error {
 
 	// Write atomically via temp file
 	tmpPath := s.path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write temp file: %w", err)
 	}
 

@@ -14,8 +14,8 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	gcontext "github.com/roelfdiedericks/goclaw/internal/context"
-	"github.com/roelfdiedericks/goclaw/internal/embeddings"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
+	"github.com/roelfdiedericks/goclaw/internal/embeddings"
 	"github.com/roelfdiedericks/goclaw/internal/hass"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -595,7 +595,7 @@ func (g *Gateway) mirrorOpenClawRecords(ctx context.Context, records []session.R
 		if !ok {
 			continue
 		}
-		
+
 		// Extract text content from message
 		var content string
 		for _, c := range msgRec.Message.Content {
@@ -604,23 +604,23 @@ func (g *Gateway) mirrorOpenClawRecords(ctx context.Context, records []session.R
 				break
 			}
 		}
-		
+
 		L_trace("session: processing OpenClaw record",
 			"role", msgRec.Message.Role,
 			"hasContent", content != "",
 			"contentLen", len(content))
-		
+
 		if content == "" {
 			continue
 		}
-		
+
 		switch msgRec.Message.Role {
 		case "user":
 			// Store user message for pairing with next assistant response
 			// Strip OpenClaw metadata formatting from user messages
 			g.lastOpenClawUserMsg = stripOpenClawMetadata(content)
 			L_debug("session: tracked OpenClaw user message", "length", len(g.lastOpenClawUserMsg))
-			
+
 		case "assistant":
 			// Mirror assistant response paired with the stored user message
 			userMsg := g.lastOpenClawUserMsg
@@ -628,7 +628,7 @@ func (g *Gateway) mirrorOpenClawRecords(ctx context.Context, records []session.R
 				L_debug("session: mirroring assistant without user message (may have been from previous session)")
 			}
 			g.lastOpenClawUserMsg = "" // Reset after pairing
-			
+
 			for _, ch := range g.channels {
 				if err := ch.SendMirror(ctx, "openclaw", userMsg, content); err != nil {
 					L_debug("session: mirror send failed", "channel", ch.Name(), "error", err)
@@ -643,32 +643,32 @@ func (g *Gateway) mirrorOpenClawRecords(ctx context.Context, records []session.R
 func stripOpenClawMetadata(msg string) string {
 	lines := strings.Split(msg, "\n")
 	var result []string
-	
+
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		
+
 		// Skip empty lines
 		if trimmed == "" {
 			continue
 		}
-		
+
 		// Skip [message_id: N] lines
 		if strings.HasPrefix(trimmed, "[message_id:") {
 			continue
 		}
-		
+
 		// Skip [media attached: ...] lines
 		if strings.HasPrefix(trimmed, "[media attached:") {
 			continue
 		}
-		
+
 		// Skip OpenClaw's media instruction lines
 		if strings.HasPrefix(trimmed, "To send an image back") ||
 			strings.Contains(trimmed, "MEDIA:/path") ||
 			strings.Contains(trimmed, "media/path/filePath") {
 			continue
 		}
-		
+
 		// Strip leading metadata bracket from content lines
 		// Format: [Telegram Roelf Diedericks id:123456789 +53s 2026-02-02 21:58 GMT+2] actual content
 		if idx := strings.Index(line, "] "); idx != -1 && strings.HasPrefix(line, "[") {
@@ -678,12 +678,12 @@ func stripOpenClawMetadata(msg string) string {
 				line = strings.TrimSpace(line[idx+2:])
 			}
 		}
-		
+
 		if line != "" {
 			result = append(result, line)
 		}
 	}
-	
+
 	return strings.Join(result, "\n")
 }
 
@@ -1342,7 +1342,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	if req.IsHeartbeat {
 		messageCountBefore = sess.MessageCount()
 	}
-	
+
 	// Add user message with images if any (skip if already added by supervision)
 	if !req.SkipAddMessage {
 		L_debug("RunAgent: adding user message", "session", sessionKey, "source", req.Source, "msgLen", len(req.UserMsg))
@@ -1351,12 +1351,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		} else {
 			sess.AddUserMessage(req.UserMsg, req.Source)
 		}
-		
+
 		// Send user message to supervision if active
 		if supervision := sess.GetSupervision(); supervision != nil {
 			supervision.SendEvent(EventUserMessage{Content: req.UserMsg, Source: req.Source})
 		}
-		
+
 		// Persist user message to SQLite (skip for heartbeat - ephemeral)
 		if !req.IsHeartbeat {
 			g.persistMessage(ctx, sessionKey, "user", req.UserMsg, req.Source, "", "", nil, "", "", "", "")
@@ -1540,15 +1540,15 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		var streamOpts *llm.StreamOptions
 		if enableThinking {
 			streamOpts = &llm.StreamOptions{
-				EnableThinking:  true,
-				ThinkingLevel:   thinkingLevel.String(),
-				ThinkingBudget:  thinkingLevel.AnthropicBudgetTokens(), // Computed from level
+				EnableThinking: true,
+				ThinkingLevel:  thinkingLevel.String(),
+				ThinkingBudget: thinkingLevel.AnthropicBudgetTokens(), // Computed from level
 				OnThinkingDelta: func(delta string) {
 					sendEvent(EventThinkingDelta{RunID: runID, Delta: delta})
 				},
 			}
 		}
-		
+
 		var response *llm.Response
 		var failoverResult *llm.FailoverResult
 		var llmErr error
@@ -1663,17 +1663,17 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					Result:   result,
 					Error:    "permission_denied",
 				})
-			sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
-			sess.AddToolResult(response.ToolUseID, result)
-			// Persist denied tool use/result (skip for heartbeat - ephemeral)
-			if !req.IsHeartbeat {
-				g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
-				g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, "", "", "", "")
+				sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
+				sess.AddToolResult(response.ToolUseID, result)
+				// Persist denied tool use/result (skip for heartbeat - ephemeral)
+				if !req.IsHeartbeat {
+					g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
+					g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, "", "", "", "")
+				}
+				continue
 			}
-			continue
-		}
 
-		sendEvent(EventToolStart{
+			sendEvent(EventToolStart{
 				RunID:    runID,
 				ToolName: response.ToolName,
 				ToolID:   response.ToolUseID,
@@ -2022,15 +2022,15 @@ func (g *Gateway) GetEmbeddingsStatus() *commands.EmbeddingsStatusResult {
 	}
 
 	result := &commands.EmbeddingsStatusResult{
-		Configured:               true,
-		PrimaryModel:             status.PrimaryModel,
-		AutoRebuild:              status.AutoRebuild,
-		TranscriptTotal:          status.Transcript.TotalChunks,
-		TranscriptPrimary:        status.Transcript.PrimaryModelCount,
-		TranscriptNeedsRebuild:   status.Transcript.NeedsRebuildCount,
-		MemoryTotal:              status.Memory.TotalChunks,
-		MemoryPrimary:            status.Memory.PrimaryModelCount,
-		MemoryNeedsRebuild:       status.Memory.NeedsRebuildCount,
+		Configured:             true,
+		PrimaryModel:           status.PrimaryModel,
+		AutoRebuild:            status.AutoRebuild,
+		TranscriptTotal:        status.Transcript.TotalChunks,
+		TranscriptPrimary:      status.Transcript.PrimaryModelCount,
+		TranscriptNeedsRebuild: status.Transcript.NeedsRebuildCount,
+		MemoryTotal:            status.Memory.TotalChunks,
+		MemoryPrimary:          status.Memory.PrimaryModelCount,
+		MemoryNeedsRebuild:     status.Memory.NeedsRebuildCount,
 	}
 
 	// Combine models from both tables
@@ -2368,7 +2368,7 @@ func (g *Gateway) SessionManager() *session.Manager {
 // The session should already have the message to respond to.
 func (g *Gateway) RunAgentForSession(ctx context.Context, sessionKey string, events chan<- AgentEvent) error {
 	L_debug("RunAgentForSession: called", "session", sessionKey)
-	
+
 	// Get the session to verify it exists
 	sess := g.sessions.Get(sessionKey)
 	if sess == nil {
@@ -2474,7 +2474,7 @@ func (g *Gateway) persistMessage(ctx context.Context, sessionKey, role, content,
 	// For tool_result, store the result in ToolResult field and mark errors
 	if role == "tool_result" {
 		msg.ToolResult = content // Store actual result
-		msg.Content = ""        // Keep content empty for tool results
+		msg.Content = ""         // Keep content empty for tool results
 		if toolError != "" {
 			msg.ToolIsError = true
 		}
@@ -2577,7 +2577,7 @@ func (g *Gateway) enrichMediaRefs(text string) string {
 	// Pattern: {{media:path}} where path doesn't contain }, ', or :
 	// This is the simple form the agent writes
 	pattern := regexp.MustCompile(`\{\{media:([^}'":]+)\}\}`)
-	
+
 	if !pattern.MatchString(text) {
 		return text
 	}

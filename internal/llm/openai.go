@@ -13,11 +13,11 @@ import (
 	"sync"
 	"time"
 
-	openai "github.com/sashabaranov/go-openai"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	. "github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/tokens"
 	"github.com/roelfdiedericks/goclaw/internal/types"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 // openRouterTransport adds GoClaw attribution headers to OpenRouter requests
@@ -357,10 +357,10 @@ func (p *OpenAIProvider) Model() string {
 
 // WithModel returns a clone of the provider configured with a specific model
 func (p *OpenAIProvider) WithModel(model string) Provider {
-	clone := *p               //nolint:govet // copylocks: mu is reset immediately below
-	clone.mu = sync.RWMutex{} // Fresh mutex - copying a used mutex is undefined behavior
-	clone.available = false          // New model needs availability check
-	clone.embeddingDimensions = 0    // New model may have different embedding dimensions
+	clone := *p                   //nolint:govet // copylocks: mu is reset immediately below
+	clone.mu = sync.RWMutex{}     // Fresh mutex - copying a used mutex is undefined behavior
+	clone.available = false       // New model needs availability check
+	clone.embeddingDimensions = 0 // New model may have different embedding dimensions
 	clone.model = model
 	clone.metricPrefix = fmt.Sprintf("llm/%s/%s/%s", p.Type(), p.Name(), model)
 	return &clone
@@ -379,8 +379,8 @@ func (p *OpenAIProvider) WithMaxTokens(max int) Provider {
 // Initialization is synchronous (blocking) because embeddings are typically
 // needed immediately when GetProvider("embeddings") is called.
 func (p *OpenAIProvider) WithModelForEmbedding(model string) *OpenAIProvider {
-	clone := *p               //nolint:govet // copylocks: mu is reset immediately below
-	clone.mu = sync.RWMutex{} // Fresh mutex - copying a used mutex is undefined behavior
+	clone := *p                   //nolint:govet // copylocks: mu is reset immediately below
+	clone.mu = sync.RWMutex{}     // Fresh mutex - copying a used mutex is undefined behavior
 	clone.available = false       // New model needs availability check
 	clone.embeddingDimensions = 0 // New model may have different embedding dimensions
 	clone.model = model
@@ -1240,8 +1240,8 @@ func (p *OpenAIProvider) StreamMessage(
 
 // openaiRepairStats tracks repairs made during message conversion
 type openaiRepairStats struct {
-	modified       bool
-	droppedOrphans int
+	modified        bool
+	droppedOrphans  int
 	mergedToolCalls int
 }
 
@@ -1547,10 +1547,10 @@ func parseReasoningFromSSE(chunk []byte) string {
 // SSEReasoningParser accumulates reasoning content from SSE chunks.
 // Use this with CapturingTransport.SetOnChunk to extract reasoning_details in real-time.
 type SSEReasoningParser struct {
-	mu        sync.Mutex
-	buffer    strings.Builder // Accumulated reasoning content
-	onDelta   func(string)    // Callback for each reasoning delta
-	partial   []byte          // Buffer for incomplete SSE lines
+	mu      sync.Mutex
+	buffer  strings.Builder // Accumulated reasoning content
+	onDelta func(string)    // Callback for each reasoning delta
+	partial []byte          // Buffer for incomplete SSE lines
 }
 
 // NewSSEReasoningParser creates a new parser with an optional delta callback.
@@ -1638,18 +1638,18 @@ func estimateOpenAITokens(messages []openai.ChatCompletionMessage, systemPrompt 
 	// Use tiktoken-compatible estimation: ~4 chars per token
 	// This is a rough estimate but better than 0
 	total := 0
-	
+
 	// System prompt
 	total += len(systemPrompt) / 4
-	
+
 	// Messages
 	for _, msg := range messages {
 		// Role overhead
 		total += 4
-		
+
 		// Content
 		total += len(msg.Content) / 4
-		
+
 		// Multi-content (images, etc.)
 		for _, part := range msg.MultiContent {
 			total += len(part.Text) / 4
@@ -1657,17 +1657,17 @@ func estimateOpenAITokens(messages []openai.ChatCompletionMessage, systemPrompt 
 				total += 85 // Base cost for an image reference
 			}
 		}
-		
+
 		// Tool calls
 		for _, tc := range msg.ToolCalls {
 			total += len(tc.Function.Name) / 4
 			total += len(tc.Function.Arguments) / 4
 			total += 10 // overhead
 		}
-		
+
 		// Reasoning content
 		total += len(msg.ReasoningContent) / 4
 	}
-	
+
 	return total
 }

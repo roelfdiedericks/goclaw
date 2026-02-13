@@ -42,7 +42,7 @@ func (d *Downloader) EnsureBrowser() (string, error) {
 	}
 
 	// Ensure bin directory exists
-	if err := os.MkdirAll(d.binDir, 0755); err != nil {
+	if err := os.MkdirAll(d.binDir, 0750); err != nil {
 		return "", fmt.Errorf("failed to create browser bin directory: %w", err)
 	}
 
@@ -79,11 +79,11 @@ func (d *Downloader) GetBinPath() string {
 func (d *Downloader) IsDownloaded() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	
+
 	if d.binPath == "" {
 		return false
 	}
-	
+
 	_, err := os.Stat(d.binPath)
 	return err == nil
 }
@@ -93,7 +93,7 @@ func (d *Downloader) ForceDownload() (string, error) {
 	d.mu.Lock()
 	d.binPath = "" // Clear cache to force re-download
 	d.mu.Unlock()
-	
+
 	return d.EnsureBrowser()
 }
 
@@ -133,14 +133,14 @@ func (d *Downloader) FindExistingBrowser() (string, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		
+
 		// Try common binary locations
 		candidates := []string{
 			filepath.Join(d.binDir, entry.Name(), "chrome"),
 			filepath.Join(d.binDir, entry.Name(), "chrome.exe"),
 			filepath.Join(d.binDir, entry.Name(), "Chromium.app", "Contents", "MacOS", "Chromium"),
 		}
-		
+
 		for _, candidate := range candidates {
 			if _, err := os.Stat(candidate); err == nil {
 				d.binPath = candidate

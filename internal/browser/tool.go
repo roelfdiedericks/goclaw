@@ -35,17 +35,17 @@ type SessionTabs struct {
 	Headed    bool         // Whether this session uses headed (visible) browser
 	Browser   *rod.Browser // Dedicated browser instance for headed sessions
 	Tabs      []*TabInfo
-	ActiveTab int // Index of active tab
+	ActiveTab int  // Index of active tab
 	Closed    bool // Set to true when browser disconnects
 	mu        sync.Mutex
 }
 
 // TabInfo contains information about a browser tab
 type TabInfo struct {
-	Index    int                `json:"index"`
-	URL      string             `json:"url"`
-	Title    string             `json:"title"`
-	Page     *rod.Page          `json:"-"`
+	Index    int                  `json:"index"`
+	URL      string               `json:"url"`
+	Title    string               `json:"title"`
+	Page     *rod.Page            `json:"-"`
 	Elements map[int]*rod.Element `json:"-"` // Indexed elements for click/type by ref
 }
 
@@ -238,7 +238,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	// 3. Otherwise, use profileDomains based on URL (profile ignored with note)
 	var ignoredProfile string
 	config := t.manager.Config()
-	
+
 	if params.Profile == "chrome" {
 		// Always honor "chrome" for extension relay
 		L_debug("browser: using chrome extension relay")
@@ -260,13 +260,13 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 
 	// Execute action and potentially append profile note
 	result, err := t.executeAction(ctx, sessionID, params)
-	
+
 	// If we ignored a profile request, append helpful note to successful results
 	if err == nil && ignoredProfile != "" {
 		profileNote := fmt.Sprintf("\n\n---\nNote: Requested profile '%s' was ignored. GoClaw uses config-driven profile selection based on URL domain. To allow explicit profiles, set allowAgentProfiles: true in goclaw.json. If authentication fails, run: goclaw browser setup <profile>", ignoredProfile)
 		result = result + profileNote
 	}
-	
+
 	return result, err
 }
 

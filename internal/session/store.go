@@ -94,11 +94,11 @@ type StoredMessage struct {
 	Content string // Text content
 
 	// For tool interactions (nullable)
-	ToolCallID   string // tool_use ID or tool_result's referenced ID
-	ToolName     string // Tool name (for tool_use)
-	ToolInput    []byte // JSON input (for tool_use)
-	ToolResult   string // Result text (for tool_result)
-	ToolIsError  bool   // Whether tool result is an error
+	ToolCallID  string // tool_use ID or tool_result's referenced ID
+	ToolName    string // Tool name (for tool_use)
+	ToolInput   []byte // JSON input (for tool_use)
+	ToolResult  string // Result text (for tool_result)
+	ToolIsError bool   // Whether tool result is an error
 
 	// Reasoning/thinking content (Kimi, Deepseek, Claude, etc.)
 	Thinking string
@@ -128,15 +128,15 @@ type StoredCheckpoint struct {
 	Timestamp  time.Time
 
 	// Checkpoint data (explicit fields)
-	Summary                 string
-	TokensAtCheckpoint      int
+	Summary                  string
+	TokensAtCheckpoint       int
 	MessageCountAtCheckpoint int
-	
+
 	// Structured data (JSON for flexibility)
 	Topics        []string // Main topics discussed
 	KeyDecisions  []string // Important decisions made
 	OpenQuestions []string // Unresolved questions
-	
+
 	// Generation metadata
 	GeneratedBy string // Model used to generate
 }

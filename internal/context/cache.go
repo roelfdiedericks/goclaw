@@ -17,16 +17,16 @@ import (
 // It uses fsnotify for immediate invalidation and optional hash polling as fallback.
 // The cache stores workspace files (SOUL.md, IDENTITY.md, etc.) to avoid disk I/O on each request.
 type PromptCache struct {
-	mu            sync.RWMutex
-	cachedFiles   []WorkspaceFile
-	valid         bool
-	contentHash   string
-	fileHashes    map[string]string // Per-file hashes for change detection
-	watcher       *fsnotify.Watcher
-	workspaceDir  string
-	pollInterval  time.Duration
-	stopCh        chan struct{}
-	watchedFiles  []string
+	mu           sync.RWMutex
+	cachedFiles  []WorkspaceFile
+	valid        bool
+	contentHash  string
+	fileHashes   map[string]string // Per-file hashes for change detection
+	watcher      *fsnotify.Watcher
+	workspaceDir string
+	pollInterval time.Duration
+	stopCh       chan struct{}
+	watchedFiles []string
 }
 
 // NewPromptCache creates a new prompt cache with file watching.
@@ -160,42 +160,42 @@ func (pc *PromptCache) hashPoller() {
 // Updates stored hashes so we don't detect the same changes again
 func (pc *PromptCache) getChangedFiles() []string {
 	newHashes := pc.computeFileHashes()
-	
+
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
-	
+
 	// First run - no previous hashes to compare
 	if pc.fileHashes == nil {
 		pc.fileHashes = newHashes
 		return nil
 	}
-	
+
 	var changed []string
 	for name, newHash := range newHashes {
 		if oldHash, exists := pc.fileHashes[name]; !exists || oldHash != newHash {
 			changed = append(changed, name)
 		}
 	}
-	
+
 	// Check for deleted files
 	for name := range pc.fileHashes {
 		if _, exists := newHashes[name]; !exists {
 			changed = append(changed, name+" (deleted)")
 		}
 	}
-	
+
 	// Update stored hashes
 	if len(changed) > 0 {
 		pc.fileHashes = newHashes
 	}
-	
+
 	return changed
 }
 
 // computeFileHashes computes hash for each watched file
 func (pc *PromptCache) computeFileHashes() map[string]string {
 	hashes := make(map[string]string)
-	
+
 	for _, name := range pc.watchedFiles {
 		path := filepath.Join(pc.workspaceDir, name)
 		if content, err := os.ReadFile(path); err == nil {
@@ -203,7 +203,7 @@ func (pc *PromptCache) computeFileHashes() map[string]string {
 			hashes[name] = hex.EncodeToString(h[:8]) // Short hash for logging
 		}
 	}
-	
+
 	return hashes
 }
 

@@ -1,8 +1,8 @@
 module github.com/roelfdiedericks/goclaw
 
-go 1.24.0
+go 1.25
 
-toolchain go1.24.12
+toolchain go1.25.7
 
 require (
 	dario.cat/mergo v1.0.2
@@ -21,6 +21,7 @@ require (
 	github.com/go-rod/stealth v0.4.9
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/itchyny/gojq v0.12.18
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/pkoukk/tiktoken-go v0.1.8
@@ -55,7 +56,6 @@ require (
 	github.com/go-logfmt/logfmt v0.6.0 // indirect
 	github.com/go-shiori/dom v0.0.0-20230515143342-73569d674e1c // indirect
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/itchyny/timefmt-go v0.1.7 // indirect
 	github.com/kardianos/osext v0.0.0-20190222173326-2bc1f35cddc0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect

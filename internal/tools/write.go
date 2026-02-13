@@ -77,7 +77,7 @@ func (t *WriteTool) Execute(ctx context.Context, input json.RawMessage) (string,
 	var err error
 	if sandboxed {
 		// Validate path and write atomically (sandbox validation + atomic write)
-		err = sandbox.WriteFileValidated(params.Path, t.workingDir, t.workspaceRoot, []byte(params.Content), 0644)
+		err = sandbox.WriteFileValidated(params.Path, t.workingDir, t.workspaceRoot, []byte(params.Content), 0600)
 	} else {
 		// No sandbox: resolve relative paths from workingDir, allow any absolute path
 		resolved := params.Path
@@ -85,11 +85,11 @@ func (t *WriteTool) Execute(ctx context.Context, input json.RawMessage) (string,
 			resolved = filepath.Join(t.workingDir, resolved)
 		}
 		// Create parent directories if needed
-		if err := os.MkdirAll(filepath.Dir(resolved), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(resolved), 0750); err != nil {
 			L_error("write tool: failed to create parent dirs", "path", params.Path, "error", err)
 			return "", err
 		}
-		err = os.WriteFile(resolved, []byte(params.Content), 0644)
+		err = os.WriteFile(resolved, []byte(params.Content), 0600)
 	}
 	if err != nil {
 		L_error("write tool failed", "path", params.Path, "error", err)

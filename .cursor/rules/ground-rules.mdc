@@ -108,7 +108,26 @@ The user will handle all git operations manually.
 
 - **DO NOT run `goclaw gateway` or `make run/debug/tui`** - the user will test manually
 - Running the gateway could interfere with existing instances
-- use "make build" and the makefile to do build testing
+
+## Use the Makefile
+
+**ALWAYS use Makefile targets instead of running tools directly.**
+
+```bash
+# CORRECT
+make build
+make lint
+make security
+make test
+
+# WRONG - do not run tools directly
+go build ./...
+golangci-lint run ./...
+gosec ./...
+go test ./...
+```
+
+The Makefile has the correct flags, environment variables, and configuration. Running tools directly bypasses this and causes problems.
 
 ## Why These Rules Exist
 

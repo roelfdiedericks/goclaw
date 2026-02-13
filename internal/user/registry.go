@@ -9,10 +9,10 @@ import (
 
 // Registry maintains the set of known users and provides lookup by identity
 type Registry struct {
-	users       map[string]*User       // by username (user ID)
-	telegramID  map[string]string      // telegram user ID -> username
-	ownerID     string                 // cached owner username
-	rolesConfig config.RolesConfig     // role definitions from goclaw.json
+	users       map[string]*User   // by username (user ID)
+	telegramID  map[string]string  // telegram user ID -> username
+	ownerID     string             // cached owner username
+	rolesConfig config.RolesConfig // role definitions from goclaw.json
 	mu          sync.RWMutex
 }
 

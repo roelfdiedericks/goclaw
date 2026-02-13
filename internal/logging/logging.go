@@ -142,7 +142,7 @@ func logMsgWithPrefix(prefix string, msg string, args ...interface{}) {
 	// Format with custom prefix - use the underlying logger's writer
 	// Format: timestamp TRAC <caller> message key=value...
 	now := time.Now().Format("2006/01/02 15:04:05")
-	
+
 	// Get caller info (skip 3 frames: logMsgWithPrefix -> L_trace -> actual caller)
 	_, file, line, ok := runtime.Caller(2)
 	caller := ""
@@ -183,7 +183,7 @@ func logMsgWithPrefix(prefix string, msg string, args ...interface{}) {
 // - logMsg(level, "loaded", "key", val, ...) -> structured
 func logMsg(level log.Level, msg string, args ...interface{}) {
 	ensureInit()
-	
+
 	var finalMsg string
 	var keyvals []interface{}
 
@@ -260,7 +260,7 @@ func SetHookExclusive(hook func(level, msg string)) {
 	logHookLock.Lock()
 	logHook = hook
 	logHookLock.Unlock()
-	
+
 	if hook != nil {
 		// Redirect logger to discard and mark exclusive mode
 		atomic.StoreInt32(&hookIsExclusive, 1)
@@ -313,10 +313,10 @@ func L_fatal(msg string, args ...interface{}) {
 // SetLevel changes the log level at runtime
 func SetLevel(level int) {
 	ensureInit()
-	
+
 	// Store current level for trace filtering
 	atomic.StoreInt32(&currentLevel, int32(level)) //nolint:gosec // G115: Level is 0-5, cannot overflow
-	
+
 	switch level {
 	case LevelTrace, LevelDebug:
 		logger.SetLevel(log.DebugLevel)

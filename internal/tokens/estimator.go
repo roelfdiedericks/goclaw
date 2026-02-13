@@ -4,8 +4,8 @@ package tokens
 import (
 	"sync"
 
-	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/pkoukk/tiktoken-go"
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
 // Estimator provides token estimation using tiktoken

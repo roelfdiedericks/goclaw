@@ -21,30 +21,30 @@ import (
 // It manages the connection lifecycle, event filtering, debouncing, and
 // event injection into the agent's session.
 type Manager struct {
-	cfg           config.HomeAssistantConfig
-	injector      types.EventInjector
-	dataDir       string
-	subscriptions map[string]*Subscription
-	debounce      map[string]time.Time // "entity_id:state" -> last fired (same state suppression)
-	interval      map[string]time.Time // "entity_id" -> last fired (per-entity rate limit)
-	conn          *websocket.Conn
-	msgID         int
+	cfg            config.HomeAssistantConfig
+	injector       types.EventInjector
+	dataDir        string
+	subscriptions  map[string]*Subscription
+	debounce       map[string]time.Time // "entity_id:state" -> last fired (same state suppression)
+	interval       map[string]time.Time // "entity_id" -> last fired (per-entity rate limit)
+	conn           *websocket.Conn
+	msgID          int
 	subscriptionID int // HA subscription ID for state_changed
-	mu            sync.RWMutex
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	connected     bool
-	reconnecting  bool
+	mu             sync.RWMutex
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	connected      bool
+	reconnecting   bool
 
 	// Connection tracking for /hass info
-	connState    string    // "disconnected", "connecting", "connected"
-	connSince    time.Time // When current connection established
-	lastError    error     // Last connection error
-	reconnects   int       // Total reconnect attempts
+	connState  string    // "disconnected", "connecting", "connected"
+	connSince  time.Time // When current connection established
+	lastError  error     // Last connection error
+	reconnects int       // Total reconnect attempts
 
 	// Debug mode for status messages
-	debug        bool
+	debug bool
 }
 
 // NewManager creates a new HASS event subscription manager.

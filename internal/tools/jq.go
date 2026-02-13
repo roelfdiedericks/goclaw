@@ -250,4 +250,3 @@ func expandPath(path string) string {
 	}
 	return path
 }
-

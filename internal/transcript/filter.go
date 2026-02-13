@@ -7,12 +7,12 @@ import (
 
 // Message represents a message from the sessions database
 type Message struct {
-	ID        string
+	ID         string
 	SessionKey string
-	Timestamp int64
-	Role      string
-	Content   string
-	UserID    string
+	Timestamp  int64
+	Role       string
+	Content    string
+	UserID     string
 }
 
 // minContentLength is the minimum content length to index

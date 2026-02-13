@@ -38,7 +38,7 @@ func NewHistoryManager(runsDir string) *HistoryManager {
 // LogRun appends a run entry to the job's history file.
 func (h *HistoryManager) LogRun(jobID string, entry RunLogEntry) error {
 	// Ensure runs directory exists
-	if err := os.MkdirAll(h.runsDir, 0755); err != nil {
+	if err := os.MkdirAll(h.runsDir, 0750); err != nil {
 		return fmt.Errorf("failed to create runs directory: %w", err)
 	}
 
@@ -55,7 +55,7 @@ func (h *HistoryManager) LogRun(jobID string, entry RunLogEntry) error {
 
 	// Append to history file
 	historyPath := h.historyPath(jobID)
-	f, err := os.OpenFile(historyPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(historyPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to open history file: %w", err)
 	}
@@ -78,7 +78,7 @@ func (h *HistoryManager) LogRun(jobID string, entry RunLogEntry) error {
 // GetRuns returns recent runs for a job.
 func (h *HistoryManager) GetRuns(jobID string, limit int) ([]RunLogEntry, error) {
 	historyPath := h.historyPath(jobID)
-	
+
 	f, err := os.Open(historyPath)
 	if err != nil {
 		if os.IsNotExist(err) {

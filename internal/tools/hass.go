@@ -21,8 +21,8 @@ import (
 // HASSTool implements the Home Assistant tool for the agent.
 type HASSTool struct {
 	client     *HASSClient
-	wsClient   *hass.WSClient  // for sync registry queries
-	manager    *hass.Manager   // for subscriptions
+	wsClient   *hass.WSClient // for sync registry queries
+	manager    *hass.Manager  // for subscriptions
 	mediaStore *media.MediaStore
 }
 
@@ -185,14 +185,14 @@ func (t *HASSTool) Schema() map[string]any {
 				"type":        "boolean",
 				"description": "Append timestamp to camera filename",
 			},
-		"pattern": map[string]any{
-			"type":        "string",
-			"description": "Glob pattern for filtering (devices/areas/entities/subscribe). E.g., binary_sensor.* - mutually exclusive with regex",
-		},
-		"regex": map[string]any{
-			"type":        "string",
-			"description": "Regex pattern for filtering (devices/areas/entities/subscribe). E.g., ^person\\. - mutually exclusive with pattern",
-		},
+			"pattern": map[string]any{
+				"type":        "string",
+				"description": "Glob pattern for filtering (devices/areas/entities/subscribe). E.g., binary_sensor.* - mutually exclusive with regex",
+			},
+			"regex": map[string]any{
+				"type":        "string",
+				"description": "Regex pattern for filtering (devices/areas/entities/subscribe). E.g., ^person\\. - mutually exclusive with pattern",
+			},
 			"debounce": map[string]any{
 				"type":        "integer",
 				"description": "Debounce seconds between events for same entity:state (default: 5)",

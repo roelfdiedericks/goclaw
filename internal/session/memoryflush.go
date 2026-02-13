@@ -49,16 +49,16 @@ func DefaultMemoryFlushConfig() *MemoryFlushConfig {
 				InjectAs:     FlushInjectSystem,
 				OncePerCycle: true,
 			},
-		{
-			Percent: 90,
-			Prompt: `[Context pressure: 90%] Compaction imminent.
+			{
+				Percent: 90,
+				Prompt: `[Context pressure: 90%] Compaction imminent.
 Before responding, save important session context to memory/YYYY-MM-DD.md (create memory/ if needed).
 Save: key decisions, user-shared context, current work state.
 Skip: secrets, trivial details, info already in files.
 After saving (or if nothing to save), respond to the user's message normally.`,
-			InjectAs:     FlushInjectSystem,
-			OncePerCycle: true,
-		},
+				InjectAs:     FlushInjectSystem,
+				OncePerCycle: true,
+			},
 		},
 	}
 }

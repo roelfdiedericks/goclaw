@@ -132,9 +132,9 @@ func (t *EditTool) Execute(ctx context.Context, input json.RawMessage) (string, 
 
 	// Write back atomically (preserves permissions)
 	if sandboxed {
-		err = sandbox.AtomicWriteFile(resolved, []byte(newText), 0644)
+		err = sandbox.AtomicWriteFile(resolved, []byte(newText), 0600)
 	} else {
-		err = os.WriteFile(resolved, []byte(newText), 0644)
+		err = os.WriteFile(resolved, []byte(newText), 0600)
 	}
 	if err != nil {
 		L_error("edit tool: failed to write", "path", params.Path, "error", err)

@@ -18,15 +18,15 @@ type ImageAttachment struct {
 // Used by both session management and LLM providers.
 type Message struct {
 	ID        string            `json:"id"`
-	Role      string            `json:"role"`                  // "user", "assistant", "tool_use", "tool_result"
+	Role      string            `json:"role"` // "user", "assistant", "tool_use", "tool_result"
 	Content   string            `json:"content"`
-	Source    string            `json:"source"`                // "tui", "telegram", etc.
+	Source    string            `json:"source"` // "tui", "telegram", etc.
 	Timestamp time.Time         `json:"timestamp"`
-	ToolUseID string            `json:"toolUseId,omitempty"`   // for tool_use and tool_result
-	ToolName  string            `json:"toolName,omitempty"`    // for tool_use
-	ToolInput json.RawMessage   `json:"toolInput,omitempty"`   // for tool_use
-	Images    []ImageAttachment `json:"images,omitempty"`      // Image attachments (for multimodal)
-	Thinking  string            `json:"thinking,omitempty"`    // Reasoning/thinking content (Kimi, Deepseek, etc.)
+	ToolUseID string            `json:"toolUseId,omitempty"` // for tool_use and tool_result
+	ToolName  string            `json:"toolName,omitempty"`  // for tool_use
+	ToolInput json.RawMessage   `json:"toolInput,omitempty"` // for tool_use
+	Images    []ImageAttachment `json:"images,omitempty"`    // Image attachments (for multimodal)
+	Thinking  string            `json:"thinking,omitempty"`  // Reasoning/thinking content (Kimi, Deepseek, etc.)
 
 	// Supervision metadata (for guidance/ghostwriting interventions)
 	Supervisor       string `json:"supervisor,omitempty"`       // Username/ID of supervisor who intervened

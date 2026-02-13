@@ -43,7 +43,6 @@ type CompactionManagerConfig struct {
 	RetryIntervalSeconds int // Background retry interval (default: 60, 0 = disabled)
 }
 
-
 // CompactionResult contains the result of a compaction operation
 type CompactionResult struct {
 	Summary             string
