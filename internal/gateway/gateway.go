@@ -92,12 +92,6 @@ type Gateway struct {
 	lastOpenClawUserMsg string        // Track user messages for mirroring
 }
 
-// Regex for detecting context overflow errors
-var (
-	// Matches "prompt is too long: 200170 tokens > 200000 maximum"
-	promptTooLongRe = regexp.MustCompile(`prompt is too long:\s*(\d+)\s*tokens?\s*>\s*(\d+)`)
-)
-
 // New creates a new Gateway instance
 func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, toolsReg *tools.Registry) (*Gateway, error) {
 	// Get agent provider from registry (supports any provider type)
@@ -1145,31 +1139,6 @@ func (g *Gateway) Shutdown() {
 	}
 }
 
-// isContextOverflowError checks if an error indicates context overflow
-func isContextOverflowError(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := err.Error()
-
-	// Anthropic format: "prompt is too long: 200170 tokens > 200000 maximum"
-	if promptTooLongRe.MatchString(errStr) {
-		return true
-	}
-
-	// Check for common variations across providers
-	if strings.Contains(errStr, "prompt is too long") ||
-		strings.Contains(errStr, "context_length_exceeded") ||
-		strings.Contains(errStr, "maximum context length") ||
-		strings.Contains(errStr, "exceeded model token limit") || // Kimi/OpenAI style
-		strings.Contains(errStr, "token limit") ||                // Generic
-		strings.Contains(errStr, "max_tokens") {                  // Another common pattern
-		return true
-	}
-
-	return false
-}
-
 // suppressionTokens are response markers indicating agent has nothing meaningful to deliver.
 // If a response contains any of these, it should not be sent to the user.
 var suppressionTokens = []string{
@@ -1512,7 +1481,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			}
 
 			// Check if this is a context overflow error
-			if isContextOverflowError(llmErr) {
+			if llm.IsContextOverflowError(llmErr) {
 				if retry < maxOverflowRetries && g.compactor != nil {
 					L_warn("context overflow detected, attempting recovery compaction",
 						"retry", retry+1,
