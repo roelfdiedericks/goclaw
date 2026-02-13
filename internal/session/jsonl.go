@@ -38,7 +38,7 @@ func (r *JSONLReader) ReadIndex() (SessionIndex, error) {
 
 	indexPath := filepath.Join(r.sessionsDir, "sessions.json")
 	L_trace("jsonl: reading session index", "path", indexPath)
-	
+
 	info, err := os.Stat(indexPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -47,7 +47,7 @@ func (r *JSONLReader) ReadIndex() (SessionIndex, error) {
 		}
 		return nil, fmt.Errorf("failed to stat session index: %w", err)
 	}
-	
+
 	data, err := os.ReadFile(indexPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read session index: %w", err)
@@ -58,7 +58,7 @@ func (r *JSONLReader) ReadIndex() (SessionIndex, error) {
 		return nil, fmt.Errorf("failed to parse session index: %w", err)
 	}
 
-	L_debug("jsonl: session index loaded", 
+	L_debug("jsonl: session index loaded",
 		"entries", len(index),
 		"size", len(data),
 		"modified", info.ModTime().Format(time.RFC3339))
@@ -92,12 +92,12 @@ func (r *JSONLReader) GetSessionEntry(key string) (*SessionIndexEntry, error) {
 // ParseJSONLFile parses a JSONL session file into records
 func (r *JSONLReader) ParseJSONLFile(filePath string) ([]Record, error) {
 	L_trace("jsonl: opening session file", "path", filePath)
-	
+
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to stat session file: %w", err)
 	}
-	
+
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open session file: %w", err)
@@ -114,7 +114,7 @@ func (r *JSONLReader) ParseJSONLFile(filePath string) ([]Record, error) {
 	// Track record types for logging
 	typeCounts := make(map[RecordType]int)
 	lineNum := 0
-	
+
 	for scanner.Scan() {
 		lineNum++
 		line := scanner.Bytes()
@@ -135,7 +135,7 @@ func (r *JSONLReader) ParseJSONLFile(filePath string) ([]Record, error) {
 		return nil, fmt.Errorf("error reading session file: %w", err)
 	}
 
-	L_debug("jsonl: parsed session file", 
+	L_debug("jsonl: parsed session file",
 		"path", filepath.Base(filePath),
 		"size", info.Size(),
 		"modified", info.ModTime().Format(time.RFC3339),
@@ -143,14 +143,14 @@ func (r *JSONLReader) ParseJSONLFile(filePath string) ([]Record, error) {
 		"messages", typeCounts[RecordTypeMessage],
 		"compactions", typeCounts[RecordTypeCompaction],
 		"checkpoints", typeCounts[RecordTypeCheckpoint])
-	
+
 	return records, nil
 }
 
 // LoadSession loads a session by key from the index
 func (r *JSONLReader) LoadSession(key string) (*Session, []Record, error) {
 	L_debug("jsonl: loading session", "key", key)
-	
+
 	entry, err := r.GetSessionEntry(key)
 	if err != nil {
 		if err == ErrSessionNotFound {
@@ -159,7 +159,7 @@ func (r *JSONLReader) LoadSession(key string) (*Session, []Record, error) {
 		return nil, nil, err
 	}
 
-	L_trace("jsonl: found session entry", 
+	L_trace("jsonl: found session entry",
 		"key", key,
 		"sessionId", entry.SessionID,
 		"sessionFile", entry.SessionFile,
@@ -201,7 +201,7 @@ func NewJSONLWriter(sessionsDir string) *JSONLWriter {
 
 // EnsureSessionsDir creates the sessions directory if it doesn't exist
 func (w *JSONLWriter) EnsureSessionsDir() error {
-	return os.MkdirAll(w.sessionsDir, 0755)
+	return os.MkdirAll(w.sessionsDir, 0750)
 }
 
 // AppendRecord appends a record to a JSONL session file
@@ -214,7 +214,7 @@ func (w *JSONLWriter) AppendRecord(sessionFile string, record Record) error {
 		return fmt.Errorf("failed to marshal record: %w", err)
 	}
 
-	f, err := os.OpenFile(sessionFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(sessionFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to open session file: %w", err)
 	}
@@ -344,7 +344,7 @@ func (w *JSONLWriter) UpdateIndex(key string, entry *SessionIndexEntry) error {
 	}
 
 	indexPath := filepath.Join(w.sessionsDir, "sessions.json")
-	if err := os.WriteFile(indexPath, data, 0644); err != nil {
+	if err := os.WriteFile(indexPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write session index: %w", err)
 	}
 

@@ -37,8 +37,8 @@ type SessionInfo struct {
 // ManagerConfig holds configuration for the session manager
 type ManagerConfig struct {
 	// Storage backend
-	StoreType   string // "jsonl" or "sqlite"
-	StorePath   string // Path for storage (DB file or sessions dir)
+	StoreType string // "jsonl" or "sqlite"
+	StorePath string // Path for storage (DB file or sessions dir)
 
 	// OpenClaw session inheritance (read-only)
 	SessionsDir string // Directory for OpenClaw session files (for watching)
@@ -52,8 +52,8 @@ type ManagerConfig struct {
 // Manager maintains all active sessions
 type Manager struct {
 	sessions map[string]*Session
-	store    Store          // Primary storage backend (SQLite)
-	reader   *JSONLReader   // For reading OpenClaw sessions (inheritance)
+	store    Store        // Primary storage backend (SQLite)
+	reader   *JSONLReader // For reading OpenClaw sessions (inheritance)
 	watcher  *SessionWatcher
 	config   *ManagerConfig
 	mu       sync.RWMutex
@@ -110,7 +110,7 @@ func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey string) error {
 	L_debug("session: attempting to inherit OpenClaw session",
 		"sessionsDir", sessionsDir,
 		"inheritKey", inheritKey)
-	
+
 	if m.reader == nil {
 		m.reader = NewJSONLReader(sessionsDir)
 	}
@@ -177,7 +177,7 @@ func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey string) error {
 	estimator := GetTokenEstimator()
 	sess.TotalTokens = estimator.EstimateSessionTokens(sess)
 	L_debug("session: recalculated tokens after merge", "totalTokens", sess.TotalTokens)
-	
+
 	// Set SessionFile to OpenClaw's file path (for watcher to monitor)
 	// GoClaw uses SQLite for storage, not JSONL
 	if m.reader != nil {
@@ -352,10 +352,10 @@ func (m *Manager) StartWatching(ctx context.Context, sessionFile string, onNewRe
 
 	callback := func(records []Record) {
 		L_debug("session: received new records from OpenClaw", "count", len(records))
-		
+
 		// Store new messages in SQLite for transcript indexing
 		m.storeWatchedMessages(records)
-		
+
 		if onNewRecords != nil {
 			onNewRecords(records)
 		}

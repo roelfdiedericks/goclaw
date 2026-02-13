@@ -177,7 +177,7 @@ func (t *UserAuthTool) runScript(ctx context.Context, credentials map[string]str
 	}
 
 	// Run script
-	cmd := exec.CommandContext(ctx, t.config.Script)
+	cmd := exec.CommandContext(ctx, t.config.Script) //nolint:gosec // G204: script path from admin config
 	cmd.Stdin = bytes.NewReader(inputJSON)
 
 	var stdout, stderr bytes.Buffer

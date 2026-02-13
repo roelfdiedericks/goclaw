@@ -71,7 +71,7 @@ func (AgentErrorEvent) IsAgentEvent() {}
 // The gateway must implement this and convert between its types and cron types.
 type GatewayRunner interface {
 	RunAgentForCron(ctx context.Context, req AgentRequest, events chan<- AgentEvent)
-	GetOwnerUserID() string // Returns the owner user ID for cron jobs
+	GetOwnerUserID() string                                   // Returns the owner user ID for cron jobs
 	InjectSystemEvent(ctx context.Context, text string) error // Inject system event into primary session
 }
 
@@ -519,7 +519,7 @@ func (s *Service) runDueJobs(ctx context.Context) {
 			L_error("cron: failed to mark job starting", "job", job.Name, "error", err)
 			continue
 		}
-		
+
 		L_info("cron: starting job execution", "job", job.Name, "id", job.ID, "prompt", truncateLog(job.Payload.GetPrompt(), 100))
 		// Execute in goroutine to not block other jobs
 		go s.executeJob(ctx, job)
@@ -544,7 +544,7 @@ func (s *Service) executeJob(ctx context.Context, job *CronJob) {
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(s.jobTimeoutMinutes)*time.Minute)
 		defer cancel()
 	}
-	
+
 	L_info("cron: === JOB START ===",
 		"job", job.Name,
 		"id", job.ID,
@@ -587,7 +587,7 @@ func (s *Service) executeJob(ctx context.Context, job *CronJob) {
 
 	// Create events channel
 	events := make(chan AgentEvent, 100)
-	
+
 	// Run the agent
 	go s.gateway.RunAgentForCron(ctx, req, events)
 
@@ -817,8 +817,8 @@ func (s *Service) runHeartbeat(ctx context.Context) {
 		FreshContext: false, // Use main session with history (for reading)
 		SessionID:    "",    // Empty = main session
 		UserID:       userID,
-		IsHeartbeat:  true,  // Ephemeral - don't persist to session
-		SkipMirror:   true,  // We handle delivery via ch.Send()
+		IsHeartbeat:  true, // Ephemeral - don't persist to session
+		SkipMirror:   true, // We handle delivery via ch.Send()
 	}
 
 	L_debug("heartbeat: invoking agent", "prompt", truncateLog(prompt, 100))

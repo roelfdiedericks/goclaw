@@ -23,7 +23,7 @@ func cleanupStaleLocks(profileDir string) {
 		"SingletonCookie",
 		"SingletonSocket",
 	}
-	
+
 	for _, lockFile := range lockFiles {
 		lockPath := filepath.Join(profileDir, lockFile)
 		if _, err := os.Stat(lockPath); err == nil {
@@ -43,7 +43,7 @@ func cleanupStaleLocks(profileDir string) {
 func (m *Manager) createLauncher(binPath, profileDir string, headless bool) (*launcher.Launcher, error) {
 	var actualBinPath string
 	var err error
-	
+
 	if m.config.Bubblewrap.Enabled {
 		// Create bubblewrap sandbox wrapper
 		actualBinPath, err = CreateSandboxedLauncher(binPath, m.config.Workspace, profileDir, m.config.Bubblewrap)
@@ -65,26 +65,26 @@ func (m *Manager) createLauncher(binPath, profileDir string, headless bool) (*la
 		}
 		L_info("browser: using passthrough wrapper (clean environment)")
 	}
-	
+
 	l := launcher.New().
 		Bin(actualBinPath).
 		UserDataDir(profileDir).
 		Headless(headless).
 		Set("disable-dev-shm-usage") // For Docker/limited memory
-	
+
 	// Set window size for headed mode (otherwise Chrome uses a tiny default)
 	if !headless {
 		l = l.Set("window-size", "1920,1080").
 			Set("start-maximized")
 	}
-	
+
 	if m.config.Stealth {
 		l = l.Set("disable-blink-features", "AutomationControlled")
 	}
-	
+
 	// Note: We no longer add --no-sandbox. The passthrough wrapper provides
 	// a clean environment, and Chrome can use its native sandbox.
-	
+
 	return l, nil
 }
 
@@ -94,7 +94,7 @@ func (m *Manager) launchWithRetry(binPath, profileDir string, headless bool) (st
 	if err != nil {
 		return "", err
 	}
-	
+
 	controlURL, err := l.Launch()
 	if err != nil {
 		// Check for SingletonLock error and retry once after cleanup
@@ -102,7 +102,7 @@ func (m *Manager) launchWithRetry(binPath, profileDir string, headless bool) (st
 			L_warn("browser: SingletonLock error, cleaning up and retrying", "error", err)
 			cleanupStaleLocks(profileDir)
 			time.Sleep(500 * time.Millisecond)
-			
+
 			l, err = m.createLauncher(binPath, profileDir, headless)
 			if err != nil {
 				return "", err
@@ -110,7 +110,7 @@ func (m *Manager) launchWithRetry(binPath, profileDir string, headless bool) (st
 			controlURL, err = l.Launch()
 		}
 	}
-	
+
 	return controlURL, err
 }
 
@@ -130,11 +130,11 @@ type Manager struct {
 	homeDir    string
 	downloader *Downloader
 	profiles   *ProfileManager
-	
+
 	// Browser instances per profile
 	browsers   map[string]*browserInstance
 	browsersMu sync.Mutex
-	
+
 	// Initialization state
 	initialized bool
 	initOnce    sync.Once
@@ -162,20 +162,20 @@ func InitManager(cfg BrowserConfig) (*Manager, error) {
 			err = fmt.Errorf("failed to get home directory: %w", e)
 			return
 		}
-		
+
 		globalManager = &Manager{
 			config:   cfg,
 			homeDir:  homeDir,
 			browsers: make(map[string]*browserInstance),
 		}
-		
+
 		// Initialize downloader and profile manager
 		binDir := cfg.ResolveBinDir(homeDir)
 		profilesDir := cfg.ResolveProfilesDir(homeDir)
-		
+
 		globalManager.downloader = NewDownloader(binDir, cfg.Revision)
 		globalManager.profiles = NewProfileManager(profilesDir)
-		
+
 		L_debug("browser: manager initialized",
 			"binDir", binDir,
 			"profilesDir", profilesDir,
@@ -183,11 +183,11 @@ func InitManager(cfg BrowserConfig) (*Manager, error) {
 			"stealth", cfg.Stealth,
 		)
 	})
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return globalManager, nil
 }
 
@@ -210,7 +210,7 @@ func (m *Manager) EnsureReady() error {
 	if m == nil {
 		return fmt.Errorf("browser manager not initialized")
 	}
-	
+
 	if !m.config.AutoDownload {
 		// Check if browser exists
 		if _, err := m.downloader.FindExistingBrowser(); err != nil {
@@ -218,7 +218,7 @@ func (m *Manager) EnsureReady() error {
 		}
 		return nil
 	}
-	
+
 	// Download if needed
 	_, err := m.downloader.EnsureBrowser()
 	return err
@@ -253,14 +253,14 @@ func (m *Manager) GetBrowser(profile string, headed bool) (*rod.Browser, error) 
 	if m == nil {
 		return nil, fmt.Errorf("browser manager not initialized")
 	}
-	
+
 	if profile == "" {
 		profile = m.config.DefaultProfile
 	}
-	
+
 	m.browsersMu.Lock()
 	defer m.browsersMu.Unlock()
-	
+
 	// Check for existing browser
 	if instance, ok := m.browsers[profile]; ok {
 		// Headed browser always wins - never close it automatically
@@ -268,20 +268,20 @@ func (m *Manager) GetBrowser(profile string, headed bool) (*rod.Browser, error) 
 			L_debug("browser: returning existing headed browser", "profile", profile, "requested_headed", headed)
 			return instance.browser, nil
 		}
-		
+
 		// Existing is headless
 		if !headed {
 			// Requested headless, have headless - return it
 			L_debug("browser: returning existing headless browser", "profile", profile)
 			return instance.browser, nil
 		}
-		
+
 		// Requested headed, have headless - safe to close and upgrade
 		L_debug("browser: upgrading headless to headed", "profile", profile)
 		instance.browser.Close()
 		delete(m.browsers, profile)
 	}
-	
+
 	// Special case: profile="chrome" connects to existing Chrome via CDP
 	if profile == "chrome" {
 		browser, err := m.connectToChrome()
@@ -298,29 +298,29 @@ func (m *Manager) GetBrowser(profile string, headed bool) (*rod.Browser, error) 
 		go m.monitorBrowser(profile, browser)
 		return browser, nil
 	}
-	
+
 	// Launch new browser with requested mode
 	browser, err := m.launchBrowser(profile, headed)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	m.browsers[profile] = &browserInstance{
 		browser:   browser,
 		headed:    headed,
 		profile:   profile,
 		createdAt: time.Now(),
 	}
-	
+
 	// Monitor for browser death - automatically clean up when WebSocket dies
 	go m.monitorBrowser(profile, browser)
-	
+
 	mode := "headless"
 	if headed {
 		mode = "headed"
 	}
 	L_info("browser: launched", "profile", profile, "mode", mode)
-	
+
 	return browser, nil
 }
 
@@ -331,45 +331,45 @@ func (m *Manager) launchBrowser(profile string, headed bool) (*rod.Browser, erro
 	if err != nil {
 		return nil, fmt.Errorf("failed to ensure browser: %w", err)
 	}
-	
+
 	// Ensure profile directory exists
 	profileDir, err := m.profiles.EnsureProfile(profile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to ensure profile: %w", err)
 	}
-	
+
 	// Clean up stale Chrome lock files from crashed sessions
 	cleanupStaleLocks(profileDir)
-	
+
 	mode := "headless"
 	if headed {
 		mode = "headed"
 	}
 	L_debug("browser: launching", "profile", profile, "mode", mode, "profileDir", profileDir)
-	
+
 	controlURL, err := m.launchWithRetry(binPath, profileDir, !headed)
 	if err != nil {
 		return nil, fmt.Errorf("failed to launch browser: %w", err)
 	}
-	
+
 	browser := rod.New().ControlURL(controlURL)
 	if err := browser.Connect(); err != nil {
 		return nil, fmt.Errorf("failed to connect to browser: %w", err)
 	}
-	
+
 	// Set device emulation based on config
 	browser.DefaultDevice(m.config.ResolveDevice())
-	
+
 	return browser, nil
 }
 
 // monitorBrowser watches for browser disconnect and removes from pool
 func (m *Manager) monitorBrowser(profile string, browser *rod.Browser) {
 	<-browser.GetContext().Done()
-	
+
 	m.browsersMu.Lock()
 	defer m.browsersMu.Unlock()
-	
+
 	// Only delete if this is still the same browser (not replaced)
 	if instance, ok := m.browsers[profile]; ok && instance.browser == browser {
 		delete(m.browsers, profile)
@@ -384,11 +384,11 @@ func (m *Manager) GetStealthPage(profile string, headed bool) (*rod.Page, error)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if m.config.Stealth {
 		return stealth.Page(browser)
 	}
-	
+
 	return browser.Page(proto.TargetCreateTarget{})
 }
 
@@ -399,13 +399,13 @@ func (m *Manager) GetBackgroundStealthPage(profile string, headed bool) (*rod.Pa
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Create page in background - won't steal focus from user's active tab
 	page, err := browser.Page(proto.TargetCreateTarget{Background: true})
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Apply stealth JS if configured (same as stealth.Page does)
 	if m.config.Stealth {
 		if _, err := page.EvalOnNewDocument(stealth.JS); err != nil {
@@ -413,7 +413,7 @@ func (m *Manager) GetBackgroundStealthPage(profile string, headed bool) (*rod.Pa
 			return nil, err
 		}
 	}
-	
+
 	return page, nil
 }
 
@@ -423,7 +423,7 @@ func (m *Manager) GetPage(profile string, headed bool) (*rod.Page, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return browser.Page(proto.TargetCreateTarget{})
 }
 
@@ -435,14 +435,14 @@ func (m *Manager) connectToChrome() (*rod.Browser, error) {
 	if endpoint == "" {
 		endpoint = "ws://localhost:9222"
 	}
-	
+
 	L_info("browser: connecting to Chrome", "endpoint", endpoint)
-	
+
 	browser := rod.New().ControlURL(endpoint)
 	if err := browser.Connect(); err != nil {
 		return nil, fmt.Errorf("failed to connect to Chrome at %s (is Chrome running with extension?): %w", endpoint, err)
 	}
-	
+
 	L_info("browser: connected to Chrome", "endpoint", endpoint)
 	return browser, nil
 }
@@ -460,20 +460,20 @@ func (m *Manager) CloseBrowser(profile string) error {
 	if m == nil {
 		return fmt.Errorf("browser manager not initialized")
 	}
-	
+
 	if profile == "" {
 		profile = m.config.DefaultProfile
 	}
-	
+
 	// Don't close external browsers (user's Chrome)
 	if m.IsExternalProfile(profile) {
 		L_debug("browser: skipping close for external profile", "profile", profile)
 		return nil
 	}
-	
+
 	m.browsersMu.Lock()
 	defer m.browsersMu.Unlock()
-	
+
 	if instance, ok := m.browsers[profile]; ok {
 		instance.browser.Close()
 		delete(m.browsers, profile)
@@ -487,10 +487,10 @@ func (m *Manager) CloseAll() {
 	if m == nil {
 		return
 	}
-	
+
 	m.browsersMu.Lock()
 	defer m.browsersMu.Unlock()
-	
+
 	for profile, instance := range m.browsers {
 		// Don't close external browsers (user's Chrome)
 		if m.IsExternalProfile(profile) {
@@ -530,10 +530,10 @@ func (m *Manager) Config() BrowserConfig {
 
 // BrowserStatus contains status information for a running browser
 type BrowserStatus struct {
-	Profile     string `json:"profile"`
-	Running     bool   `json:"running"`
-	PageCount   int    `json:"pageCount"`
-	ControlURL  string `json:"controlURL,omitempty"`
+	Profile    string `json:"profile"`
+	Running    bool   `json:"running"`
+	PageCount  int    `json:"pageCount"`
+	ControlURL string `json:"controlURL,omitempty"`
 }
 
 // Status returns the status of all browser instances
@@ -606,14 +606,14 @@ func (m *Manager) HasBrowser(profile string) (exists bool, headed bool) {
 	if m == nil {
 		return false, false
 	}
-	
+
 	if profile == "" {
 		profile = m.config.DefaultProfile
 	}
-	
+
 	m.browsersMu.Lock()
 	defer m.browsersMu.Unlock()
-	
+
 	if instance, ok := m.browsers[profile]; ok {
 		return true, instance.headed
 	}

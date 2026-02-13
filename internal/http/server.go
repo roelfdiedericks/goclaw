@@ -51,7 +51,7 @@ type ServerConfig struct {
 // NewServer creates a new HTTP server instance
 func NewServer(cfg *ServerConfig, users *user.Registry) (*Server, error) {
 	L_debug("http: NewServer starting", "listen", cfg.Listen, "devMode", cfg.DevMode, "mediaRoot", cfg.MediaRoot)
-	
+
 	// Validate that at least one user has HTTP credentials
 	hasHTTPUsers := false
 	userList := users.List()

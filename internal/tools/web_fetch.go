@@ -193,7 +193,7 @@ func (t *WebFetchTool) fetchWithHTTP(ctx context.Context, urlStr string, maxLen 
 	// Check for Cloudflare challenge in body
 	bodyStr := string(body)
 	L_debug("web_fetch: raw HTML received", "url", urlStr, "htmlLength", len(bodyStr))
-	
+
 	if t.isCloudflareChallenge(bodyStr) {
 		L_warn("web_fetch: Cloudflare challenge detected in body", "url", urlStr)
 		return "", &fetchError{code: 403, msg: "Cloudflare challenge page", retryable: true}
@@ -220,7 +220,7 @@ func (t *WebFetchTool) fetchWithHTTP(ctx context.Context, urlStr string, maxLen 
 	// Check for minimal content (likely JS-rendered SPA)
 	textLen := len(strings.TrimSpace(article.TextContent))
 	L_debug("web_fetch: readability extracted", "url", urlStr, "textLength", textLen, "title", article.Title)
-	
+
 	if textLen < 200 {
 		L_warn("web_fetch: minimal content extracted (likely JS SPA)", "url", urlStr, "textLength", textLen)
 		return "", &fetchError{code: 0, msg: fmt.Sprintf("minimal content (%d chars) - likely JS-rendered page", textLen), retryable: true}
@@ -368,7 +368,7 @@ func (t *WebFetchTool) isCloudflareChallenge(body string) bool {
 		"Ray ID:",
 		"cf-spinner",
 	}
-	
+
 	bodyLower := strings.ToLower(body)
 	for _, indicator := range indicators {
 		if strings.Contains(bodyLower, strings.ToLower(indicator)) {

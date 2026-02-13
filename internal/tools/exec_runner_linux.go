@@ -61,7 +61,7 @@ func (r *ExecRunner) buildSandboxedCommand(ctx context.Context, command, workDir
 	}
 
 	// Apply context for timeout handling
-	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
+	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...) //nolint:gosec // G204: cmd from bwrap builder - sandboxed execution
 
 	L_debug("exec runner: sandbox command built",
 		"command", truncate(command, 50),

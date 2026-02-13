@@ -14,11 +14,11 @@ import (
 
 // Builder constructs bwrap command arguments using a fluent interface.
 type Builder struct {
-	args       []string
-	bwrapPath  string
-	command    string
+	args        []string
+	bwrapPath   string
+	command     string
 	commandArgs []string
-	err        error
+	err         error
 }
 
 // New creates a new bwrap command builder.
@@ -268,19 +268,19 @@ func (b *Builder) DefaultEnv(home string) *Builder {
 	}
 	b.SetEnv("HOME", home)
 	b.SetEnv("TERM", "xterm")
-	
+
 	// Preserve LANG from host or use default
 	if lang := os.Getenv("LANG"); lang != "" {
 		b.SetEnv("LANG", lang)
 	} else {
 		b.SetEnv("LANG", "C.UTF-8")
 	}
-	
+
 	// Preserve USER from host
 	if user := os.Getenv("USER"); user != "" {
 		b.SetEnv("USER", user)
 	}
-	
+
 	return b
 }
 
@@ -331,7 +331,7 @@ func (b *Builder) BuildCommand() (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	return exec.Command(bwrapPath, args...), nil
+	return exec.Command(bwrapPath, args...), nil //nolint:gosec // G204: bwrapPath validated by FindBwrap()
 }
 
 // FindBwrap locates the bwrap binary.

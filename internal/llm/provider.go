@@ -17,8 +17,8 @@ type Provider interface {
 	Model() string // Current model name
 
 	// Cloning with overrides
-	WithModel(model string) Provider    // Clone with different model
-	WithMaxTokens(max int) Provider     // Clone with output limit override
+	WithModel(model string) Provider // Clone with different model
+	WithMaxTokens(max int) Provider  // Clone with output limit override
 
 	// Availability
 	IsAvailable() bool  // Ready to accept requests
@@ -48,7 +48,7 @@ type Provider interface {
 // Message represents a conversation message (provider-agnostic).
 // Can be converted from session.Message for use with providers.
 type Message struct {
-	Role      string          `json:"role"`      // "user", "assistant", "system", "tool_result"
+	Role      string          `json:"role"` // "user", "assistant", "system", "tool_result"
 	Content   string          `json:"content"`
 	ToolUseID string          `json:"toolUseId,omitempty"` // For tool_use/tool_result pairing
 	ToolName  string          `json:"toolName,omitempty"`  // Tool name (for tool_use)
@@ -95,7 +95,7 @@ type ToolDefinition = types.ToolDefinition
 
 // ToolUse represents a tool call from the model
 type ToolUse struct {
-	ID    string          `json:"id"`    // For pairing with results
+	ID    string          `json:"id"` // For pairing with results
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input"`
 }

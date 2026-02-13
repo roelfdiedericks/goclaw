@@ -49,17 +49,17 @@ type AnthropicProvider struct {
 
 // Response represents the LLM response
 type Response struct {
-	Text       string          // accumulated text response
-	ToolUseID  string          // if tool use requested
+	Text       string // accumulated text response
+	ToolUseID  string // if tool use requested
 	ToolName   string
 	ToolInput  json.RawMessage
-	StopReason string          // "end_turn", "tool_use", etc.
-	Thinking   string          // reasoning/thinking content (Kimi, Deepseek, etc.)
+	StopReason string // "end_turn", "tool_use", etc.
+	Thinking   string // reasoning/thinking content (Kimi, Deepseek, etc.)
 
-	InputTokens            int
-	OutputTokens           int
-	CacheCreationTokens    int // tokens used to create cache entry
-	CacheReadTokens        int // tokens read from cache (saved cost!)
+	InputTokens         int
+	OutputTokens        int
+	CacheCreationTokens int // tokens used to create cache entry
+	CacheReadTokens     int // tokens read from cache (saved cost!)
 }
 
 // HasToolUse returns true if the response contains a tool use request
@@ -212,7 +212,7 @@ func (c *AnthropicProvider) SimpleMessage(ctx context.Context, userMessage, syst
 	messages := []types.Message{
 		{Role: "user", Content: userMessage},
 	}
-	
+
 	var result string
 	_, err := c.StreamMessage(ctx, messages, nil, systemPrompt, func(delta string) {
 		result += delta
@@ -220,7 +220,7 @@ func (c *AnthropicProvider) SimpleMessage(ctx context.Context, userMessage, syst
 	if err != nil {
 		return "", err
 	}
-	
+
 	return result, nil
 }
 
@@ -263,7 +263,7 @@ func (c *AnthropicProvider) StreamMessage(
 			}
 		}
 	}
-	
+
 	contextWindow := c.ContextTokens()
 	L_info("llm: request started", "provider", c.name, "model", c.model, "messages", len(messages), "tools", len(toolDefs), "thinking", enableThinking)
 	L_debug("preparing LLM request", "messages", len(messages), "tools", len(toolDefs))
@@ -388,7 +388,7 @@ func (c *AnthropicProvider) StreamMessage(
 
 	for stream.Next() {
 		event := stream.Current()
-		
+
 		// Accumulate the message
 		if err := message.Accumulate(event); err != nil {
 			FinishDumpError(dumpCtx, err, c.transport)
@@ -477,7 +477,7 @@ func (c *AnthropicProvider) StreamMessage(
 	response.OutputTokens = int(message.Usage.OutputTokens)
 	response.CacheCreationTokens = int(message.Usage.CacheCreationInputTokens)
 	response.CacheReadTokens = int(message.Usage.CacheReadInputTokens)
-	
+
 	// Log with cache info if caching is active
 	if response.CacheReadTokens > 0 || response.CacheCreationTokens > 0 {
 		L_debug("response received (cache active)",
@@ -513,7 +513,7 @@ func (c *AnthropicProvider) StreamMessage(
 			}
 		}
 	}
-	
+
 	// If we accumulated thinking from deltas but didn't get a final block, use that
 	if response.Thinking == "" && thinkingContent.Len() > 0 {
 		response.Thinking = thinkingContent.String()

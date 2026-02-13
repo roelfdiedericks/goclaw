@@ -88,9 +88,9 @@ type AuditResult struct {
 
 // EligibilityContext provides runtime context for eligibility checking
 type EligibilityContext struct {
-	OS          string                    // runtime.GOOS
-	ConfigKeys  map[string]bool           // Available config keys
-	SkillConfig *SkillEntryConfig         // Per-skill config if exists
+	OS          string            // runtime.GOOS
+	ConfigKeys  map[string]bool   // Available config keys
+	SkillConfig *SkillEntryConfig // Per-skill config if exists
 }
 
 // SkillEntryConfig holds per-skill configuration from goclaw.json

@@ -26,7 +26,7 @@ const currentSchemaVersion = 5
 func NewSQLiteStore(cfg StoreConfig) (*SQLiteStore, error) {
 	// Ensure directory exists
 	dir := filepath.Dir(cfg.Path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
@@ -661,7 +661,7 @@ func (s *SQLiteStore) AppendCompaction(ctx context.Context, sessionKey string, c
 		WHERE key = ?
 	`, time.Now().Unix(), sessionKey)
 
-	L_info("sqlite: compaction appended", "session", sessionKey, "id", comp.ID, 
+	L_info("sqlite: compaction appended", "session", sessionKey, "id", comp.ID,
 		"tokensBefore", comp.TokensBefore, "needsRetry", comp.NeedsSummaryRetry)
 	return nil
 }

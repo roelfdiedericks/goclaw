@@ -88,22 +88,22 @@ func NewAuditor() *Auditor {
 				desc:     "Pastebin URL reference",
 			},
 
-		// Encoded content
-		{
-			name:     "base64_long",
-			severity: "info",
-			regex:    regexp.MustCompile(`[A-Za-z0-9+/]{100,}={0,2}`),
-			desc:     "Long base64-encoded content",
-		},
+			// Encoded content
+			{
+				name:     "base64_long",
+				severity: "info",
+				regex:    regexp.MustCompile(`[A-Za-z0-9+/]{100,}={0,2}`),
+				desc:     "Long base64-encoded content",
+			},
 
-		// Outside workspace access (exclude common shell profiles like ~/.zshrc, ~/.bashrc)
-		{
-			name:     "outside_workspace",
-			severity: "warn",
-			regex:    regexp.MustCompile(`~/\.config/|/etc/|/home/\w+/|/Users/\w+/`),
-			desc:     "References paths outside workspace",
+			// Outside workspace access (exclude common shell profiles like ~/.zshrc, ~/.bashrc)
+			{
+				name:     "outside_workspace",
+				severity: "warn",
+				regex:    regexp.MustCompile(`~/\.config/|/etc/|/home/\w+/|/Users/\w+/`),
+				desc:     "References paths outside workspace",
+			},
 		},
-	},
 	}
 }
 

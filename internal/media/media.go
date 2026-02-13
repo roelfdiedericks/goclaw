@@ -11,10 +11,10 @@ import (
 
 // Anthropic API limits for images
 const (
-	MaxDimension = 2000              // Max width or height in pixels
-	MaxBytes     = 5 * 1024 * 1024   // 5MB max file size
-	MinQuality   = 35                // Minimum JPEG quality to try
-	MaxQuality   = 85                // Starting JPEG quality
+	MaxDimension = 2000            // Max width or height in pixels
+	MaxBytes     = 5 * 1024 * 1024 // 5MB max file size
+	MinQuality   = 35              // Minimum JPEG quality to try
+	MaxQuality   = 85              // Starting JPEG quality
 )
 
 // Supported image MIME types for Anthropic vision

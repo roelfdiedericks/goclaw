@@ -74,7 +74,7 @@ type CommandResult struct {
 // HassInfo contains Home Assistant connection status
 type HassInfo struct {
 	Configured    bool
-	State         string        // "disconnected", "connecting", "connected"
+	State         string // "disconnected", "connecting", "connected"
 	Endpoint      string
 	Uptime        time.Duration
 	LastError     string
@@ -97,8 +97,8 @@ type HassSubscriptionInfo struct {
 
 // LLMProviderStatusResult contains status of all LLM providers
 type LLMProviderStatusResult struct {
-	Providers        []LLMProviderInfo
-	AgentChain       []string
+	Providers          []LLMProviderInfo
+	AgentChain         []string
 	SummarizationChain []string
 }
 
@@ -113,16 +113,16 @@ type LLMProviderInfo struct {
 
 // EmbeddingsStatusResult contains embeddings status info
 type EmbeddingsStatusResult struct {
-	Configured               bool
-	PrimaryModel             string
-	AutoRebuild              bool
-	TranscriptTotal          int
-	TranscriptPrimary        int
-	TranscriptNeedsRebuild   int
-	MemoryTotal              int
-	MemoryPrimary            int
-	MemoryNeedsRebuild       int
-	Models                   []EmbeddingsModelInfo
+	Configured             bool
+	PrimaryModel           string
+	AutoRebuild            bool
+	TranscriptTotal        int
+	TranscriptPrimary      int
+	TranscriptNeedsRebuild int
+	MemoryTotal            int
+	MemoryPrimary          int
+	MemoryNeedsRebuild     int
+	Models                 []EmbeddingsModelInfo
 }
 
 // EmbeddingsModelInfo contains info about embedding model usage

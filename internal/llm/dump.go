@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	dumpDirName   = "llm_dumps"
-	maxDumpFiles  = 20
+	dumpDirName  = "llm_dumps"
+	maxDumpFiles = 20
 )
 
 // requestCaptureKey is the context key for per-request capture data
@@ -329,7 +329,7 @@ func dumpDir() (string, error) {
 		return "", fmt.Errorf("get home dir: %w", err)
 	}
 	dir := filepath.Join(home, ".goclaw", dumpDirName)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return "", fmt.Errorf("create dump dir: %w", err)
 	}
 	return dir, nil
@@ -346,24 +346,24 @@ func sanitizeFilename(s string) string {
 
 // TokenInfo holds token estimation details for debugging context issues
 type TokenInfo struct {
-	ContextWindow   int     // Model's context window size
-	EstimatedInput  int     // Our token estimate for input
-	ConfiguredMax   int     // User-configured max_tokens
-	CappedMax       int     // After applying safety limits
-	SafetyMargin    float64 // The multiplier applied (e.g., 1.2)
-	Buffer          int     // Reserved buffer tokens
+	ContextWindow  int     // Model's context window size
+	EstimatedInput int     // Our token estimate for input
+	ConfiguredMax  int     // User-configured max_tokens
+	CappedMax      int     // After applying safety limits
+	SafetyMargin   float64 // The multiplier applied (e.g., 1.2)
+	Buffer         int     // Reserved buffer tokens
 }
 
 // DumpContext holds the context for a dump operation.
 // Content is buffered in memory and only written to disk on error.
 type DumpContext struct {
-	Content        strings.Builder  // Buffered dump content
+	Content        strings.Builder // Buffered dump content
 	Provider       string
 	Model          string
 	CallerFile     string
 	CallerLine     int
 	StartTime      time.Time
-	RequestCapture *RequestCapture  // Per-request HTTP capture (provides isolation)
+	RequestCapture *RequestCapture // Per-request HTTP capture (provides isolation)
 }
 
 // SetTokenInfo appends token estimation details to the dump buffer.
@@ -565,7 +565,7 @@ func FinishDumpError(ctx *DumpContext, err error, transport *CapturingTransport)
 	filename := fmt.Sprintf("%s_%s_%s_%03d_error.txt", ctx.Provider, sanitizedModel, timestamp, millis)
 	path := filepath.Join(dir, filename)
 
-	if writeErr := os.WriteFile(path, []byte(ctx.Content.String()), 0644); writeErr != nil {
+	if writeErr := os.WriteFile(path, []byte(ctx.Content.String()), 0600); writeErr != nil {
 		L_warn("dump: failed to write error dump", "path", path, "error", writeErr)
 		return
 	}
@@ -608,7 +608,7 @@ func FinishDumpSuccess(ctx *DumpContext, keepOnSuccess bool) {
 	filename := fmt.Sprintf("%s_%s_%s_%03d_success.txt", ctx.Provider, sanitizedModel, timestamp, millis)
 	path := filepath.Join(dir, filename)
 
-	if writeErr := os.WriteFile(path, []byte(ctx.Content.String()), 0644); writeErr != nil {
+	if writeErr := os.WriteFile(path, []byte(ctx.Content.String()), 0600); writeErr != nil {
 		L_warn("dump: failed to write success dump", "path", path, "error", writeErr)
 		return
 	}

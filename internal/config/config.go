@@ -27,24 +27,24 @@ func isMinimalJSON(data []byte) bool {
 
 // Config represents the merged goclaw configuration
 type Config struct {
-	Gateway       GatewayConfig         `json:"gateway"`
-	Agent         AgentIdentityConfig   `json:"agent"`
-	LLM           LLMConfig             `json:"llm"`
-	HomeAssistant HomeAssistantConfig   `json:"homeassistant"` // Top-level Home Assistant config
-	Tools         ToolsConfig           `json:"tools"`
-	Telegram      TelegramConfig        `json:"telegram"`
-	HTTP          HTTPConfig            `json:"http"`
-	Session       SessionConfig         `json:"session"`
-	MemorySearch  MemorySearchConfig    `json:"memorySearch"`
-	Transcript    TranscriptConfig      `json:"transcript"`
-	PromptCache   PromptCacheConfig     `json:"promptCache"`
-	Media         MediaConfig           `json:"media"`
-	TUI           TUIConfig             `json:"tui"`
-	Skills        SkillsConfig          `json:"skills"`
-	Cron          CronConfig            `json:"cron"`
-	Supervision   SupervisionConfig     `json:"supervision"`
-	Roles         RolesConfig           `json:"roles"`         // Role-based access control
-	Auth          AuthConfig            `json:"auth"`          // Role elevation authentication
+	Gateway       GatewayConfig       `json:"gateway"`
+	Agent         AgentIdentityConfig `json:"agent"`
+	LLM           LLMConfig           `json:"llm"`
+	HomeAssistant HomeAssistantConfig `json:"homeassistant"` // Top-level Home Assistant config
+	Tools         ToolsConfig         `json:"tools"`
+	Telegram      TelegramConfig      `json:"telegram"`
+	HTTP          HTTPConfig          `json:"http"`
+	Session       SessionConfig       `json:"session"`
+	MemorySearch  MemorySearchConfig  `json:"memorySearch"`
+	Transcript    TranscriptConfig    `json:"transcript"`
+	PromptCache   PromptCacheConfig   `json:"promptCache"`
+	Media         MediaConfig         `json:"media"`
+	TUI           TUIConfig           `json:"tui"`
+	Skills        SkillsConfig        `json:"skills"`
+	Cron          CronConfig          `json:"cron"`
+	Supervision   SupervisionConfig   `json:"supervision"`
+	Roles         RolesConfig         `json:"roles"` // Role-based access control
+	Auth          AuthConfig          `json:"auth"`  // Role elevation authentication
 }
 
 // RolesConfig maps role names to their permission configurations
@@ -181,13 +181,13 @@ type GhostwritingConfig struct {
 // SkillsConfig configures the skills system
 type SkillsConfig struct {
 	Enabled       bool                        `json:"enabled"`
-	BundledDir    string                      `json:"bundledDir"`    // Override bundled skills path
-	ManagedDir    string                      `json:"managedDir"`    // Override managed skills path
-	WorkspaceDir  string                      `json:"workspaceDir"`  // Override workspace skills path
-	ExtraDirs     []string                    `json:"extraDirs"`     // Additional skill directories
-	Watch         bool                        `json:"watch"`         // Watch for file changes
+	BundledDir    string                      `json:"bundledDir"`      // Override bundled skills path
+	ManagedDir    string                      `json:"managedDir"`      // Override managed skills path
+	WorkspaceDir  string                      `json:"workspaceDir"`    // Override workspace skills path
+	ExtraDirs     []string                    `json:"extraDirs"`       // Additional skill directories
+	Watch         bool                        `json:"watch"`           // Watch for file changes
 	WatchDebounce int                         `json:"watchDebounceMs"` // Debounce interval in ms
-	Entries       map[string]SkillEntryConfig `json:"entries"`       // Per-skill configuration
+	Entries       map[string]SkillEntryConfig `json:"entries"`         // Per-skill configuration
 }
 
 // SkillEntryConfig holds per-skill configuration
@@ -279,7 +279,7 @@ type MemoryFlushConfig struct {
 type FlushThresholdConfig struct {
 	Percent      int    `json:"percent"`
 	Prompt       string `json:"prompt"`
-	InjectAs     string `json:"injectAs"`     // "system" or "user"
+	InjectAs     string `json:"injectAs"` // "system" or "user"
 	OncePerCycle bool   `json:"oncePerCycle"`
 }
 
@@ -382,10 +382,10 @@ type LLMProviderConfig struct {
 
 // LLMPurposeConfig defines the model chain for a specific purpose
 type LLMPurposeConfig struct {
-	Models         []string `json:"models"`                    // First = primary, rest = fallbacks
-	MaxTokens      int      `json:"maxTokens,omitempty"`       // Output limit override (0 = use model default)
-	MaxInputTokens int      `json:"maxInputTokens,omitempty"`  // Input limit for summarization (0 = use model context - buffer)
-	AutoRebuild    *bool    `json:"autoRebuild,omitempty"`     // Embeddings: auto-rebuild on model mismatch (default: true)
+	Models         []string `json:"models"`                   // First = primary, rest = fallbacks
+	MaxTokens      int      `json:"maxTokens,omitempty"`      // Output limit override (0 = use model default)
+	MaxInputTokens int      `json:"maxInputTokens,omitempty"` // Input limit for summarization (0 = use model context - buffer)
+	AutoRebuild    *bool    `json:"autoRebuild,omitempty"`    // Embeddings: auto-rebuild on model mismatch (default: true)
 }
 
 // GetAutoRebuild returns the AutoRebuild setting, defaulting to true if not set
@@ -439,8 +439,8 @@ type BubblewrapGlobalConfig struct {
 
 // ExecToolsConfig contains exec tool settings
 type ExecToolsConfig struct {
-	Timeout    int                    `json:"timeout"`    // Timeout in seconds (default: 1800 = 30 min, 0 = no timeout)
-	Bubblewrap ExecBubblewrapConfig   `json:"bubblewrap"` // Sandbox settings
+	Timeout    int                  `json:"timeout"`    // Timeout in seconds (default: 1800 = 30 min, 0 = no timeout)
+	Bubblewrap ExecBubblewrapConfig `json:"bubblewrap"` // Sandbox settings
 }
 
 // ExecBubblewrapConfig contains bubblewrap settings for exec tool
@@ -463,18 +463,18 @@ type WebToolsConfig struct {
 
 // BrowserToolsConfig contains browser tool settings
 type BrowserToolsConfig struct {
-	Enabled        bool                     `json:"enabled"`        // Enable headless browser tool (requires Chrome/Chromium)
-	Dir            string                   `json:"dir"`            // Browser data directory (empty = ~/.goclaw/browser)
-	AutoDownload   bool                     `json:"autoDownload"`   // Download Chromium if missing (default: true)
-	Revision       string                   `json:"revision"`       // Chromium revision (empty = latest)
-	Headless       bool                     `json:"headless"`       // Run browser in headless mode (default: true)
-	NoSandbox      bool                     `json:"noSandbox"`      // Disable Chrome sandbox (needed for Docker/root)
-	DefaultProfile string                   `json:"defaultProfile"` // Default profile name (default: "default")
-	Timeout        string                   `json:"timeout"`        // Default action timeout (default: "30s")
-	Stealth        bool                     `json:"stealth"`        // Enable stealth mode (default: true)
-	Device         string                   `json:"device"`         // Device emulation: "clear", "laptop", "iphone-x", etc. (default: "clear")
-	ProfileDomains map[string]string        `json:"profileDomains"` // Domain → profile mapping for auto-selection
-	Bubblewrap     BrowserBubblewrapConfig  `json:"bubblewrap"`     // Sandbox settings
+	Enabled        bool                    `json:"enabled"`        // Enable headless browser tool (requires Chrome/Chromium)
+	Dir            string                  `json:"dir"`            // Browser data directory (empty = ~/.goclaw/browser)
+	AutoDownload   bool                    `json:"autoDownload"`   // Download Chromium if missing (default: true)
+	Revision       string                  `json:"revision"`       // Chromium revision (empty = latest)
+	Headless       bool                    `json:"headless"`       // Run browser in headless mode (default: true)
+	NoSandbox      bool                    `json:"noSandbox"`      // Disable Chrome sandbox (needed for Docker/root)
+	DefaultProfile string                  `json:"defaultProfile"` // Default profile name (default: "default")
+	Timeout        string                  `json:"timeout"`        // Default action timeout (default: "30s")
+	Stealth        bool                    `json:"stealth"`        // Enable stealth mode (default: true)
+	Device         string                  `json:"device"`         // Device emulation: "clear", "laptop", "iphone-x", etc. (default: "clear")
+	ProfileDomains map[string]string       `json:"profileDomains"` // Domain → profile mapping for auto-selection
+	Bubblewrap     BrowserBubblewrapConfig `json:"bubblewrap"`     // Sandbox settings
 }
 
 // BrowserBubblewrapConfig contains bubblewrap settings for browser tool
@@ -559,7 +559,7 @@ func Load() (*LoadResult, error) {
 			},
 		},
 		HomeAssistant: HomeAssistantConfig{
-			Enabled:          false,                        // Disabled by default - requires manual configuration
+			Enabled:          false, // Disabled by default - requires manual configuration
 			Timeout:          "10s",
 			EventPrefix:      "[HomeAssistant Event]",
 			SubscriptionFile: "hass-subscriptions.json",
@@ -568,21 +568,21 @@ func Load() (*LoadResult, error) {
 		Tools: ToolsConfig{
 			Browser: BrowserToolsConfig{
 				Enabled:        true,
-				Dir:            "",        // Default: ~/.goclaw/browser
+				Dir:            "", // Default: ~/.goclaw/browser
 				AutoDownload:   true,
-				Revision:       "",        // Latest
+				Revision:       "", // Latest
 				Headless:       true,
 				NoSandbox:      false,
 				DefaultProfile: "default",
 				Timeout:        "30s",
 				Stealth:        true,
-				Device:         "clear",   // No viewport emulation, fills window
+				Device:         "clear", // No viewport emulation, fills window
 				ProfileDomains: map[string]string{},
 				Bubblewrap: BrowserBubblewrapConfig{
 					Enabled:     false, // Disabled by default
 					ExtraRoBind: []string{},
 					ExtraBind:   []string{},
-					GPU:         true,  // GPU enabled by default when sandbox is used
+					GPU:         true, // GPU enabled by default when sandbox is used
 				},
 			},
 			Exec: ExecToolsConfig{
@@ -647,12 +647,12 @@ func Load() (*LoadResult, error) {
 						InjectAs:     "system",
 						OncePerCycle: true,
 					},
-				{
-					Percent:      90,
-					Prompt:       "[Context pressure: 90%] Compaction imminent.\nBefore responding, save important session context to memory/YYYY-MM-DD.md (create memory/ if needed).\nSave: key decisions, user-shared context, current work state.\nSkip: secrets, trivial details, info already in files.\nAfter saving (or if nothing to save), respond to the user's message normally.",
-					InjectAs:     "system",
-					OncePerCycle: true,
-				},
+					{
+						Percent:      90,
+						Prompt:       "[Context pressure: 90%] Compaction imminent.\nBefore responding, save important session context to memory/YYYY-MM-DD.md (create memory/ if needed).\nSave: key decisions, user-shared context, current work state.\nSkip: secrets, trivial details, info already in files.\nAfter saving (or if nothing to save), respond to the user's message normally.",
+						InjectAs:     "system",
+						OncePerCycle: true,
+					},
 				},
 			},
 		},
@@ -684,8 +684,8 @@ func Load() (*LoadResult, error) {
 			PollInterval: 60, // Check file hashes every 60 seconds as fallback
 		},
 		Media: MediaConfig{
-			Dir:     "media", // Relative to workspace (resolved in gateway)
-			TTL:     600,     // 10 minutes (more generous than OpenClaw's 2 min)
+			Dir:     "media",         // Relative to workspace (resolved in gateway)
+			TTL:     600,             // 10 minutes (more generous than OpenClaw's 2 min)
 			MaxSize: 5 * 1024 * 1024, // 5MB
 		},
 		TUI: TUIConfig{

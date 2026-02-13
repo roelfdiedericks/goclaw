@@ -49,10 +49,10 @@ func NewManager(cfg config.MemorySearchConfig, workspaceDir string) (*Manager, e
 	}
 
 	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0750); err != nil {
 		return nil, fmt.Errorf("create db directory: %w", err)
 	}
-	
+
 	L_debug("memory: using database", "path", dbPath)
 
 	// Open database

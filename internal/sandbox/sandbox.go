@@ -158,7 +158,7 @@ func AtomicWriteFile(path string, data []byte, defaultPerm os.FileMode) error {
 	// Determine permissions to use
 	perm := defaultPerm
 	if perm == 0 {
-		perm = 0644
+		perm = 0600
 	}
 
 	// Try to preserve existing file permissions
@@ -169,7 +169,7 @@ func AtomicWriteFile(path string, data []byte, defaultPerm os.FileMode) error {
 
 	// Ensure parent directory exists
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 

@@ -18,10 +18,10 @@ type OutboundMessage struct {
 	Format string   // "text", "markdown" (hint for rendering)
 
 	// Metadata
-	Source    string // Original source that triggered this response
-	RunID     string // Agent run ID for correlation
-	Suppress  bool   // If true, don't actually deliver (response was suppressed)
-	Error     string // If non-empty, this is an error response
+	Source   string // Original source that triggered this response
+	RunID    string // Agent run ID for correlation
+	Suppress bool   // If true, don't actually deliver (response was suppressed)
+	Error    string // If non-empty, this is an error response
 }
 
 // DeliveryResult tracks what happened when delivering a message.
