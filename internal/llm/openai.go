@@ -15,6 +15,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	. "github.com/roelfdiedericks/goclaw/internal/metrics"
+	"github.com/roelfdiedericks/goclaw/internal/tokens"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
@@ -143,24 +144,40 @@ func NewOpenAIProvider(name string, cfg ProviderConfig) (*OpenAIProvider, error)
 	return p, nil
 }
 
-// fetchModelMetadata fetches model metadata from the /v1/models endpoint.
-// This is an OpenAI-compatible endpoint that some providers (like OpenRouter)
-// extend with additional fields like context_length.
+// fetchModelMetadata fetches model metadata from provider endpoints.
+// Tries OpenAI-compatible /v1/models first, then falls back to native endpoints
+// (like LM Studio's /api/v1/models) if no context length data is found.
 // The fetch has a 10s timeout and failures are logged but don't block startup.
 func (p *OpenAIProvider) fetchModelMetadata(baseURL, apiKey string) {
-	// Build the models endpoint URL
-	modelsURL := strings.TrimSuffix(baseURL, "/") + "/models"
-
-	// Create HTTP client with timeout
 	client := &http.Client{Timeout: 10 * time.Second}
+
+	// Try OpenAI-compatible endpoint first
+	cache := p.fetchOpenAIModels(client, baseURL, apiKey)
+
+	// If no context data found, try LM Studio native endpoint
+	if len(cache) == 0 {
+		cache = p.fetchLMStudioModels(client, baseURL)
+	}
+
+	if len(cache) > 0 {
+		p.modelContextCache = cache
+		L_info("openai: cached model context windows", "provider", p.name, "models", len(cache))
+		for model, ctx := range cache {
+			L_trace("openai: model context", "provider", p.name, "model", model, "contextLength", ctx)
+		}
+	}
+}
+
+// fetchOpenAIModels tries the OpenAI-compatible /v1/models endpoint
+func (p *OpenAIProvider) fetchOpenAIModels(client *http.Client, baseURL, apiKey string) map[string]int {
+	modelsURL := strings.TrimSuffix(baseURL, "/") + "/models"
 
 	req, err := http.NewRequest("GET", modelsURL, nil)
 	if err != nil {
 		L_debug("openai: failed to create models request", "provider", p.name, "error", err)
-		return
+		return nil
 	}
 
-	// Add auth header if API key is provided and not a placeholder
 	if apiKey != "" && apiKey != "not-needed" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
@@ -171,29 +188,27 @@ func (p *OpenAIProvider) fetchModelMetadata(baseURL, apiKey string) {
 	resp, err := client.Do(req)
 	if err != nil {
 		L_debug("openai: model metadata fetch failed", "provider", p.name, "error", err)
-		return
+		return nil
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		L_debug("openai: model metadata fetch returned non-200", "provider", p.name, "status", resp.StatusCode)
-		return
+		return nil
 	}
 
-	// Read the full response body so we can log it if needed
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		L_debug("openai: failed to read models response", "provider", p.name, "error", err)
-		return
+		return nil
 	}
 
-	// Parse the response - we expect {"data": [...]} or {"object": "list", "data": [...]}
-	// Different providers use different field names for context length
+	// Parse OpenAI-compatible response
 	var result struct {
 		Data []struct {
 			ID               string `json:"id"`
 			ContextLength    *int   `json:"context_length"`     // OpenRouter
-			MaxContextLength *int   `json:"max_context_length"` // LM Studio, others
+			MaxContextLength *int   `json:"max_context_length"` // Some providers
 			ContextWindow    *int   `json:"context_window"`     // Some providers
 			NCtx             *int   `json:"n_ctx"`              // llama.cpp style
 			MaxModelLen      *int   `json:"max_model_len"`      // vLLM
@@ -202,7 +217,7 @@ func (p *OpenAIProvider) fetchModelMetadata(baseURL, apiKey string) {
 
 	if err := json.Unmarshal(body, &result); err != nil {
 		L_debug("openai: failed to parse models response", "provider", p.name, "error", err)
-		return
+		return nil
 	}
 
 	// Build the cache - coalesce all possible context length fields
@@ -211,7 +226,6 @@ func (p *OpenAIProvider) fetchModelMetadata(baseURL, apiKey string) {
 		if model.ID == "" {
 			continue
 		}
-		// Try each field in priority order
 		var ctx int
 		switch {
 		case model.ContextLength != nil && *model.ContextLength > 0:
@@ -230,21 +244,89 @@ func (p *OpenAIProvider) fetchModelMetadata(baseURL, apiKey string) {
 		}
 	}
 
-	if len(cache) > 0 {
-		p.modelContextCache = cache
-		L_info("openai: cached model context windows", "provider", p.name, "models", len(cache))
-	} else {
-		// Log raw response at DEBUG to help identify new field names
-		sample := string(body)
-		if len(sample) > 1000 {
-			sample = sample[:1000] + "... (truncated)"
-		}
-		L_debug("openai: no context_length data in models response",
-			"provider", p.name,
-			"modelsReturned", len(result.Data),
-			"rawResponse", sample,
-		)
+	if len(cache) == 0 {
+		L_debug("openai: no context_length in OpenAI-compatible response",
+			"provider", p.name, "modelsReturned", len(result.Data))
 	}
+
+	return cache
+}
+
+// fetchLMStudioModels tries LM Studio's native /api/v1/models endpoint
+// which returns context_length in loaded_instances[].config.context_length
+func (p *OpenAIProvider) fetchLMStudioModels(client *http.Client, baseURL string) map[string]int {
+	// LM Studio native endpoint is at /api/v1/models (not /v1/models)
+	// Need to strip /v1 suffix if present and add /api/v1/models
+	nativeURL := strings.TrimSuffix(baseURL, "/v1")
+	nativeURL = strings.TrimSuffix(nativeURL, "/")
+	nativeURL = nativeURL + "/api/v1/models"
+
+	req, err := http.NewRequest("GET", nativeURL, nil)
+	if err != nil {
+		L_debug("openai: failed to create LM Studio native request", "provider", p.name, "error", err)
+		return nil
+	}
+	req.Header.Set("Accept", "application/json")
+
+	L_debug("openai: trying LM Studio native endpoint", "provider", p.name, "url", nativeURL)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		L_debug("openai: LM Studio native fetch failed", "provider", p.name, "error", err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		L_debug("openai: LM Studio native returned non-200", "provider", p.name, "status", resp.StatusCode)
+		return nil
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		L_debug("openai: failed to read LM Studio response", "provider", p.name, "error", err)
+		return nil
+	}
+
+	// Parse LM Studio native response structure
+	var result struct {
+		Models []struct {
+			Key             string `json:"key"`
+			LoadedInstances []struct {
+				ID     string `json:"id"`
+				Config struct {
+					ContextLength int `json:"context_length"`
+				} `json:"config"`
+			} `json:"loaded_instances"`
+		} `json:"models"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		L_debug("openai: failed to parse LM Studio response", "provider", p.name, "error", err)
+		return nil
+	}
+
+	cache := make(map[string]int)
+	for _, model := range result.Models {
+		for _, instance := range model.LoadedInstances {
+			if instance.Config.ContextLength > 0 {
+				// Use instance ID as the model name (what's used in API calls)
+				modelID := instance.ID
+				if modelID == "" {
+					modelID = model.Key
+				}
+				cache[modelID] = instance.Config.ContextLength
+				L_trace("openai: LM Studio model context",
+					"provider", p.name, "model", modelID, "contextLength", instance.Config.ContextLength)
+			}
+		}
+	}
+
+	if len(cache) > 0 {
+		L_info("openai: found context data via LM Studio native API", "provider", p.name, "models", len(cache))
+	}
+
+	return cache
 }
 
 // trace logs a trace message if tracing is enabled for this provider.
@@ -360,12 +442,23 @@ func (p *OpenAIProvider) ContextTokens() int {
 	// 2. Check cache from /v1/models endpoint (populated at startup)
 	if p.modelContextCache != nil {
 		if ctx, ok := p.modelContextCache[p.model]; ok && ctx > 0 {
+			L_debug("openai: context from cache", "provider", p.name, "model", p.model, "contextTokens", ctx)
 			return ctx
+		}
+		// Cache miss - log what we have for debugging
+		if len(p.modelContextCache) > 0 {
+			var cached []string
+			for k := range p.modelContextCache {
+				cached = append(cached, k)
+			}
+			L_debug("openai: context cache miss", "provider", p.name, "lookingFor", p.model, "cachedModels", cached)
 		}
 	}
 
 	// 3. Fall back to hardcoded patterns / default
-	return getOpenAIModelContextWindow(p.model)
+	fallback := getOpenAIModelContextWindow(p.model)
+	L_debug("openai: context fallback", "provider", p.name, "model", p.model, "contextTokens", fallback)
+	return fallback
 }
 
 // MaxTokens returns the current output limit
@@ -565,10 +658,27 @@ func (p *OpenAIProvider) StreamMessage(
 	// Convert tool definitions
 	openaiTools := convertToOpenAITools(toolDefs)
 
+	// Estimate input tokens and cap max_tokens to fit within context window
+	estimator := tokens.Get()
+	estimatedInput := 0
+	for _, m := range messages {
+		estimatedInput += estimator.CountWithOverhead(m.Content, 4)
+	}
+	estimatedInput += estimator.Count(systemPrompt)
+	maxTokens := tokens.CapMaxTokens(p.maxTokens, contextWindow, estimatedInput, 100)
+	if maxTokens != p.maxTokens {
+		L_debug("openai: capped max_tokens to fit context",
+			"provider", p.name,
+			"original", p.maxTokens,
+			"capped", maxTokens,
+			"contextWindow", contextWindow,
+			"estimatedInput", estimatedInput)
+	}
+
 	// Build request
 	req := openai.ChatCompletionRequest{
 		Model:     p.model,
-		MaxTokens: p.maxTokens,
+		MaxTokens: maxTokens,
 		Messages:  openaiMessages,
 		Stream:    true,
 		StreamOptions: &openai.StreamOptions{
@@ -598,7 +708,7 @@ func (p *OpenAIProvider) StreamMessage(
 		"provider", p.name,
 		"model", p.model,
 		"baseURL", p.baseURL,
-		"maxTokens", p.maxTokens,
+		"maxTokens", maxTokens,
 		"messageCount", len(openaiMessages),
 		"toolCount", len(openaiTools),
 		"requestSizeKB", reqSizeKB,
