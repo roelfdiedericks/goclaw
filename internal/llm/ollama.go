@@ -539,7 +539,11 @@ func (p *OllamaProvider) Type() string {
 
 // WithModel returns a clone of the provider configured with a specific model
 func (p *OllamaProvider) WithModel(model string) Provider {
-	clone := *p
+	clone := *p               //nolint:govet // copylocks: mu is reset immediately below
+	clone.mu = sync.RWMutex{} // Fresh mutex - copying a used mutex is undefined behavior
+	clone.available = false    // New model needs availability check
+	clone.dimensions = 0       // New model may have different embedding dimensions
+	clone.contextTokens = 4096 // Reset to default, will be queried
 	clone.model = model
 	clone.metricPrefix = fmt.Sprintf("llm/%s/%s/%s", p.Type(), p.Name(), model)
 	// Initialize model in background
@@ -552,7 +556,11 @@ func (p *OllamaProvider) WithModel(model string) Provider {
 // Initialization is synchronous (blocking) because embeddings are typically
 // needed immediately when GetProvider("embeddings") is called.
 func (p *OllamaProvider) WithModelForEmbedding(model string) *OllamaProvider {
-	clone := *p
+	clone := *p               //nolint:govet // copylocks: mu is reset immediately below
+	clone.mu = sync.RWMutex{} // Fresh mutex - copying a used mutex is undefined behavior
+	clone.available = false    // New model needs availability check
+	clone.dimensions = 0       // New model may have different embedding dimensions
+	clone.contextTokens = 4096 // Reset to default
 	clone.model = model
 	clone.embeddingOnly = true
 	clone.metricPrefix = fmt.Sprintf("llm/%s/%s/%s", p.Type(), p.Name(), model)
@@ -564,7 +572,9 @@ func (p *OllamaProvider) WithModelForEmbedding(model string) *OllamaProvider {
 
 // WithMaxTokens returns a clone of the provider with a different output limit
 func (p *OllamaProvider) WithMaxTokens(max int) Provider {
-	clone := *p
+	clone := *p               //nolint:govet // copylocks: mu is reset immediately below
+	clone.mu = sync.RWMutex{} // Fresh mutex - copying a used mutex is undefined behavior
+	// Keep available, dimensions, contextTokens - same model, just different output limit
 	clone.maxTokens = max
 	return &clone
 }

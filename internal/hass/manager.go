@@ -351,10 +351,11 @@ func (m *Manager) connect() error {
 		HandshakeTimeout: 30 * time.Second,
 	}
 	if m.cfg.Insecure {
-		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // G402: HASS instances may use private SSL certs
 	}
 
 	// Connect
+	//nolint:bodyclose // WebSocket upgrade - response body handled by gorilla/websocket
 	conn, _, err := dialer.DialContext(m.ctx, wsURL, http.Header{})
 	if err != nil {
 		m.mu.Lock()

@@ -264,6 +264,10 @@ func (idx *Indexer) runBackfill() {
 		}
 		chunks = append(chunks, c)
 	}
+	if err := rows.Err(); err != nil {
+		L_warn("transcript: backfill row iteration error", "error", err)
+		return
+	}
 
 	if len(chunks) == 0 {
 		return
