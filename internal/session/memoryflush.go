@@ -49,15 +49,16 @@ func DefaultMemoryFlushConfig() *MemoryFlushConfig {
 				InjectAs:     FlushInjectSystem,
 				OncePerCycle: true,
 			},
-			{
-				Percent: 90,
-				Prompt: `[SYSTEM: pre-compaction memory flush]
+		{
+			Percent: 90,
+			Prompt: `[SYSTEM: pre-compaction memory flush]
 Context at 90%. Compaction imminent.
-Store durable memories now (use memory/YYYY-MM-DD.md; create memory/ if needed).
-If nothing to store, reply with NO_REPLY.`,
-				InjectAs:     FlushInjectUser,
-				OncePerCycle: true,
-			},
+Write important context to memory/YYYY-MM-DD.md now (create memory/ if needed).
+After saving: briefly confirm what you saved (e.g. "Saved session notes").
+If nothing worth saving: reply with only NO_REPLY.`,
+			InjectAs:     FlushInjectUser,
+			OncePerCycle: true,
+		},
 		},
 	}
 }

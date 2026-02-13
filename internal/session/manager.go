@@ -232,7 +232,13 @@ func mergeMessagesByTimestamp(openclawMsgs []Message, goclawMsgs []StoredMessage
 
 	// Add GoClaw messages, skipping duplicates
 	for _, sm := range goclawMsgs {
-		key := makeKey(sm.Timestamp.Unix(), sm.Role, sm.Content)
+		// For tool_result, use ToolResult field (Content is empty for tool results)
+		content := sm.Content
+		if sm.Role == "tool_result" && sm.ToolResult != "" {
+			content = sm.ToolResult
+		}
+
+		key := makeKey(sm.Timestamp.Unix(), sm.Role, content)
 		if seen[key] {
 			continue
 		}
@@ -241,7 +247,7 @@ func mergeMessagesByTimestamp(openclawMsgs []Message, goclawMsgs []StoredMessage
 		msg := Message{
 			ID:        sm.ID,
 			Role:      sm.Role,
-			Content:   sm.Content,
+			Content:   content, // Use resolved content (handles tool_result)
 			Source:    sm.Source,
 			Timestamp: sm.Timestamp,
 			ToolUseID: sm.ToolCallID,
