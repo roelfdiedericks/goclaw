@@ -155,4 +155,5 @@ type ProviderConfig struct {
 	PromptCaching  bool   `json:"promptCaching"`  // Anthropic-specific
 	EmbeddingOnly  bool   `json:"embeddingOnly"`  // For embedding-only models (skip chat availability check)
 	Trace          *bool  `json:"trace"`          // Per-provider trace logging (nil = default enabled when -t flag used)
+	DumpOnSuccess  bool   `json:"dumpOnSuccess"`  // Keep request dumps even on success (for debugging)
 }

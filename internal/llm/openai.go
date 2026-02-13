@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +52,14 @@ type OpenAIProvider struct {
 	// Per-provider trace logging control
 	traceEnabled bool // If false, suppress L_trace calls for this provider
 
+	// Model metadata cache (context_length from /v1/models endpoint)
+	// Populated at startup if the provider supports extended model metadata
+	modelContextCache map[string]int
+
+	// HTTP transport for capturing request/response (for error dumps)
+	transport     *CapturingTransport
+	dumpOnSuccess bool // Keep dumps even on success (for debugging)
+
 	// Thread-safe availability tracking
 	mu        sync.RWMutex
 	available bool
@@ -83,13 +91,15 @@ func NewOpenAIProvider(name string, cfg ProviderConfig) (*OpenAIProvider, error)
 		config.BaseURL = baseURL
 	}
 
-	// Add OpenRouter attribution headers if this is an OpenRouter endpoint
+	// Create capturing transport for request/response debugging
+	// For OpenRouter, wrap with header transport first
+	var baseTransport http.RoundTripper = http.DefaultTransport
 	if strings.Contains(strings.ToLower(baseURL), "openrouter") {
-		config.HTTPClient = &http.Client{
-			Transport: &openRouterTransport{base: http.DefaultTransport},
-		}
+		baseTransport = &openRouterTransport{base: http.DefaultTransport}
 		L_debug("openai: using OpenRouter headers", "referer", "https://goclaw.org", "title", "GoClaw")
 	}
+	transport := &CapturingTransport{Base: baseTransport}
+	config.HTTPClient = &http.Client{Transport: transport}
 
 	client := openai.NewClientWithConfig(config)
 
@@ -111,7 +121,7 @@ func NewOpenAIProvider(name string, cfg ProviderConfig) (*OpenAIProvider, error)
 
 	L_debug("openai provider created", "name", name, "baseURL", displayURL, "maxTokens", maxTokens, "contextTokens", cfg.ContextTokens, "trace", traceEnabled)
 
-	return &OpenAIProvider{
+	p := &OpenAIProvider{
 		name:          name,
 		client:        client,
 		model:         "", // Model set via WithModel()
@@ -120,7 +130,121 @@ func NewOpenAIProvider(name string, cfg ProviderConfig) (*OpenAIProvider, error)
 		apiKey:        cfg.APIKey,
 		baseURL:       baseURL,
 		traceEnabled:  traceEnabled,
-	}, nil
+		transport:     transport,
+		dumpOnSuccess: cfg.DumpOnSuccess,
+	}
+
+	// Fetch model metadata from /v1/models endpoint (if supported)
+	// This populates context_length for accurate context window detection
+	if baseURL != "" {
+		p.fetchModelMetadata(baseURL, apiKey)
+	}
+
+	return p, nil
+}
+
+// fetchModelMetadata fetches model metadata from the /v1/models endpoint.
+// This is an OpenAI-compatible endpoint that some providers (like OpenRouter)
+// extend with additional fields like context_length.
+// The fetch has a 10s timeout and failures are logged but don't block startup.
+func (p *OpenAIProvider) fetchModelMetadata(baseURL, apiKey string) {
+	// Build the models endpoint URL
+	modelsURL := strings.TrimSuffix(baseURL, "/") + "/models"
+
+	// Create HTTP client with timeout
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	req, err := http.NewRequest("GET", modelsURL, nil)
+	if err != nil {
+		L_debug("openai: failed to create models request", "provider", p.name, "error", err)
+		return
+	}
+
+	// Add auth header if API key is provided and not a placeholder
+	if apiKey != "" && apiKey != "not-needed" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	L_debug("openai: fetching model metadata", "provider", p.name, "url", modelsURL)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		L_debug("openai: model metadata fetch failed", "provider", p.name, "error", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		L_debug("openai: model metadata fetch returned non-200", "provider", p.name, "status", resp.StatusCode)
+		return
+	}
+
+	// Read the full response body so we can log it if needed
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		L_debug("openai: failed to read models response", "provider", p.name, "error", err)
+		return
+	}
+
+	// Parse the response - we expect {"data": [...]} or {"object": "list", "data": [...]}
+	// Different providers use different field names for context length
+	var result struct {
+		Data []struct {
+			ID               string `json:"id"`
+			ContextLength    *int   `json:"context_length"`     // OpenRouter
+			MaxContextLength *int   `json:"max_context_length"` // LM Studio, others
+			ContextWindow    *int   `json:"context_window"`     // Some providers
+			NCtx             *int   `json:"n_ctx"`              // llama.cpp style
+			MaxModelLen      *int   `json:"max_model_len"`      // vLLM
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		L_debug("openai: failed to parse models response", "provider", p.name, "error", err)
+		return
+	}
+
+	// Build the cache - coalesce all possible context length fields
+	cache := make(map[string]int)
+	for _, model := range result.Data {
+		if model.ID == "" {
+			continue
+		}
+		// Try each field in priority order
+		var ctx int
+		switch {
+		case model.ContextLength != nil && *model.ContextLength > 0:
+			ctx = *model.ContextLength
+		case model.MaxContextLength != nil && *model.MaxContextLength > 0:
+			ctx = *model.MaxContextLength
+		case model.ContextWindow != nil && *model.ContextWindow > 0:
+			ctx = *model.ContextWindow
+		case model.NCtx != nil && *model.NCtx > 0:
+			ctx = *model.NCtx
+		case model.MaxModelLen != nil && *model.MaxModelLen > 0:
+			ctx = *model.MaxModelLen
+		}
+		if ctx > 0 {
+			cache[model.ID] = ctx
+		}
+	}
+
+	if len(cache) > 0 {
+		p.modelContextCache = cache
+		L_info("openai: cached model context windows", "provider", p.name, "models", len(cache))
+	} else {
+		// Log raw response at DEBUG to help identify new field names
+		sample := string(body)
+		if len(sample) > 1000 {
+			sample = sample[:1000] + "... (truncated)"
+		}
+		L_debug("openai: no context_length data in models response",
+			"provider", p.name,
+			"modelsReturned", len(result.Data),
+			"rawResponse", sample,
+		)
+	}
 }
 
 // trace logs a trace message if tracing is enabled for this provider.
@@ -226,11 +350,21 @@ func (p *OpenAIProvider) IsAvailable() bool {
 }
 
 // ContextTokens returns the model's context window size in tokens.
-// Uses configured contextTokens if set, otherwise auto-detects from model name.
+// Priority: 1) Config override, 2) Cached from /v1/models, 3) Hardcoded patterns, 4) Default
 func (p *OpenAIProvider) ContextTokens() int {
+	// 1. Config override always wins
 	if p.contextTokens > 0 {
 		return p.contextTokens
 	}
+
+	// 2. Check cache from /v1/models endpoint (populated at startup)
+	if p.modelContextCache != nil {
+		if ctx, ok := p.modelContextCache[p.model]; ok && ctx > 0 {
+			return ctx
+		}
+	}
+
+	// 3. Fall back to hardcoded patterns / default
 	return getOpenAIModelContextWindow(p.model)
 }
 
@@ -408,6 +542,7 @@ func (p *OpenAIProvider) StreamMessage(
 	// The ReasoningContent field is already captured from the response
 	_ = opts // Currently unused, reasoning is automatic for compatible models
 	startTime := time.Now()
+	contextWindow := p.ContextTokens()
 	L_info("llm: request started", "provider", p.name, "model", p.model, "messages", len(messages), "tools", len(toolDefs))
 	L_debug("preparing OpenAI request", "messages", len(messages), "tools", len(toolDefs))
 
@@ -488,10 +623,8 @@ func (p *OpenAIProvider) StreamMessage(
 		)
 	}
 
-	// Dump request for OpenRouter debugging (always, not just on error)
-	if strings.Contains(strings.ToLower(p.baseURL), "openrouter") {
-		dumpOpenAIRequest(p.name, p.model, p.baseURL, &req)
-	}
+	// Start dump for debugging (captures request context)
+	dumpCtx := StartDump(p.name, p.model, p.baseURL, openaiMessages, openaiTools, systemPrompt, 1)
 
 	// Stream the response
 	stream, err := p.client.CreateChatCompletionStream(ctx, req)
@@ -540,8 +673,8 @@ func (p *OpenAIProvider) StreamMessage(
 		} else {
 			L_error("stream creation failed", "provider", p.name, "model", p.model, "error", err)
 		}
-		// Dump full request to file for debugging
-		dumpOpenAIError(err, p.name, p.model, p.baseURL, &req)
+		// Dump full request/response to file for debugging
+		FinishDumpError(dumpCtx, err, p.transport)
 
 		// Record metrics for failed request
 		if p.metricPrefix != "" {
@@ -577,7 +710,39 @@ func (p *OpenAIProvider) StreamMessage(
 				)
 				break
 			}
-			L_error("stream error", "error", err)
+			// Try to extract detailed error information (same as stream creation errors)
+			var apiErr *openai.APIError
+			var reqErr *openai.RequestError
+			if errors.As(err, &apiErr) {
+				L_error("stream recv failed (APIError)",
+					"provider", p.name,
+					"model", p.model,
+					"statusCode", apiErr.HTTPStatusCode,
+					"code", apiErr.Code,
+					"message", apiErr.Message,
+					"type", apiErr.Type,
+				)
+			} else if errors.As(err, &reqErr) {
+				L_error("stream recv failed (RequestError)",
+					"provider", p.name,
+					"model", p.model,
+					"statusCode", reqErr.HTTPStatusCode,
+					"error", reqErr.Error(),
+				)
+			} else {
+				// For other errors (like JSON parse failures), log the raw error
+				// This catches things like "unexpected end of JSON input" from providers
+				// that return non-JSON error responses (e.g., LM Studio context overflow)
+				L_error("stream recv failed",
+					"provider", p.name,
+					"model", p.model,
+					"error", err,
+					"errorType", fmt.Sprintf("%T", err),
+				)
+			}
+			// Dump full request/response to file for debugging
+			FinishDumpError(dumpCtx, err, p.transport)
+
 			// Record metrics for failed request
 			if p.metricPrefix != "" {
 				MetricDuration(p.metricPrefix, "request", time.Since(startTime))
@@ -782,6 +947,10 @@ func (p *OpenAIProvider) StreamMessage(
 	}
 
 	elapsed := time.Since(startTime)
+	usagePercent := 0.0
+	if contextWindow > 0 {
+		usagePercent = float64(response.InputTokens) / float64(contextWindow) * 100.0
+	}
 	L_info("llm: request completed", "provider", p.name, "duration", elapsed.Round(time.Millisecond),
 		"inputTokens", response.InputTokens, "outputTokens", response.OutputTokens)
 
@@ -802,7 +971,17 @@ func (p *OpenAIProvider) StreamMessage(
 		MetricAdd(p.metricPrefix, "output_tokens", int64(response.OutputTokens))
 		MetricOutcome(p.metricPrefix, "stop_reason", response.StopReason)
 		MetricSuccess(p.metricPrefix, "request_status")
+
+		// Context window metrics (contextWindow calculated at request start)
+		if contextWindow > 0 {
+			MetricSet(p.metricPrefix, "context_window", int64(contextWindow))
+			MetricSet(p.metricPrefix, "context_used", int64(response.InputTokens))
+			MetricThreshold(p.metricPrefix, "context_usage_percent", usagePercent, 100.0)
+		}
 	}
+
+	// Finalize dump (delete on success unless dumpOnSuccess is enabled)
+	FinishDumpSuccess(dumpCtx, p.dumpOnSuccess)
 
 	return response, nil
 }
@@ -1100,129 +1279,4 @@ func estimateOpenAITokens(messages []openai.ChatCompletionMessage, systemPrompt 
 	}
 	
 	return total
-}
-
-// dumpOpenAIError writes full request details to openaierr.txt for debugging
-func dumpOpenAIError(err error, provider, model, baseURL string, req *openai.ChatCompletionRequest) {
-	// Build comprehensive error dump
-	var sb strings.Builder
-	
-	sb.WriteString("OpenAI API Error\n")
-	sb.WriteString("================\n")
-	sb.WriteString(fmt.Sprintf("Timestamp: %s\n", time.Now().Format(time.RFC3339)))
-	sb.WriteString(fmt.Sprintf("Provider: %s\n", provider))
-	sb.WriteString(fmt.Sprintf("Model: %s\n", model))
-	sb.WriteString(fmt.Sprintf("BaseURL: %s\n", baseURL))
-	sb.WriteString(fmt.Sprintf("MaxTokens: %d\n", req.MaxTokens))
-	sb.WriteString(fmt.Sprintf("Stream: %v\n", req.Stream))
-	sb.WriteString(fmt.Sprintf("Message Count: %d\n", len(req.Messages)))
-	sb.WriteString(fmt.Sprintf("Tool Count: %d\n", len(req.Tools)))
-	
-	// Message role summary
-	roleCounts := make(map[string]int)
-	for _, msg := range req.Messages {
-		roleCounts[string(msg.Role)]++
-	}
-	sb.WriteString(fmt.Sprintf("Message Roles: %v\n", roleCounts))
-	
-	// Tool names
-	if len(req.Tools) > 0 {
-		sb.WriteString("\nTools:\n")
-		for i, t := range req.Tools {
-			if t.Function != nil {
-				sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, t.Function.Name))
-			}
-		}
-	}
-	
-	// Error details
-	sb.WriteString("\n\nError Details\n")
-	sb.WriteString("=============\n")
-	sb.WriteString(fmt.Sprintf("Error Type: %T\n", err))
-	sb.WriteString(fmt.Sprintf("Error: %v\n", err))
-	
-	// Try to extract API error details
-	var apiErr *openai.APIError
-	var reqErr *openai.RequestError
-	if errors.As(err, &apiErr) {
-		sb.WriteString(fmt.Sprintf("\nAPIError Details:\n"))
-		sb.WriteString(fmt.Sprintf("  HTTPStatusCode: %d\n", apiErr.HTTPStatusCode))
-		sb.WriteString(fmt.Sprintf("  HTTPStatus: %s\n", apiErr.HTTPStatus))
-		sb.WriteString(fmt.Sprintf("  Code: %v\n", apiErr.Code))
-		sb.WriteString(fmt.Sprintf("  Message: %s\n", apiErr.Message))
-		sb.WriteString(fmt.Sprintf("  Type: %s\n", apiErr.Type))
-		sb.WriteString(fmt.Sprintf("  Param: %v\n", apiErr.Param))
-	} else if errors.As(err, &reqErr) {
-		sb.WriteString(fmt.Sprintf("\nRequestError Details:\n"))
-		sb.WriteString(fmt.Sprintf("  HTTPStatusCode: %d\n", reqErr.HTTPStatusCode))
-		sb.WriteString(fmt.Sprintf("  HTTPStatus: %s\n", reqErr.HTTPStatus))
-	}
-	
-	// Full request JSON
-	sb.WriteString("\n\nFull Request JSON\n")
-	sb.WriteString("=================\n")
-	reqJSON, jsonErr := json.MarshalIndent(req, "", "  ")
-	if jsonErr != nil {
-		sb.WriteString(fmt.Sprintf("(Failed to marshal: %v)\n", jsonErr))
-	} else {
-		sb.Write(reqJSON)
-	}
-	
-	// Write to file
-	if writeErr := os.WriteFile("openaierr.txt", []byte(sb.String()), 0644); writeErr != nil {
-		L_warn("failed to write openaierr.txt", "error", writeErr)
-	} else {
-		L_info("OpenAI API error dumped to openaierr.txt")
-	}
-}
-
-// dumpOpenAIRequest writes full request details to openai_request.txt for debugging
-// This is called before every OpenRouter request to help debug model behavior
-func dumpOpenAIRequest(provider, model, baseURL string, req *openai.ChatCompletionRequest) {
-	var sb strings.Builder
-	
-	sb.WriteString("OpenAI Request Dump\n")
-	sb.WriteString("===================\n")
-	sb.WriteString(fmt.Sprintf("Timestamp: %s\n", time.Now().Format(time.RFC3339)))
-	sb.WriteString(fmt.Sprintf("Provider: %s\n", provider))
-	sb.WriteString(fmt.Sprintf("Model: %s\n", model))
-	sb.WriteString(fmt.Sprintf("BaseURL: %s\n", baseURL))
-	sb.WriteString(fmt.Sprintf("MaxTokens: %d\n", req.MaxTokens))
-	sb.WriteString(fmt.Sprintf("Stream: %v\n", req.Stream))
-	sb.WriteString(fmt.Sprintf("Message Count: %d\n", len(req.Messages)))
-	sb.WriteString(fmt.Sprintf("Tool Count: %d\n", len(req.Tools)))
-	
-	// Message role summary
-	roleCounts := make(map[string]int)
-	for _, msg := range req.Messages {
-		roleCounts[string(msg.Role)]++
-	}
-	sb.WriteString(fmt.Sprintf("Message Roles: %v\n", roleCounts))
-	
-	// Tool names
-	if len(req.Tools) > 0 {
-		sb.WriteString("\nTools:\n")
-		for i, t := range req.Tools {
-			if t.Function != nil {
-				sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, t.Function.Name))
-			}
-		}
-	}
-	
-	// Full request JSON
-	sb.WriteString("\n\nFull Request JSON\n")
-	sb.WriteString("=================\n")
-	reqJSON, jsonErr := json.MarshalIndent(req, "", "  ")
-	if jsonErr != nil {
-		sb.WriteString(fmt.Sprintf("(Failed to marshal: %v)\n", jsonErr))
-	} else {
-		sb.Write(reqJSON)
-	}
-	
-	// Write to file
-	if writeErr := os.WriteFile("openai_request.txt", []byte(sb.String()), 0644); writeErr != nil {
-		L_warn("failed to write openai_request.txt", "error", writeErr)
-	} else {
-		L_debug("OpenAI request dumped to openai_request.txt", "provider", provider, "model", model)
-	}
 }

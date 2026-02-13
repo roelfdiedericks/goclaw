@@ -1474,7 +1474,19 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		}
 
 		// Stream from LLM with overflow retry logic
-		L_debug("RunAgent: about to call LLM.StreamMessage", "session", sessionKey, "messageCount", len(messages), "toolCount", len(toolDefs), "thinking", req.EnableThinking)
+		contextTokens := sess.GetTotalTokens()
+		contextWindow := sess.GetMaxTokens()
+		contextUsage := sess.GetContextUsage() * 100.0
+		L_debug("invoking LLM",
+			"provider", g.llm.Name(),
+			"model", g.llm.Model(),
+			"messages", len(messages),
+			"tools", len(toolDefs),
+			"contextTokens", contextTokens,
+			"contextWindow", contextWindow,
+			"contextUsage", fmt.Sprintf("%.1f%%", contextUsage),
+			"thinking", req.EnableThinking,
+		)
 		
 		// Build stream options
 		var streamOpts *llm.StreamOptions
