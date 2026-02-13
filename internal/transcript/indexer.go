@@ -201,7 +201,7 @@ func (idx *Indexer) runSync() {
 	}
 
 	elapsed := time.Since(startTime)
-	
+
 	// Only log at INFO when actual chunks were created, otherwise TRACE
 	if chunksCreated > 0 || chunksDeferred > 0 {
 		L_info("transcript: sync completed",

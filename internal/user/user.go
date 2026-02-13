@@ -169,9 +169,9 @@ func (u *User) HasTelegramAuth() bool {
 
 // Default tool permissions by role
 var defaultPermissions = map[Role][]string{
-	RoleOwner: {"*"},                                          // everything
+	RoleOwner: {"*"},                                             // everything
 	RoleUser:  {"read", "web_search", "web_fetch", "transcript"}, // safe tools + own transcript
-	RoleGuest: {"read"},                                       // minimal - read only
+	RoleGuest: {"read"},                                          // minimal - read only
 }
 
 // CanUseTool checks if the user has permission to use a specific tool
@@ -179,17 +179,17 @@ func (u *User) CanUseTool(toolName string) bool {
 	if u == nil {
 		return false
 	}
-	
+
 	// Owner can do anything
 	if u.Role == RoleOwner {
 		return true
 	}
-	
+
 	// Check explicit permissions if set
 	if u.Permissions != nil {
 		return u.Permissions[toolName]
 	}
-	
+
 	// Fall back to role defaults
 	defaults := defaultPermissions[u.Role]
 	return slices.Contains(defaults, toolName) || slices.Contains(defaults, "*")

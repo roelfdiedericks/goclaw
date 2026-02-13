@@ -67,10 +67,10 @@ var _ EmbeddingProvider = (*LLMProviderAdapter)(nil)
 // Used when embeddings are disabled or unavailable
 type NoopProvider struct{}
 
-func (p *NoopProvider) ID() string                   { return "none" }
-func (p *NoopProvider) Model() string                { return "" }
-func (p *NoopProvider) Dimensions() int              { return 0 }
-func (p *NoopProvider) Available() bool              { return false }
+func (p *NoopProvider) ID() string      { return "none" }
+func (p *NoopProvider) Model() string   { return "" }
+func (p *NoopProvider) Dimensions() int { return 0 }
+func (p *NoopProvider) Available() bool { return false }
 
 func (p *NoopProvider) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	return nil, nil

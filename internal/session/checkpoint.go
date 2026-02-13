@@ -341,21 +341,21 @@ func BuildMessagesForCheckpoint(messages []Message) string {
 func BuildMessagesForSummary(messages []Message, maxTokens int) string {
 	// Rough estimate: 1 token ≈ 4 characters
 	maxChars := maxTokens * 4
-	
+
 	L_info("compaction: building summary input", "messages", len(messages), "maxTokens", maxTokens, "maxChars", maxChars)
-	
+
 	// First pass: filter and truncate messages
 	type summaryMsg struct {
 		index   int
 		role    string
 		content string
 	}
-	
+
 	var filtered []summaryMsg
 	for i, msg := range messages {
 		role := msg.Role
 		content := msg.Content
-		
+
 		// Skip tool_result messages (often large JSON, less useful for summary)
 		if role == "tool_result" {
 			// Include a brief marker instead
@@ -366,25 +366,25 @@ func BuildMessagesForSummary(messages []Message, maxTokens int) string {
 			})
 			continue
 		}
-		
+
 		// Truncate very long messages
 		if len(content) > 2000 {
 			content = content[:2000] + "... [truncated]"
 		}
-		
+
 		filtered = append(filtered, summaryMsg{
 			index:   i,
 			role:    role,
 			content: content,
 		})
 	}
-	
+
 	// Estimate total size
 	totalChars := 0
 	for _, m := range filtered {
 		totalChars += len(m.content) + 50 // overhead for formatting
 	}
-	
+
 	// If within limit, use all messages
 	if totalChars <= maxChars {
 		var result string
@@ -394,12 +394,12 @@ func BuildMessagesForSummary(messages []Message, maxTokens int) string {
 		L_info("compaction: summary input built (all messages)", "keptMessages", len(filtered), "resultChars", len(result))
 		return result
 	}
-	
+
 	// Over limit: drop older messages, keep recent ones
 	// Recent messages are more relevant for understanding current context
 	var result string
 	currentChars := 0
-	
+
 	// Build from end (most recent) backwards
 	var kept []summaryMsg
 	for i := len(filtered) - 1; i >= 0; i-- {
@@ -411,16 +411,16 @@ func BuildMessagesForSummary(messages []Message, maxTokens int) string {
 		kept = append([]summaryMsg{m}, kept...) // prepend
 		currentChars += msgChars
 	}
-	
+
 	// Add note about truncation
 	if len(kept) < len(filtered) {
 		result = fmt.Sprintf("[Note: Showing %d of %d messages (recent messages only)]\n\n", len(kept), len(filtered))
 	}
-	
+
 	for _, m := range kept {
 		result += fmt.Sprintf("[%d] %s: %s\n\n", m.index+1, m.role, m.content)
 	}
-	
+
 	L_info("compaction: summary input built (truncated)", "keptMessages", len(kept), "totalMessages", len(filtered), "resultChars", len(result))
 	return result
 }

@@ -288,7 +288,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Height: total - input height - status bar - borders
 		contentHeight := m.height - 8
 
-		m.chatViewport.Width = chatWidth - 4  // -4 for borders and padding
+		m.chatViewport.Width = chatWidth - 4 // -4 for borders and padding
 		m.chatViewport.Height = contentHeight
 		m.logsViewport.Width = logsWidth - 4
 		m.logsViewport.Height = contentHeight
@@ -302,7 +302,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentEventMsg:
 		event := gateway.AgentEvent(msg)
 		handleAgentEvent(&m, event)
-		
+
 		// Continue listening for more events if streaming
 		if m.streaming && m.eventsChan != nil {
 			cmds = append(cmds, m.waitForEvent())

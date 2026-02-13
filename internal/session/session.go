@@ -31,11 +31,11 @@ type Session struct {
 	// Token tracking
 	InputTokens  int `json:"inputTokens"`
 	OutputTokens int `json:"outputTokens"`
-	TotalTokens  int `json:"totalTokens"`  // Current context size
-	MaxTokens    int `json:"maxTokens"`    // Model's context window
+	TotalTokens  int `json:"totalTokens"` // Current context size
+	MaxTokens    int `json:"maxTokens"`   // Model's context window
 
 	// Persistence
-	SessionFile string `json:"-"` // Path to JSONL file
+	SessionFile  string  `json:"-"` // Path to JSONL file
 	LastRecordID *string `json:"-"` // ID of last record (for parentId)
 
 	// Checkpoints & Compaction

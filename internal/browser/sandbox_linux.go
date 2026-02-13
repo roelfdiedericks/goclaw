@@ -50,7 +50,7 @@ func CreateSandboxedLauncher(browserBin, workspace, profileDir string, cfg Brows
 	// Add browser binary directory (read-only) so chromium can execute
 	// browserBin is something like /home/user/.goclaw/browser/bin/chromium-XXX/chrome
 	// We need to bind the parent directories up to the bin/ level
-	browserBinDir := filepath.Dir(browserBin) // chromium-XXX directory
+	browserBinDir := filepath.Dir(browserBin)     // chromium-XXX directory
 	browserBaseDir := filepath.Dir(browserBinDir) // bin directory
 	b.RoBind(browserBaseDir)
 
@@ -76,7 +76,7 @@ func CreateSandboxedLauncher(browserBin, workspace, profileDir string, cfg Brows
 	// Create a wrapper script that runs bwrap with the browser
 	// The wrapper passes through all arguments to the browser
 	wrapperDir := filepath.Join(home, ".goclaw", "browser-sandbox")
-	if err := os.MkdirAll(wrapperDir, 0755); err != nil {
+	if err := os.MkdirAll(wrapperDir, 0750); err != nil {
 		return "", err
 	}
 
@@ -96,7 +96,8 @@ func CreateSandboxedLauncher(browserBin, workspace, profileDir string, cfg Brows
 	}
 	script += " " + shellQuote(browserBin) + " \"$@\"\n"
 
-	if err := os.WriteFile(wrapperPath, []byte(script), 0755); err != nil {
+	//nolint:gosec // G306: Executable script needs execute permission
+	if err := os.WriteFile(wrapperPath, []byte(script), 0750); err != nil {
 		return "", err
 	}
 
@@ -117,7 +118,7 @@ func CreatePassthroughLauncher(browserBin string) (string, error) {
 	home, _ := os.UserHomeDir()
 
 	wrapperDir := filepath.Join(home, ".goclaw", "browser-sandbox")
-	if err := os.MkdirAll(wrapperDir, 0755); err != nil {
+	if err := os.MkdirAll(wrapperDir, 0750); err != nil {
 		return "", err
 	}
 
@@ -183,7 +184,8 @@ func CreatePassthroughLauncher(browserBin string) (string, error) {
 	}
 	script += " \\\n  " + shellQuote(browserBin) + " \"$@\"\n"
 
-	if err := os.WriteFile(wrapperPath, []byte(script), 0755); err != nil {
+	//nolint:gosec // G306: Executable script needs execute permission
+	if err := os.WriteFile(wrapperPath, []byte(script), 0750); err != nil {
 		return "", err
 	}
 

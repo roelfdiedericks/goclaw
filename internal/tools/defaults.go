@@ -23,9 +23,9 @@ type ToolsConfig struct {
 	TranscriptManager *transcript.Manager
 
 	// Exec tool configuration
-	ExecTimeout         int               // Timeout in seconds (default: 1800 = 30 min)
-	ExecBubblewrap      ExecBubblewrapCfg // Bubblewrap sandbox settings
-	BubblewrapPath      string            // Global path to bwrap binary
+	ExecTimeout    int               // Timeout in seconds (default: 1800 = 30 min)
+	ExecBubblewrap ExecBubblewrapCfg // Bubblewrap sandbox settings
+	BubblewrapPath string            // Global path to bwrap binary
 }
 
 // ExecBubblewrapCfg holds bubblewrap configuration for exec tool

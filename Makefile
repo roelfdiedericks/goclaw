@@ -1,4 +1,4 @@
-.PHONY: build run debug trace clean install test skills-update skills-check
+.PHONY: build run debug trace clean install test lint audit install-lint-tools skills-update skills-check
 
 BINARY := goclaw
 VERSION := 0.0.1
@@ -45,6 +45,28 @@ stop:
 
 status:
 	./$(BINARY) status
+
+# Code quality and security
+GOLANGCI_LINT := $(shell which golangci-lint 2>/dev/null)
+GOVULNCHECK := $(shell which govulncheck 2>/dev/null)
+
+install-lint-tools:
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install golang.org/x/vuln/cmd/govulncheck@latest
+
+lint:
+ifndef GOLANGCI_LINT
+	@echo "Installing golangci-lint..."
+	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+endif
+	golangci-lint run ./...
+
+audit: lint
+ifndef GOVULNCHECK
+	@echo "Installing govulncheck..."
+	@go install golang.org/x/vuln/cmd/govulncheck@latest
+endif
+	govulncheck ./...
 
 # Update bundled skills from upstream OpenClaw repo
 skills-update:

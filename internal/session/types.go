@@ -61,12 +61,12 @@ func NewImageContent(data, mimeType, source string) MessageContent {
 
 // MessageUsage contains token usage information
 type MessageUsage struct {
-	Input       int     `json:"input"`
-	Output      int     `json:"output"`
-	CacheRead   int     `json:"cacheRead"`
-	CacheWrite  int     `json:"cacheWrite"`
-	TotalTokens int     `json:"totalTokens"`
-	Cost        *Cost   `json:"cost,omitempty"`
+	Input       int   `json:"input"`
+	Output      int   `json:"output"`
+	CacheRead   int   `json:"cacheRead"`
+	CacheWrite  int   `json:"cacheWrite"`
+	TotalTokens int   `json:"totalTokens"`
+	Cost        *Cost `json:"cost,omitempty"`
 }
 
 // Cost contains cost breakdown
@@ -157,19 +157,19 @@ type CustomRecord struct {
 
 // SessionIndexEntry represents an entry in sessions.json
 type SessionIndexEntry struct {
-	SessionID        string                 `json:"sessionId"`
-	UpdatedAt        int64                  `json:"updatedAt"` // Unix ms timestamp
-	SystemSent       bool                   `json:"systemSent,omitempty"`
-	AbortedLastRun   bool                   `json:"abortedLastRun,omitempty"`
-	ChatType         string                 `json:"chatType,omitempty"`
-	DeliveryContext  map[string]interface{} `json:"deliveryContext,omitempty"`
-	LastChannel      string                 `json:"lastChannel,omitempty"`
-	Origin           map[string]interface{} `json:"origin,omitempty"`
-	SessionFile      string                 `json:"sessionFile"`
-	CompactionCount  int                    `json:"compactionCount,omitempty"`
-	TotalTokens      int                    `json:"totalTokens,omitempty"`      // GoClaw: track token usage
-	SkillsSnapshot   map[string]interface{} `json:"skillsSnapshot,omitempty"`
-	FlushActioned    bool                   `json:"flushActioned,omitempty"`    // GoClaw: true if agent wrote to memory at 90%
+	SessionID       string                 `json:"sessionId"`
+	UpdatedAt       int64                  `json:"updatedAt"` // Unix ms timestamp
+	SystemSent      bool                   `json:"systemSent,omitempty"`
+	AbortedLastRun  bool                   `json:"abortedLastRun,omitempty"`
+	ChatType        string                 `json:"chatType,omitempty"`
+	DeliveryContext map[string]interface{} `json:"deliveryContext,omitempty"`
+	LastChannel     string                 `json:"lastChannel,omitempty"`
+	Origin          map[string]interface{} `json:"origin,omitempty"`
+	SessionFile     string                 `json:"sessionFile"`
+	CompactionCount int                    `json:"compactionCount,omitempty"`
+	TotalTokens     int                    `json:"totalTokens,omitempty"` // GoClaw: track token usage
+	SkillsSnapshot  map[string]interface{} `json:"skillsSnapshot,omitempty"`
+	FlushActioned   bool                   `json:"flushActioned,omitempty"` // GoClaw: true if agent wrote to memory at 90%
 }
 
 // SessionIndex is the sessions.json file structure

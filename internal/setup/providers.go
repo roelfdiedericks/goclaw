@@ -106,7 +106,7 @@ var Presets = []ProviderPreset{
 		BaseURL:            "http://localhost:1234/v1",
 		Description:        "Local models, nice UI",
 		IsLocal:            true,
-		SupportsEmbeddings: true,  // Assumes user loads embedding model
+		SupportsEmbeddings: true,       // Assumes user loads embedding model
 		KnownEmbedModels:   []string{}, // Dynamic - fetch from API
 		KnownChatModels:    []string{}, // Dynamic - fetch from API
 	},

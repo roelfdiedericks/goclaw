@@ -30,7 +30,7 @@ func NextRunTime(job *CronJob, now time.Time) (*time.Time, error) {
 // nextRunAt calculates next run for "at" (one-shot) jobs.
 func nextRunAt(job *CronJob, now time.Time) (*time.Time, error) {
 	atTime := time.UnixMilli(job.Schedule.AtMs)
-	
+
 	// If already past, return nil (job won't run again)
 	if atTime.Before(now) || atTime.Equal(now) {
 		// Check if job has already run
@@ -40,7 +40,7 @@ func nextRunAt(job *CronJob, now time.Time) (*time.Time, error) {
 		// If not yet run, return the time (will execute immediately)
 		return &atTime, nil
 	}
-	
+
 	return &atTime, nil
 }
 
@@ -101,7 +101,7 @@ func nextRunCron(job *CronJob, now time.Time) (*time.Time, error) {
 	// Calculate next time in the correct timezone
 	nowInTz := now.In(tz)
 	next := schedule.Next(nowInTz)
-	
+
 	return &next, nil
 }
 

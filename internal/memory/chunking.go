@@ -28,7 +28,7 @@ type Chunk struct {
 
 // ChunkOptions configures the chunking behavior
 type ChunkOptions struct {
-	TargetTokens int // Target tokens per chunk (default: 400)
+	TargetTokens  int // Target tokens per chunk (default: 400)
 	OverlapTokens int // Overlap tokens between chunks (default: 80)
 }
 
@@ -64,7 +64,7 @@ func ChunkMarkdown(content string, opts ChunkOptions) []Chunk {
 	currentCharCount := 0
 
 	for i, line := range lines {
-		lineNum := i + 1 // 1-indexed
+		lineNum := i + 1         // 1-indexed
 		lineLen := len(line) + 1 // +1 for newline
 
 		// Check if adding this line would exceed target

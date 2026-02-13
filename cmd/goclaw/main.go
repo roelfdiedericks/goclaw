@@ -16,16 +16,16 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/go-rod/rod/lib/proto"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/sevlyar/go-daemon"
 	"golang.org/x/term"
 
 	"github.com/roelfdiedericks/goclaw/internal/browser"
 	"github.com/roelfdiedericks/goclaw/internal/bwrap"
 	"github.com/roelfdiedericks/goclaw/internal/config"
-	"github.com/roelfdiedericks/goclaw/internal/embeddings"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
+	"github.com/roelfdiedericks/goclaw/internal/embeddings"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/hass"
 	goclawhttp "github.com/roelfdiedericks/goclaw/internal/http"
@@ -57,11 +57,11 @@ func loadRuntimePaths() (*RuntimePaths, error) {
 		// Don't wrap - config.Load() error already includes "Run 'goclaw setup'" hint
 		return nil, err
 	}
-	
+
 	// Derive data directory from session store path
 	storePath := loadResult.Config.Session.GetStorePath()
 	dataDir := filepath.Dir(storePath)
-	
+
 	return &RuntimePaths{
 		DataDir: dataDir,
 		PidFile: filepath.Join(dataDir, "goclaw.pid"),
@@ -125,13 +125,13 @@ func (s *StartCmd) Run(ctx *Context) error {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
 	}
-	
+
 	// Ensure data directory exists
-	if err := os.MkdirAll(paths.DataDir, 0755); err != nil {
+	if err := os.MkdirAll(paths.DataDir, 0750); err != nil {
 		L_error("failed to create data directory", "error", err)
 		return err
 	}
-	
+
 	// Check if already running
 	if isRunningAt(paths.PidFile) {
 		L_error("gateway already running")
@@ -160,7 +160,7 @@ func (s *StartCmd) Run(ctx *Context) error {
 	defer cntxt.Release()
 
 	L_info("supervisor: started", "pid", os.Getpid(), "dataDir", paths.DataDir)
-	
+
 	// Run supervisor loop (spawns gateway subprocesses)
 	sup := supervisor.New(paths.DataDir)
 	return sup.Run()
@@ -176,7 +176,7 @@ func (s *StopCmd) Run(ctx *Context) error {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
 	}
-	
+
 	pid, running := getPidFromFile(paths.PidFile)
 	if !running {
 		L_info("gateway not running")
@@ -208,26 +208,26 @@ func (s *StatusCmd) Run(ctx *Context) error {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
 	}
-	
+
 	pid, running := getPidFromFile(paths.PidFile)
-	
+
 	if !running {
 		L_info("gateway not running")
 		return nil
 	}
-	
+
 	// Load supervisor state
 	state, err := supervisor.LoadState(paths.DataDir)
-	
+
 	if err != nil {
 		// Fall back to basic status if supervisor.json not available
 		L_info("gateway running", "pid", pid)
 		return nil
 	}
-	
+
 	// Calculate uptime
 	uptime := time.Since(state.StartedAt).Round(time.Second)
-	
+
 	// Format status output
 	fmt.Println("Gateway:  running")
 	if state.GatewayPID > 0 {
@@ -236,7 +236,7 @@ func (s *StatusCmd) Run(ctx *Context) error {
 		fmt.Printf("PID:      %d (supervisor)\n", state.PID)
 	}
 	fmt.Printf("Uptime:   %s\n", formatDuration(uptime))
-	
+
 	if state.CrashCount > 0 {
 		lastCrash := "unknown"
 		if state.LastCrashAt != nil {
@@ -246,7 +246,7 @@ func (s *StatusCmd) Run(ctx *Context) error {
 	} else {
 		fmt.Println("Crashes:  0 this session")
 	}
-	
+
 	return nil
 }
 
@@ -595,12 +595,12 @@ func formatCronSchedule(s *cron.Schedule) string {
 
 // UserCmd manages users
 type UserCmd struct {
-	Add         UserAddCmd         `cmd:"" help:"Add a new user"`
-	List        UserListCmd        `cmd:"" help:"List all users"`
-	Edit        UserEditCmd        `cmd:"" help:"Interactive user management (TUI)"`
-	Delete      UserDeleteCmd      `cmd:"" help:"Delete a user"`
-	SetTelegram UserTelegramCmd    `cmd:"set-telegram" help:"Set Telegram ID"`
-	SetPassword UserPasswordCmd    `cmd:"set-password" help:"Set HTTP password"`
+	Add         UserAddCmd      `cmd:"" help:"Add a new user"`
+	List        UserListCmd     `cmd:"" help:"List all users"`
+	Edit        UserEditCmd     `cmd:"" help:"Interactive user management (TUI)"`
+	Delete      UserDeleteCmd   `cmd:"" help:"Delete a user"`
+	SetTelegram UserTelegramCmd `cmd:"set-telegram" help:"Set Telegram ID"`
+	SetPassword UserPasswordCmd `cmd:"set-password" help:"Set HTTP password"`
 }
 
 // UserEditCmd launches the TUI user editor
@@ -1183,7 +1183,7 @@ func (b *BrowserMigrateCmd) Run(ctx *Context) error {
 
 	// OpenClaw profile location
 	openclawProfilesDir := filepath.Join(home, ".openclaw", "browser", "profiles")
-	
+
 	// GoClaw profile location
 	goclawProfilesDir := filepath.Join(home, ".openclaw", "goclaw", "browser", "profiles")
 
@@ -1220,7 +1220,7 @@ func (b *BrowserMigrateCmd) Run(ctx *Context) error {
 	fmt.Println()
 
 	// Ensure GoClaw profiles directory exists
-	if err := os.MkdirAll(goclawProfilesDir, 0755); err != nil {
+	if err := os.MkdirAll(goclawProfilesDir, 0750); err != nil {
 		return fmt.Errorf("failed to create GoClaw profiles directory: %w", err)
 	}
 
@@ -1228,7 +1228,7 @@ func (b *BrowserMigrateCmd) Run(ctx *Context) error {
 	reader := bufio.NewReader(os.Stdin)
 	for _, p := range profiles {
 		srcPath := filepath.Join(openclawProfilesDir, p)
-		
+
 		// Suggest renaming "openclaw" to "default"
 		destName := p
 		if p == "openclaw" {
@@ -1237,10 +1237,10 @@ func (b *BrowserMigrateCmd) Run(ctx *Context) error {
 			fmt.Println("  [2] 'openclaw' (keep original name)")
 			fmt.Println("  [3] Skip this profile")
 			fmt.Print("Choice [1]: ")
-			
+
 			choice, _ := reader.ReadString('\n')
 			choice = strings.TrimSpace(choice)
-			
+
 			switch choice {
 			case "", "1":
 				destName = "default"
@@ -1264,7 +1264,7 @@ func (b *BrowserMigrateCmd) Run(ctx *Context) error {
 		}
 
 		destPath := filepath.Join(goclawProfilesDir, destName)
-		
+
 		// Check if destination exists
 		if _, err := os.Stat(destPath); err == nil {
 			fmt.Printf("  Warning: '%s' already exists in GoClaw. Overwrite? [y/N]: ", destName)
@@ -1292,7 +1292,7 @@ func (b *BrowserMigrateCmd) Run(ctx *Context) error {
 	fmt.Println("  1. Run 'goclaw browser profiles' to verify imported profiles")
 	fmt.Println("  2. Update profileDomains in goclaw.json to map domains to profiles")
 	fmt.Println("  3. Or set allowAgentProfiles: true to let agent specify profiles directly")
-	
+
 	return nil
 }
 
@@ -2073,7 +2073,7 @@ func runTUI(ctx context.Context, gw *gateway.Gateway, users *user.Registry, show
 	if owner == nil {
 		return fmt.Errorf("no owner user configured")
 	}
-	
+
 	// Log sandbox warning after TUI starts (in a goroutine so TUI can initialize first)
 	if sandboxDisabledReason != "" {
 		go func() {
@@ -2082,7 +2082,7 @@ func runTUI(ctx context.Context, gw *gateway.Gateway, users *user.Registry, show
 				"hint", "install bubblewrap and restart to enable")
 		}()
 	}
-	
+
 	return tui.Run(ctx, gw, owner, showLogs)
 }
 

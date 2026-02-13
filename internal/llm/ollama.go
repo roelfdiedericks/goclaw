@@ -32,7 +32,7 @@ type OllamaProvider struct {
 	client        *http.Client
 	available     bool
 	mu            sync.RWMutex
-	traceEnabled  bool   // Per-provider trace logging control
+	traceEnabled  bool // Per-provider trace logging control
 
 	// HTTP transport for capturing request/response (for error dumps)
 	transport     *CapturingTransport
@@ -327,7 +327,7 @@ func (c *OllamaClient) Available() bool {
 // If the message exceeds the model's context window, it will be truncated with a warning.
 func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPrompt string) (string, error) {
 	startTime := time.Now()
-	
+
 	// Estimate chars limit from tokens (rough: 1 token ≈ 3 chars for English)
 	// Reserve 20% for response generation
 	c.mu.RLock()
@@ -335,7 +335,7 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 	c.mu.RUnlock()
 
 	maxInputTokens := int(float64(contextTokens) * 0.8) // 80% for input
-	maxInputChars := maxInputTokens * 3                  // ~3 chars per token
+	maxInputChars := maxInputTokens * 3                 // ~3 chars per token
 
 	totalChars := len(userMessage) + len(systemPrompt)
 	L_info("llm: request started", "provider", c.name, "model", c.model, "chars", totalChars)
@@ -539,8 +539,8 @@ func (p *OllamaProvider) Type() string {
 
 // WithModel returns a clone of the provider configured with a specific model
 func (p *OllamaProvider) WithModel(model string) Provider {
-	clone := *p               //nolint:govet // copylocks: mu is reset immediately below
-	clone.mu = sync.RWMutex{} // Fresh mutex - copying a used mutex is undefined behavior
+	clone := *p                //nolint:govet // copylocks: mu is reset immediately below
+	clone.mu = sync.RWMutex{}  // Fresh mutex - copying a used mutex is undefined behavior
 	clone.available = false    // New model needs availability check
 	clone.dimensions = 0       // New model may have different embedding dimensions
 	clone.contextTokens = 4096 // Reset to default, will be queried
@@ -556,8 +556,8 @@ func (p *OllamaProvider) WithModel(model string) Provider {
 // Initialization is synchronous (blocking) because embeddings are typically
 // needed immediately when GetProvider("embeddings") is called.
 func (p *OllamaProvider) WithModelForEmbedding(model string) *OllamaProvider {
-	clone := *p               //nolint:govet // copylocks: mu is reset immediately below
-	clone.mu = sync.RWMutex{} // Fresh mutex - copying a used mutex is undefined behavior
+	clone := *p                //nolint:govet // copylocks: mu is reset immediately below
+	clone.mu = sync.RWMutex{}  // Fresh mutex - copying a used mutex is undefined behavior
 	clone.available = false    // New model needs availability check
 	clone.dimensions = 0       // New model may have different embedding dimensions
 	clone.contextTokens = 4096 // Reset to default

@@ -14,7 +14,7 @@ func CreateWorkspace(wsPath string) error {
 	L_info("setup: creating workspace", "path", wsPath)
 
 	// Create main workspace directory
-	if err := os.MkdirAll(wsPath, 0755); err != nil {
+	if err := os.MkdirAll(wsPath, 0750); err != nil {
 		return fmt.Errorf("failed to create workspace directory: %w", err)
 	}
 
@@ -22,7 +22,7 @@ func CreateWorkspace(wsPath string) error {
 	subdirs := []string{"memory", "skills", "media"}
 	for _, dir := range subdirs {
 		dirPath := filepath.Join(wsPath, dir)
-		if err := os.MkdirAll(dirPath, 0755); err != nil {
+		if err := os.MkdirAll(dirPath, 0750); err != nil {
 			return fmt.Errorf("failed to create %s directory: %w", dir, err)
 		}
 		L_debug("setup: created directory", "path", dirPath)
@@ -56,14 +56,13 @@ func writeTemplateIfMissing(destPath, templateName string) error {
 	}
 
 	// Write file
-	if err := os.WriteFile(destPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(destPath, []byte(content), 0600); err != nil {
 		return fmt.Errorf("failed to write %s: %w", destPath, err)
 	}
 
 	L_debug("setup: wrote template", "file", destPath)
 	return nil
 }
-
 
 // ExpandPath expands ~ to home directory
 func ExpandPath(path string) string {

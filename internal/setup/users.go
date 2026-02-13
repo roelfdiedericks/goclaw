@@ -175,7 +175,7 @@ func (e *UserEditor) showUserList() {
 	fmt.Println("Current users:")
 	for _, username := range usernames {
 		entry := e.users[username]
-		
+
 		// Build status indicators
 		var indicators []string
 		if entry.TelegramID != "" {

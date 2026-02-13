@@ -106,7 +106,7 @@ func SplitMediaFromOutput(raw string) ParseResult {
 func cleanCandidate(raw string) string {
 	s := strings.TrimSpace(raw)
 	// Remove leading/trailing quotes, backticks, brackets
-	s = strings.Trim(s, `"'` + "`" + `[]{}()`)
+	s = strings.Trim(s, `"'`+"`"+`[]{}()`)
 	return strings.TrimSpace(s)
 }
 

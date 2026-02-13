@@ -136,7 +136,7 @@ func findExistingConfig() string {
 
 	// Search locations
 	paths := []string{
-		"goclaw.json",                                 // current directory
+		"goclaw.json", // current directory
 		filepath.Join(home, ".goclaw", "goclaw.json"), // ~/.goclaw/
 	}
 
@@ -168,7 +168,7 @@ func GetUsersPath(configPath string) string {
 // EnsureConfigDir creates the directory for the config file if needed
 func EnsureConfigDir(configPath string) error {
 	dir := filepath.Dir(configPath)
-	return os.MkdirAll(dir, 0755)
+	return os.MkdirAll(dir, 0750)
 }
 
 // BackupFile creates a backup of the file with rotation.

@@ -14,23 +14,23 @@ import (
 
 // PromptParams contains parameters for building the system prompt
 type PromptParams struct {
-	WorkspaceDir   string
-	IsSubagent     bool
-	Tools          *tools.Registry
-	Model          string
-	Channel        string // "tui", "telegram", etc.
-	UserTimezone   string
-	Version        string
-	User           *user.User // Current user for identity section
+	WorkspaceDir string
+	IsSubagent   bool
+	Tools        *tools.Registry
+	Model        string
+	Channel      string // "tui", "telegram", etc.
+	UserTimezone string
+	Version      string
+	User         *user.User // Current user for identity section
 	// Context tracking
-	TotalTokens    int // Current context size
-	MaxTokens      int // Model's context window
+	TotalTokens int // Current context size
+	MaxTokens   int // Model's context window
 	// Optional cached workspace files (if nil, loads from disk)
 	WorkspaceFiles []WorkspaceFile
 	// Skills prompt section (pre-formatted XML)
-	SkillsPrompt   string
+	SkillsPrompt string
 	// Memory access control (true = include MEMORY.md, false = exclude)
-	IncludeMemory  bool
+	IncludeMemory bool
 	// Role-specific system prompt customization
 	RoleSystemPrompt     string // Inline system prompt text from role config
 	RoleSystemPromptFile string // Path to system prompt file (relative to workspace)

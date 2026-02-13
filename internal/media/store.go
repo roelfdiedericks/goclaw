@@ -34,12 +34,12 @@ const (
 // It stores files in a configurable directory with subdirectories for different sources
 // (browser screenshots, inbound media, etc.).
 type MediaStore struct {
-	baseDir  string        // Resolved absolute path to media directory
-	ttl      time.Duration // Time-to-live for files
-	maxSize  int64         // Maximum file size in bytes
-	stopCh   chan struct{} // Channel to stop cleanup goroutine
-	wg       sync.WaitGroup
-	mu       sync.Mutex // Protects concurrent saves
+	baseDir string        // Resolved absolute path to media directory
+	ttl     time.Duration // Time-to-live for files
+	maxSize int64         // Maximum file size in bytes
+	stopCh  chan struct{} // Channel to stop cleanup goroutine
+	wg      sync.WaitGroup
+	mu      sync.Mutex // Protects concurrent saves
 }
 
 // MediaConfig configures the MediaStore

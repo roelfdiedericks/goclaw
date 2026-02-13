@@ -90,9 +90,9 @@ type BrowserConfig struct {
 // DefaultBrowserConfig returns the default browser configuration
 func DefaultBrowserConfig() BrowserConfig {
 	return BrowserConfig{
-		Dir:            "",      // Will resolve to ~/.goclaw/browser
+		Dir:            "", // Will resolve to ~/.goclaw/browser
 		AutoDownload:   true,
-		Revision:       "",      // Latest
+		Revision:       "", // Latest
 		Headless:       true,
 		NoSandbox:      false,
 		DefaultProfile: "default",

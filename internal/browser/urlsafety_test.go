@@ -30,7 +30,7 @@ func TestValidateURLSafety(t *testing.T) {
 		{"localhost with port", "http://localhost:8080", true, "loopback"},
 		{"127.0.0.1", "http://127.0.0.1", true, "loopback"},
 		{"127.0.0.1 with port", "http://127.0.0.1:3000", true, "loopback"},
-		{"127.1 short form", "http://127.1", true, ""}, // May fail DNS or resolve to loopback - either is safe
+		{"127.1 short form", "http://127.1", true, ""},     // May fail DNS or resolve to loopback - either is safe
 		{"127.0.1 short form", "http://127.0.1", true, ""}, // May fail DNS or resolve to loopback - either is safe
 		{"127.x.x.x range", "http://127.255.255.255", true, "loopback"},
 

@@ -100,7 +100,7 @@ func convertMessageRecord(rec *MessageRecord) *Message {
 		msg.Content = ExtractTextContent(rec.Message.Content)
 		// Try to extract source from message metadata if available
 		msg.Source = "unknown"
-		
+
 		// Skip empty user messages
 		if msg.Content == "" {
 			return nil
@@ -117,7 +117,7 @@ func convertMessageRecord(rec *MessageRecord) *Message {
 			msg.ToolName = toolCalls[0].Name
 			msg.ToolUseID = toolCalls[0].ID
 			msg.ToolInput = toolCalls[0].Arguments
-			
+
 			// If this is a tool-only message (no text), mark as tool_use role
 			if msg.Content == "" {
 				msg.Role = "tool_use"
@@ -167,9 +167,9 @@ func BuildLLMMessages(sess *Session) []map[string]interface{} {
 
 		case "tool_result":
 			messages = append(messages, map[string]interface{}{
-				"role":         "user",
-				"content":      fmt.Sprintf("[Tool result for %s]\n%s", msg.ToolName, msg.Content),
-				"tool_use_id":  msg.ToolUseID,
+				"role":        "user",
+				"content":     fmt.Sprintf("[Tool result for %s]\n%s", msg.ToolName, msg.Content),
+				"tool_use_id": msg.ToolUseID,
 			})
 		}
 	}
