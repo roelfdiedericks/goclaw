@@ -361,7 +361,8 @@ type LLMConfig struct {
 
 // ThinkingConfig configures extended thinking for models that support it
 type ThinkingConfig struct {
-	BudgetTokens int `json:"budgetTokens"` // Token budget for thinking (default: 10000)
+	BudgetTokens int    `json:"budgetTokens"` // Token budget for thinking (default: 10000) - legacy, kept for compatibility
+	DefaultLevel string `json:"defaultLevel"` // Global default level: off/minimal/low/medium/high/xhigh (default: "medium")
 }
 
 // LLMProviderConfig is the configuration for a single provider instance
@@ -376,6 +377,7 @@ type LLMProviderConfig struct {
 	PromptCaching  bool   `json:"promptCaching,omitempty"`  // Anthropic-specific
 	EmbeddingOnly  bool   `json:"embeddingOnly,omitempty"`  // For embedding-only models
 	DumpOnSuccess  bool   `json:"dumpOnSuccess,omitempty"`  // Keep request dumps even on success (for debugging)
+	ThinkingLevel  string `json:"thinkingLevel,omitempty"`  // Default thinking level for this provider: off/minimal/low/medium/high/xhigh
 }
 
 // LLMPurposeConfig defines the model chain for a specific purpose

@@ -29,7 +29,8 @@ type AgentRequest struct {
 	SkipAddMessage bool // If true, don't add UserMsg to session (already added by supervision)
 
 	// Thinking mode
-	EnableThinking bool // If true, enable extended thinking for models that support it
+	EnableThinking bool   // If true, enable extended thinking for models that support it
+	ThinkingLevel  string // Thinking intensity: off/minimal/low/medium/high/xhigh (overrides EnableThinking)
 
 	// Mirroring control
 	SkipMirror bool // If true, don't mirror to other channels (caller handles delivery)

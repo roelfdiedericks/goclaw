@@ -2,6 +2,7 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -622,7 +623,7 @@ func (p *OpenAIProvider) SimpleMessage(ctx context.Context, userMessage, systemP
 
 // StreamMessage sends a message to the LLM and streams the response
 // onDelta is called for each text chunk received
-// opts is currently unused for OpenAI but accepted for interface compliance
+// opts controls thinking level and provides callback for thinking deltas
 func (p *OpenAIProvider) StreamMessage(
 	ctx context.Context,
 	messages []types.Message,
@@ -631,12 +632,41 @@ func (p *OpenAIProvider) StreamMessage(
 	onDelta func(delta string),
 	opts *StreamOptions,
 ) (*Response, error) {
-	// Note: OpenAI reasoning models (o1, etc.) handle thinking differently
-	// The ReasoningContent field is already captured from the response
-	_ = opts // Currently unused, reasoning is automatic for compatible models
 	startTime := time.Now()
 	contextWindow := p.ContextTokens()
-	L_info("llm: request started", "provider", p.name, "model", p.model, "messages", len(messages), "tools", len(toolDefs))
+
+	// Determine thinking configuration
+	enableThinking := false
+	var thinkingLevel ThinkingLevel
+	var onThinkingDelta func(string)
+	if opts != nil {
+		// Use ThinkingLevel if set, fall back to legacy EnableThinking
+		thinkingLevel = ThinkingLevel(opts.ThinkingLevel)
+		if thinkingLevel == "" && opts.EnableThinking {
+			thinkingLevel = DefaultThinkingLevel
+		}
+		enableThinking = thinkingLevel.IsEnabled()
+		onThinkingDelta = opts.OnThinkingDelta
+	}
+
+	// Set up reasoning injection for OpenRouter/Kimi if thinking is enabled
+	// This adds {"reasoning":{"effort":"..."}} to the request body
+	if enableThinking && p.transport != nil {
+		effort := thinkingLevel.OpenRouterEffort()
+		if effort != "" {
+			p.transport.SetReasoningEffort(effort)
+			L_debug("openai: set reasoning effort", "provider", p.name, "level", thinkingLevel, "effort", effort)
+		}
+	}
+
+	// Set up SSE parser for reasoning_details extraction
+	var reasoningParser *SSEReasoningParser
+	if enableThinking && p.transport != nil {
+		reasoningParser = NewSSEReasoningParser(onThinkingDelta)
+		p.transport.SetOnChunk(reasoningParser.ProcessChunk)
+	}
+
+	L_info("llm: request started", "provider", p.name, "model", p.model, "messages", len(messages), "tools", len(toolDefs), "thinking", enableThinking, "thinkingLevel", thinkingLevel)
 	L_debug("preparing OpenAI request", "messages", len(messages), "tools", len(toolDefs))
 
 	// Convert session messages to OpenAI format
@@ -735,6 +765,14 @@ func (p *OpenAIProvider) StreamMessage(
 
 	// Start dump for debugging (captures request context)
 	dumpCtx := StartDump(p.name, p.model, p.baseURL, openaiMessages, openaiTools, systemPrompt, 1)
+	dumpCtx.SetTokenInfo(TokenInfo{
+		ContextWindow:  contextWindow,
+		EstimatedInput: estimatedInput,
+		ConfiguredMax:  p.maxTokens,
+		CappedMax:      maxTokens,
+		SafetyMargin:   tokens.SafetyMargin,
+		Buffer:         100,
+	})
 
 	// Stream the response
 	stream, err := p.client.CreateChatCompletionStream(ctx, req)
@@ -785,6 +823,12 @@ func (p *OpenAIProvider) StreamMessage(
 		}
 		// Dump full request/response to file for debugging
 		FinishDumpError(dumpCtx, err, p.transport)
+
+		// Check if the captured response contains the real error
+		if p.transport != nil {
+			_, respBody, _, _ := p.transport.GetLastCapture()
+			err = CheckResponseBody(err, respBody)
+		}
 
 		// Record metrics for failed request
 		if p.metricPrefix != "" {
@@ -852,6 +896,13 @@ func (p *OpenAIProvider) StreamMessage(
 			}
 			// Dump full request/response to file for debugging
 			FinishDumpError(dumpCtx, err, p.transport)
+
+			// Check if the captured response contains the real error (e.g., LM Studio SSE error events)
+			// The go-openai library may fail to parse SSE error events, masking the real error
+			if p.transport != nil {
+				_, respBody, _, _ := p.transport.GetLastCapture()
+				err = CheckResponseBody(err, respBody)
+			}
 
 			// Record metrics for failed request
 			if p.metricPrefix != "" {
@@ -1022,9 +1073,27 @@ func (p *OpenAIProvider) StreamMessage(
 	}
 
 	// Store accumulated reasoning content
+	// Sources: 1) go-openai ReasoningContent (native), 2) SSE parser (reasoning_details)
 	if reasoningContent != "" {
 		response.Thinking = reasoningContent
-		L_info("llm: reasoning content captured", "length", len(reasoningContent))
+		L_info("llm: reasoning content captured (native)", "length", len(reasoningContent))
+	}
+	// Also capture reasoning_details from SSE parser (OpenRouter/Kimi format)
+	if reasoningParser != nil {
+		parsedReasoning := reasoningParser.GetReasoning()
+		if parsedReasoning != "" {
+			// Append to any native reasoning content
+			if response.Thinking != "" {
+				response.Thinking += "\n\n--- reasoning_details ---\n" + parsedReasoning
+			} else {
+				response.Thinking = parsedReasoning
+			}
+			L_info("llm: reasoning_details captured (SSE)", "length", len(parsedReasoning))
+		}
+		// Clear the transport callback
+		if p.transport != nil {
+			p.transport.SetOnChunk(nil)
+		}
 	}
 
 	// Process accumulated tool calls
@@ -1350,6 +1419,145 @@ func convertToOpenAITools(toolDefs []types.ToolDefinition) []openai.Tool {
 		}
 	}
 	return result
+}
+
+// parseReasoningFromSSE extracts reasoning content from SSE event chunks.
+// This handles OpenRouter/Kimi-style reasoning_details which aren't parsed by go-openai.
+// The chunk may contain partial SSE events, so we handle them incrementally.
+func parseReasoningFromSSE(chunk []byte) string {
+	// SSE format: "data: {json}\n\n"
+	// Look for reasoning_details in the JSON
+	// Extract text from reasoning.text type blocks
+
+	var reasoningText strings.Builder
+	lines := bytes.Split(chunk, []byte("\n"))
+
+	for _, line := range lines {
+		if !bytes.HasPrefix(line, []byte("data: ")) {
+			continue
+		}
+
+		jsonData := bytes.TrimPrefix(line, []byte("data: "))
+		if bytes.Equal(jsonData, []byte("[DONE]")) {
+			continue
+		}
+
+		// Parse delta.reasoning_details array
+		var event struct {
+			Choices []struct {
+				Delta struct {
+					ReasoningDetails []struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					} `json:"reasoning_details"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+
+		if err := json.Unmarshal(jsonData, &event); err != nil {
+			// Not valid JSON or incomplete chunk - skip
+			continue
+		}
+
+		for _, choice := range event.Choices {
+			for _, detail := range choice.Delta.ReasoningDetails {
+				if detail.Type == "reasoning.text" && detail.Text != "" {
+					reasoningText.WriteString(detail.Text)
+				}
+			}
+		}
+	}
+
+	return reasoningText.String()
+}
+
+// SSEReasoningParser accumulates reasoning content from SSE chunks.
+// Use this with CapturingTransport.SetOnChunk to extract reasoning_details in real-time.
+type SSEReasoningParser struct {
+	mu        sync.Mutex
+	buffer    strings.Builder // Accumulated reasoning content
+	onDelta   func(string)    // Callback for each reasoning delta
+	partial   []byte          // Buffer for incomplete SSE lines
+}
+
+// NewSSEReasoningParser creates a new parser with an optional delta callback.
+func NewSSEReasoningParser(onDelta func(string)) *SSEReasoningParser {
+	return &SSEReasoningParser{onDelta: onDelta}
+}
+
+// ProcessChunk processes incoming SSE data and extracts reasoning content.
+// Safe for concurrent use.
+func (p *SSEReasoningParser) ProcessChunk(chunk []byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Prepend any partial line from previous chunk
+	if len(p.partial) > 0 {
+		chunk = append(p.partial, chunk...)
+		p.partial = nil
+	}
+
+	// Process complete lines
+	lines := bytes.Split(chunk, []byte("\n"))
+
+	// Check if last line is incomplete (doesn't end with newline)
+	if len(chunk) > 0 && chunk[len(chunk)-1] != '\n' && len(lines) > 0 {
+		p.partial = lines[len(lines)-1]
+		lines = lines[:len(lines)-1]
+	}
+
+	for _, line := range lines {
+		if !bytes.HasPrefix(line, []byte("data: ")) {
+			continue
+		}
+
+		jsonData := bytes.TrimPrefix(line, []byte("data: "))
+		if bytes.Equal(jsonData, []byte("[DONE]")) {
+			continue
+		}
+
+		// Parse delta.reasoning_details array
+		var event struct {
+			Choices []struct {
+				Delta struct {
+					ReasoningDetails []struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					} `json:"reasoning_details"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+
+		if err := json.Unmarshal(jsonData, &event); err != nil {
+			continue
+		}
+
+		for _, choice := range event.Choices {
+			for _, detail := range choice.Delta.ReasoningDetails {
+				if detail.Type == "reasoning.text" && detail.Text != "" {
+					p.buffer.WriteString(detail.Text)
+					if p.onDelta != nil {
+						p.onDelta(detail.Text)
+					}
+				}
+			}
+		}
+	}
+}
+
+// GetReasoning returns all accumulated reasoning content.
+func (p *SSEReasoningParser) GetReasoning() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.buffer.String()
+}
+
+// Reset clears the accumulated content.
+func (p *SSEReasoningParser) Reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.buffer.Reset()
+	p.partial = nil
 }
 
 // estimateOpenAITokens provides a fallback token estimate when the API doesn't return usage

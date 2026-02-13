@@ -2,11 +2,15 @@
 package llm
 
 import (
+	"context"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
+	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
 // Global registry singleton
@@ -29,12 +33,30 @@ func GetRegistry() *Registry {
 	return globalRegistry
 }
 
+// providerCooldown tracks cooldown state for a provider after errors
+type providerCooldown struct {
+	until      time.Time // When cooldown expires
+	errorCount int       // Consecutive error count (for exponential backoff)
+	reason     ErrorType // Why the provider is in cooldown
+}
+
+// ProviderStatus represents the current status of a provider for /llm command
+type ProviderStatus struct {
+	Alias      string
+	InCooldown bool
+	Until      time.Time
+	Reason     ErrorType
+	ErrorCount int
+}
+
 // Registry manages LLM provider instances and model resolution.
 // It supports multiple provider instances and purpose-based model selection.
 type Registry struct {
-	providers map[string]providerInstance // provider name -> instance
-	purposes  map[string]PurposeConfig    // purpose -> config with models array
-	mu        sync.RWMutex
+	providers  map[string]providerInstance   // provider name -> instance
+	purposes   map[string]PurposeConfig      // purpose -> config with models array
+	cooldowns  map[string]*providerCooldown  // provider alias -> cooldown state
+	mu         sync.RWMutex
+	cooldownMu sync.RWMutex
 }
 
 // providerInstance holds a provider and its config
@@ -67,6 +89,7 @@ func NewRegistry(cfg RegistryConfig) (*Registry, error) {
 			"summarization": cfg.Summarization,
 			"embeddings":    cfg.Embeddings,
 		},
+		cooldowns: make(map[string]*providerCooldown),
 	}
 
 	// Initialize all providers (but don't connect models yet)
@@ -312,4 +335,437 @@ func (r *Registry) ListModelsForPurpose(purpose string) []string {
 		return cfg.Models
 	}
 	return nil
+}
+
+// ==================== Provider Cooldown Management ====================
+
+// calculateCooldownDuration returns the cooldown duration based on error count and type.
+// Non-billing: 1min → 5min → 25min → 1hr max (exponential base 5)
+// Billing: 5hr → 10hr → 20hr → 24hr max (exponential base 2)
+func calculateCooldownDuration(errorCount int, isBilling bool) time.Duration {
+	if errorCount < 1 {
+		errorCount = 1
+	}
+
+	if isBilling {
+		// Billing: 5hr * 2^(n-1), max 24hr
+		base := 5 * time.Hour
+		maxDur := 24 * time.Hour
+		exponent := min(errorCount-1, 2) // Cap at 2 (5h → 10h → 20h)
+		dur := time.Duration(float64(base) * math.Pow(2, float64(exponent)))
+		if dur > maxDur {
+			return maxDur
+		}
+		return dur
+	}
+
+	// Non-billing: 1min * 5^(n-1), max 1hr
+	base := time.Minute
+	maxDur := time.Hour
+	exponent := min(errorCount-1, 3) // Cap at 3 (1m → 5m → 25m → 125m capped to 1hr)
+	dur := time.Duration(float64(base) * math.Pow(5, float64(exponent)))
+	if dur > maxDur {
+		return maxDur
+	}
+	return dur
+}
+
+// isProviderInCooldown checks if a provider is currently in cooldown.
+func (r *Registry) isProviderInCooldown(alias string) bool {
+	r.cooldownMu.RLock()
+	defer r.cooldownMu.RUnlock()
+
+	cd := r.cooldowns[alias]
+	return cd != nil && time.Now().Before(cd.until)
+}
+
+// markProviderCooldown puts a provider into cooldown with exponential backoff.
+func (r *Registry) markProviderCooldown(alias string, errType ErrorType) {
+	r.cooldownMu.Lock()
+	defer r.cooldownMu.Unlock()
+
+	cd := r.cooldowns[alias]
+	if cd == nil {
+		cd = &providerCooldown{}
+		r.cooldowns[alias] = cd
+	}
+
+	cd.errorCount++
+	cd.reason = errType
+	cd.until = time.Now().Add(calculateCooldownDuration(cd.errorCount, errType == ErrorTypeBilling))
+
+	L_warn("llm: provider cooldown",
+		"provider", alias,
+		"until", cd.until.Format("15:04:05"),
+		"reason", errType,
+		"errorCount", cd.errorCount,
+		"duration", time.Until(cd.until).Round(time.Second))
+}
+
+// clearProviderCooldown removes cooldown state for a provider.
+// Returns whether the provider was in cooldown and the reason.
+func (r *Registry) clearProviderCooldown(alias string) (wasInCooldown bool, reason ErrorType) {
+	r.cooldownMu.Lock()
+	defer r.cooldownMu.Unlock()
+
+	cd := r.cooldowns[alias]
+	if cd != nil {
+		wasInCooldown = true
+		reason = cd.reason
+		delete(r.cooldowns, alias)
+		L_info("llm: provider cooldown cleared", "provider", alias, "wasReason", reason)
+	}
+	return
+}
+
+// ClearAllCooldowns removes all provider cooldowns (for /llm reset command).
+// Returns the number of cooldowns cleared.
+func (r *Registry) ClearAllCooldowns() int {
+	r.cooldownMu.Lock()
+	defer r.cooldownMu.Unlock()
+
+	count := len(r.cooldowns)
+	r.cooldowns = make(map[string]*providerCooldown)
+	
+	if count > 0 {
+		L_info("llm: all cooldowns cleared", "count", count)
+	}
+	return count
+}
+
+// GetProviderStatus returns the status of all providers for /llm command.
+func (r *Registry) GetProviderStatus() []ProviderStatus {
+	r.mu.RLock()
+	providers := make([]string, 0, len(r.providers))
+	for name := range r.providers {
+		providers = append(providers, name)
+	}
+	r.mu.RUnlock()
+
+	r.cooldownMu.RLock()
+	defer r.cooldownMu.RUnlock()
+
+	now := time.Now()
+	statuses := make([]ProviderStatus, 0, len(providers))
+
+	for _, alias := range providers {
+		status := ProviderStatus{Alias: alias}
+		if cd := r.cooldowns[alias]; cd != nil && now.Before(cd.until) {
+			status.InCooldown = true
+			status.Until = cd.until
+			status.Reason = cd.reason
+			status.ErrorCount = cd.errorCount
+		}
+		statuses = append(statuses, status)
+	}
+
+	return statuses
+}
+
+// ==================== Failover Streaming ====================
+
+// FailoverAttempt records a single attempt in the failover chain
+type FailoverAttempt struct {
+	Model   string    // Model reference that was tried
+	Reason  ErrorType // Error type (if failed)
+	Skipped bool      // True if skipped due to cooldown (no network call)
+}
+
+// RecoveryInfo records when a provider recovered from cooldown
+type RecoveryInfo struct {
+	Provider  string
+	WasReason ErrorType
+}
+
+// FailoverResult contains the result of a failover-enabled stream call
+type FailoverResult struct {
+	Response   *Response
+	ModelUsed  string            // Model reference that succeeded
+	Attempts   []FailoverAttempt // All attempts (for notification)
+	FailedOver bool              // True if not using primary model
+	Recovered  *RecoveryInfo     // Non-nil if provider recovered from cooldown
+}
+
+// StreamMessageWithFailover tries models in the chain for a purpose, handling
+// failover and cooldowns. Returns detailed result for notification purposes.
+func (r *Registry) StreamMessageWithFailover(
+	ctx context.Context,
+	purpose string,
+	messages []types.Message,
+	toolDefs []types.ToolDefinition,
+	systemPrompt string,
+	onDelta func(delta string),
+	opts *StreamOptions,
+) (*FailoverResult, error) {
+	r.mu.RLock()
+	cfg, ok := r.purposes[purpose]
+	r.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("unknown purpose: %s", purpose)
+	}
+
+	if len(cfg.Models) == 0 {
+		return nil, fmt.Errorf("no models configured for purpose: %s", purpose)
+	}
+
+	result := &FailoverResult{
+		Attempts: make([]FailoverAttempt, 0, len(cfg.Models)),
+	}
+
+	var lastErr error
+	primaryModel := cfg.Models[0]
+
+	for _, modelRef := range cfg.Models {
+		// Parse provider alias from "provider/model" or "provider/subpath/model"
+		parts := strings.SplitN(modelRef, "/", 2)
+		if len(parts) < 2 {
+			L_debug("failover: invalid model ref", "ref", modelRef)
+			continue
+		}
+		providerAlias := parts[0]
+
+		// Check cooldown (no network call if in cooldown)
+		if r.isProviderInCooldown(providerAlias) {
+			result.Attempts = append(result.Attempts, FailoverAttempt{
+				Model:   modelRef,
+				Skipped: true,
+			})
+			L_debug("failover: provider in cooldown, skipping", "model", modelRef)
+			continue
+		}
+
+		// Resolve provider with model
+		provider, err := r.resolveForPurpose(modelRef, purpose)
+		if err != nil {
+			L_debug("failover: model unavailable", "model", modelRef, "error", err)
+			continue
+		}
+
+		// Apply maxTokens override if configured
+		var p Provider
+		switch typed := provider.(type) {
+		case *AnthropicProvider:
+			if !typed.IsAvailable() {
+				continue
+			}
+			if cfg.MaxTokens > 0 {
+				p = typed.WithMaxTokens(cfg.MaxTokens)
+			} else {
+				p = typed
+			}
+		case *OllamaProvider:
+			if !typed.IsAvailable() {
+				continue
+			}
+			if cfg.MaxTokens > 0 {
+				p = typed.WithMaxTokens(cfg.MaxTokens)
+			} else {
+				p = typed
+			}
+		case *OpenAIProvider:
+			if !typed.IsAvailable() {
+				continue
+			}
+			if cfg.MaxTokens > 0 {
+				p = typed.WithMaxTokens(cfg.MaxTokens)
+			} else {
+				p = typed
+			}
+		default:
+			L_warn("failover: unknown provider type", "model", modelRef)
+			continue
+		}
+
+		// Try the call
+		resp, err := p.StreamMessage(ctx, messages, toolDefs, systemPrompt, onDelta, opts)
+		if err == nil {
+			// Success!
+			result.Response = resp
+			result.ModelUsed = modelRef
+			result.FailedOver = modelRef != primaryModel
+
+			// Check if provider recovered from cooldown
+			wasInCooldown, wasReason := r.clearProviderCooldown(providerAlias)
+			if wasInCooldown {
+				result.Recovered = &RecoveryInfo{
+					Provider:  providerAlias,
+					WasReason: wasReason,
+				}
+			}
+
+			if result.FailedOver {
+				L_info("failover: using fallback model", "model", modelRef, "primary", primaryModel)
+			}
+			return result, nil
+		}
+
+		// Classify the error
+		errType := ClassifyError(err.Error())
+		result.Attempts = append(result.Attempts, FailoverAttempt{
+			Model:   modelRef,
+			Reason:  errType,
+			Skipped: false,
+		})
+
+		// Non-failover errors: return immediately
+		if !IsFailoverError(errType) {
+			result.ModelUsed = modelRef
+			L_warn("failover: non-failover error, stopping",
+				"model", modelRef,
+				"errType", errType,
+				"error", err)
+			return result, err
+		}
+
+		// Failover error: mark cooldown and try next
+		r.markProviderCooldown(providerAlias, errType)
+		L_warn("failover: trying next model",
+			"failed", modelRef,
+			"reason", errType,
+			"error", err)
+		lastErr = err
+	}
+
+	// All models failed
+	return result, fmt.Errorf("all models failed for %s (last: %w)", purpose, lastErr)
+}
+
+// SimpleMessageResult contains the result of a failover-enabled simple message call
+type SimpleMessageResult struct {
+	Text       string
+	ModelUsed  string
+	FailedOver bool
+	Recovered  *RecoveryInfo
+}
+
+// SimpleMessageWithFailover tries models in the chain for a purpose using SimpleMessage.
+// This is for non-streaming calls like summarization.
+func (r *Registry) SimpleMessageWithFailover(
+	ctx context.Context,
+	purpose string,
+	userMessage string,
+	systemPrompt string,
+) (*SimpleMessageResult, error) {
+	r.mu.RLock()
+	cfg, ok := r.purposes[purpose]
+	r.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("unknown purpose: %s", purpose)
+	}
+
+	if len(cfg.Models) == 0 {
+		return nil, fmt.Errorf("no models configured for purpose: %s", purpose)
+	}
+
+	result := &SimpleMessageResult{}
+	var lastErr error
+	primaryModel := cfg.Models[0]
+
+	for _, modelRef := range cfg.Models {
+		// Parse provider alias
+		parts := strings.SplitN(modelRef, "/", 2)
+		if len(parts) < 2 {
+			L_debug("failover: invalid model ref", "ref", modelRef)
+			continue
+		}
+		providerAlias := parts[0]
+
+		// Check cooldown
+		if r.isProviderInCooldown(providerAlias) {
+			L_debug("failover: provider in cooldown, skipping", "model", modelRef)
+			continue
+		}
+
+		// Resolve provider
+		provider, err := r.resolveForPurpose(modelRef, purpose)
+		if err != nil {
+			L_debug("failover: model unavailable", "model", modelRef, "error", err)
+			continue
+		}
+
+		// Get typed provider
+		var p Provider
+		switch typed := provider.(type) {
+		case *AnthropicProvider:
+			if !typed.IsAvailable() {
+				continue
+			}
+			if cfg.MaxTokens > 0 {
+				p = typed.WithMaxTokens(cfg.MaxTokens)
+			} else {
+				p = typed
+			}
+		case *OllamaProvider:
+			if !typed.IsAvailable() {
+				continue
+			}
+			if cfg.MaxTokens > 0 {
+				p = typed.WithMaxTokens(cfg.MaxTokens)
+			} else {
+				p = typed
+			}
+		case *OpenAIProvider:
+			if !typed.IsAvailable() {
+				continue
+			}
+			if cfg.MaxTokens > 0 {
+				p = typed.WithMaxTokens(cfg.MaxTokens)
+			} else {
+				p = typed
+			}
+		default:
+			continue
+		}
+
+		// Try the call
+		text, err := p.SimpleMessage(ctx, userMessage, systemPrompt)
+		if err == nil {
+			// Success!
+			result.Text = text
+			result.ModelUsed = modelRef
+			result.FailedOver = modelRef != primaryModel
+
+			// Check if provider recovered from cooldown
+			wasInCooldown, wasReason := r.clearProviderCooldown(providerAlias)
+			if wasInCooldown {
+				result.Recovered = &RecoveryInfo{
+					Provider:  providerAlias,
+					WasReason: wasReason,
+				}
+			}
+
+			if result.FailedOver {
+				L_info("failover: using fallback model", "model", modelRef, "primary", primaryModel, "purpose", purpose)
+			}
+			return result, nil
+		}
+
+		// Classify the error
+		errType := ClassifyError(err.Error())
+
+		// Non-failover errors: return immediately
+		if !IsFailoverError(errType) {
+			result.ModelUsed = modelRef
+			L_warn("failover: non-failover error, stopping",
+				"model", modelRef,
+				"errType", errType,
+				"error", err,
+				"purpose", purpose)
+			return result, err
+		}
+
+		// Failover error: mark cooldown and try next
+		r.markProviderCooldown(providerAlias, errType)
+		L_warn("failover: trying next model",
+			"failed", modelRef,
+			"reason", errType,
+			"error", err,
+			"purpose", purpose)
+		lastErr = err
+	}
+
+	// All models failed
+	return result, fmt.Errorf("all models failed for %s (last: %w)", purpose, lastErr)
 }

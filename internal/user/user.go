@@ -145,6 +145,7 @@ type User struct {
 	HTTPPasswordHash string          // Argon2id hash of HTTP password
 	Permissions      map[string]bool // tool whitelist (nil = use role defaults)
 	Thinking         bool            // default /thinking toggle state
+	ThinkingLevel    string          // preferred thinking level: off/minimal/low/medium/high/xhigh
 	Sandbox          bool            // enable file sandboxing
 }
 

@@ -18,12 +18,13 @@ type UsersConfig map[string]*UserEntry
 // UserEntry represents a single user in users.json
 // The map key (username) is used for HTTP auth and non-owner session keys
 type UserEntry struct {
-	Name             string `json:"name"`                         // Display name
-	Role             string `json:"role"`                         // "owner" or "user"
-	TelegramID       string `json:"telegram_id,omitempty"`        // Telegram user ID (numeric string)
-	HTTPPasswordHash string `json:"http_password_hash,omitempty"` // Argon2id hash of HTTP password
-	Thinking         *bool  `json:"thinking,omitempty"`           // Default /thinking toggle state (nil = role default)
-	Sandbox          *bool  `json:"sandbox,omitempty"`            // Enable file sandboxing (nil = role default)
+	Name             string  `json:"name"`                         // Display name
+	Role             string  `json:"role"`                         // "owner" or "user"
+	TelegramID       string  `json:"telegram_id,omitempty"`        // Telegram user ID (numeric string)
+	HTTPPasswordHash string  `json:"http_password_hash,omitempty"` // Argon2id hash of HTTP password
+	Thinking         *bool   `json:"thinking,omitempty"`           // Default /thinking toggle state (nil = role default)
+	ThinkingLevel    *string `json:"thinking_level,omitempty"`     // Preferred thinking level: off/minimal/low/medium/high/xhigh
+	Sandbox          *bool   `json:"sandbox,omitempty"`            // Enable file sandboxing (nil = role default)
 }
 
 // applyDefaults sets role-based defaults for nil Thinking and Sandbox fields
