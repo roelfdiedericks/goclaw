@@ -516,6 +516,10 @@ func (idx *Indexer) removeStaleFiles(currentFiles []string) {
 			stale = append(stale, path)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		L_warn("memory: row iteration error during cleanup", "error", err)
+		return
+	}
 
 	// Remove stale files
 	for _, path := range stale {

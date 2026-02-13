@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -627,7 +628,7 @@ func (a *MessageChannelAdapter) SendMedia(chatID string, filePath string, captio
 
 	// Generate media URL - the server will serve files from allowed paths
 	// We pass the absolute path as a query param (server validates it)
-	mediaURL := fmt.Sprintf("%s?path=%s", a.mediaBase, absPath)
+	mediaURL := fmt.Sprintf("%s?path=%s", a.mediaBase, url.QueryEscape(absPath))
 
 	event := SSEEvent{
 		Event: "agent_message",

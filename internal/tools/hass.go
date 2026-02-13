@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -287,7 +288,7 @@ func (t *HASSTool) getState(ctx context.Context, in hassInput) (json.RawMessage,
 		return nil, fmt.Errorf("entity is required for state action")
 	}
 
-	path := fmt.Sprintf("/api/states/%s", in.Entity)
+	path := fmt.Sprintf("/api/states/%s", url.PathEscape(in.Entity))
 	return t.client.Get(ctx, path)
 }
 
@@ -398,7 +399,8 @@ func (t *HASSTool) callService(ctx context.Context, in hassInput) (json.RawMessa
 		data["entity_id"] = in.Entity
 	}
 
-	path := fmt.Sprintf("/api/services/%s/%s?return_response", domain, service)
+	basePath := fmt.Sprintf("/api/services/%s/%s", url.PathEscape(domain), url.PathEscape(service))
+	path := basePath + "?return_response"
 	L_info("hass: calling service", "service", in.Service, "entity", in.Entity)
 
 	result, err := t.client.Post(ctx, path, data)
@@ -406,8 +408,7 @@ func (t *HASSTool) callService(ctx context.Context, in hassInput) (json.RawMessa
 		// If 400 error, retry without return_response (service doesn't support it)
 		if hassErr, ok := err.(*HASSError); ok && hassErr.StatusCode == 400 {
 			L_debug("hass: retrying without return_response", "service", in.Service)
-			path = fmt.Sprintf("/api/services/%s/%s", domain, service)
-			return t.client.Post(ctx, path, data)
+			return t.client.Post(ctx, basePath, data)
 		}
 		return nil, err
 	}
@@ -426,7 +427,7 @@ func (t *HASSTool) getCamera(ctx context.Context, in hassInput) (string, error) 
 	}
 
 	// Get camera image
-	path := fmt.Sprintf("/api/camera_proxy/%s", in.Entity)
+	path := fmt.Sprintf("/api/camera_proxy/%s", url.PathEscape(in.Entity))
 	imageData, contentType, err := t.client.GetBinary(ctx, path)
 	if err != nil {
 		if hassErr, ok := err.(*HASSError); ok {
@@ -546,16 +547,18 @@ func (t *HASSTool) getHistory(ctx context.Context, in hassInput) (json.RawMessag
 		endTime = now
 	}
 
-	// Build API path with query params
+	// Build API path with properly encoded query params
 	// Format: /api/history/period/<timestamp>?filter_entity_id=<entity>&end_time=<end>
-	path := fmt.Sprintf("/api/history/period/%s?filter_entity_id=%s&end_time=%s",
-		startTime.Format(time.RFC3339),
-		in.Entity,
-		endTime.Format(time.RFC3339))
-
+	params := url.Values{}
+	params.Set("filter_entity_id", in.Entity)
+	params.Set("end_time", endTime.Format(time.RFC3339))
 	if in.Minimal {
-		path += "&minimal_response"
+		params.Set("minimal_response", "")
 	}
+
+	path := fmt.Sprintf("/api/history/period/%s?%s",
+		url.PathEscape(startTime.Format(time.RFC3339)),
+		params.Encode())
 
 	L_debug("hass: history request", "entity", in.Entity, "start", startTime, "end", endTime, "minimal", in.Minimal)
 	return t.client.Get(ctx, path)

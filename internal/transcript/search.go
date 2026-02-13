@@ -224,6 +224,9 @@ func (s *Searcher) vectorSearch(ctx context.Context, query string, userID string
 		score := cosineSimilarity(queryEmbedding, embedding)
 		scored = append(scored, scoredChunk{id: id, score: score})
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rows: %w", err)
+	}
 
 	// Sort by score descending and take top results
 	sort.Slice(scored, func(i, j int) bool {
@@ -330,6 +333,10 @@ func (s *Searcher) applyExactBoost(ctx context.Context, scores map[string]float6
 			continue
 		}
 		exactMatches[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		L_warn("transcript: exact boost row iteration error", "error", err)
+		return scores
 	}
 
 	if len(exactMatches) == 0 {

@@ -162,6 +162,9 @@ func (m *Manager) Recent(ctx context.Context, userID string, isOwner bool, limit
 		}
 		entries = append(entries, e)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rows: %w", err)
+	}
 
 	return entries, nil
 }
@@ -281,6 +284,9 @@ func (m *Manager) ExactSearch(ctx context.Context, query string, userID string, 
 		}
 		entries = append(entries, e)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rows: %w", err)
+	}
 
 	L_debug("transcript: exact search",
 		"query", query,
@@ -365,6 +371,9 @@ func (m *Manager) Gaps(ctx context.Context, userID string, isOwner bool, minHour
 			e.Source = sourceNull.String
 		}
 		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate rows: %w", err)
 	}
 
 	return entries, nil

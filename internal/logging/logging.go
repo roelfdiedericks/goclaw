@@ -72,7 +72,7 @@ func Init(cfg *Config) {
 		})
 
 		// Store current level for trace filtering
-		atomic.StoreInt32(&currentLevel, int32(cfg.Level))
+		atomic.StoreInt32(&currentLevel, int32(cfg.Level)) //nolint:gosec // G115: Level is 0-5, cannot overflow
 
 		// Map our levels to charmbracelet levels
 		// Note: charmbracelet doesn't have trace, so both trace and debug use DebugLevel
@@ -315,7 +315,7 @@ func SetLevel(level int) {
 	ensureInit()
 	
 	// Store current level for trace filtering
-	atomic.StoreInt32(&currentLevel, int32(level))
+	atomic.StoreInt32(&currentLevel, int32(level)) //nolint:gosec // G115: Level is 0-5, cannot overflow
 	
 	switch level {
 	case LevelTrace, LevelDebug:
