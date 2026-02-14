@@ -117,7 +117,7 @@ The user will handle all git operations manually.
 # CORRECT
 make build
 make lint
-make security
+make audit
 make test
 
 # WRONG - do not run tools directly
