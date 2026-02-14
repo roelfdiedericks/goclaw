@@ -207,23 +207,6 @@ func (pc *PromptCache) computeFileHashes() map[string]string {
 	return hashes
 }
 
-// hashChanged checks if any watched file content has changed
-// If changed, updates the stored hash so we don't keep detecting the same change
-func (pc *PromptCache) hashChanged() bool {
-	newHash := pc.computeHash()
-
-	pc.mu.Lock()
-	oldHash := pc.contentHash
-	changed := oldHash != "" && newHash != oldHash
-	if changed {
-		// Update stored hash so we don't detect this change again
-		pc.contentHash = newHash
-	}
-	pc.mu.Unlock()
-
-	return changed
-}
-
 // computeHash computes a combined hash of all watched files
 func (pc *PromptCache) computeHash() string {
 	h := sha256.New()

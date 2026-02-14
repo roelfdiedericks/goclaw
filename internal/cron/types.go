@@ -4,6 +4,8 @@ package cron
 import (
 	"encoding/json"
 	"time"
+
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
 // CronJob represents a scheduled task (OpenClaw compatible).
@@ -163,6 +165,8 @@ func (j *CronJob) IsRunning() bool {
 func (j *CronJob) Clone() *CronJob {
 	data, _ := json.Marshal(j)
 	var clone CronJob
-	json.Unmarshal(data, &clone)
+	if err := json.Unmarshal(data, &clone); err != nil {
+		L_warn("cron: failed to unmarshal job clone", "job", j.ID, "error", err)
+	}
 	return &clone
 }

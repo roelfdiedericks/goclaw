@@ -190,18 +190,3 @@ func migrateV1(tx *sql.Tx) error {
 
 	return nil
 }
-
-// clearAllData removes all indexed data (for full reindex)
-func clearAllData(db *sql.DB) error {
-	L_debug("memory: clearing all indexed data")
-
-	if _, err := db.Exec("DELETE FROM memory_chunks"); err != nil {
-		return fmt.Errorf("clear chunks: %w", err)
-	}
-	if _, err := db.Exec("DELETE FROM memory_files"); err != nil {
-		return fmt.Errorf("clear files: %w", err)
-	}
-	// FTS5 is automatically cleared via triggers
-
-	return nil
-}

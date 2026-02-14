@@ -44,23 +44,6 @@ func (g *CheckpointGenerator) SetStore(store Store, sessionKey string) {
 	g.sessionKey = sessionKey
 }
 
-// getClient returns the current summarization client from the LLM registry.
-func (g *CheckpointGenerator) getClient() SummarizationClient {
-	reg := llm.GetRegistry()
-	if reg == nil {
-		return nil
-	}
-	provider, err := reg.GetProvider("summarization")
-	if err != nil {
-		L_debug("checkpoint: no summarization provider", "error", err)
-		return nil
-	}
-	if client, ok := provider.(SummarizationClient); ok {
-		return client
-	}
-	return nil
-}
-
 // ShouldCheckpoint determines if a checkpoint should be generated
 func (g *CheckpointGenerator) ShouldCheckpoint(sess *Session) bool {
 	if g == nil || g.config == nil || !g.config.Enabled {

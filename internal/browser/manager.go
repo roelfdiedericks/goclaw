@@ -134,11 +134,6 @@ type Manager struct {
 	// Browser instances per profile
 	browsers   map[string]*browserInstance
 	browsersMu sync.Mutex
-
-	// Initialization state
-	initialized bool
-	initOnce    sync.Once
-	initErr     error
 }
 
 var (
