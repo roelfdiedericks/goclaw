@@ -20,7 +20,7 @@ type SQLiteStore struct {
 }
 
 // Schema version for migrations
-const currentSchemaVersion = 5
+const currentSchemaVersion = 6
 
 // NewSQLiteStore creates a new SQLite store
 func NewSQLiteStore(cfg StoreConfig) (*SQLiteStore, error) {
@@ -88,6 +88,7 @@ func (s *SQLiteStore) Migrate() error {
 		migrateV3,
 		migrateV4,
 		migrateV5,
+		migrateV6,
 	}
 
 	for i := version; i < len(migrations); i++ {
@@ -282,6 +283,32 @@ func migrateV5(db *sql.DB) error {
 	
 	-- Update schema version
 	INSERT INTO schema_version (version, applied_at) VALUES (5, ?);
+	`
+
+	_, err := db.Exec(schema, time.Now().Unix())
+	return err
+}
+
+// migrateV6 adds provider_state table for stateful provider session-scoped state
+// Used by providers like xAI to persist response_id for context chaining
+func migrateV6(db *sql.DB) error {
+	schema := `
+	-- Provider state table for session-scoped provider state
+	-- Key format: provider_key = "providerName:model" (e.g., "xai:grok-4-1-fast-reasoning")
+	CREATE TABLE IF NOT EXISTS provider_state (
+		session_key TEXT NOT NULL,
+		provider_key TEXT NOT NULL,
+		state_json TEXT NOT NULL,
+		updated_at INTEGER NOT NULL,
+		PRIMARY KEY (session_key, provider_key),
+		FOREIGN KEY (session_key) REFERENCES sessions(key) ON DELETE CASCADE
+	);
+	
+	-- Index for efficient session-scoped queries (e.g., delete all state for a session)
+	CREATE INDEX IF NOT EXISTS idx_provider_state_session ON provider_state(session_key);
+	
+	-- Update schema version
+	INSERT INTO schema_version (version, applied_at) VALUES (6, ?);
 	`
 
 	_, err := db.Exec(schema, time.Now().Unix())
