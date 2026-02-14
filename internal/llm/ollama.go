@@ -389,9 +389,27 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 		Content: userMessage,
 	})
 
-	// Estimate input tokens and calculate safe output limit
+	// Build request first so we can estimate tokens from full JSON
+	reqBody := ollamaChatRequest{
+		Model:    c.model,
+		Messages: messages,
+		Stream:   false, // Non-streaming for simplicity in compaction use case
+		Options: &ollamaOptions{
+			NumCtx:     contextTokens, // Use detected context window
+			NumPredict: c.maxTokens,   // Will be capped below
+		},
+	}
+
+	// Estimate input tokens from full serialized request
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		L_error("ollama: failed to marshal request", "error", err)
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
 	estimator := tokens.Get()
-	estimatedInput := estimator.Count(userMessage) + estimator.Count(systemPrompt)
+	estimatedInput := estimator.Count(string(jsonData))
+
+	// Cap output tokens to fit within context window
 	maxOutput := tokens.CapMaxTokens(c.maxTokens, contextTokens, estimatedInput, 100)
 	if c.maxTokens > 0 && maxOutput != c.maxTokens {
 		L_debug("ollama: capped num_predict to fit context",
@@ -400,16 +418,9 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 			"capped", maxOutput,
 			"contextTokens", contextTokens,
 			"estimatedInput", estimatedInput)
-	}
-
-	reqBody := ollamaChatRequest{
-		Model:    c.model,
-		Messages: messages,
-		Stream:   false, // Non-streaming for simplicity in compaction use case
-		Options: &ollamaOptions{
-			NumCtx:     contextTokens, // Use detected context window
-			NumPredict: maxOutput,     // Cap output to fit context
-		},
+		reqBody.Options.NumPredict = maxOutput
+		// Re-marshal with updated options
+		jsonData, _ = json.Marshal(reqBody)
 	}
 
 	// Start dump for debugging (captures request context)
@@ -422,13 +433,6 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 		SafetyMargin:   tokens.SafetyMargin,
 		Buffer:         100,
 	})
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		L_error("ollama: failed to marshal request", "error", err)
-		FinishDumpError(dumpCtx, err, c.transport)
-		return "", fmt.Errorf("marshal request: %w", err)
-	}
 
 	url := c.url + "/api/chat"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonData))
