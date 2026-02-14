@@ -30,7 +30,7 @@ require (
 	github.com/sevlyar/go-daemon v0.1.6
 	github.com/yuin/goldmark v1.7.13
 	golang.org/x/crypto v0.47.0
-	golang.org/x/image v0.0.0-20191009234506-e7c1f5e7dbb8
+	golang.org/x/image v0.36.0
 	golang.org/x/term v0.39.0
 	gopkg.in/telebot.v4 v4.0.0-beta.7
 	gopkg.in/yaml.v3 v3.0.1
@@ -80,5 +80,5 @@ require (
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
-	golang.org/x/text v0.33.0 // indirect
+	golang.org/x/text v0.34.0 // indirect
 )
