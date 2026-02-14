@@ -209,13 +209,24 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 				"contextWindow", contextTokens,
 				"usage", fmt.Sprintf("%.1f%%", float64(currentTokens)/float64(contextTokens)*100))
 
-			// Keep compacting until we're under the target threshold
+			// Keep compacting until we're under both token AND message thresholds
 			// This handles the case where 50% compaction isn't enough
 			targetTokens := (contextTokens * 40) / 100 // Target 40% of context after compaction
+			maxMessages := g.compactor.GetMaxMessages()
 			compactionRounds := 0
-			maxRounds := 3
+			maxRounds := 5 // Allow more rounds for very large sessions
 
-			for currentTokens > targetTokens && compactionRounds < maxRounds {
+			needsCompaction := func() bool {
+				if currentTokens > targetTokens {
+					return true
+				}
+				if maxMessages > 0 && len(primary.Messages) > maxMessages {
+					return true
+				}
+				return false
+			}
+
+			for needsCompaction() && compactionRounds < maxRounds {
 				compactionRounds++
 				result, err := g.compactor.Compact(context.Background(), primary, primary.SessionFile)
 				if err != nil {
@@ -241,15 +252,19 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 				currentTokens = newTokens
 			}
 
-			if currentTokens <= targetTokens {
+			if !needsCompaction() {
 				L_info("session: proactive compaction completed",
 					"finalTokens", currentTokens,
+					"finalMessages", len(primary.Messages),
 					"targetTokens", targetTokens,
+					"maxMessages", maxMessages,
 					"rounds", compactionRounds)
 			} else {
-				L_warn("session: proactive compaction incomplete, tokens still high",
+				L_warn("session: proactive compaction incomplete",
 					"finalTokens", currentTokens,
+					"finalMessages", len(primary.Messages),
 					"targetTokens", targetTokens,
+					"maxMessages", maxMessages,
 					"rounds", compactionRounds)
 			}
 		}
