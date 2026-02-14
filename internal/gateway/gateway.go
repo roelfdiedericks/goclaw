@@ -85,7 +85,6 @@ type Gateway struct {
 	promptCache         *gcontext.PromptCache
 	mediaStore          *media.MediaStore
 	memoryManager       *memory.Manager
-	ollamaClient        *llm.OllamaClient
 	commandHandler      *commands.Handler
 	skillManager        *skills.Manager
 	cronService         *cron.Service
@@ -895,7 +894,7 @@ func (g *Gateway) RunAgentForCron(ctx context.Context, cronReq cron.AgentRequest
 		}
 		statusMsg := fmt.Sprintf("💭 Running cron: %s...", jobDesc)
 		for _, ch := range g.channels {
-			ch.Send(ctx, statusMsg)
+			ch.Send(ctx, statusMsg) //nolint:errcheck // fire-and-forget status broadcast
 		}
 	}
 
@@ -915,7 +914,7 @@ func (g *Gateway) RunAgentForCron(ctx context.Context, cronReq cron.AgentRequest
 	events := make(chan AgentEvent, 100)
 
 	// Run the agent in a goroutine
-	go g.RunAgent(ctx, req, events)
+	go g.RunAgent(ctx, req, events) //nolint:errcheck // fire-and-forget goroutine
 
 	// Forward events, converting types
 	for event := range events {
@@ -1188,7 +1187,7 @@ func (g *Gateway) Shutdown() {
 
 	// Stop skill manager
 	if g.skillManager != nil {
-		g.skillManager.Stop()
+		g.skillManager.Stop() //nolint:errcheck // shutdown cleanup
 	}
 
 	// Stop compaction manager background tasks
@@ -1205,11 +1204,11 @@ func (g *Gateway) Shutdown() {
 	}
 
 	if g.memoryManager != nil {
-		g.memoryManager.Close()
+		g.memoryManager.Close() //nolint:errcheck // shutdown cleanup
 	}
 
 	if g.sessions != nil {
-		g.sessions.Close()
+		g.sessions.Close() //nolint:errcheck // shutdown cleanup
 	}
 }
 
@@ -1959,7 +1958,7 @@ func (g *Gateway) SendStatusMessage(ctx context.Context, u *user.User, msg strin
 	}
 	for _, ch := range g.channels {
 		if ch.HasUser(u) {
-			ch.Send(ctx, msg)
+			ch.Send(ctx, msg) //nolint:errcheck // fire-and-forget notification
 		}
 	}
 }
@@ -2136,7 +2135,7 @@ func (g *Gateway) mirrorToOthers(ctx context.Context, req AgentRequest, response
 		}
 
 		L_debug("mirror: sending", "from", req.Source, "to", name)
-		ch.SendMirror(ctx, req.Source, req.UserMsg, response)
+		ch.SendMirror(ctx, req.Source, req.UserMsg, response) //nolint:errcheck // fire-and-forget mirror
 	}
 }
 

@@ -565,7 +565,9 @@ func (s *Service) executeJob(ctx context.Context, job *CronJob) {
 		L_error("cron: no owner user configured, cannot run job", "job", job.Name)
 		job.SetLastRun(startTime, 0, StatusError, "no owner user configured")
 		job.ClearRunning()
-		s.store.UpdateJob(job)
+		if err := s.store.UpdateJob(job); err != nil {
+			L_warn("cron: failed to update job after error", "job", job.Name, "error", err)
+		}
 		return
 	}
 

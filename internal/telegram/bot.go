@@ -36,9 +36,6 @@ type Bot struct {
 	users   *user.Registry
 	config  *config.TelegramConfig
 
-	// Track active messages for editing during streaming
-	activeMessages sync.Map // chatID -> *tele.Message
-
 	// Per-chat preferences
 	chatPrefs sync.Map // chatID (int64) -> *ChatPreferences
 
@@ -50,7 +47,7 @@ type Bot struct {
 // If user is provided and prefs don't exist, initializes from user preferences.
 func (b *Bot) getChatPrefs(chatID int64, u *user.User) *ChatPreferences {
 	if prefs, ok := b.chatPrefs.Load(chatID); ok {
-		return prefs.(*ChatPreferences)
+		return prefs.(*ChatPreferences) //nolint:errcheck // type assertion safe - we only store *ChatPreferences
 	}
 	// Initialize from user preference if available
 	showThinking := false
@@ -222,9 +219,9 @@ func (b *Bot) setupHandlers() {
 				result := mgr.Execute(ctx, cmdName, sessionKey)
 
 				if msg != nil {
-					c.Bot().Edit(msg, FormatMessage(result.Markdown), &tele.SendOptions{ParseMode: tele.ModeHTML})
+					c.Bot().Edit(msg, FormatMessage(result.Markdown), &tele.SendOptions{ParseMode: tele.ModeHTML}) //nolint:errcheck // fire-and-forget telegram edit
 				} else {
-					c.Send(FormatMessage(result.Markdown), &tele.SendOptions{ParseMode: tele.ModeHTML})
+					c.Send(FormatMessage(result.Markdown), &tele.SendOptions{ParseMode: tele.ModeHTML}) //nolint:errcheck // fire-and-forget telegram send
 				}
 				return nil
 			})
@@ -733,7 +730,10 @@ func (b *Bot) Send(ctx context.Context, msg string) error {
 		return nil
 	}
 	var chatID int64
-	fmt.Sscanf(owner.TelegramID, "%d", &chatID)
+	if _, err := fmt.Sscanf(owner.TelegramID, "%d", &chatID); err != nil {
+		L_warn("telegram: invalid owner telegram ID", "telegramID", owner.TelegramID, "error", err)
+		return nil
+	}
 	_, err := b.SendText(chatID, msg)
 	return err
 }
@@ -1076,7 +1076,10 @@ func (b *Bot) SendMirror(ctx context.Context, source, userMsg, response string) 
 
 	// Parse telegram ID to int64
 	var chatID int64
-	fmt.Sscanf(telegramID, "%d", &chatID)
+	if _, err := fmt.Sscanf(telegramID, "%d", &chatID); err != nil {
+		L_warn("telegram: invalid telegram ID for mirror", "telegramID", telegramID, "error", err)
+		return nil
+	}
 	chat := &tele.Chat{ID: chatID}
 
 	// Telegram max message is 4096 chars. Reserve space for formatting.
@@ -1363,18 +1366,6 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
-}
-
-// escapeMarkdown escapes Telegram Markdown special characters to prevent parse errors
-func escapeMarkdown(s string) string {
-	// Telegram Markdown v1 special chars: * _ ` [
-	replacer := strings.NewReplacer(
-		"*", "\\*",
-		"_", "\\_",
-		"`", "\\`",
-		"[", "\\[",
-	)
-	return replacer.Replace(s)
 }
 
 // escapeHTML escapes HTML special characters for Telegram HTML mode

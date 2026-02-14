@@ -154,8 +154,12 @@ func (h *HistoryManager) pruneHistory(jobID string) {
 	}
 
 	for _, entry := range entries {
-		tmpFile.Write(entry)
-		tmpFile.Write([]byte{'\n'})
+		if _, err := tmpFile.Write(entry); err != nil {
+			L_warn("cron: failed to write history entry", "job", jobID, "error", err)
+		}
+		if _, err := tmpFile.Write([]byte{'\n'}); err != nil {
+			L_warn("cron: failed to write newline", "job", jobID, "error", err)
+		}
 	}
 	tmpFile.Close()
 

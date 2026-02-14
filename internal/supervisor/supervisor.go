@@ -173,7 +173,9 @@ func (s *Supervisor) Stop() {
 	// Forward signal to gateway subprocess if running
 	if s.cmd != nil && s.cmd.Process != nil {
 		L_debug("supervisor: forwarding SIGTERM to gateway", "pid", s.cmd.Process.Pid)
-		s.cmd.Process.Signal(syscall.SIGTERM)
+		if err := s.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+			L_warn("supervisor: failed to signal gateway", "pid", s.cmd.Process.Pid, "error", err)
+		}
 	}
 	s.cmdMu.Unlock()
 }

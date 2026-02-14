@@ -26,9 +26,8 @@ type UserAuthTool struct {
 	rolesConfig config.RolesConfig
 
 	// Rate limiting
-	mu           sync.Mutex
-	attempts     []time.Time
-	rateLimitMsg string
+	mu       sync.Mutex
+	attempts []time.Time
 }
 
 // AuthInput is the input from the agent

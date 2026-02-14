@@ -130,7 +130,7 @@ func (r *TelegramRenderer) renderListItem(w util.BufWriter, source []byte, node 
 
 func (r *TelegramRenderer) renderText(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
 	if entering {
-		n := node.(*ast.Text)
+		n := node.(*ast.Text) //nolint:errcheck // renderer registered for this node type
 		w.WriteString(escapeHTMLString(string(n.Segment.Value(source))))
 		if n.SoftLineBreak() {
 			w.WriteString("\n")
@@ -141,14 +141,14 @@ func (r *TelegramRenderer) renderText(w util.BufWriter, source []byte, node ast.
 
 func (r *TelegramRenderer) renderString(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
 	if entering {
-		n := node.(*ast.String)
+		n := node.(*ast.String) //nolint:errcheck // renderer registered for this node type
 		w.WriteString(escapeHTMLString(string(n.Value)))
 	}
 	return ast.WalkContinue, nil
 }
 
 func (r *TelegramRenderer) renderEmphasis(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
-	n := node.(*ast.Emphasis)
+	n := node.(*ast.Emphasis) //nolint:errcheck // renderer registered for this node type
 	if n.Level == 2 {
 		// Bold
 		if entering {
@@ -182,7 +182,7 @@ func (r *TelegramRenderer) renderCodeSpan(w util.BufWriter, source []byte, node 
 }
 
 func (r *TelegramRenderer) renderLink(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
-	n := node.(*ast.Link)
+	n := node.(*ast.Link) //nolint:errcheck // renderer registered for this node type
 	if entering {
 		w.WriteString(`<a href="`)
 		w.WriteString(escapeHTMLString(string(n.Destination)))
@@ -194,7 +194,7 @@ func (r *TelegramRenderer) renderLink(w util.BufWriter, source []byte, node ast.
 }
 
 func (r *TelegramRenderer) renderAutoLink(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
-	n := node.(*ast.AutoLink)
+	n := node.(*ast.AutoLink) //nolint:errcheck // renderer registered for this node type
 	if entering {
 		url := n.URL(source)
 		w.WriteString(`<a href="`)
@@ -210,20 +210,6 @@ func (r *TelegramRenderer) renderAutoLink(w util.BufWriter, source []byte, node 
 func (r *TelegramRenderer) renderRawHTML(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
 	// Skip raw HTML - don't render it
 	return ast.WalkSkipChildren, nil
-}
-
-func (r *TelegramRenderer) renderSoftLineBreak(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
-	if entering {
-		w.WriteString("\n")
-	}
-	return ast.WalkContinue, nil
-}
-
-func (r *TelegramRenderer) renderHardLineBreak(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
-	if entering {
-		w.WriteString("\n")
-	}
-	return ast.WalkContinue, nil
 }
 
 func (r *TelegramRenderer) renderStrikethrough(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {

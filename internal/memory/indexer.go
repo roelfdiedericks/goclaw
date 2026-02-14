@@ -288,7 +288,9 @@ func (idx *Indexer) runSync() {
 			filesProcessed++
 			// Count chunks for this file
 			var count int
-			idx.db.QueryRow("SELECT COUNT(*) FROM memory_chunks WHERE path = ?", file).Scan(&count)
+			if err := idx.db.QueryRow("SELECT COUNT(*) FROM memory_chunks WHERE path = ?", file).Scan(&count); err != nil {
+				L_warn("memory: failed to count file chunks", "path", file, "error", err)
+			}
 			chunksProcessed += count
 		}
 	}
@@ -304,8 +306,12 @@ func (idx *Indexer) runSync() {
 	var chunksWithEmbeddings int
 	idx.mu.Lock()
 	idx.filesIndexed = len(files)
-	idx.db.QueryRow("SELECT COUNT(*) FROM memory_chunks").Scan(&idx.chunksTotal)
-	idx.db.QueryRow("SELECT COUNT(*) FROM memory_chunks WHERE embedding IS NOT NULL AND embedding != ''").Scan(&chunksWithEmbeddings)
+	if err := idx.db.QueryRow("SELECT COUNT(*) FROM memory_chunks").Scan(&idx.chunksTotal); err != nil {
+		L_warn("memory: failed to count total chunks", "error", err)
+	}
+	if err := idx.db.QueryRow("SELECT COUNT(*) FROM memory_chunks WHERE embedding IS NOT NULL AND embedding != ''").Scan(&chunksWithEmbeddings); err != nil {
+		L_warn("memory: failed to count embedded chunks", "error", err)
+	}
 	idx.mu.Unlock()
 
 	elapsed := time.Since(startTime)
@@ -354,7 +360,7 @@ func (idx *Indexer) listMemoryFiles() ([]string, error) {
 			continue
 		}
 		if info.IsDir() {
-			filepath.WalkDir(absExtra, func(path string, d fs.DirEntry, err error) error {
+			if err := filepath.WalkDir(absExtra, func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
 					return nil
 				}
@@ -362,7 +368,9 @@ func (idx *Indexer) listMemoryFiles() ([]string, error) {
 					files = append(files, path)
 				}
 				return nil
-			})
+			}); err != nil {
+				L_warn("memory: failed to walk extra dir", "dir", absExtra, "error", err)
+			}
 		} else if strings.HasSuffix(strings.ToLower(absExtra), ".md") {
 			files = append(files, absExtra)
 		}
@@ -401,10 +409,12 @@ func (idx *Indexer) indexFile(ctx context.Context, path string) (bool, error) {
 		if idx.forceReindex.Load() && idx.provider.Available() {
 			// Check if chunks are missing embeddings
 			var missingEmbeddings int
-			idx.db.QueryRow(`
+			if err := idx.db.QueryRow(`
 				SELECT COUNT(*) FROM memory_chunks 
 				WHERE path = ? AND (embedding IS NULL OR embedding = '')
-			`, relPath).Scan(&missingEmbeddings)
+			`, relPath).Scan(&missingEmbeddings); err != nil {
+				L_warn("memory: failed to count missing embeddings", "path", relPath, "error", err)
+			}
 			if missingEmbeddings == 0 {
 				L_trace("memory: file unchanged, embeddings present", "path", relPath)
 				return false, nil
@@ -524,8 +534,12 @@ func (idx *Indexer) removeStaleFiles(currentFiles []string) {
 	// Remove stale files
 	for _, path := range stale {
 		L_debug("memory: removing stale file from index", "path", path)
-		idx.db.Exec("DELETE FROM memory_chunks WHERE path = ?", path)
-		idx.db.Exec("DELETE FROM memory_files WHERE path = ?", path)
+		if _, err := idx.db.Exec("DELETE FROM memory_chunks WHERE path = ?", path); err != nil {
+			L_warn("memory: failed to delete stale chunks", "path", path, "error", err)
+		}
+		if _, err := idx.db.Exec("DELETE FROM memory_files WHERE path = ?", path); err != nil {
+			L_warn("memory: failed to delete stale file record", "path", path, "error", err)
+		}
 	}
 }
 

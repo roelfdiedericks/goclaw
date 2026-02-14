@@ -223,7 +223,9 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		L_warn("http: failed to encode response", "error", err)
+	}
 }
 
 // handleThinkingCommand handles the /thinking command for toggling tool visibility
@@ -309,10 +311,12 @@ func (s *Server) handleThinkingCommand(w http.ResponseWriter, sessionID string, 
 
 	// Respond to HTTP request
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"status":  "ok",
 		"message": resultMsg,
-	})
+	}); err != nil {
+		L_warn("http: failed to encode response", "error", err)
+	}
 }
 
 // handleBuiltinCommand handles built-in slash commands (/status, /compact, /clear, etc.)
@@ -364,7 +368,9 @@ func (s *Server) handleBuiltinCommand(w http.ResponseWriter, ctx context.Context
 		resp["status"] = "error"
 		resp["error"] = result.Error.Error()
 	}
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		L_warn("http: failed to encode response", "error", err)
+	}
 }
 
 // handleEvents handles GET /api/events - SSE stream
@@ -527,7 +533,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(status)
+	if err := json.NewEncoder(w).Encode(status); err != nil {
+		L_warn("http: failed to encode status", "error", err)
+	}
 }
 
 // handleMedia serves media files from media root or allowed paths
@@ -616,7 +624,9 @@ func (s *Server) handleMetricsAPI(w http.ResponseWriter, r *http.Request) {
 
 	snapshot := metrics.GetInstance().GetSnapshot()
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(snapshot)
+	if err := json.NewEncoder(w).Encode(snapshot); err != nil {
+		L_warn("http: failed to encode metrics snapshot", "error", err)
+	}
 }
 
 // handleMetrics handles GET /metrics - metrics dashboard page

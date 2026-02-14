@@ -76,10 +76,14 @@ func (m *Manager) Stats() TranscriptStats {
 	needingEmbeddings := m.indexer.ChunksNeedingEmbeddings()
 
 	var totalChunks int
-	m.db.QueryRow("SELECT COUNT(*) FROM transcript_chunks").Scan(&totalChunks)
+	if err := m.db.QueryRow("SELECT COUNT(*) FROM transcript_chunks").Scan(&totalChunks); err != nil {
+		L_warn("transcript: failed to count chunks", "error", err)
+	}
 
 	var chunksWithEmbeddings int
-	m.db.QueryRow("SELECT COUNT(*) FROM transcript_chunks WHERE embedding IS NOT NULL").Scan(&chunksWithEmbeddings)
+	if err := m.db.QueryRow("SELECT COUNT(*) FROM transcript_chunks WHERE embedding IS NOT NULL").Scan(&chunksWithEmbeddings); err != nil {
+		L_warn("transcript: failed to count embedded chunks", "error", err)
+	}
 
 	providerName := "none"
 	if m.provider != nil && m.provider.Available() {
@@ -129,6 +133,7 @@ func (m *Manager) Recent(ctx context.Context, userID string, isOwner bool, limit
 	whereClause := "WHERE " + strings.Join(conditions, " AND ")
 	args = append(args, limit)
 
+	//nolint:gosec // G201: conditions are internal strings, values parameterized
 	query := fmt.Sprintf(`
 		SELECT id, session_key, timestamp, role, 
 			   CASE WHEN LENGTH(content) > 200 THEN SUBSTR(content, 1, 200) || '...' ELSE content END as preview,
@@ -251,6 +256,7 @@ func (m *Manager) ExactSearch(ctx context.Context, query string, userID string, 
 	whereClause := "WHERE " + strings.Join(conditions, " AND ")
 	args = append(args, limit)
 
+	//nolint:gosec // G201: conditions are internal strings, values parameterized
 	sqlQuery := fmt.Sprintf(`
 		SELECT id, session_key, timestamp, role,
 		       CASE WHEN LENGTH(content) > 200 THEN SUBSTR(content, 1, 200) || '...' ELSE content END as preview,
@@ -332,6 +338,7 @@ func (m *Manager) Gaps(ctx context.Context, userID string, isOwner bool, minHour
 	whereClause := "WHERE " + strings.Join(conditions, " AND ")
 	args = append(args, minSeconds, limit)
 
+	//nolint:gosec // G201: conditions are internal strings, values parameterized
 	query := fmt.Sprintf(`
 		WITH user_msgs AS (
 			SELECT timestamp, content, source,

@@ -157,7 +157,7 @@ func (s *StartCmd) Run(ctx *Context) error {
 		return nil
 	}
 	// Child process continues as supervisor
-	defer cntxt.Release()
+	defer cntxt.Release() //nolint:errcheck // daemon cleanup
 
 	L_info("supervisor: started", "pid", os.Getpid(), "dataDir", paths.DataDir)
 
@@ -792,7 +792,10 @@ func (u *UserDeleteCmd) Run(ctx *Context) error {
 	// Confirm deletion
 	fmt.Printf("Delete user %q? [y/N]: ", u.Username)
 	var confirm string
-	fmt.Scanln(&confirm)
+	if _, err := fmt.Scanln(&confirm); err != nil {
+		fmt.Fprintf(os.Stderr, "Input error: %v\n", err)
+		os.Exit(1)
+	}
 	if confirm != "y" && confirm != "Y" {
 		fmt.Println("Cancelled.")
 		return nil
@@ -979,7 +982,7 @@ func (b *BrowserSetupCmd) Run(ctx *Context) error {
 		fmt.Println("\nBrowser window closed.")
 	}
 
-	browserInstance.Close()
+	browserInstance.Close() //nolint:errcheck // cleanup
 
 	fmt.Printf("\nProfile '%s' is ready to use.\n", profile)
 	return nil
@@ -1084,7 +1087,10 @@ func (b *BrowserClearCmd) Run(ctx *Context) error {
 		fmt.Printf("Clear all data for profile '%s'? This will delete cookies, cache, and login sessions.\n", b.Profile)
 		fmt.Print("Type 'yes' to confirm: ")
 		var confirm string
-		fmt.Scanln(&confirm)
+		if _, err := fmt.Scanln(&confirm); err != nil {
+			fmt.Fprintf(os.Stderr, "Input error: %v\n", err)
+			os.Exit(1)
+		}
 		if confirm != "yes" {
 			fmt.Println("Cancelled.")
 			return nil
@@ -1299,7 +1305,7 @@ func (b *BrowserMigrateCmd) Run(ctx *Context) error {
 // getDirSize calculates the total size of a directory
 func getDirSize(path string) int64 {
 	var size int64
-	filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+	filepath.Walk(path, func(_ string, info os.FileInfo, err error) error { //nolint:errcheck // errors handled in callback
 		if err != nil {
 			return nil
 		}
@@ -1770,7 +1776,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	gw, err := gateway.New(cfg, users, llmRegistry, toolsReg)
 	if err != nil {
 		L_error("failed to create gateway", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to create gateway: %w", err)
 	}
 	L_info("gateway initialized")
 
@@ -2169,6 +2175,8 @@ func readPassword() ([]byte, error) {
 	}
 	// Fallback for non-terminal (piped input)
 	var password string
-	fmt.Scanln(&password)
+	if _, err := fmt.Scanln(&password); err != nil {
+		return nil, fmt.Errorf("failed to read password: %w", err)
+	}
 	return []byte(password), nil
 }

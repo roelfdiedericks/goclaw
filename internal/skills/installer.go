@@ -79,7 +79,7 @@ func (i *Installer) installBrew(ctx context.Context, spec InstallSpec) (*Install
 		}, nil
 	}
 
-	cmd := exec.CommandContext(ctx, "brew", "install", spec.Formula)
+	cmd := exec.CommandContext(ctx, "brew", "install", spec.Formula) //nolint:gosec // G204: dead code, needs security review before enabling
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return &InstallResult{
@@ -117,7 +117,7 @@ func (i *Installer) installGo(ctx context.Context, spec InstallSpec) (*InstallRe
 		module += "@latest"
 	}
 
-	cmd := exec.CommandContext(ctx, "go", "install", module)
+	cmd := exec.CommandContext(ctx, "go", "install", module) //nolint:gosec // G204: dead code, needs security review before enabling
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return &InstallResult{
@@ -150,7 +150,7 @@ func (i *Installer) installUV(ctx context.Context, spec InstallSpec) (*InstallRe
 		}, nil
 	}
 
-	cmd := exec.CommandContext(ctx, "uv", "tool", "install", spec.Package)
+	cmd := exec.CommandContext(ctx, "uv", "tool", "install", spec.Package) //nolint:gosec // G204: dead code, needs security review before enabling
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return &InstallResult{

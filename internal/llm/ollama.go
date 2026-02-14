@@ -460,9 +460,8 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		errMsg := fmt.Sprintf("ollama returned status %d: %s", resp.StatusCode, string(body))
 		L_error("ollama: request failed", "status", resp.StatusCode, "body", string(body))
-		err := fmt.Errorf(errMsg)
+		err := fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, string(body))
 		FinishDumpError(dumpCtx, err, c.transport)
 		// Check if response body contains a known error pattern
 		err = CheckResponseBody(err, body)

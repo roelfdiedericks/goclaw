@@ -936,9 +936,9 @@ func mergeSessionSelective(dst, src *SessionConfig, rawMap map[string]interface{
 
 	// Sub-structs - only merge if present in JSON
 	if _, ok := rawMap["summarization"]; ok {
-		mergo.Merge(&dst.Summarization, src.Summarization, mergo.WithOverride)
+		mergo.Merge(&dst.Summarization, src.Summarization, mergo.WithOverride) //nolint:errcheck // mergo.Merge rarely fails
 	}
 	if _, ok := rawMap["memoryFlush"]; ok {
-		mergo.Merge(&dst.MemoryFlush, src.MemoryFlush, mergo.WithOverride)
+		mergo.Merge(&dst.MemoryFlush, src.MemoryFlush, mergo.WithOverride) //nolint:errcheck // mergo.Merge rarely fails
 	}
 }
