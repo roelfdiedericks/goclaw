@@ -21,7 +21,6 @@ type CompactionManager struct {
 
 	// State (in-memory, transient)
 	inProgress atomic.Bool
-	mu         sync.Mutex
 
 	// Background goroutine control
 	stopCh chan struct{}

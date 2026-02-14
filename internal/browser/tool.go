@@ -1454,7 +1454,7 @@ func (t *Tool) click(ctx context.Context, sessionID string, ref *int, selector s
 	// Wait for page to stabilize
 	page, _ := t.getActivePage(sessionID, "", headed)
 	if page != nil {
-		page.WaitStable(time.Second)
+		page.WaitStable(time.Second) //nolint:errcheck // best-effort wait
 	}
 
 	// Get element description for feedback

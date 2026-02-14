@@ -717,7 +717,7 @@ func (p *OpenAIProvider) StreamMessage(
 
 	// Check if we have a cached output limit for this model
 	if cachedLimit, ok := modelMaxOutputTokens.Load(p.model); ok {
-		limit := cachedLimit.(int)
+		limit := cachedLimit.(int) //nolint:errcheck // we only store int values
 		if maxTokens > limit {
 			L_debug("openai: capping max_tokens to cached model limit",
 				"model", p.model,
@@ -1492,56 +1492,6 @@ func convertToOpenAITools(toolDefs []types.ToolDefinition) []openai.Tool {
 		}
 	}
 	return result
-}
-
-// parseReasoningFromSSE extracts reasoning content from SSE event chunks.
-// This handles OpenRouter/Kimi-style reasoning_details which aren't parsed by go-openai.
-// The chunk may contain partial SSE events, so we handle them incrementally.
-func parseReasoningFromSSE(chunk []byte) string {
-	// SSE format: "data: {json}\n\n"
-	// Look for reasoning_details in the JSON
-	// Extract text from reasoning.text type blocks
-
-	var reasoningText strings.Builder
-	lines := bytes.Split(chunk, []byte("\n"))
-
-	for _, line := range lines {
-		if !bytes.HasPrefix(line, []byte("data: ")) {
-			continue
-		}
-
-		jsonData := bytes.TrimPrefix(line, []byte("data: "))
-		if bytes.Equal(jsonData, []byte("[DONE]")) {
-			continue
-		}
-
-		// Parse delta.reasoning_details array
-		var event struct {
-			Choices []struct {
-				Delta struct {
-					ReasoningDetails []struct {
-						Type string `json:"type"`
-						Text string `json:"text"`
-					} `json:"reasoning_details"`
-				} `json:"delta"`
-			} `json:"choices"`
-		}
-
-		if err := json.Unmarshal(jsonData, &event); err != nil {
-			// Not valid JSON or incomplete chunk - skip
-			continue
-		}
-
-		for _, choice := range event.Choices {
-			for _, detail := range choice.Delta.ReasoningDetails {
-				if detail.Type == "reasoning.text" && detail.Text != "" {
-					reasoningText.WriteString(detail.Text)
-				}
-			}
-		}
-	}
-
-	return reasoningText.String()
 }
 
 // SSEReasoningParser accumulates reasoning content from SSE chunks.

@@ -4,7 +4,6 @@ package browser
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/roelfdiedericks/goclaw/internal/bwrap"
@@ -238,28 +237,4 @@ func CheckBwrapForBrowser(cfg BrowserBubblewrapConfig) bool {
 
 	L_info("browser sandbox: bubblewrap enabled", "gpu", cfg.GPU)
 	return true
-}
-
-// buildSandboxedCommand is a helper that builds the bwrap command for debugging.
-// Not used directly - see CreateSandboxedLauncher for the actual implementation.
-func buildSandboxedCommand(browserBin, workspace, profileDir string, cfg BrowserBubblewrapConfig) (*exec.Cmd, error) {
-	home, _ := os.UserHomeDir()
-
-	b := bwrap.BrowserSandbox(workspace, profileDir, home, cfg.GPU)
-
-	if cfg.BwrapPath != "" {
-		b.BwrapPath(cfg.BwrapPath)
-	}
-
-	for _, path := range cfg.ExtraRoBind {
-		b.RoBind(path)
-	}
-
-	for _, path := range cfg.ExtraBind {
-		b.Bind(path)
-	}
-
-	b.Command(browserBin)
-
-	return b.BuildCommand()
 }

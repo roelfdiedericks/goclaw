@@ -355,7 +355,7 @@ func (e *Editor) editWorkspace() error {
 		if e.config["gateway"] == nil {
 			e.config["gateway"] = make(map[string]interface{})
 		}
-		e.config["gateway"].(map[string]interface{})["workingDir"] = expandedPath
+		e.config["gateway"].(map[string]interface{})["workingDir"] = expandedPath //nolint:errcheck // config structure known
 		e.modified = true
 	}
 
@@ -447,11 +447,11 @@ func (e *Editor) ensureProvidersMap() map[string]interface{} {
 	if e.config["llm"] == nil {
 		e.config["llm"] = make(map[string]interface{})
 	}
-	llm := e.config["llm"].(map[string]interface{})
+	llm := e.config["llm"].(map[string]interface{}) //nolint:errcheck // config structure known
 	if llm["providers"] == nil {
 		llm["providers"] = make(map[string]interface{})
 	}
-	return llm["providers"].(map[string]interface{})
+	return llm["providers"].(map[string]interface{}) //nolint:errcheck // config structure known
 }
 
 func (e *Editor) addProvider() error {
@@ -872,11 +872,11 @@ func (e *Editor) editAgentModel() error {
 		if e.config["llm"] == nil {
 			e.config["llm"] = make(map[string]interface{})
 		}
-		llm := e.config["llm"].(map[string]interface{})
+		llm := e.config["llm"].(map[string]interface{}) //nolint:errcheck // config structure known
 		if llm["agent"] == nil {
 			llm["agent"] = make(map[string]interface{})
 		}
-		llm["agent"].(map[string]interface{})["models"] = []string{newModel}
+		llm["agent"].(map[string]interface{})["models"] = []string{newModel} //nolint:errcheck // config structure known
 		e.modified = true
 	}
 
@@ -917,15 +917,15 @@ func (e *Editor) editEmbeddingModel() error {
 		if e.config["llm"] == nil {
 			e.config["llm"] = make(map[string]interface{})
 		}
-		llm := e.config["llm"].(map[string]interface{})
+		llm := e.config["llm"].(map[string]interface{}) //nolint:errcheck // config structure known
 		if llm["embeddings"] == nil {
 			llm["embeddings"] = make(map[string]interface{})
 		}
 
 		if newModel == "" {
-			llm["embeddings"].(map[string]interface{})["models"] = []string{}
+			llm["embeddings"].(map[string]interface{})["models"] = []string{} //nolint:errcheck // config structure known
 		} else {
-			llm["embeddings"].(map[string]interface{})["models"] = []string{newModel}
+			llm["embeddings"].(map[string]interface{})["models"] = []string{newModel} //nolint:errcheck // config structure known
 		}
 		e.modified = true
 	}
@@ -959,7 +959,7 @@ func (e *Editor) editTelegram() error {
 		if e.config["telegram"] == nil {
 			e.config["telegram"] = make(map[string]interface{})
 		}
-		e.config["telegram"].(map[string]interface{})["enabled"] = enabled
+		e.config["telegram"].(map[string]interface{})["enabled"] = enabled //nolint:errcheck // config structure known
 		e.modified = true
 	}
 
@@ -989,7 +989,7 @@ func (e *Editor) editTelegram() error {
 		}
 
 		if newToken != "" && newToken != currentToken {
-			e.config["telegram"].(map[string]interface{})["botToken"] = newToken
+			e.config["telegram"].(map[string]interface{})["botToken"] = newToken //nolint:errcheck // config structure known
 			e.modified = true
 
 			// Test the new token
@@ -1029,7 +1029,7 @@ func (e *Editor) editHTTP() error {
 		if e.config["http"] == nil {
 			e.config["http"] = make(map[string]interface{})
 		}
-		e.config["http"].(map[string]interface{})["listen"] = newListen
+		e.config["http"].(map[string]interface{})["listen"] = newListen //nolint:errcheck // config structure known
 		e.modified = true
 	}
 
@@ -1043,7 +1043,10 @@ func (e *Editor) editSandbox() error {
 	if !bwrap.IsLinux() {
 		fmt.Println("Bubblewrap sandboxing is only available on Linux.")
 		fmt.Println("Press Enter to continue...")
-		fmt.Scanln()
+		if _, err := fmt.Scanln(); err != nil && err.Error() != "unexpected newline" {
+			fmt.Fprintf(os.Stderr, "Input error: %v\n", err)
+			os.Exit(1)
+		}
 		return nil
 	}
 
@@ -1118,7 +1121,7 @@ func (e *Editor) editSandbox() error {
 	if e.config["tools"] == nil {
 		e.config["tools"] = make(map[string]interface{})
 	}
-	tools := e.config["tools"].(map[string]interface{})
+	tools := e.config["tools"].(map[string]interface{}) //nolint:errcheck // config structure known
 
 	// Ensure bubblewrap global section exists
 	if tools["bubblewrap"] == nil {
@@ -1139,7 +1142,7 @@ func (e *Editor) editSandbox() error {
 			},
 		}
 	}
-	exec := tools["exec"].(map[string]interface{})
+	exec := tools["exec"].(map[string]interface{}) //nolint:errcheck // config structure known
 	if exec["bubblewrap"] == nil {
 		exec["bubblewrap"] = map[string]interface{}{
 			"enabled":      false,
@@ -1150,7 +1153,7 @@ func (e *Editor) editSandbox() error {
 			"clearEnv":     true,
 		}
 	}
-	exec["bubblewrap"].(map[string]interface{})["enabled"] = execEnabled
+	exec["bubblewrap"].(map[string]interface{})["enabled"] = execEnabled //nolint:errcheck // config structure known
 
 	// Ensure browser section exists with bubblewrap
 	if tools["browser"] == nil {
@@ -1164,7 +1167,7 @@ func (e *Editor) editSandbox() error {
 			},
 		}
 	}
-	browser := tools["browser"].(map[string]interface{})
+	browser := tools["browser"].(map[string]interface{}) //nolint:errcheck // config structure known
 	if browser["bubblewrap"] == nil {
 		browser["bubblewrap"] = map[string]interface{}{
 			"enabled":     false,
@@ -1173,7 +1176,7 @@ func (e *Editor) editSandbox() error {
 			"gpu":         true,
 		}
 	}
-	browser["bubblewrap"].(map[string]interface{})["enabled"] = browserEnabled
+	browser["bubblewrap"].(map[string]interface{})["enabled"] = browserEnabled //nolint:errcheck // config structure known
 
 	e.modified = true
 

@@ -1444,7 +1444,7 @@ func (w *Wizard) saveUsers(configPath string) error {
 	}
 
 	if w.userTelegramID != "" {
-		users[w.userName].(map[string]interface{})["telegram_id"] = w.userTelegramID
+		users[w.userName].(map[string]interface{})["telegram_id"] = w.userTelegramID //nolint:errcheck // structure just created above
 	}
 
 	data, err := json.MarshalIndent(users, "", "  ")

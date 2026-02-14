@@ -529,7 +529,7 @@ func (m *Model) startAgent(text string) tea.Cmd {
 
 	// Run agent in background
 	go func() {
-		m.gateway.RunAgent(m.ctx, req, events)
+		m.gateway.RunAgent(m.ctx, req, events) //nolint:errcheck // fire-and-forget goroutine
 	}()
 
 	// Return command to wait for first event

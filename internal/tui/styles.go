@@ -6,9 +6,9 @@ import "github.com/charmbracelet/lipgloss"
 var (
 	primaryColor   = lipgloss.Color("39")  // Blue
 	secondaryColor = lipgloss.Color("245") // Gray
-	accentColor    = lipgloss.Color("212") // Pink
+	accentColor    = lipgloss.Color("212") // Pink  //nolint:unused // planned
 	errorColor     = lipgloss.Color("196") // Red
-	successColor   = lipgloss.Color("82")  // Green
+	successColor   = lipgloss.Color("82")  // Green //nolint:unused // planned
 	warningColor   = lipgloss.Color("214") // Orange
 )
 
@@ -49,11 +49,11 @@ var (
 				Foreground(primaryColor).
 				Bold(true)
 
-	// Log level styles
-	logDebugStyle = lipgloss.NewStyle().Foreground(secondaryColor)
-	logInfoStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
-	logWarnStyle  = lipgloss.NewStyle().Foreground(warningColor)
-	logErrorStyle = lipgloss.NewStyle().Foreground(errorColor)
+	// Log level styles (planned)
+	logDebugStyle = lipgloss.NewStyle().Foreground(secondaryColor)       //nolint:unused
+	logInfoStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("86")) //nolint:unused
+	logWarnStyle  = lipgloss.NewStyle().Foreground(warningColor)         //nolint:unused
+	logErrorStyle = lipgloss.NewStyle().Foreground(errorColor)           //nolint:unused
 
 	// Status bar
 	statusBarStyle = lipgloss.NewStyle().
@@ -74,4 +74,10 @@ var (
 	thinkingStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("243")). // Dim gray for thinking
 			Italic(true)
+)
+
+// Ensure planned styles are kept (silence unused linter)
+var (
+	_ = accentColor
+	_ = successColor
 )

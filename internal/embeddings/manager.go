@@ -499,16 +499,16 @@ func rebuildTable(ctx context.Context, db *sql.DB, tableName, textColumn, primar
 		for rows.Next() {
 			var c chunk
 			if err := rows.Scan(&c.id, &c.text); err != nil {
-				rows.Close()
+				rows.Close() //nolint:sqlclosecheck // can't defer in loop
 				return processed, fmt.Errorf("scan chunk: %w", err)
 			}
 			chunks = append(chunks, c)
 		}
 		if err := rows.Err(); err != nil {
-			rows.Close()
+			rows.Close() //nolint:sqlclosecheck // can't defer in loop
 			return processed, fmt.Errorf("iterate rows: %w", err)
 		}
-		rows.Close()
+		rows.Close() //nolint:sqlclosecheck // can't defer in loop
 
 		if len(chunks) == 0 {
 			break
@@ -544,7 +544,7 @@ func rebuildTable(ctx context.Context, db *sql.DB, tableName, textColumn, primar
 		for i, c := range chunks {
 			embeddingBlob, _ := json.Marshal(embeddings[i])
 			if _, err := stmt.Exec(embeddingBlob, primaryModel, c.id); err != nil {
-				stmt.Close()
+				stmt.Close() //nolint:sqlclosecheck // can't defer in loop
 				tx.Rollback()
 				return processed, fmt.Errorf("update chunk %s: %w", c.id, err)
 			}
@@ -555,7 +555,7 @@ func rebuildTable(ctx context.Context, db *sql.DB, tableName, textColumn, primar
 			}
 		}
 
-		stmt.Close()
+		stmt.Close() //nolint:sqlclosecheck // can't defer in loop
 		if err := tx.Commit(); err != nil {
 			return processed, fmt.Errorf("commit transaction: %w", err)
 		}

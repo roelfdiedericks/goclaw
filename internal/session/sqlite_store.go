@@ -48,7 +48,9 @@ func NewSQLiteStore(cfg StoreConfig) (*SQLiteStore, error) {
 	if timeout == 0 {
 		timeout = 5000
 	}
-	db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", timeout))
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA busy_timeout=%d", timeout)); err != nil {
+		L_warn("sqlite: failed to set busy_timeout", "error", err)
+	}
 
 	store := &SQLiteStore{db: db, config: cfg}
 
@@ -325,7 +327,9 @@ func (s *SQLiteStore) GetSession(ctx context.Context, key string) (*StoredSessio
 
 	sess.CreatedAt = time.Unix(createdAt, 0)
 	sess.UpdatedAt = time.Unix(updatedAt, 0)
-	json.Unmarshal([]byte(flushedJSON), &sess.FlushedThresholds)
+	if err := json.Unmarshal([]byte(flushedJSON), &sess.FlushedThresholds); err != nil {
+		L_warn("sqlite: failed to unmarshal flushed thresholds", "session", sess.Key, "error", err)
+	}
 
 	return &sess, nil
 }
@@ -433,7 +437,9 @@ func (s *SQLiteStore) AppendMessage(ctx context.Context, sessionKey string, msg 
 	}
 
 	// Update session timestamp
-	s.db.ExecContext(ctx, "UPDATE sessions SET updated_at = ? WHERE key = ?", time.Now().Unix(), sessionKey)
+	if _, err := s.db.ExecContext(ctx, "UPDATE sessions SET updated_at = ? WHERE key = ?", time.Now().Unix(), sessionKey); err != nil {
+		L_warn("sqlite: failed to update session timestamp", "session", sessionKey, "error", err)
+	}
 
 	L_trace("sqlite: message appended", "session", sessionKey, "id", msg.ID, "role", msg.Role)
 	return nil
@@ -586,9 +592,15 @@ func (s *SQLiteStore) GetLatestCheckpoint(ctx context.Context, sessionKey string
 	cp.Timestamp = time.Unix(ts, 0)
 	cp.ParentID = parentID.String
 	cp.GeneratedBy = generatedBy.String
-	json.Unmarshal([]byte(topicsJSON), &cp.Topics)
-	json.Unmarshal([]byte(decisionsJSON), &cp.KeyDecisions)
-	json.Unmarshal([]byte(questionsJSON), &cp.OpenQuestions)
+	if err := json.Unmarshal([]byte(topicsJSON), &cp.Topics); err != nil {
+		L_warn("sqlite: failed to unmarshal checkpoint topics", "checkpoint", cp.ID, "error", err)
+	}
+	if err := json.Unmarshal([]byte(decisionsJSON), &cp.KeyDecisions); err != nil {
+		L_warn("sqlite: failed to unmarshal checkpoint decisions", "checkpoint", cp.ID, "error", err)
+	}
+	if err := json.Unmarshal([]byte(questionsJSON), &cp.OpenQuestions); err != nil {
+		L_warn("sqlite: failed to unmarshal checkpoint questions", "checkpoint", cp.ID, "error", err)
+	}
 
 	return &cp, nil
 }
@@ -628,9 +640,15 @@ func (s *SQLiteStore) GetCheckpoints(ctx context.Context, sessionKey string) ([]
 		cp.Timestamp = time.Unix(ts, 0)
 		cp.ParentID = parentID.String
 		cp.GeneratedBy = generatedBy.String
-		json.Unmarshal([]byte(topicsJSON), &cp.Topics)
-		json.Unmarshal([]byte(decisionsJSON), &cp.KeyDecisions)
-		json.Unmarshal([]byte(questionsJSON), &cp.OpenQuestions)
+		if err := json.Unmarshal([]byte(topicsJSON), &cp.Topics); err != nil {
+			L_warn("sqlite: failed to unmarshal checkpoint topics", "checkpoint", cp.ID, "error", err)
+		}
+		if err := json.Unmarshal([]byte(decisionsJSON), &cp.KeyDecisions); err != nil {
+			L_warn("sqlite: failed to unmarshal checkpoint decisions", "checkpoint", cp.ID, "error", err)
+		}
+		if err := json.Unmarshal([]byte(questionsJSON), &cp.OpenQuestions); err != nil {
+			L_warn("sqlite: failed to unmarshal checkpoint questions", "checkpoint", cp.ID, "error", err)
+		}
 
 		checkpoints = append(checkpoints, cp)
 	}
@@ -656,10 +674,12 @@ func (s *SQLiteStore) AppendCompaction(ctx context.Context, sessionKey string, c
 	}
 
 	// Update session compaction count
-	s.db.ExecContext(ctx, `
+	if _, err := s.db.ExecContext(ctx, `
 		UPDATE sessions SET compaction_count = compaction_count + 1, updated_at = ?
 		WHERE key = ?
-	`, time.Now().Unix(), sessionKey)
+	`, time.Now().Unix(), sessionKey); err != nil {
+		L_warn("sqlite: failed to update compaction count", "session", sessionKey, "error", err)
+	}
 
 	L_info("sqlite: compaction appended", "session", sessionKey, "id", comp.ID,
 		"tokensBefore", comp.TokensBefore, "needsRetry", comp.NeedsSummaryRetry)

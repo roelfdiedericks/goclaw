@@ -63,7 +63,7 @@ func WithRequestCapture(ctx context.Context, capture *RequestCapture) context.Co
 // GetRequestCapture retrieves the RequestCapture from context
 func GetRequestCapture(ctx context.Context) *RequestCapture {
 	if v := ctx.Value(requestCaptureKey{}); v != nil {
-		return v.(*RequestCapture)
+		return v.(*RequestCapture) //nolint:errcheck // we only store *RequestCapture
 	}
 	return nil
 }

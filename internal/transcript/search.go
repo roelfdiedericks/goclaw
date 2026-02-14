@@ -142,6 +142,7 @@ func (s *Searcher) keywordSearch(ctx context.Context, query string, userID strin
 
 	args = append(args, limit)
 
+	//nolint:gosec // G201: conditions are internal strings, values parameterized
 	sqlQuery := fmt.Sprintf(`
 		SELECT id, bm25(transcript_fts) as rank
 		FROM transcript_fts
@@ -193,9 +194,8 @@ func (s *Searcher) vectorSearch(ctx context.Context, query string, userID string
 	}
 
 	// Load all embeddings (for small-medium scale; for large scale would use sqlite-vec)
-	sqlQuery := fmt.Sprintf(`
-		SELECT id, embedding FROM transcript_chunks %s
-	`, whereClause)
+	//nolint:gosec // G201: conditions are internal strings, values parameterized
+	sqlQuery := fmt.Sprintf(`SELECT id, embedding FROM transcript_chunks %s`, whereClause)
 
 	rows, err := s.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
@@ -292,27 +292,20 @@ func (s *Searcher) applyExactBoost(ctx context.Context, scores map[string]float6
 	// Use placeholders for all IDs
 	placeholders := make([]string, len(ids))
 	args := make([]interface{}, len(ids)+1)
-	args[0] = "%" + exactQuery + "%"
 	for i, id := range ids {
 		placeholders[i] = "?"
 		args[i+1] = id
 	}
 
-	query := fmt.Sprintf(`
-		SELECT id FROM transcript_chunks
-		WHERE id IN (%s)
-		AND LOWER(content) LIKE LOWER(?)
-	`, strings.Join(placeholders, ","))
-
-	// SQLite LIKE with placeholder for pattern first
-	// Reorder: pattern at end for LIKE
+	// Reorder args: IDs first, then pattern for LIKE
 	reorderedArgs := make([]interface{}, len(args))
 	for i, id := range ids {
 		reorderedArgs[i] = id
 	}
 	reorderedArgs[len(ids)] = "%" + exactQuery + "%"
 
-	query = fmt.Sprintf(`
+	//nolint:gosec // G201: placeholders are "?" literals, values parameterized
+	query := fmt.Sprintf(`
 		SELECT id FROM transcript_chunks
 		WHERE id IN (%s)
 		AND LOWER(content) LIKE LOWER(?)

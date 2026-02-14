@@ -138,8 +138,3 @@ func hashText(text string) string {
 	h := sha256.Sum256([]byte(text))
 	return hex.EncodeToString(h[:])
 }
-
-// estimateTokens estimates the number of tokens in text
-func estimateTokens(text string) int {
-	return (len(text) + charsPerToken - 1) / charsPerToken
-}

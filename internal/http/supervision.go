@@ -265,10 +265,12 @@ func (s *Server) handleSessionGuidance(w http.ResponseWriter, r *http.Request, s
 	}()
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":       "delivered",
 		"regenerating": true,
-	})
+	}); err != nil {
+		L_warn("http: failed to encode response", "error", err)
+	}
 }
 
 // handleSessionLLM handles POST /api/sessions/:key/llm - enable/disable LLM responses
@@ -308,10 +310,12 @@ func (s *Server) handleSessionLLM(w http.ResponseWriter, r *http.Request, sessio
 	L_info("http: LLM "+action, "session", sessionKey, "supervisor", u.ID)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":     "ok",
 		"llmEnabled": req.Enabled,
-	})
+	}); err != nil {
+		L_warn("http: failed to encode response", "error", err)
+	}
 }
 
 // handleSessionMessage handles POST /api/sessions/:key/message - ghostwrite a message
@@ -358,10 +362,12 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request, se
 	L_info("http: ghostwrite sent", "session", sessionKey, "supervisor", u.ID, "contentLen", len(req.Content))
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":    "sent",
 		"messageId": fmt.Sprintf("ghost_%d", time.Now().UnixNano()),
-	})
+	}); err != nil {
+		L_warn("http: failed to encode response", "error", err)
+	}
 }
 
 // getGatewaySessionsInfo returns info about all gateway sessions for supervision.
@@ -485,12 +491,4 @@ func (s *Server) supervisionEventToSSE(event interface{}) *SSEEvent {
 	default:
 		return nil
 	}
-}
-
-// subscribeToSession subscribes to events from a specific gateway session.
-// This enables real-time supervision by forwarding gateway events to the supervisor's SSE stream.
-func (s *Server) subscribeToSession(ctx context.Context, sessionKey string, events chan<- gateway.AgentEvent) {
-	// This will be implemented in Phase 2 when we hook into the gateway's event system
-	// For now, supervision relies on polling/refreshing the history
-	<-ctx.Done()
 }

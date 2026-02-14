@@ -307,7 +307,7 @@ func (c *AnthropicProvider) StreamMessage(
 
 	// Check if we have a cached output limit for this model
 	if cachedLimit, ok := modelMaxOutputTokens.Load(c.model); ok {
-		limit := cachedLimit.(int)
+		limit := cachedLimit.(int) //nolint:errcheck // we only store int values
 		if maxTokens > limit {
 			L_debug("anthropic: capping max_tokens to cached model limit",
 				"model", c.model,
@@ -662,7 +662,9 @@ func convertMessages(messages []types.Message) []anthropic.MessageParam {
 			}
 			// Tool use is part of assistant message
 			var input map[string]any
-			json.Unmarshal(msg.ToolInput, &input)
+			if err := json.Unmarshal(msg.ToolInput, &input); err != nil {
+				L_warn("anthropic: failed to unmarshal tool input", "tool", msg.ToolName, "error", err)
+			}
 			result = append(result, anthropic.NewAssistantMessage(
 				anthropic.ContentBlockParamUnion{
 					OfToolUse: &anthropic.ToolUseBlockParam{
@@ -974,39 +976,6 @@ func repairToolPairing(messages []anthropic.MessageParam) ([]anthropic.MessagePa
 	L_trace("repair pass 2 complete", "inputMessages", len(messages), "outputMessages", len(result))
 
 	return result, stats
-}
-
-// immediatelyFollows checks if a tool_result for toolID immediately follows the given assistant message
-// in the original message list (used for logging whether we relocated a result)
-func immediatelyFollows(messages []anthropic.MessageParam, assistantMsg anthropic.MessageParam, toolID string) bool {
-	for i, msg := range messages {
-		if msg.Role == assistantMsg.Role && len(msg.Content) == len(assistantMsg.Content) {
-			// Found the assistant message, check next
-			if i+1 < len(messages) {
-				nextMsg := messages[i+1]
-				if nextMsg.Role == anthropic.MessageParamRoleUser {
-					for _, block := range nextMsg.Content {
-						if block.OfToolResult != nil && block.OfToolResult.ToolUseID == toolID {
-							return true
-						}
-					}
-				}
-			}
-			return false
-		}
-	}
-	return false
-}
-
-// extractToolUseIDs extracts all tool_use IDs from an assistant message
-func extractToolUseIDs(msg anthropic.MessageParam) map[string]bool {
-	ids := make(map[string]bool)
-	for _, block := range msg.Content {
-		if block.OfToolUse != nil {
-			ids[block.OfToolUse.ID] = true
-		}
-	}
-	return ids
 }
 
 // isThinkingNotSupportedError checks if an error indicates the model doesn't support thinking

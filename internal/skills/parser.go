@@ -228,7 +228,6 @@ func parseSimpleFrontmatter(content []byte) (Frontmatter, error) {
 
 				if key == "metadata" {
 					inMetadata = true
-					currentKey = key
 					if value != "" && value != "|" && value != ">" {
 						// Inline metadata
 						fm.Metadata = value
