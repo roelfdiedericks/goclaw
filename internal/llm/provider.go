@@ -45,6 +45,35 @@ type Provider interface {
 	SupportsEmbeddings() bool
 }
 
+// StatefulProvider is implemented by providers that need session-scoped state.
+// The registry automatically calls these methods around StreamMessage calls.
+// Examples: xAI (response_id for context chaining), future providers (cursor tokens, OAuth state).
+type StatefulProvider interface {
+	Provider
+
+	// LoadSessionState is called before StreamMessage with previously saved state.
+	// state may be nil for new sessions or providers without prior state.
+	LoadSessionState(state map[string]any)
+
+	// SaveSessionState returns state to persist after StreamMessage completes.
+	// Called even on error (state may have changed). Return nil if no state to save.
+	SaveSessionState() map[string]any
+}
+
+// ProviderStateAccessor provides access to provider-specific state storage.
+// Implemented by session.Session, passed to Registry methods.
+// This interface decouples the registry from session implementation, avoiding import cycles.
+type ProviderStateAccessor interface {
+	// GetProviderState returns saved state for a provider key, or nil if none.
+	// providerKey format: "providerName:model" (e.g., "xai:grok-4-1-fast-reasoning")
+	// where providerName is the JSON key from config (NOT the provider type).
+	GetProviderState(providerKey string) map[string]any
+
+	// SetProviderState saves state for a provider key. Pass nil to clear.
+	// providerKey format: "providerName:model" (e.g., "openrouter1:anthropic/claude-sonnet-4.5")
+	SetProviderState(providerKey string, state map[string]any)
+}
+
 // Message represents a conversation message (provider-agnostic).
 // Can be converted from session.Message for use with providers.
 type Message struct {
