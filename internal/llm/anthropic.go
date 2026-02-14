@@ -288,46 +288,8 @@ func (c *AnthropicProvider) StreamMessage(
 	// Convert tool definitions
 	anthropicTools := convertTools(toolDefs)
 
-	// Estimate input tokens and cap max_tokens to fit within context window
-	estimator := tokens.Get()
-	estimatedInput := 0
-	for _, m := range messages {
-		estimatedInput += estimator.CountWithOverhead(m.Content, 4)
-	}
-	estimatedInput += estimator.Count(systemPrompt)
-	maxTokens := tokens.CapMaxTokens(c.maxTokens, contextWindow, estimatedInput, 100)
-	if maxTokens != c.maxTokens {
-		L_debug("anthropic: capped max_tokens to fit context",
-			"provider", c.name,
-			"original", c.maxTokens,
-			"capped", maxTokens,
-			"contextWindow", contextWindow,
-			"estimatedInput", estimatedInput)
-	}
-
-	// Check if we have a cached output limit for this model
-	if cachedLimit, ok := modelMaxOutputTokens.Load(c.model); ok {
-		limit := cachedLimit.(int) //nolint:errcheck // we only store int values
-		if maxTokens > limit {
-			L_debug("anthropic: capping max_tokens to cached model limit",
-				"model", c.model,
-				"requested", maxTokens,
-				"limit", limit)
-			maxTokens = limit
-		}
-	}
-
-	// Add extended thinking if enabled
-	// max_tokens must be greater than thinking.budget_tokens
-	if enableThinking {
-		minRequired := thinkingBudget + 4096 // budget + buffer for actual output
-		if maxTokens < minRequired {
-			L_debug("llm: adjusting max_tokens for thinking", "original", maxTokens, "required", minRequired)
-			maxTokens = minRequired
-		}
-	}
-
-	// Build request params
+	// Build request params first so we can estimate tokens from full JSON
+	maxTokens := c.maxTokens
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(c.model),
 		MaxTokens: int64(maxTokens),
@@ -337,7 +299,6 @@ func (c *AnthropicProvider) StreamMessage(
 	// Add extended thinking if enabled
 	if enableThinking {
 		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(thinkingBudget))
-		L_info("llm: extended thinking enabled", "model", c.model, "budget", thinkingBudget, "maxTokens", maxTokens)
 	}
 
 	// Add system prompt if provided
@@ -359,6 +320,58 @@ func (c *AnthropicProvider) StreamMessage(
 		params.Tools = anthropicTools
 		c.trace("tools attached", "count", len(anthropicTools))
 	}
+
+	// Estimate input tokens from full serialized request (includes tools, messages, all metadata)
+	reqBytes, _ := json.Marshal(params)
+	reqSizeKB := len(reqBytes) / 1024
+	estimator := tokens.Get()
+	estimatedInput := estimator.Count(string(reqBytes))
+
+	// Cap max_tokens to fit within context window
+	maxTokens = tokens.CapMaxTokens(c.maxTokens, contextWindow, estimatedInput, 100)
+	if maxTokens != c.maxTokens {
+		L_debug("anthropic: capped max_tokens to fit context",
+			"provider", c.name,
+			"original", c.maxTokens,
+			"capped", maxTokens,
+			"contextWindow", contextWindow,
+			"estimatedInput", estimatedInput)
+		params.MaxTokens = int64(maxTokens)
+	}
+
+	// Check if we have a cached output limit for this model
+	if cachedLimit, ok := modelMaxOutputTokens.Load(c.model); ok {
+		limit := cachedLimit.(int) //nolint:errcheck // we only store int values
+		if maxTokens > limit {
+			L_debug("anthropic: capping max_tokens to cached model limit",
+				"model", c.model,
+				"requested", maxTokens,
+				"limit", limit)
+			maxTokens = limit
+			params.MaxTokens = int64(maxTokens)
+		}
+	}
+
+	// Adjust max_tokens for thinking if enabled
+	// max_tokens must be greater than thinking.budget_tokens
+	if enableThinking {
+		minRequired := thinkingBudget + 4096 // budget + buffer for actual output
+		if maxTokens < minRequired {
+			L_debug("llm: adjusting max_tokens for thinking", "original", maxTokens, "required", minRequired)
+			maxTokens = minRequired
+			params.MaxTokens = int64(maxTokens)
+		}
+		L_info("llm: extended thinking enabled", "model", c.model, "budget", thinkingBudget, "maxTokens", maxTokens)
+	}
+
+	L_info("llm: request size",
+		"provider", c.name,
+		"model", c.model,
+		"messages", len(anthropicMessages),
+		"tools", len(anthropicTools),
+		"sizeKB", reqSizeKB,
+		"estimatedTokens", estimatedInput,
+	)
 
 	L_debug("sending request to Anthropic", "model", c.model)
 

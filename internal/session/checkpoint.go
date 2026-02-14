@@ -325,7 +325,7 @@ func BuildMessagesForSummary(messages []Message, maxTokens int) string {
 	// Rough estimate: 1 token ≈ 4 characters
 	maxChars := maxTokens * 4
 
-	L_info("compaction: building summary input", "messages", len(messages), "maxTokens", maxTokens, "maxChars", maxChars)
+	L_info("compaction: building summary prompt from removed messages", "removedMessages", len(messages), "maxTokens", maxTokens, "maxChars", maxChars)
 
 	// First pass: filter and truncate messages
 	type summaryMsg struct {
@@ -374,7 +374,7 @@ func BuildMessagesForSummary(messages []Message, maxTokens int) string {
 		for _, m := range filtered {
 			result += fmt.Sprintf("[%d] %s: %s\n\n", m.index+1, m.role, m.content)
 		}
-		L_info("compaction: summary input built (all messages)", "keptMessages", len(filtered), "resultChars", len(result))
+		L_info("compaction: summary prompt built", "sampledMessages", len(filtered), "resultChars", len(result))
 		return result
 	}
 
@@ -404,7 +404,7 @@ func BuildMessagesForSummary(messages []Message, maxTokens int) string {
 		result += fmt.Sprintf("[%d] %s: %s\n\n", m.index+1, m.role, m.content)
 	}
 
-	L_info("compaction: summary input built (truncated)", "keptMessages", len(kept), "totalMessages", len(filtered), "resultChars", len(result))
+	L_info("compaction: summary prompt built (sampled)", "sampledMessages", len(kept), "removedMessages", len(filtered), "resultChars", len(result))
 	return result
 }
 

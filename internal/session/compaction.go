@@ -108,6 +108,14 @@ func (m *CompactionManager) SetStore(store Store) {
 	m.store = store
 }
 
+// GetMaxMessages returns the configured max messages threshold
+func (m *CompactionManager) GetMaxMessages() int {
+	if m == nil || m.config == nil {
+		return 0
+	}
+	return m.config.MaxMessages
+}
+
 // GetStatus returns the current health state of the compaction manager
 func (m *CompactionManager) GetStatus(ctx context.Context) CompactionStatus {
 	if m == nil {

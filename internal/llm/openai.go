@@ -698,39 +698,10 @@ func (p *OpenAIProvider) StreamMessage(
 	// Convert tool definitions
 	openaiTools := convertToOpenAITools(toolDefs)
 
-	// Estimate input tokens and cap max_tokens to fit within context window
-	estimator := tokens.Get()
-	estimatedInput := 0
-	for _, m := range messages {
-		estimatedInput += estimator.CountWithOverhead(m.Content, 4)
-	}
-	estimatedInput += estimator.Count(systemPrompt)
-	maxTokens := tokens.CapMaxTokens(p.maxTokens, contextWindow, estimatedInput, 100)
-	if maxTokens != p.maxTokens {
-		L_debug("openai: capped max_tokens to fit context",
-			"provider", p.name,
-			"original", p.maxTokens,
-			"capped", maxTokens,
-			"contextWindow", contextWindow,
-			"estimatedInput", estimatedInput)
-	}
-
-	// Check if we have a cached output limit for this model
-	if cachedLimit, ok := modelMaxOutputTokens.Load(p.model); ok {
-		limit := cachedLimit.(int) //nolint:errcheck // we only store int values
-		if maxTokens > limit {
-			L_debug("openai: capping max_tokens to cached model limit",
-				"model", p.model,
-				"requested", maxTokens,
-				"limit", limit)
-			maxTokens = limit
-		}
-	}
-
-	// Build request
+	// Build request first so we can estimate tokens from full JSON
 	req := openai.ChatCompletionRequest{
 		Model:     p.model,
-		MaxTokens: maxTokens,
+		MaxTokens: p.maxTokens,
 		Messages:  openaiMessages,
 		Stream:    true,
 		StreamOptions: &openai.StreamOptions{
@@ -751,9 +722,45 @@ func (p *OpenAIProvider) StreamMessage(
 		p.trace("tools attached", "count", len(openaiTools), "names", toolNames)
 	}
 
-	// Calculate approximate request size for debugging
+	// Estimate input tokens from full serialized request (includes tools, messages, all metadata)
 	reqBytes, _ := json.Marshal(req)
 	reqSizeKB := len(reqBytes) / 1024
+	estimator := tokens.Get()
+	estimatedInput := estimator.Count(string(reqBytes))
+
+	// Cap max_tokens to fit within context window
+	maxTokens := tokens.CapMaxTokens(p.maxTokens, contextWindow, estimatedInput, 100)
+	if maxTokens != p.maxTokens {
+		L_debug("openai: capped max_tokens to fit context",
+			"provider", p.name,
+			"original", p.maxTokens,
+			"capped", maxTokens,
+			"contextWindow", contextWindow,
+			"estimatedInput", estimatedInput)
+		req.MaxTokens = maxTokens
+	}
+
+	// Check if we have a cached output limit for this model
+	if cachedLimit, ok := modelMaxOutputTokens.Load(p.model); ok {
+		limit := cachedLimit.(int) //nolint:errcheck // we only store int values
+		if maxTokens > limit {
+			L_debug("openai: capping max_tokens to cached model limit",
+				"model", p.model,
+				"requested", maxTokens,
+				"limit", limit)
+			maxTokens = limit
+			req.MaxTokens = maxTokens
+		}
+	}
+
+	L_info("llm: request size",
+		"provider", p.name,
+		"model", p.model,
+		"messages", len(openaiMessages),
+		"tools", len(openaiTools),
+		"sizeKB", reqSizeKB,
+		"estimatedTokens", estimatedInput,
+	)
 
 	// Log request details for debugging (trace level to avoid clutter)
 	p.trace("openai: sending request",
@@ -893,9 +900,13 @@ func (p *OpenAIProvider) StreamMessage(
 	var reasoningContent string
 	chunkNum := 0
 
+	// Time-based hang detection (for slow thinking models like Kimi)
+	const noContentWarnInterval = 60 * time.Second // Warn after 60s of no content
+	lastContentTime := time.Now()
+	lastWarnTime := time.Time{}
+	emptyChunkCount := 0 // Still track for trace logging
+
 	// Hybrid logging state tracking
-	const emptyChunkThreshold = 50 // Warn after this many consecutive empty chunks
-	emptyChunkCount := 0
 	firstContentLogged := false
 	toolCallsStarted := make(map[int]bool) // Track which tool call indices we've logged start for
 
@@ -988,22 +999,17 @@ func (p *OpenAIProvider) StreamMessage(
 		chunkNum++
 
 		if len(chunk.Choices) == 0 {
-			// Empty chunk (no choices) - count it
+			// Empty chunk (no choices) - check for time-based warning
 			emptyChunkCount++
-			if emptyChunkCount == emptyChunkThreshold {
-				L_warn("openai: potential hang - many consecutive empty chunks",
+			timeSinceContent := time.Since(lastContentTime)
+			if timeSinceContent >= noContentWarnInterval && time.Since(lastWarnTime) >= noContentWarnInterval {
+				L_warn("openai: waiting for content",
 					"provider", p.name,
+					"noContentFor", timeSinceContent.Round(time.Second),
+					"elapsed", time.Since(startTime).Round(time.Second),
 					"emptyChunks", emptyChunkCount,
-					"chunk", chunkNum,
 				)
-			} else if emptyChunkCount > 0 && emptyChunkCount%100 == 0 {
-				// Periodic update for very long empty stretches
-				L_warn("openai: still waiting - empty chunks continuing",
-					"provider", p.name,
-					"emptyChunks", emptyChunkCount,
-					"chunk", chunkNum,
-					"elapsed", time.Since(startTime).Round(time.Millisecond),
-				)
+				lastWarnTime = time.Now()
 			}
 			continue
 		}
@@ -1019,32 +1025,29 @@ func (p *OpenAIProvider) StreamMessage(
 
 		if isEmptyChunk {
 			emptyChunkCount++
-			if emptyChunkCount == emptyChunkThreshold {
-				L_warn("openai: potential hang - many consecutive empty chunks",
+			timeSinceContent := time.Since(lastContentTime)
+			if timeSinceContent >= noContentWarnInterval && time.Since(lastWarnTime) >= noContentWarnInterval {
+				L_warn("openai: waiting for content",
 					"provider", p.name,
+					"noContentFor", timeSinceContent.Round(time.Second),
+					"elapsed", time.Since(startTime).Round(time.Second),
 					"emptyChunks", emptyChunkCount,
-					"chunk", chunkNum,
 				)
-			} else if emptyChunkCount > 0 && emptyChunkCount%100 == 0 {
-				L_warn("openai: still waiting - empty chunks continuing",
-					"provider", p.name,
-					"emptyChunks", emptyChunkCount,
-					"chunk", chunkNum,
-					"elapsed", time.Since(startTime).Round(time.Millisecond),
-				)
+				lastWarnTime = time.Now()
 			}
 			continue
 		}
 
-		// Non-empty chunk - log transition from empty if applicable
+		// Non-empty chunk - reset content timer and log transition if applicable
 		if emptyChunkCount > 0 {
-			p.trace("openai: content after empty chunks",
+			p.trace("openai: content after waiting",
 				"provider", p.name,
+				"waitedFor", time.Since(lastContentTime).Round(time.Millisecond),
 				"emptyChunks", emptyChunkCount,
-				"chunk", chunkNum,
 			)
 			emptyChunkCount = 0
 		}
+		lastContentTime = time.Now()
 
 		// Handle reasoning/thinking content (Kimi, Deepseek, etc.)
 		if hasReasoning {
