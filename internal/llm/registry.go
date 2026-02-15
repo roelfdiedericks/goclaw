@@ -120,6 +120,8 @@ func (r *Registry) initProvider(name string, cfg ProviderConfig) error {
 		provider, err = NewOllamaProvider(name, cfg)
 	case "openai":
 		provider, err = NewOpenAIProvider(name, cfg)
+	case "xai":
+		provider, err = NewXAIProvider(name, cfg)
 	default:
 		return fmt.Errorf("unknown provider type: %s", cfg.Type)
 	}
@@ -182,6 +184,15 @@ func (r *Registry) GetProvider(purpose string) (Provider, error) {
 				result = p
 			}
 		case *OpenAIProvider:
+			if !p.IsAvailable() {
+				continue
+			}
+			if cfg.MaxTokens > 0 {
+				result = p.WithMaxTokens(cfg.MaxTokens)
+			} else {
+				result = p
+			}
+		case *XAIProvider:
 			if !p.IsAvailable() {
 				continue
 			}
@@ -275,6 +286,9 @@ func (r *Registry) resolveForPurpose(ref, purpose string) (interface{}, error) {
 			return p.WithModelForEmbedding(modelName), nil
 		}
 		return p.WithModel(modelName), nil
+	case *XAIProvider:
+		// xAI doesn't support embeddings
+		return p.WithModel(modelName), nil
 	default:
 		return nil, fmt.Errorf("provider %s has unexpected type", providerName)
 	}
@@ -315,6 +329,19 @@ func (r *Registry) GetOpenAIProvider(purpose string) (*OpenAIProvider, error) {
 	p, ok := provider.(*OpenAIProvider)
 	if !ok {
 		return nil, fmt.Errorf("provider for %s is not OpenAI", purpose)
+	}
+	return p, nil
+}
+
+// GetXAIProvider returns an xAI provider for a purpose (typed helper)
+func (r *Registry) GetXAIProvider(purpose string) (*XAIProvider, error) {
+	provider, err := r.GetProvider(purpose)
+	if err != nil {
+		return nil, err
+	}
+	p, ok := provider.(*XAIProvider)
+	if !ok {
+		return nil, fmt.Errorf("provider for %s is not xAI", purpose)
 	}
 	return p, nil
 }
@@ -493,9 +520,11 @@ type FailoverResult struct {
 
 // StreamMessageWithFailover tries models in the chain for a purpose, handling
 // failover and cooldowns. Returns detailed result for notification purposes.
+// stateAccessor is used for stateful providers (like xAI) to load/save session state.
 func (r *Registry) StreamMessageWithFailover(
 	ctx context.Context,
 	purpose string,
+	stateAccessor ProviderStateAccessor,
 	messages []types.Message,
 	toolDefs []types.ToolDefinition,
 	systemPrompt string,
@@ -577,13 +606,40 @@ func (r *Registry) StreamMessageWithFailover(
 			} else {
 				p = typed
 			}
+		case *XAIProvider:
+			if !typed.IsAvailable() {
+				continue
+			}
+			if cfg.MaxTokens > 0 {
+				p = typed.WithMaxTokens(cfg.MaxTokens)
+			} else {
+				p = typed
+			}
 		default:
 			L_warn("failover: unknown provider type", "model", modelRef)
 			continue
 		}
 
+		// Build state key for stateful providers: providerName:model
+		stateKey := p.Name() + ":" + p.Model()
+
+		// Load state if provider supports it
+		if sp, ok := p.(StatefulProvider); ok && stateAccessor != nil {
+			state := stateAccessor.GetProviderState(stateKey)
+			sp.LoadSessionState(state)
+			L_debug("stateful provider: loaded state", "key", stateKey, "hasState", state != nil)
+		}
+
 		// Try the call
 		resp, err := p.StreamMessage(ctx, messages, toolDefs, systemPrompt, onDelta, opts)
+
+		// Save state after call (even on error - state may have changed)
+		if sp, ok := p.(StatefulProvider); ok && stateAccessor != nil {
+			state := sp.SaveSessionState()
+			stateAccessor.SetProviderState(stateKey, state)
+			L_debug("stateful provider: saved state", "key", stateKey, "hasState", state != nil)
+		}
+
 		if err == nil {
 			// Success!
 			result.Response = resp
@@ -646,9 +702,11 @@ type SimpleMessageResult struct {
 
 // SimpleMessageWithFailover tries models in the chain for a purpose using SimpleMessage.
 // This is for non-streaming calls like summarization.
+// stateAccessor is used for stateful providers (like xAI) to load/save session state.
 func (r *Registry) SimpleMessageWithFailover(
 	ctx context.Context,
 	purpose string,
+	stateAccessor ProviderStateAccessor,
 	userMessage string,
 	systemPrompt string,
 ) (*SimpleMessageResult, error) {
@@ -720,12 +778,39 @@ func (r *Registry) SimpleMessageWithFailover(
 			} else {
 				p = typed
 			}
+		case *XAIProvider:
+			if !typed.IsAvailable() {
+				continue
+			}
+			if cfg.MaxTokens > 0 {
+				p = typed.WithMaxTokens(cfg.MaxTokens)
+			} else {
+				p = typed
+			}
 		default:
 			continue
 		}
 
+		// Build state key for stateful providers: providerName:model
+		stateKey := p.Name() + ":" + p.Model()
+
+		// Load state if provider supports it
+		if sp, ok := p.(StatefulProvider); ok && stateAccessor != nil {
+			state := stateAccessor.GetProviderState(stateKey)
+			sp.LoadSessionState(state)
+			L_debug("stateful provider: loaded state", "key", stateKey, "hasState", state != nil)
+		}
+
 		// Try the call
 		text, err := p.SimpleMessage(ctx, userMessage, systemPrompt)
+
+		// Save state after call (even on error - state may have changed)
+		if sp, ok := p.(StatefulProvider); ok && stateAccessor != nil {
+			state := sp.SaveSessionState()
+			stateAccessor.SetProviderState(stateKey, state)
+			L_debug("stateful provider: saved state", "key", stateKey, "hasState", state != nil)
+		}
+
 		if err == nil {
 			// Success!
 			result.Text = text

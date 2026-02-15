@@ -38,6 +38,12 @@ type Store interface {
 	// Cleanup operations
 	DeleteOrphanedToolMessages(ctx context.Context, sessionKey string) (int, error) // Delete tool_use/tool_result with no matching pair
 
+	// Provider state operations (for stateful providers like xAI)
+	// providerKey format: "providerName:model" (e.g., "xai:grok-4-1-fast-reasoning")
+	GetProviderState(ctx context.Context, sessionKey, providerKey string) (map[string]any, error)
+	SetProviderState(ctx context.Context, sessionKey, providerKey string, state map[string]any) error
+	DeleteProviderStates(ctx context.Context, sessionKey string) error
+
 	// Lifecycle
 	Close() error
 	Migrate() error // Run schema migrations

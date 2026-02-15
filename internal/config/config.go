@@ -367,7 +367,7 @@ type ThinkingConfig struct {
 
 // LLMProviderConfig is the configuration for a single provider instance
 type LLMProviderConfig struct {
-	Type           string `json:"type"`                     // "anthropic", "openai", "ollama"
+	Type           string `json:"type"`                     // "anthropic", "openai", "ollama", "xai"
 	APIKey         string `json:"apiKey,omitempty"`         // For cloud providers
 	BaseURL        string `json:"baseURL,omitempty"`        // For OpenAI-compatible endpoints
 	URL            string `json:"url,omitempty"`            // For Ollama
@@ -378,6 +378,13 @@ type LLMProviderConfig struct {
 	EmbeddingOnly  bool   `json:"embeddingOnly,omitempty"`  // For embedding-only models
 	DumpOnSuccess  bool   `json:"dumpOnSuccess,omitempty"`  // Keep request dumps even on success (for debugging)
 	ThinkingLevel  string `json:"thinkingLevel,omitempty"`  // Default thinking level for this provider: off/minimal/low/medium/high/xhigh
+
+	// xAI-specific fields
+	ServerToolsAllowed []string `json:"serverToolsAllowed,omitempty"` // xAI server-side tools to enable (empty = all known tools)
+	MaxTurns           int      `json:"maxTurns,omitempty"`           // xAI max agentic turns (0 = xai-go default)
+	StoreResponses     *bool    `json:"storeResponses,omitempty"`     // xAI: store responses server-side for context preservation (nil = true)
+	KeepaliveTime      int      `json:"keepaliveTime,omitempty"`      // xAI gRPC keepalive time in seconds (0 = xai-go default)
+	KeepaliveTimeout   int      `json:"keepaliveTimeout,omitempty"`   // xAI gRPC keepalive timeout in seconds (0 = xai-go default)
 }
 
 // LLMPurposeConfig defines the model chain for a specific purpose
@@ -430,6 +437,16 @@ type ToolsConfig struct {
 	Browser    BrowserToolsConfig     `json:"browser"`
 	Exec       ExecToolsConfig        `json:"exec"`
 	Bubblewrap BubblewrapGlobalConfig `json:"bubblewrap"`
+	XAIImagine XAIImagineConfig       `json:"xaiImagine"`
+}
+
+// XAIImagineConfig contains xAI image generation tool settings
+type XAIImagineConfig struct {
+	Enabled     bool   `json:"enabled"`               // Enable the tool (default: false)
+	APIKey      string `json:"apiKey,omitempty"`      // xAI API key (falls back to provider config)
+	Model       string `json:"model,omitempty"`       // Model to use (default: grok-2-image)
+	Resolution  string `json:"resolution,omitempty"`  // Default resolution: "1K" (~1024px) or "2K" (~2048px)
+	SaveToMedia bool   `json:"saveToMedia,omitempty"` // Save generated images to media store (default: true)
 }
 
 // BubblewrapGlobalConfig contains global bubblewrap settings

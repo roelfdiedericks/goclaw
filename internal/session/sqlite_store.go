@@ -937,6 +937,87 @@ func (s *SQLiteStore) DeleteOrphanedToolMessages(ctx context.Context, sessionKey
 	return int(rows), nil
 }
 
+// ============================================================================
+// Provider State CRUD
+// ============================================================================
+
+// GetProviderState retrieves state for a (session_key, provider_key) tuple.
+// providerKey format: "providerName:model" (e.g., "xai:grok-4-1-fast-reasoning")
+// Returns nil if no state exists (not an error).
+func (s *SQLiteStore) GetProviderState(ctx context.Context, sessionKey, providerKey string) (map[string]any, error) {
+	var stateJSON string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT state_json FROM provider_state 
+		WHERE session_key = ? AND provider_key = ?
+	`, sessionKey, providerKey).Scan(&stateJSON)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query provider state failed: %w", err)
+	}
+
+	var state map[string]any
+	if err := json.Unmarshal([]byte(stateJSON), &state); err != nil {
+		return nil, fmt.Errorf("unmarshal provider state failed: %w", err)
+	}
+
+	L_trace("sqlite: got provider state", "sessionKey", sessionKey, "providerKey", providerKey)
+	return state, nil
+}
+
+// SetProviderState saves state for a (session_key, provider_key) tuple.
+// providerKey format: "providerName:model" (e.g., "openrouter1:anthropic/claude-sonnet-4.5")
+// Pass nil state to delete the entry.
+func (s *SQLiteStore) SetProviderState(ctx context.Context, sessionKey, providerKey string, state map[string]any) error {
+	if state == nil {
+		_, err := s.db.ExecContext(ctx, `
+			DELETE FROM provider_state WHERE session_key = ? AND provider_key = ?
+		`, sessionKey, providerKey)
+		if err != nil {
+			return fmt.Errorf("delete provider state failed: %w", err)
+		}
+		L_trace("sqlite: deleted provider state", "sessionKey", sessionKey, "providerKey", providerKey)
+		return nil
+	}
+
+	stateJSON, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Errorf("marshal provider state failed: %w", err)
+	}
+
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO provider_state (session_key, provider_key, state_json, updated_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(session_key, provider_key) DO UPDATE SET
+			state_json = excluded.state_json,
+			updated_at = excluded.updated_at
+	`, sessionKey, providerKey, string(stateJSON), time.Now().Unix())
+	if err != nil {
+		return fmt.Errorf("upsert provider state failed: %w", err)
+	}
+
+	L_trace("sqlite: set provider state", "sessionKey", sessionKey, "providerKey", providerKey)
+	return nil
+}
+
+// DeleteProviderStates deletes all provider states for a session.
+// Note: CASCADE on FK handles this automatically when session is deleted,
+// but this method allows explicit cleanup without deleting the session.
+func (s *SQLiteStore) DeleteProviderStates(ctx context.Context, sessionKey string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM provider_state WHERE session_key = ?`, sessionKey)
+	if err != nil {
+		return fmt.Errorf("delete provider states failed: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows > 0 {
+		L_debug("sqlite: deleted provider states", "sessionKey", sessionKey, "count", rows)
+	}
+	return nil
+}
+
 // Helper functions
 
 func nullString(s string) interface{} {

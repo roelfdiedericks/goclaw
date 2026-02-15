@@ -195,7 +195,7 @@ func GenerateSummaryWithRegistry(ctx context.Context, registry *llm.Registry, me
 		systemPrompt := "You are a helpful assistant that creates concise conversation summaries."
 
 		// Call LLM with failover
-		result, err := registry.SimpleMessageWithFailover(ctx, "summarization", userMessage, systemPrompt)
+		result, err := registry.SimpleMessageWithFailover(ctx, "summarization", nil, userMessage, systemPrompt)
 		if err == nil {
 			if result.FailedOver {
 				L_info("compaction: used fallback model", "model", result.ModelUsed)
@@ -251,7 +251,7 @@ func GenerateCheckpointWithRegistry(ctx context.Context, registry *llm.Registry,
 		systemPrompt := "You are a helpful assistant that creates structured conversation summaries. Respond only with valid JSON."
 
 		// Call LLM with failover
-		result, err := registry.SimpleMessageWithFailover(ctx, "summarization", userMessage, systemPrompt)
+		result, err := registry.SimpleMessageWithFailover(ctx, "summarization", nil, userMessage, systemPrompt)
 		if err == nil {
 			// Parse the response
 			checkpoint, parseErr := ParseCheckpointResponse(result.Text)

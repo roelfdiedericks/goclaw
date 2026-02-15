@@ -1,6 +1,8 @@
 // Package llm provides LLM client implementations.
 package llm
 
+import "github.com/roelfdiedericks/xai-go"
+
 // ThinkingLevel represents the effort level for extended thinking/reasoning.
 // This is a universal abstraction that gets mapped to provider-specific parameters.
 type ThinkingLevel string
@@ -121,6 +123,27 @@ func (l ThinkingLevel) DeepSeekEffort() string {
 func (l ThinkingLevel) KimiEffort() string {
 	// Kimi uses same values as OpenRouter
 	return l.OpenRouterEffort()
+}
+
+// XAIEffort maps ThinkingLevel to xAI's ReasoningEffort.
+// Returns nil for "off" (no reasoning), otherwise returns Low/Medium/High.
+func (l ThinkingLevel) XAIEffort() *xai.ReasoningEffort {
+	switch l {
+	case ThinkingOff:
+		return nil // No reasoning
+	case ThinkingMinimal, ThinkingLow:
+		effort := xai.ReasoningEffortLow
+		return &effort
+	case ThinkingMedium:
+		effort := xai.ReasoningEffortMedium
+		return &effort
+	case ThinkingHigh, ThinkingXHigh:
+		effort := xai.ReasoningEffortHigh
+		return &effort
+	default:
+		effort := xai.ReasoningEffortMedium
+		return &effort
+	}
 }
 
 // ThinkingLevelFromBool converts legacy boolean EnableThinking to ThinkingLevel.
