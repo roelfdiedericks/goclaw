@@ -324,7 +324,7 @@ func (s *Service) initializeNextRuns() {
 			L_error("cron: failed to update job", "job", job.Name, "id", job.ID, "error", err)
 		}
 		if next != nil {
-			L_debug("cron: job scheduled",
+			L_trace("cron: job scheduled",
 				"job", job.Name,
 				"schedule", formatScheduleLog(&job.Schedule),
 				"nextRun", next.Format(time.RFC3339),

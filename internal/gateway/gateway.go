@@ -92,6 +92,33 @@ type Gateway struct {
 	lastOpenClawUserMsg string        // Track user messages for mirroring
 }
 
+// providerStateAccessor implements llm.ProviderStateAccessor using session store.
+// It wraps a session key and store to provide stateful providers access to their
+// persisted state (e.g., xAI's responseID for context preservation).
+type providerStateAccessor struct {
+	sessionKey string
+	store      session.Store
+}
+
+// GetProviderState retrieves state for a provider key.
+// providerKey format: "providerName:model" (e.g., "xai:grok-4-1-fast-reasoning")
+func (a *providerStateAccessor) GetProviderState(providerKey string) map[string]any {
+	state, err := a.store.GetProviderState(context.Background(), a.sessionKey, providerKey)
+	if err != nil {
+		L_warn("failed to get provider state", "sessionKey", a.sessionKey, "providerKey", providerKey, "error", err)
+		return nil
+	}
+	return state
+}
+
+// SetProviderState saves state for a provider key.
+// providerKey format: "providerName:model" (e.g., "xai:grok-4-1-fast-reasoning")
+func (a *providerStateAccessor) SetProviderState(providerKey string, state map[string]any) {
+	if err := a.store.SetProviderState(context.Background(), a.sessionKey, providerKey, state); err != nil {
+		L_warn("failed to set provider state", "sessionKey", a.sessionKey, "providerKey", providerKey, "error", err)
+	}
+}
+
 // New creates a new Gateway instance
 func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, toolsReg *tools.Registry) (*Gateway, error) {
 	// Get agent provider from registry (supports any provider type)
@@ -1332,6 +1359,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		sess = g.sessions.Get(sessionKey)
 	}
 
+	// Create provider state accessor for stateful providers (e.g., xAI)
+	stateAccessor := &providerStateAccessor{
+		sessionKey: sessionKey,
+		store:      g.sessions.GetStore(),
+	}
+
 	// Helper to send events to both the caller and supervision (if active)
 	sendEvent := func(ev AgentEvent) {
 		events <- ev
@@ -1570,6 +1603,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			failoverResult, llmErr = g.registry.StreamMessageWithFailover(
 				agentCtx,
 				"agent",
+				stateAccessor,
 				messages,
 				toolDefs,
 				systemPrompt,

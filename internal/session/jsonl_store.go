@@ -469,3 +469,18 @@ func (s *JSONLStore) Close() error {
 func (s *JSONLStore) Migrate() error {
 	return nil
 }
+
+// GetProviderState is not supported by JSONL store
+func (s *JSONLStore) GetProviderState(ctx context.Context, sessionKey, providerKey string) (map[string]any, error) {
+	return nil, nil // Return nil state, no error (effectively no-op)
+}
+
+// SetProviderState is not supported by JSONL store
+func (s *JSONLStore) SetProviderState(ctx context.Context, sessionKey, providerKey string, state map[string]any) error {
+	return nil // No-op
+}
+
+// DeleteProviderStates is not supported by JSONL store
+func (s *JSONLStore) DeleteProviderStates(ctx context.Context, sessionKey string) error {
+	return nil // No-op
+}

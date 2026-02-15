@@ -126,7 +126,7 @@ func (s *Store) saveLocked() error {
 	}
 
 	s.modified = false
-	L_debug("cron: saved jobs", "count", len(s.jobs), "path", s.path)
+	L_trace("cron: saved jobs", "count", len(s.jobs), "path", s.path)
 	return nil
 }
 
