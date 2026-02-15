@@ -26,6 +26,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/robfig/cron/v3 v3.0.1
+	github.com/roelfdiedericks/xai-go v0.4.0
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/sevlyar/go-daemon v0.1.6
 	github.com/yuin/goldmark v1.7.13
@@ -81,4 +82,7 @@ require (
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260209200024-4cfbd4190f57 // indirect
+	google.golang.org/grpc v1.68.0 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 )

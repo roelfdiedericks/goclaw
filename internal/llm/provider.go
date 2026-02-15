@@ -183,7 +183,7 @@ func (e ErrUnavailable) Error() string {
 
 // ProviderConfig is the configuration for a single provider instance
 type ProviderConfig struct {
-	Type           string `json:"type"`           // "anthropic", "openai", "ollama"
+	Type           string `json:"type"`           // "anthropic", "openai", "ollama", "xai"
 	APIKey         string `json:"apiKey"`         // For cloud providers
 	BaseURL        string `json:"baseURL"`        // For OpenAI-compatible endpoints
 	URL            string `json:"url"`            // For Ollama
@@ -194,4 +194,11 @@ type ProviderConfig struct {
 	EmbeddingOnly  bool   `json:"embeddingOnly"`  // For embedding-only models (skip chat availability check)
 	Trace          *bool  `json:"trace"`          // Per-provider trace logging (nil = default enabled when -t flag used)
 	DumpOnSuccess  bool   `json:"dumpOnSuccess"`  // Keep request dumps even on success (for debugging)
+
+	// xAI-specific fields
+	ServerToolsAllowed []string `json:"serverToolsAllowed"` // xAI server-side tools to enable (empty = all known tools)
+	MaxTurns           int      `json:"maxTurns"`           // xAI max agentic turns (0 = xai-go default)
+	StoreResponses     *bool    `json:"storeResponses"`     // xAI: store responses server-side for context preservation (nil = true)
+	KeepaliveTime      int      `json:"keepaliveTime"`      // xAI gRPC keepalive time in seconds (0 = xai-go default)
+	KeepaliveTimeout   int      `json:"keepaliveTimeout"`   // xAI gRPC keepalive timeout in seconds (0 = xai-go default)
 }

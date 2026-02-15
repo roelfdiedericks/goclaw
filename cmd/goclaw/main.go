@@ -1843,6 +1843,21 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		}
 	}
 
+	// Register xAI Imagine tool
+	if cfg.Tools.XAIImagine.Enabled {
+		if mediaStore := gw.MediaStore(); mediaStore != nil {
+			xaiImagineTool, err := tools.NewXAIImagineTool(cfg.Tools.XAIImagine, mediaStore)
+			if err != nil {
+				L_warn("xai_imagine tool not registered", "error", err)
+			} else {
+				toolsReg.Register(xaiImagineTool)
+				L_info("xai_imagine: tool registered", "model", cfg.Tools.XAIImagine.Model)
+			}
+		} else {
+			L_warn("xai_imagine tool not registered: no media store")
+		}
+	}
+
 	// Initialize transcript manager (needs SQLite DB from session store)
 	var transcriptMgr *transcript.Manager
 	if cfg.Transcript.Enabled {
