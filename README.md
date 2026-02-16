@@ -99,7 +99,7 @@ GoClaw includes a managed Chromium browser as a first-class citizen, not an afte
 
 The browser auto-downloads and updates Chromium, so there's nothing to install manually.
 
-See [Browser Tool](docs/browser_tool.md) for full documentation.
+See [Browser Tool](docs/tools/browser.md) for full documentation.
 
 ---
 
@@ -186,27 +186,55 @@ After bootstrap, `goclaw.json` is the authoritative config.
 
 Full documentation available at [goclaw.org/docs](https://goclaw.org/docs/) or in the [docs/](docs/) folder:
 
+### Getting Started
+
+- [Installation](docs/installation.md) — Download, build, and install
+- [Configuration](docs/configuration.md) — Config file reference
+- [First Run](docs/first-run.md) — Starting the gateway
+
 ### Core Concepts
 
-- [Architecture Overview](docs/architecture.md) — System components and how they interact
-- [Session Management](docs/session-management.md) — Compaction, checkpoints, and context window management
-- [Configuration Reference](docs/configuration.md) — All configuration options explained
+- [Concepts Overview](docs/concepts.md) — Key concepts explained
+- [Architecture](docs/architecture.md) — System components
+- [Session Management](docs/session-management.md) — Context and compaction
 
-### Features
+### LLM Providers
 
-- [Transcript Search](docs/transcript-search.md) — Searchable conversation history with embeddings
-- [Memory Search](docs/memory-search.md) — Semantic search over memory files
-- [Browser Tool](docs/browser_tool.md) — Managed browser for web automation
-- [Sandboxing](docs/sandbox.md) — File, exec, and browser isolation
-- [Telegram Integration](docs/telegram.md) — Bot setup and commands
-- [Cron & Heartbeat](docs/cron.md) — Scheduled tasks and periodic checks
-- [Skills](docs/skills.md) — Extensible agent capabilities
-- [Tools](docs/tools.md) — Available agent tools
+- [Provider Overview](docs/llm-providers.md) — Multi-provider setup
+- [Anthropic](docs/providers/anthropic.md) — Claude models
+- [OpenAI Compatible](docs/providers/openai.md) — OpenAI, LM Studio, OpenRouter
+- [Ollama](docs/providers/ollama.md) — Local models
+- [xAI](docs/providers/xai.md) — Grok models
 
-### Operations
+### Channels
 
-- [Deployment](docs/deployment.md) — Running GoClaw in production
-- [Troubleshooting](docs/troubleshooting.md) — Common issues and solutions
+- [Channels Overview](docs/channels.md) — Communication interfaces
+- [Telegram](docs/telegram.md) — Bot setup
+- [Web UI](docs/web-ui.md) — HTTP interface
+- [Commands](docs/commands.md) — Slash commands
+
+### Tools
+
+- [Tools Overview](docs/tools.md) — Available tools
+- [Browser](docs/tools/browser.md) — Web automation
+- [Home Assistant](docs/tools/hass.md) — Smart home
+- [Cron](docs/tools/cron.md) — Scheduling
+
+### Agent Memory
+
+- [Memory Overview](docs/agent-memory.md) — Memory architecture
+- [Memory Search](docs/memory-search.md) — Workspace files
+- [Transcript Search](docs/transcript-search.md) — Conversation history
+- [Embeddings](docs/embeddings.md) — Vector search
+
+### Advanced
+
+- [Advanced Topics](docs/advanced.md) — Deep dives
+- [Roles & Access](docs/roles.md) — RBAC and auth
+- [Skills](docs/skills.md) — Extensibility
+- [Sandbox](docs/sandbox.md) — Security
+- [Deployment](docs/deployment.md) — Production setup
+- [Troubleshooting](docs/troubleshooting.md) — Common issues
 
 ---
 
