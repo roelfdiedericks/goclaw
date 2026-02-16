@@ -5,14 +5,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 
-	"github.com/roelfdiedericks/xai-go"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
+	"github.com/roelfdiedericks/xai-go"
 )
+
+// safeInt32 converts int to int32 with bounds checking to prevent overflow.
+func safeInt32(n int) int32 {
+	if n > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if n < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(n)
+}
 
 // XAIImagineTool generates images using xAI's image generation API
 type XAIImagineTool struct {
@@ -198,7 +210,7 @@ func (t *XAIImagineTool) Execute(ctx context.Context, input json.RawMessage) (st
 	if count > 4 {
 		count = 4
 	}
-	req.WithCount(int32(count))
+	req.WithCount(safeInt32(count))
 
 	// Determine saveToMedia: input param > config
 	saveToMedia := t.config.SaveToMedia

@@ -23,8 +23,8 @@ type CompactionManager struct {
 	inProgress atomic.Bool
 
 	// Background goroutine control
-	stopCh     chan struct{}
-	wg         sync.WaitGroup
+	stopCh      chan struct{}
+	wg          sync.WaitGroup
 	shutdownCtx context.Context // Cancelled on shutdown; used for async summaries
 }
 

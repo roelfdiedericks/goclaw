@@ -155,7 +155,7 @@ changelog:
 	fi
 
 # Pre-release validation
-release-check:
+release-check: lint audit
 	@echo "=== Release Check ==="
 	@# Must be on master branch
 	@branch=$$(git branch --show-current); \
