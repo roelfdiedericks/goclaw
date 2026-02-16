@@ -1,0 +1,148 @@
+# GoClaw golangci-lint configuration
+# Security-focused with practical defaults
+
+run:
+  timeout: 5m
+  tests: false
+
+linters:
+  disable-all: true
+  enable:
+    # Security
+    - gosec          # Security issues (SQL injection, hardcoded creds, weak crypto)
+    - bodyclose      # Unclosed HTTP response bodies
+    - noctx          # HTTP requests without context
+    - sqlclosecheck  # Unclosed SQL rows/connections
+    - rowserrcheck   # Unchecked rows.Err()
+    
+    # Bugs & correctness
+    - govet          # Suspicious constructs
+    - staticcheck    # Bugs, deprecated APIs, simplifications
+    - errcheck       # Unchecked error returns
+    - ineffassign    # Useless assignments
+    - typecheck      # Type checking
+    
+    # Code quality
+    - unused         # Unused code
+    # - gocritic     # Disabled: too opinionated, real issues fixed manually
+    - gofmt          # Formatting
+    - goimports      # Import sorting
+
+linters-settings:
+  gosec:
+    excludes:
+      - G104  # Unhandled errors (errcheck covers this better)
+      - G304  # File path from variable (we validate paths)
+    config:
+      global:
+        audit: false  # Don't be overly paranoid
+  
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment  # Not worth the noise
+      - shadow          # Too noisy for idiomatic Go error handling
+  
+  errcheck:
+    check-type-assertions: true
+    check-blank: false  # Allow _ = err for intentional ignores
+    exclude-functions:
+      # Close patterns - errors not actionable in defer/cleanup
+      - (*database/sql.Rows).Close
+      - (*database/sql.Tx).Rollback
+      - (*database/sql.Stmt).Close
+      - (*database/sql.DB).Close
+      - (*os.File).Close
+      - io.Closer.Close
+      - (*bufio.Writer).Flush
+      
+      # strings.Builder never returns errors
+      - (*strings.Builder).WriteString
+      - (*strings.Builder).Write
+      
+      # Logging and crash output - best effort
+      - fmt.Fprintf
+      - fmt.Fprintln
+      - fmt.Printf
+      - fmt.Println
+      
+      
+      # Best-effort cleanup
+      - os.Remove
+      - os.RemoveAll
+  
+  staticcheck:
+    checks: ["all", "-ST1000", "-ST1003"]  # Skip some style checks
+  
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+    disabled-checks:
+      - hugeParam       # Too noisy
+      - rangeValCopy    # Too noisy
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  
+  exclude-rules:
+    # L_* functions are structured loggers (key-value pairs), not printf-style
+    - linters:
+        - govet
+      text: "printf:.*\\.L_"
+    
+    # trace() methods are also structured loggers, not printf-style
+    - linters:
+        - govet
+      text: "printf:.*\\.trace"
+    
+    # WriteString on buffer writers - goldmark util.BufWriter etc
+    - linters:
+        - errcheck
+      text: "w\\.WriteString"
+    
+    # resp.Body.Close - standard HTTP cleanup pattern
+    - linters:
+        - errcheck
+      text: "resp\\.Body\\.Close"
+    
+    # req.Body.Close - request body cleanup
+    - linters:
+        - errcheck
+      text: "req\\.Body\\.Close"
+    
+    # Watcher cleanup
+    - linters:
+        - errcheck
+      text: "watcher\\.Close"
+    
+    # Stream cleanup (OpenAI)
+    - linters:
+        - errcheck
+      text: "stream\\.Close"
+    
+    # Browser/page cleanup (rod)
+    - linters:
+        - errcheck
+      text: "Page\\.Close"
+    - linters:
+        - errcheck
+      text: "Browser\\.Close"
+    
+    # WebSocket conn cleanup
+    - linters:
+        - errcheck
+      text: "conn\\.Close"
+    
+    # Allow unchecked errors in test files
+    - path: _test\.go
+      linters:
+        - errcheck
+    
+    # Allow hardcoded credentials in test/example files
+    - path: _test\.go
+      linters:
+        - gosec
+      text: "G101"
