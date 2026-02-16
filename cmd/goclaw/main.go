@@ -38,6 +38,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/tools"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
 	"github.com/roelfdiedericks/goclaw/internal/tui"
+	"github.com/roelfdiedericks/goclaw/internal/update"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
@@ -80,6 +81,7 @@ type CLI struct {
 	Stop       StopCmd       `cmd:"" help:"Stop the background daemon"`
 	Status     StatusCmd     `cmd:"" help:"Show gateway status"`
 	Version    VersionCmd    `cmd:"" help:"Show version"`
+	Update     UpdateCmd     `cmd:"" help:"Check for and install updates"`
 	Cron       CronCmd       `cmd:"" help:"Manage cron jobs"`
 	User       UserCmd       `cmd:"" help:"Manage users"`
 	Browser    BrowserCmd    `cmd:"" help:"Manage browser (download, profiles, setup)"`
@@ -289,6 +291,18 @@ type VersionCmd struct{}
 func (v *VersionCmd) Run(ctx *Context) error {
 	fmt.Printf("goclaw %s\n", version)
 	return nil
+}
+
+// UpdateCmd checks for and installs updates
+type UpdateCmd struct {
+	Check     bool   `help:"Check for updates without installing"`
+	Channel   string `help:"Update channel (stable, beta)" default:"stable"`
+	NoRestart bool   `help:"Update but don't restart" name:"no-restart"`
+	Force     bool   `help:"Update even if already on latest version"`
+}
+
+func (u *UpdateCmd) Run(ctx *Context) error {
+	return runUpdate(u.Check, u.Channel, u.NoRestart, u.Force)
 }
 
 // CronCmd manages cron jobs
@@ -1833,6 +1847,10 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		L_info("user_auth: tool registered", "allowedRoles", cfg.Auth.AllowedRoles)
 	}
 
+	// Register goclaw_update tool (allows agent to update GoClaw)
+	toolsReg.Register(tools.NewUpdateTool(version))
+	L_debug("goclaw_update tool registered")
+
 	// Register Home Assistant tool
 	if cfg.HomeAssistant.Enabled && cfg.HomeAssistant.Token != "" {
 		if mediaStore := gw.MediaStore(); mediaStore != nil {
@@ -2217,4 +2235,90 @@ func readPassword() ([]byte, error) {
 		return nil, fmt.Errorf("failed to read password: %w", err)
 	}
 	return []byte(password), nil
+}
+
+// runUpdate handles the update command
+func runUpdate(checkOnly bool, channel string, noRestart, force bool) error {
+	// Check if system-managed
+	if update.IsSystemManaged() {
+		exePath, _ := update.GetExecutablePath()
+		fmt.Println("GoClaw is installed at a system-managed location:")
+		fmt.Printf("  %s\n\n", exePath)
+		fmt.Println("Please update using your package manager:")
+		fmt.Println()
+		fmt.Println("  # For Debian/Ubuntu:")
+		fmt.Println("  sudo apt update && sudo apt upgrade goclaw")
+		fmt.Println()
+		fmt.Println("  # Or download the latest .deb from:")
+		fmt.Println("  https://github.com/roelfdiedericks/goclaw/releases/latest")
+		return nil
+	}
+
+	updater := update.NewUpdater(version)
+
+	fmt.Printf("Checking for updates (channel: %s)...\n", channel)
+
+	info, err := updater.CheckForUpdate(channel)
+	if err != nil {
+		return fmt.Errorf("failed to check for updates: %w", err)
+	}
+
+	fmt.Printf("Current version: %s\n", info.CurrentVersion)
+	fmt.Printf("Latest version:  %s (%s)\n", info.NewVersion, info.Channel)
+
+	if !info.IsNewer && !force {
+		fmt.Println("\nYou are already running the latest version.")
+		return nil
+	}
+
+	if !info.IsNewer && force {
+		fmt.Println("\nForcing reinstall of current version.")
+	} else {
+		fmt.Println("\nA new version is available!")
+	}
+
+	// Show changelog preview
+	if info.Changelog != "" {
+		fmt.Println("\nChangelog:")
+		fmt.Println("----------")
+		// Truncate changelog if too long
+		changelog := info.Changelog
+		if len(changelog) > 1000 {
+			changelog = changelog[:1000] + "\n..."
+		}
+		fmt.Println(changelog)
+		fmt.Println()
+	}
+
+	if checkOnly {
+		fmt.Println("Run 'goclaw update' to install the update.")
+		return nil
+	}
+
+	// Download with progress
+	fmt.Println("Downloading...")
+	binaryPath, err := updater.Download(info, func(downloaded, total int64) {
+		if total > 0 {
+			pct := float64(downloaded) / float64(total) * 100
+			fmt.Printf("\r  %.1f%% (%d / %d bytes)", pct, downloaded, total)
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+	fmt.Println("\n  Download complete!")
+
+	// Apply update
+	fmt.Println("Installing...")
+	if err := updater.Apply(binaryPath, noRestart); err != nil {
+		return fmt.Errorf("failed to apply update: %w", err)
+	}
+
+	if noRestart {
+		fmt.Println("\nUpdate installed successfully!")
+		fmt.Println("Restart GoClaw to use the new version.")
+	}
+	// If not noRestart, the process will be replaced via exec and this line won't be reached
+
+	return nil
 }
