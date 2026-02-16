@@ -297,11 +297,30 @@ Secrets and settings are read only from `goclaw.json` (and `users.json`). Enviro
 
 ## Security: config file and credentials
 
-**Config is sandboxed from the agent.** The `read`, `write`, and `edit` tools cannot access `goclaw.json`, `users.json`, or `openclaw.json` — these filenames are on a denied list and are blocked even if they appear inside the workspace. So the agent cannot read or modify your API keys or user credentials through file tools. See [Sandbox](sandbox.md#denied-files).
+### Sandbox and location
 
-**Config is stored outside the workspace directory** in the normal layout. The default config path is `~/.goclaw/goclaw.json`; the default workspace (where the agent reads/writes) is `~/.goclaw/workspace` or a path you set (e.g. a project directory). So the config file is not inside the agent’s workspace. If you use a local `goclaw.json` in the current directory, it can be alongside the workspace, but it remains inaccessible to the agent because of the denied list.
+**Config is sandboxed from the agent.** The `read`, `write`, and `edit` tools cannot access `goclaw.json`, `users.json`, or `openclaw.json`. These filenames are on a [denied list](sandbox.md#denied-files) in the file-tools sandbox and are blocked even if they appear inside the workspace. The agent cannot read or modify API keys or user credentials through file tools.
 
-**Environment variables vs file: a pragmatic view.** Storing secrets in a file has downsides (backup leaks, world-readable if misconfigured), but so do env vars: they live in process memory and in shell history, and can be inherited by child processes. Many stacks (OpenClaw included) store API keys in files under the app dir (e.g. OpenClaw’s `auth-profiles.json` under `~/.openclaw/`). GoClaw’s choice: **no env overrides at runtime**, so behaviour is predictable and the only place to look for secrets is the config file. The setup wizard can copy env vars into `goclaw.json` once, so OpenClaw users who relied on env can migrate without changing how they set those vars before running the wizard. For stricter setups, keep `goclaw.json` in `~/.goclaw/` with mode `0600` and avoid committing it.
+**Config is stored outside the workspace directory** in the normal layout. The default config path is `~/.goclaw/goclaw.json`; the default workspace (where the agent reads/writes) is `~/.goclaw/workspace` or a path you set (e.g. a project directory). So the config file is not inside the agent’s workspace. If you use a local `goclaw.json` in the current directory, it can be alongside the workspace but remains inaccessible to the agent because of the denied list. For stricter setups, keep `goclaw.json` in `~/.goclaw/` with mode `0600` and avoid committing it.
+
+### Why not environment variables at runtime
+
+GoClaw does **not** read API keys or tokens from environment variables at runtime. Reasons:
+
+- **Predictable behaviour** — No ambiguity about precedence (file vs env). The only source of secrets is the config file.
+- **Security** — Env vars are process-visible (any child process or user with proc access can read them), often appear in logs and crash dumps, and can be inherited by shells and subprocesses. Storing secrets in env is explicitly called out as risky (e.g. CWE-526: cleartext storage in environment variables). Env vars built from or passed through untrusted input can also be a vector for injection (e.g. Shellshock-style issues, or command injection when values are used in shell commands).
+- **Operational clarity** — One place to look for and rotate secrets: `goclaw.json` (and `users.json`). No need to track which env vars are set in which environment.
+
+Storing secrets in a file has downsides too (backups, permissions), but the file is at a fixed path, can be permission-restricted (`chmod 0600`), and is explicitly excluded from agent tool access. The setup wizard can copy env vars into `goclaw.json` once during migration, so OpenClaw users who used env vars can run the wizard and then rely only on the config file.
+
+### How OpenClaw handles credentials
+
+OpenClaw stores credentials in files under `~/.openclaw/`:
+
+- **`openclaw.json`** — Main config (workspace, channels, etc.). May contain some tokens.
+- **`~/.openclaw/agents/main/agent/auth-profiles.json`** — API keys per profile (e.g. `anthropic:default`, `openai:default`). Keys are under `profiles.<name>.key`.
+
+So OpenClaw is file-based for persistence. If OpenClaw also reads from environment variables at runtime, that would be a separate layer (and can be checked in OpenClaw’s source, e.g. in `ref/openclaw` if available). GoClaw’s import path uses only these files; the setup wizard optionally offers to copy from env into `goclaw.json` during setup only.
 
 ---
 

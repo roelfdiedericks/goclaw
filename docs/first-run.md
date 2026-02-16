@@ -4,7 +4,7 @@ This guide walks you through running GoClaw for the first time after installatio
 
 ## Prerequisites
 
-- GoClaw binary installed (see [Installation](README.md))
+- GoClaw binary installed (see [Installation](installation.md))
 - Configuration file created (see [Configuration](configuration.md))
 - At least one LLM provider configured
 
