@@ -46,15 +46,21 @@ sqlite3 ~/.goclaw/sessions.db ".tables"
 **Symptoms:** Error about Anthropic client
 
 **Solutions:**
-1. Check API key is set:
-   ```bash
-   echo $ANTHROPIC_API_KEY
-   ```
-2. Or set in config:
+1. Check API key is set in `goclaw.json`:
    ```json
-   {"llm": {"apiKey": "sk-ant-..."}}
+   {
+     "llm": {
+       "providers": {
+         "anthropic": {
+           "type": "anthropic",
+           "apiKey": "sk-ant-..."
+         }
+       }
+     }
+   }
    ```
-3. Verify API key is valid (not expired/revoked)
+2. Verify API key is valid (not expired/revoked)
+3. Check for typos in the API key
 
 ### "failed to create session manager"
 

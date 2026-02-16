@@ -68,6 +68,6 @@ INFO  http: listening port=3333
 
 If the gateway fails to start:
 
-1. Check your configuration file syntax: `goclaw validate`
-2. Verify API keys are set correctly
+1. Run with debug logging to see errors: `goclaw gateway -d`
+2. Verify API keys are set correctly in `goclaw.json`
 3. Check the [Troubleshooting](troubleshooting.md) guide
