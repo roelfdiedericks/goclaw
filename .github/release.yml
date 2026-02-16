@@ -1,0 +1,19 @@
+# GitHub auto-generated release notes configuration
+# This categorizes merged PRs by their labels
+
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+      - dependencies
+  categories:
+    - title: 🚀 Features
+      labels: [enhancement, feature]
+    - title: 🐛 Bug Fixes
+      labels: [bug, fix]
+    - title: 📚 Documentation
+      labels: [documentation, docs]
+    - title: 🔧 Maintenance
+      labels: [maintenance, chore, refactor]
+    - title: Other Changes
+      labels: ["*"]
