@@ -758,6 +758,71 @@ func Load() (*LoadResult, error) {
 	}, nil
 }
 
+// DefaultConfigTemplate is a minimal config struct for template generation.
+// Only includes fields that users typically need to customize.
+// The full defaults are applied by Load() when merging.
+type DefaultConfigTemplate struct {
+	LLM     DefaultLLMTemplate     `json:"llm"`
+	Gateway DefaultGatewayTemplate `json:"gateway,omitempty"`
+	HTTP    DefaultHTTPTemplate    `json:"http,omitempty"`
+	Roles   RolesConfig            `json:"roles,omitempty"`
+}
+
+type DefaultLLMTemplate struct {
+	Providers map[string]LLMProviderConfig `json:"providers"`
+	Agent     LLMPurposeConfig             `json:"agent"`
+}
+
+type DefaultGatewayTemplate struct {
+	WorkingDir string `json:"workingDir,omitempty"`
+}
+
+type DefaultHTTPTemplate struct {
+	Listen string `json:"listen,omitempty"`
+}
+
+// DefaultConfig returns a minimal config template with sensible defaults.
+// Only includes fields that users typically need to customize.
+// The apiKey field has a placeholder that must be replaced.
+func DefaultConfig() *DefaultConfigTemplate {
+	return &DefaultConfigTemplate{
+		LLM: DefaultLLMTemplate{
+			Providers: map[string]LLMProviderConfig{
+				"anthropic": {
+					Type:          "anthropic",
+					APIKey:        "YOUR_ANTHROPIC_API_KEY",
+					PromptCaching: true,
+				},
+			},
+			Agent: LLMPurposeConfig{
+				Models: []string{"anthropic/claude-sonnet-4-20250514"},
+			},
+		},
+		Gateway: DefaultGatewayTemplate{
+			WorkingDir: "~/.goclaw/workspace",
+		},
+		HTTP: DefaultHTTPTemplate{
+			Listen: ":1337",
+		},
+		Roles: RolesConfig{
+			"owner": RoleConfig{
+				Tools:       "*",
+				Skills:      "*",
+				Memory:      "full",
+				Transcripts: "all",
+				Commands:    true,
+			},
+			"user": RoleConfig{
+				Tools:       []interface{}{"read_file", "write_file", "web_search", "web_fetch"},
+				Skills:      "*",
+				Memory:      "none",
+				Transcripts: "own",
+				Commands:    true,
+			},
+		},
+	}
+}
+
 // GetStoreType returns the effective store type ("jsonl" or "sqlite")
 func (s *SessionConfig) GetStoreType() string {
 	if s.Store != "" {
