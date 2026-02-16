@@ -24,9 +24,7 @@ nfpms:
     description: AI agent gateway
     license: GPL-3.0
     formats: [deb]
-    contents:
-      - src: ./goclaw
-        dst: /usr/bin/goclaw
+    bindir: /usr/bin
 
 dockers:
   - image_templates:
