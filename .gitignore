@@ -22,6 +22,11 @@ go.work.sum
 goclaw.json
 users.json
 
+# Config backups
+goclaw.json.*
+*.bak
+*.bak.*
+
 apierror.txt
 
 # Reference code (not part of goclaw)
