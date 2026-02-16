@@ -127,6 +127,7 @@ func (l ThinkingLevel) KimiEffort() string {
 
 // XAIEffort maps ThinkingLevel to xAI's ReasoningEffort.
 // Returns nil for "off" (no reasoning), otherwise returns Low/Medium/High.
+// Note: Only grok-3-mini uses reasoning; other xAI models ignore it (no harm in sending).
 func (l ThinkingLevel) XAIEffort() *xai.ReasoningEffort {
 	switch l {
 	case ThinkingOff:

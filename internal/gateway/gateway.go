@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1571,6 +1572,28 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		thinkingLevel := g.resolveThinkingLevel(req, g.llm.Name())
 		enableThinking := req.EnableThinking || thinkingLevel.IsEnabled()
 
+		// Show user message preview in green for easy spotting
+		preview := req.UserMsg
+		if preview == "" {
+			for i := len(messages) - 1; i >= 0; i-- {
+				if messages[i].Role == "user" {
+					preview = messages[i].Content
+					break
+				}
+			}
+		}
+		const previewLen = 100
+		if len(preview) > previewLen {
+			preview = preview[:previewLen] + "..."
+		}
+		if len(preview) < previewLen {
+			preview = preview + strings.Repeat(" ", previewLen-len(preview))
+		}
+		if preview != "" {
+			// Bold black on bright green background - impossible to miss
+			L_info("user", "msg", "\033[1;30;102m "+preview+" \033[0m")
+		}
+
 		L_debug("invoking LLM",
 			"provider", g.llm.Name(),
 			"model", g.llm.Model(),
@@ -1583,16 +1606,26 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			"thinkingLevel", thinkingLevel,
 		)
 
-		// Build stream options with thinking level
-		var streamOpts *llm.StreamOptions
+		// Build stream options (OnServerToolCall always; thinking opts when enabled)
+		streamOpts := &llm.StreamOptions{
+			OnServerToolCall: func(name, args, status, errMsg string) {
+				if status == "pending" {
+					sendEvent(EventToolStart{RunID: runID, ToolName: name, ToolID: "", Input: json.RawMessage(args)})
+				} else {
+					result := "(server executed)"
+					if status == "failed" {
+						result = ""
+					}
+					sendEvent(EventToolEnd{RunID: runID, ToolName: name, ToolID: "", Result: result, Error: errMsg})
+				}
+			},
+		}
 		if enableThinking {
-			streamOpts = &llm.StreamOptions{
-				EnableThinking: true,
-				ThinkingLevel:  thinkingLevel.String(),
-				ThinkingBudget: thinkingLevel.AnthropicBudgetTokens(), // Computed from level
-				OnThinkingDelta: func(delta string) {
-					sendEvent(EventThinkingDelta{RunID: runID, Delta: delta})
-				},
+			streamOpts.EnableThinking = true
+			streamOpts.ThinkingLevel = thinkingLevel.String()
+			streamOpts.ThinkingBudget = thinkingLevel.AnthropicBudgetTokens()
+			streamOpts.OnThinkingDelta = func(delta string) {
+				sendEvent(EventThinkingDelta{RunID: runID, Delta: delta})
 			}
 		}
 
@@ -1800,6 +1833,19 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		L_warn("agent run completed with empty response", "runID", runID, "messages", sess.MessageCount())
 	}
 	L_info("agent run completed", "runID", runID, "responseLen", len(finalText))
+
+	// Agent response preview (same style as user message - green, 100 chars)
+	if finalText != "" {
+		const previewLen = 100
+		preview := finalText
+		if len(preview) > previewLen {
+			preview = preview[:previewLen] + "..."
+		}
+		if len(preview) < previewLen {
+			preview = preview + strings.Repeat(" ", previewLen-len(preview))
+		}
+		L_info("agent", "msg", "\033[1;30;104m "+preview+" \033[0m")
+	}
 
 	// Enrich media references: {{media:path}} -> {{media:mime:'path'}}
 	finalText = g.enrichMediaRefs(finalText)

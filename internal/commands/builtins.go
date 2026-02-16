@@ -55,18 +55,21 @@ func registerBuiltins(m *Manager) {
 	m.Register(&Command{
 		Name:        "/hass",
 		Description: "Home Assistant status and debug",
+		Usage:       "[debug|info|subs]",
 		Handler:     handleHass,
 	})
 
 	m.Register(&Command{
 		Name:        "/llm",
 		Description: "LLM provider status and cooldown management",
+		Usage:       "[status|reset]",
 		Handler:     handleLLM,
 	})
 
 	m.Register(&Command{
 		Name:        "/embeddings",
 		Description: "Embeddings status and rebuild",
+		Usage:       "[status|rebuild]",
 		Handler:     handleEmbeddings,
 	})
 }
@@ -399,6 +402,11 @@ func handleHelp(ctx context.Context, args *CommandArgs) *CommandResult {
 	for _, cmd := range cmds {
 		text.WriteString(fmt.Sprintf("  %s - %s\n", cmd.Name, cmd.Description))
 		md.WriteString(fmt.Sprintf("%s - %s\n", cmd.Name, cmd.Description))
+		if cmd.Usage != "" {
+			usageLine := fmt.Sprintf("%s %s", cmd.Name, cmd.Usage)
+			text.WriteString(fmt.Sprintf("    %s\n", usageLine))
+			md.WriteString(fmt.Sprintf("  `%s`\n", usageLine))
+		}
 	}
 
 	return &CommandResult{
@@ -467,9 +475,10 @@ func handleHass(ctx context.Context, args *CommandArgs) *CommandResult {
 	case "subs":
 		return hassSubs(args)
 	default:
+		usage := fmt.Sprintf("/hass %s", args.Usage)
 		return &CommandResult{
-			Text:     fmt.Sprintf("Unknown subcommand: %s\nUsage: /hass [debug|info|subs]", parts[0]),
-			Markdown: fmt.Sprintf("Unknown subcommand: `%s`\nUsage: `/hass [debug|info|subs]`", parts[0]),
+			Text:     fmt.Sprintf("Unknown subcommand: %s\nUsage: %s", parts[0], usage),
+			Markdown: fmt.Sprintf("Unknown subcommand: `%s`\nUsage: `%s`", parts[0], usage),
 		}
 	}
 }
@@ -632,9 +641,10 @@ func handleLLM(ctx context.Context, args *CommandArgs) *CommandResult {
 	case "reset":
 		return llmReset(args)
 	default:
+		usage := fmt.Sprintf("/llm %s", args.Usage)
 		return &CommandResult{
-			Text:     fmt.Sprintf("Unknown subcommand: %s\nUsage: /llm [status|reset]", parts[0]),
-			Markdown: fmt.Sprintf("Unknown subcommand: `%s`\nUsage: `/llm [status|reset]`", parts[0]),
+			Text:     fmt.Sprintf("Unknown subcommand: %s\nUsage: %s", parts[0], usage),
+			Markdown: fmt.Sprintf("Unknown subcommand: `%s`\nUsage: `%s`", parts[0], usage),
 		}
 	}
 }
@@ -715,9 +725,10 @@ func handleEmbeddings(ctx context.Context, args *CommandArgs) *CommandResult {
 	case "rebuild":
 		return embeddingsRebuild(args)
 	default:
+		usage := fmt.Sprintf("/embeddings %s", args.Usage)
 		return &CommandResult{
-			Text:     fmt.Sprintf("Unknown subcommand: %s\nUsage: /embeddings [status|rebuild]", parts[0]),
-			Markdown: fmt.Sprintf("Unknown subcommand: `%s`\nUsage: `/embeddings [status|rebuild]`", parts[0]),
+			Text:     fmt.Sprintf("Unknown subcommand: %s\nUsage: %s", parts[0], usage),
+			Markdown: fmt.Sprintf("Unknown subcommand: `%s`\nUsage: `%s`", parts[0], usage),
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -99,6 +100,13 @@ func NewRegistry(cfg RegistryConfig) (*Registry, error) {
 		}
 	}
 
+	// Validate models for all purposes (providers with restrictions may fail or remove models)
+	for _, purpose := range []string{"agent", "summarization", "embeddings"} {
+		if err := r.validatePurposeModels(purpose); err != nil {
+			return nil, err
+		}
+	}
+
 	L_info("llm: registry created",
 		"providers", len(r.providers),
 		"agentModels", len(cfg.Agent.Models),
@@ -136,6 +144,68 @@ func (r *Registry) initProvider(name string, cfg ProviderConfig) error {
 	}
 
 	L_debug("llm: provider initialized", "name", name, "type", cfg.Type)
+	return nil
+}
+
+// validatePurposeModels checks each model ref against provider restrictions.
+// Fatal results: return error, process exits. Non-fatal: L_error and remove model from chain.
+func (r *Registry) validatePurposeModels(purpose string) error {
+	cfg := r.purposes[purpose]
+	models := cfg.Models
+	var kept []string
+
+	for _, ref := range models {
+		parts := strings.SplitN(ref, "/", 2)
+		if len(parts) != 2 {
+			kept = append(kept, ref)
+			continue
+		}
+		providerName := parts[0]
+		modelName := parts[1]
+
+		r.mu.RLock()
+		instance, ok := r.providers[providerName]
+		r.mu.RUnlock()
+
+		if !ok {
+			kept = append(kept, ref)
+			continue
+		}
+
+		v, ok := instance.provider.(ModelValidator)
+		if !ok {
+			kept = append(kept, ref)
+			continue
+		}
+
+		result := v.ValidateModel(modelName)
+		if result == nil {
+			kept = append(kept, ref)
+			continue
+		}
+
+		if result.Fatal {
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, "========================================")
+			fmt.Fprintln(os.Stderr, "  ❌ LLM MODEL VALIDATION FAILED")
+			fmt.Fprintln(os.Stderr, "========================================")
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, result.Message)
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, "========================================")
+			os.Exit(1)
+		}
+
+		L_error("llm: model validation failed, removing from chain",
+			"purpose", purpose,
+			"model", ref,
+			"message", result.Message)
+	}
+
+	r.mu.Lock()
+	r.purposes[purpose] = PurposeConfig{Models: kept, MaxTokens: cfg.MaxTokens, MaxInputTokens: cfg.MaxInputTokens}
+	r.mu.Unlock()
+
 	return nil
 }
 

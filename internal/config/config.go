@@ -382,7 +382,7 @@ type LLMProviderConfig struct {
 	// xAI-specific fields
 	ServerToolsAllowed []string `json:"serverToolsAllowed,omitempty"` // xAI server-side tools to enable (empty = all known tools)
 	MaxTurns           int      `json:"maxTurns,omitempty"`           // xAI max agentic turns (0 = xai-go default)
-	StoreResponses     *bool    `json:"storeResponses,omitempty"`     // xAI: store responses server-side for context preservation (nil = true)
+	IncrementalContext *bool    `json:"incrementalContext,omitempty"` // xAI: chain context, send only new messages (nil = true)
 	KeepaliveTime      int      `json:"keepaliveTime,omitempty"`      // xAI gRPC keepalive time in seconds (0 = xai-go default)
 	KeepaliveTimeout   int      `json:"keepaliveTimeout,omitempty"`   // xAI gRPC keepalive timeout in seconds (0 = xai-go default)
 }
