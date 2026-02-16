@@ -162,10 +162,10 @@ release-check:
 	if [ "$$branch" != "master" ]; then \
 		echo "ERROR: Must be on master branch (currently on $$branch)"; exit 1; \
 	fi
-	@# No uncommitted changes
-	@if [ -n "$$(git status --porcelain)" ]; then \
-		echo "ERROR: Uncommitted changes. Commit first."; \
-		git status --short; exit 1; \
+	@# No uncommitted changes to tracked files (ignores untracked)
+	@if [ -n "$$(git status --porcelain -uno)" ]; then \
+		echo "ERROR: Uncommitted changes to tracked files. Commit first."; \
+		git status --short -uno; exit 1; \
 	fi
 	@# Up to date with remote
 	@git fetch origin master --quiet 2>/dev/null || true; \
