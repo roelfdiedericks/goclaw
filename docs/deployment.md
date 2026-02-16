@@ -23,11 +23,21 @@ make run
 
 ## Production Setup
 
-### 1. Build Binary
+### 1. Install Binary
+
+Install via the one-line installer (recommended):
+
+```bash
+curl -fsSL https://goclaw.org/install.sh | sh
+```
+
+Or build from source:
 
 ```bash
 make build
-# Creates: bin/goclaw
+# Creates: ./goclaw
+mkdir -p ~/.goclaw/bin
+mv goclaw ~/.goclaw/bin/
 ```
 
 ### 2. Create Configuration
@@ -62,7 +72,9 @@ EOF
 ### 4. Run
 
 ```bash
-./bin/goclaw gateway
+goclaw gateway
+# Or with full path:
+~/.goclaw/bin/goclaw gateway
 ```
 
 ---
@@ -81,8 +93,8 @@ After=network.target
 Type=simple
 User=goclaw
 Group=goclaw
-WorkingDirectory=/opt/goclaw
-ExecStart=/opt/goclaw/bin/goclaw gateway
+WorkingDirectory=/home/goclaw
+ExecStart=/home/goclaw/.goclaw/bin/goclaw gateway
 Restart=always
 RestartSec=5
 
@@ -94,7 +106,7 @@ StandardError=journal
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/opt/goclaw /home/goclaw/.goclaw
+ReadWritePaths=/home/goclaw/.goclaw /home/goclaw/.openclaw
 
 [Install]
 WantedBy=multi-user.target
@@ -121,9 +133,22 @@ sudo journalctl -u goclaw -f
 
 ## Docker
 
-GoClaw provides Docker files in the `docker/` directory of the repository.
+GoClaw images are published to GitHub Container Registry (GHCR).
 
 ### Quick Start
+
+```bash
+# Pull latest stable
+docker pull ghcr.io/roelfdiedericks/goclaw:latest
+
+# Or pull specific version
+docker pull ghcr.io/roelfdiedericks/goclaw:0.1.0
+
+# Or pull latest beta
+docker pull ghcr.io/roelfdiedericks/goclaw:beta
+```
+
+Using the provided Docker Compose:
 
 ```bash
 cd docker
@@ -229,12 +254,12 @@ Enable debug or trace logging with flags:
 
 ```bash
 # Debug logging
-./bin/goclaw gateway -d
+goclaw gateway -d
 
 # Trace logging (very verbose)
-./bin/goclaw gateway -t
+goclaw gateway -t
 
-# Or via make
+# Or via make (during development)
 make debug
 ```
 

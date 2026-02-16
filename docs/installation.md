@@ -12,27 +12,57 @@ This guide covers installing GoClaw and getting it running on your system.
 
 ## Quick Install
 
-### Download Binary (Recommended)
-
-Download the latest release for your platform:
+### One-Line Installer (Recommended)
 
 ```bash
-# Linux (amd64)
-curl -LO https://github.com/roelfdiedericks/goclaw/releases/latest/download/goclaw-linux-amd64
-chmod +x goclaw-linux-amd64
-sudo mv goclaw-linux-amd64 /usr/local/bin/goclaw
+curl -fsSL https://goclaw.org/install.sh | sh
+```
 
-# Linux (arm64)
-curl -LO https://github.com/roelfdiedericks/goclaw/releases/latest/download/goclaw-linux-arm64
-chmod +x goclaw-linux-arm64
-sudo mv goclaw-linux-arm64 /usr/local/bin/goclaw
+This will:
+- Download the latest stable release for your platform
+- Verify the checksum
+- Install to `~/.goclaw/bin/goclaw`
+- Add to your PATH (via symlink or shell config)
+
+**Options:**
+
+```bash
+# Install latest beta
+curl -fsSL https://goclaw.org/install.sh | sh -s -- --channel beta
+
+# Install specific version
+curl -fsSL https://goclaw.org/install.sh | sh -s -- --version 0.2.0
 ```
 
 Verify the installation:
 
 ```bash
-goclaw version
+goclaw --version
 ```
+
+### Install from Debian Package
+
+**One-liner (auto-detects latest version):**
+
+```bash
+VERSION=$(curl -s https://api.github.com/repos/roelfdiedericks/goclaw/releases/latest | grep tag_name | cut -d'"' -f4 | tr -d 'v') && \
+curl -LO "https://github.com/roelfdiedericks/goclaw/releases/download/v${VERSION}/goclaw_${VERSION}_linux_amd64.deb" && \
+sudo dpkg -i goclaw_${VERSION}_linux_amd64.deb
+```
+
+**Manual download:**
+
+1. Go to [github.com/roelfdiedericks/goclaw/releases/latest](https://github.com/roelfdiedericks/goclaw/releases/latest)
+2. Download the `.deb` file for your architecture (`amd64` or `arm64`)
+3. Install with: `sudo dpkg -i goclaw_*.deb`
+
+### Docker
+
+```bash
+docker pull ghcr.io/roelfdiedericks/goclaw:latest
+```
+
+See [Deployment](deployment.md#docker) for Docker Compose setup.
 
 ### Run Setup Wizard
 
@@ -64,7 +94,7 @@ goclaw start         # Daemon mode (background)
 
 ### Prerequisites
 
-- **Go 1.22+** — [golang.org/dl](https://golang.org/dl/)
+- **Go 1.25+** — [golang.org/dl](https://golang.org/dl/)
 - **Git**
 - **GCC** — Required for SQLite with FTS5 (full-text search)
 
@@ -89,8 +119,13 @@ make build
 # Or build directly with Go (ensure CGO flags are set)
 CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" go build -o goclaw ./cmd/goclaw
 
-# Install to PATH
-sudo mv goclaw /usr/local/bin/
+# Install to ~/.goclaw/bin/
+mkdir -p ~/.goclaw/bin
+mv goclaw ~/.goclaw/bin/
+
+# Add to PATH (if not already)
+echo 'export PATH="$PATH:$HOME/.goclaw/bin"' >> ~/.bashrc
+source ~/.bashrc
 ```
 
 ### Makefile Targets
@@ -140,6 +175,8 @@ GoClaw stores all its data in `~/.goclaw/`:
 
 ```
 ~/.goclaw/
+├── bin/
+│   └── goclaw        # GoClaw binary (when installed via installer)
 ├── goclaw.json       # Main configuration
 ├── users.json        # User accounts and permissions
 ├── sessions.db       # SQLite database (sessions, transcripts, embeddings)
@@ -183,23 +220,39 @@ After import, `~/.goclaw/goclaw.json` becomes the authoritative config.
 
 ---
 
-## Upgrading
+## Updating
 
-### Binary Upgrade
+### Self-Update (Recommended)
+
+GoClaw can update itself:
+
+```bash
+goclaw update
+```
+
+This will:
+- Check for new releases on GitHub
+- Download and verify the new binary
+- Replace itself and restart
+
+**Options:**
+
+```bash
+goclaw update --check       # Check for updates without installing
+goclaw update --channel beta  # Update to latest beta release
+goclaw update --no-restart  # Update but don't restart (for manual control)
+```
+
+**Note:** If GoClaw was installed via a system package manager (e.g., dpkg, apt), `goclaw update` will warn you to use your package manager instead. This prevents conflicts with system-managed installations.
+
+### Updating via Package Manager
+
+For Debian/Ubuntu users who installed via `.deb`:
 
 ```bash
 # Download new version
-curl -LO https://github.com/roelfdiedericks/goclaw/releases/latest/download/goclaw-linux-amd64
-chmod +x goclaw-linux-amd64
-
-# Stop running instance (if daemon mode)
-goclaw stop
-
-# Replace binary
-sudo mv goclaw-linux-amd64 /usr/local/bin/goclaw
-
-# Restart
-goclaw start
+curl -LO https://github.com/roelfdiedericks/goclaw/releases/latest/download/goclaw_VERSION_linux_amd64.deb
+sudo dpkg -i goclaw_VERSION_linux_amd64.deb
 ```
 
 ### Source Upgrade
@@ -209,8 +262,15 @@ cd goclaw
 git pull
 make build
 goclaw stop
-sudo mv goclaw /usr/local/bin/
+cp goclaw ~/.goclaw/bin/
 goclaw start
+```
+
+### Docker Updates
+
+```bash
+docker pull ghcr.io/roelfdiedericks/goclaw:latest
+docker-compose up -d
 ```
 
 ### Database Migrations
@@ -225,11 +285,14 @@ GoClaw automatically migrates the SQLite database on startup. No manual steps re
 # Stop daemon if running
 goclaw stop
 
-# Remove binary
-sudo rm /usr/local/bin/goclaw
-
-# Remove GoClaw configuration
+# Remove binary and data directory
 rm -rf ~/.goclaw
+
+# If installed via symlink, remove it
+rm -f ~/.local/bin/goclaw
+
+# If installed via .deb package
+sudo dpkg -r goclaw
 
 # Remove shared data (WARNING: also removes OpenClaw data!)
 # rm -rf ~/.openclaw
@@ -241,11 +304,21 @@ rm -rf ~/.goclaw
 
 ### "goclaw: command not found"
 
-Ensure `/usr/local/bin` is in your PATH:
+If you used the installer, ensure your PATH includes `~/.goclaw/bin`:
 
 ```bash
-echo $PATH | grep -q /usr/local/bin || echo 'export PATH=$PATH:/usr/local/bin' >> ~/.bashrc
+# Check if in PATH
+echo $PATH | tr ':' '\n' | grep goclaw
+
+# If not, add it (or re-run installer)
+echo 'export PATH="$PATH:$HOME/.goclaw/bin"' >> ~/.bashrc
 source ~/.bashrc
+```
+
+On Linux, the installer tries to symlink to `~/.local/bin` if it's in your PATH. Check if the symlink exists:
+
+```bash
+ls -la ~/.local/bin/goclaw
 ```
 
 ### "Permission denied"
@@ -253,7 +326,7 @@ source ~/.bashrc
 Make the binary executable:
 
 ```bash
-chmod +x /usr/local/bin/goclaw
+chmod +x ~/.goclaw/bin/goclaw
 ```
 
 ### CGO / SQLite build errors

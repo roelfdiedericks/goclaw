@@ -1,0 +1,147 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/update"
+)
+
+// UpdateTool provides the goclaw_update tool for agents
+type UpdateTool struct {
+	currentVersion string
+}
+
+// NewUpdateTool creates a new UpdateTool
+func NewUpdateTool(currentVersion string) *UpdateTool {
+	return &UpdateTool{
+		currentVersion: currentVersion,
+	}
+}
+
+func (t *UpdateTool) Name() string {
+	return "goclaw_update"
+}
+
+func (t *UpdateTool) Description() string {
+	return "Check for GoClaw updates and optionally install them. Use action='check' to see if updates are available, action='update' to install. This tool runs outside the sandbox and can update the GoClaw binary."
+}
+
+func (t *UpdateTool) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"action": map[string]any{
+				"type":        "string",
+				"enum":        []string{"check", "update"},
+				"description": "Action to perform: 'check' to see available updates, 'update' to download and install",
+			},
+			"channel": map[string]any{
+				"type":        "string",
+				"enum":        []string{"stable", "beta"},
+				"default":     "stable",
+				"description": "Release channel to check/update from",
+			},
+			"force": map[string]any{
+				"type":        "boolean",
+				"default":     false,
+				"description": "Force reinstall even if already on latest version",
+			},
+		},
+		"required": []string{"action"},
+	}
+}
+
+type updateInput struct {
+	Action  string `json:"action"`
+	Channel string `json:"channel"`
+	Force   bool   `json:"force"`
+}
+
+func (t *UpdateTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+	var params updateInput
+	if err := json.Unmarshal(input, &params); err != nil {
+		return "", fmt.Errorf("invalid input: %w", err)
+	}
+
+	// Default channel
+	if params.Channel == "" {
+		params.Channel = "stable"
+	}
+
+	L_debug("goclaw_update: executing", "action", params.Action, "channel", params.Channel, "force", params.Force)
+
+	// Check if system-managed
+	if update.IsSystemManaged() {
+		exePath, _ := update.GetExecutablePath()
+		return fmt.Sprintf("GoClaw is installed at a system-managed location (%s).\n\n"+
+			"Self-update is disabled to prevent conflicts with the package manager.\n\n"+
+			"To update, use the system package manager or download the latest .deb from:\n"+
+			"https://github.com/roelfdiedericks/goclaw/releases/latest", exePath), nil
+	}
+
+	updater := update.NewUpdater(t.currentVersion)
+
+	// Check for updates
+	info, err := updater.CheckForUpdate(params.Channel)
+	if err != nil {
+		return "", fmt.Errorf("failed to check for updates: %w", err)
+	}
+
+	var result strings.Builder
+
+	result.WriteString(fmt.Sprintf("Current version: %s\n", info.CurrentVersion))
+	result.WriteString(fmt.Sprintf("Latest %s version: %s\n", params.Channel, info.NewVersion))
+
+	if !info.IsNewer && !params.Force {
+		result.WriteString("\nGoClaw is already up to date.")
+		return result.String(), nil
+	}
+
+	if info.IsNewer {
+		result.WriteString("\nA new version is available!\n")
+	} else if params.Force {
+		result.WriteString("\nForce reinstall requested.\n")
+	}
+
+	// Show changelog
+	if info.Changelog != "" {
+		result.WriteString("\nChangelog:\n")
+		result.WriteString("----------\n")
+		changelog := info.Changelog
+		if len(changelog) > 2000 {
+			changelog = changelog[:2000] + "\n..."
+		}
+		result.WriteString(changelog)
+		result.WriteString("\n")
+	}
+
+	if params.Action == "check" {
+		result.WriteString("\nTo install this update, call goclaw_update with action='update'.")
+		return result.String(), nil
+	}
+
+	// Action is "update" - proceed with download and install
+	result.WriteString("\nDownloading update...\n")
+
+	binaryPath, err := updater.Download(info, nil)
+	if err != nil {
+		return "", fmt.Errorf("download failed: %w", err)
+	}
+
+	result.WriteString("Download complete. Checksum verified.\n")
+	result.WriteString("Installing update...\n")
+
+	// Apply update (will restart the process)
+	// Note: This will replace the current process, so we won't return
+	if err := updater.Apply(binaryPath, false); err != nil {
+		return "", fmt.Errorf("failed to apply update: %w", err)
+	}
+
+	// This line is reached only if noRestart was true (which it's not in this case)
+	result.WriteString("Update installed! GoClaw will restart.\n")
+	return result.String(), nil
+}

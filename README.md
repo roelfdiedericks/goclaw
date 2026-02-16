@@ -28,6 +28,12 @@ GoClaw is a bit opinionated about security, considering the brave new era we're 
 
 ## Quick Start
 
+### Install
+
+```bash
+curl -fsSL https://goclaw.org/install.sh | sh
+```
+
 ### Interactive Setup (Recommended)
 
 ```bash
