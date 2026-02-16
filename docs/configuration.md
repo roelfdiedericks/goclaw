@@ -317,10 +317,16 @@ Storing secrets in a file has downsides too (backups, permissions), but the file
 
 OpenClaw stores credentials in files under `~/.openclaw/`:
 
-- **`openclaw.json`** — Main config (workspace, channels, etc.). May contain some tokens.
-- **`~/.openclaw/agents/main/agent/auth-profiles.json`** — API keys per profile (e.g. `anthropic:default`, `openai:default`). Keys are under `profiles.<name>.key`.
+- **`openclaw.json`** — Main config (workspace, channels, etc.). May contain some tokens and provider `apiKey` overrides.
+- **`~/.openclaw/agents/<agentId>/agent/auth-profiles.json`** — API keys and OAuth per profile (e.g. `anthropic:default`, `openai:default`). Keys live under `profiles.<name>.key`.
 
-So OpenClaw is file-based for persistence. If OpenClaw also reads from environment variables at runtime, that would be a separate layer (and can be checked in OpenClaw’s source, e.g. in `ref/openclaw` if available). GoClaw’s import path uses only these files; the setup wizard optionally offers to copy from env into `goclaw.json` during setup only.
+At runtime, OpenClaw resolves API keys in this order (see `ref/openclaw` → `src/agents/model-auth.ts`):
+
+1. **Auth profiles** — Keys in the agent’s `auth-profiles.json` (by profile order).
+2. **Environment variables** — Fallback: e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `BRAVE_API_KEY` (web search), and many other provider-specific vars. Gateway auth can use `OPENCLAW_GATEWAY_TOKEN` and `OPENCLAW_GATEWAY_PASSWORD`.
+3. **Config** — Provider `apiKey` in `openclaw.json` (`models.providers.<provider>.apiKey`).
+
+So OpenClaw is file-based for persistence but uses **env vars as a runtime fallback**, which can make “which key is actually used?” depend on what’s set in the process environment. GoClaw avoids that: **no env at runtime**; the setup wizard can copy from OpenClaw’s files or from env into `goclaw.json` once, and thereafter only the config file is used.
 
 ---
 
