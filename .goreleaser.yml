@@ -1,0 +1,75 @@
+version: 2
+
+project_name: goclaw
+
+builds:
+  - binary: goclaw
+    main: ./cmd/goclaw
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -X main.version={{.Version}}
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: 'checksums.txt'
+
+nfpms:
+  - package_name: goclaw
+    vendor: Roelf Diedericks
+    maintainer: roelfdiedericks@users.noreply.github.com
+    description: AI agent gateway
+    license: GPL-3.0
+    formats: [deb]
+    contents:
+      - src: ./goclaw
+        dst: /usr/bin/goclaw
+
+dockers:
+  - image_templates:
+      - ghcr.io/roelfdiedericks/goclaw:{{ .Version }}-amd64
+    goos: linux
+    goarch: amd64
+    use: buildx
+    dockerfile: Dockerfile.goreleaser
+    extra_files:
+      - docker/entrypoint.sh
+    build_flag_templates:
+      - "--platform=linux/amd64"
+  - image_templates:
+      - ghcr.io/roelfdiedericks/goclaw:{{ .Version }}-arm64
+    goos: linux
+    goarch: arm64
+    use: buildx
+    dockerfile: Dockerfile.goreleaser
+    extra_files:
+      - docker/entrypoint.sh
+    build_flag_templates:
+      - "--platform=linux/arm64"
+
+docker_manifests:
+  - name_template: ghcr.io/roelfdiedericks/goclaw:{{ .Version }}
+    image_templates:
+      - ghcr.io/roelfdiedericks/goclaw:{{ .Version }}-amd64
+      - ghcr.io/roelfdiedericks/goclaw:{{ .Version }}-arm64
+  - name_template: ghcr.io/roelfdiedericks/goclaw:latest
+    image_templates:
+      - ghcr.io/roelfdiedericks/goclaw:{{ .Version }}-amd64
+      - ghcr.io/roelfdiedericks/goclaw:{{ .Version }}-arm64
+    skip_push: auto
+  - name_template: ghcr.io/roelfdiedericks/goclaw:beta
+    image_templates:
+      - ghcr.io/roelfdiedericks/goclaw:{{ .Version }}-amd64
+      - ghcr.io/roelfdiedericks/goclaw:{{ .Version }}-arm64
+    skip_push: "{{ if not .Prerelease }}true{{ end }}"
+
+release:
+  prerelease: auto
+  footer: |
+    ## Docker
+    ```
+    docker pull ghcr.io/roelfdiedericks/goclaw:{{ .Version }}
+    ```

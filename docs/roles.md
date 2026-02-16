@@ -67,10 +67,15 @@ Identities link external accounts to GoClaw users:
 
 ### Built-in Roles
 
-| Role | Description |
-|------|-------------|
-| `owner` | Full access to all tools and features |
-| `user` | Limited access based on permissions |
+GoClaw recognizes three built-in role names:
+
+| Role | Default Permissions | Description |
+|------|---------------------|-------------|
+| `owner` | Full access (built-in) | Has built-in defaults even if not defined in config |
+| `user` | Must define in config | Authenticated user with configurable permissions |
+| `guest` | Must define in config | Unauthenticated user — **no access unless explicitly configured** |
+
+**Security by default:** Only `owner` has built-in permissions. Both `user` and `guest` roles must be explicitly defined in the `roles` section of `goclaw.json` or users with those roles will be denied access.
 
 ## Role Configuration
 
@@ -79,24 +84,25 @@ Define custom role permissions in `goclaw.json`:
 ```json
 {
   "roles": {
+    "owner": {
+      "tools": "*",
+      "skills": "*",
+      "memory": "full",
+      "transcripts": "all",
+      "commands": true
+    },
     "user": {
       "tools": ["read", "memory_search", "transcript_search"],
       "skills": "*",
       "memory": "full",
       "transcripts": "own",
       "commands": true
-    },
-    "guest": {
-      "tools": ["read"],
-      "skills": [],
-      "memory": "none",
-      "transcripts": "none",
-      "commands": false,
-      "systemPrompt": "You are in guest mode. Limited functionality."
     }
   }
 }
 ```
+
+**Note:** The `guest` role is not defined by default (secure by default). See [Unknown Users](#unknown-users-and-guest-role) for how to enable guest access.
 
 | Option | Values | Description |
 |--------|--------|-------------|
@@ -140,7 +146,7 @@ The `user_auth` tool allows guests to elevate their role by providing credential
 {
   "auth": {
     "script": "./scripts/auth.sh",
-    "allowedRoles": ["user", "owner"],
+    "allowedRoles": ["user"],
     "rateLimit": 3,
     "timeout": 10
   }
@@ -154,56 +160,50 @@ The `user_auth` tool allows guests to elevate their role by providing credential
 | `rateLimit` | 3 | Max attempts per minute |
 | `timeout` | 10 | Script timeout (seconds) |
 
+**Security rules:**
+
+- **Elevation to `owner` is always blocked** — Even if the auth script returns `owner`, GoClaw refuses. Owner access requires being defined in `users.json`.
+- **Role must be in `allowedRoles`** — The script can only grant roles explicitly listed.
+- **Role must be defined** — The target role must exist in the `roles` config.
+
 ## Supervision
 
-Configure how supervisors interact with agent sessions:
+Owners can supervise active sessions — watching, guiding, or ghostwriting agent responses in real-time.
 
-```json
-{
-  "supervision": {
-    "guidance": {
-      "prefix": "[Supervisor]: ",
-      "systemNote": ""
-    },
-    "ghostwriting": {
-      "typingDelayMs": 500
-    }
-  }
-}
-```
+See [Session Supervision](supervision.md) for full documentation on:
 
-### Guidance
+- Real-time session monitoring
+- Guidance messages (visible only to agent)
+- Ghostwriting mode (respond as the agent)
+- Interrupt generation
+- Configuration options
 
-Supervisors can inject guidance messages visible only to the agent:
+## Unknown Users and Guest Role
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `prefix` | `[Supervisor]: ` | Message prefix |
-| `systemNote` | - | Persistent system-level note |
+Users not in `users.json` are treated as guests. **By default, no `guest` role is defined**, which means unknown users have no access — this is secure by default.
 
-### Ghostwriting
+To allow unknown users (e.g., for a public-facing bot with authentication):
 
-Supervisors can draft messages for the agent:
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `typingDelayMs` | 500 | Typing indicator delay |
-
-## Unknown Users
-
-Users not in `users.json` are treated as guests with minimal permissions.
-
-To allow unknown Telegram users:
 ```json
 {
   "roles": {
     "guest": {
-      "tools": ["read"],
-      "memory": "none"
+      "tools": ["read", "user_auth"],
+      "skills": [],
+      "memory": "none",
+      "transcripts": "none",
+      "commands": false,
+      "systemPrompt": "You are in guest mode. Ask the user for credentials to authenticate."
     }
   }
 }
 ```
+
+**Important:** If you define a `guest` role, consider:
+- Keep permissions minimal (read-only, no skills)
+- Include `user_auth` tool if you want guests to authenticate
+- Use a system prompt that guides the agent to request credentials
+- The agent can then use `user_auth` to elevate the guest to `user` role
 
 Unknown users appear in logs:
 ```
