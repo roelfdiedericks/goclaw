@@ -1,3 +1,0 @@
-# Tools
-
-Individual tool documentation.
