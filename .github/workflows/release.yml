@@ -31,9 +31,59 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Try changelog-reader-action (understands Keep a Changelog format)
+      - name: Read changelog
+        id: changelog
+        uses: mindsers/changelog-reader-action@v2
+        with:
+          path: ./CHANGELOG.md
+
+      - name: Write release notes
+        run: |
+          echo "=== Changelog reader output ==="
+          echo "Version: ${{ steps.changelog.outputs.version }}"
+          echo "Changes:"
+          echo "${{ steps.changelog.outputs.changes }}"
+          echo "==="
+          echo "${{ steps.changelog.outputs.changes }}" > /tmp/release_notes.md
+
+      # FALLBACK: awk approach if changelog-reader doesn't work with our format
+      # - name: Extract release notes from CHANGELOG
+      #   run: |
+      #     VERSION=${GITHUB_REF#refs/tags/v}
+      #     # Extract content between current version and next version header
+      #     awk "/^## \\[$VERSION\\]/{found=1; next} /^## \\[/{found=0} found" CHANGELOG.md > /tmp/release_notes.md
+      #     cat /tmp/release_notes.md
+
+      - name: Append auto-generated PR list
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          # Get previous tag for comparison
+          PREV_TAG=$(git describe --tags --abbrev=0 ${TAG}^ 2>/dev/null || echo "")
+          
+          echo "" >> /tmp/release_notes.md
+          
+          if [ -n "$PREV_TAG" ]; then
+            # Generate release notes comparing to previous tag
+            gh api repos/${{ github.repository }}/releases/generate-notes \
+              -f tag_name="$TAG" \
+              -f previous_tag_name="$PREV_TAG" \
+              --jq '.body' >> /tmp/release_notes.md
+          else
+            # First release, no previous tag
+            gh api repos/${{ github.repository }}/releases/generate-notes \
+              -f tag_name="$TAG" \
+              --jq '.body' >> /tmp/release_notes.md
+          fi
+          
+          echo "=== Final release notes ==="
+          cat /tmp/release_notes.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
-          args: release --clean
+          args: release --clean --release-notes /tmp/release_notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
