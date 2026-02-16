@@ -1,0 +1,48 @@
+sections:
+  - name: Getting Started
+    items:
+      - title: Installation
+        file: README
+      - title: Configuration
+        file: configuration
+      - title: First Run
+        file: first-run
+
+  - name: Channels
+    items:
+      - title: Telegram
+        file: telegram
+      - title: HTTP API
+        file: http-api
+      - title: Interactive TUI
+        file: tui
+
+  - name: Tools
+    items:
+      - title: Overview
+        file: tools
+      - title: Home Assistant
+        file: home-assistant
+      - title: Browser
+        file: browser_tool
+      - title: Cron & Scheduling
+        file: cron
+
+  - name: Advanced
+    items:
+      - title: Architecture
+        file: architecture
+      - title: Memory & Embeddings
+        file: memory-search
+      - title: Session Management
+        file: session-management
+      - title: Transcript Search
+        file: transcript-search
+      - title: Skills
+        file: skills
+      - title: Sandbox & Security
+        file: sandbox
+      - title: Deployment
+        file: deployment
+      - title: Troubleshooting
+        file: troubleshooting
