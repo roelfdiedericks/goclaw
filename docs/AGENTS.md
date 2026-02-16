@@ -37,8 +37,7 @@ docs/
 │   ├── message.md
 │   ├── user-auth.md
 │   └── xai-imagine.md
-├── *.md                 # Top-level and landing pages
-└── sidebar.yaml         # Navigation definition
+└── *.md                 # Top-level and landing pages
 ```
 
 ### Landing Pages
@@ -250,7 +249,7 @@ Only include Go code in architecture/internals docs. User-facing docs should foc
 
 ## sidebar.yaml
 
-The sidebar is defined in `docs/sidebar.yaml`. It only lists section names — **pages are discovered from frontmatter**.
+The sidebar is defined in the **goclaw.org** repository (`data/sidebar.yaml`), not here. It only lists section names — **pages are discovered from frontmatter**.
 
 ```yaml
 # Sidebar section definitions
@@ -289,7 +288,7 @@ sections:
 1. Create the markdown file in `docs/` (or appropriate subdirectory)
 2. Add YAML frontmatter with `title`, `description`, `section`, and `weight`
 3. The page automatically appears in the correct sidebar section
-4. **No need to edit sidebar.yaml** — it only defines section order
+4. **No need to edit anything else** — sidebar sections are auto-populated from frontmatter
 
 ### Orphan Pages
 
