@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // extractTarGz extracts a .tar.gz archive to a destination directory
@@ -21,9 +22,12 @@ func extractTarGz(archivePath, destDir string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create gzip reader: %w", err)
 	}
-	defer gzr.Close()
+	defer func() { _ = gzr.Close() }()
 
 	tr := tar.NewReader(gzr)
+
+	// Clean and normalize the destination directory
+	destDir = filepath.Clean(destDir)
 
 	for {
 		header, err := tr.Next()
@@ -35,23 +39,37 @@ func extractTarGz(archivePath, destDir string) error {
 		}
 
 		// Security: prevent path traversal
-		target := filepath.Join(destDir, header.Name)
-		if !filepath.HasPrefix(target, filepath.Clean(destDir)+string(os.PathSeparator)) {
+		// Clean the header name and ensure it doesn't escape destDir
+		cleanName := filepath.Clean(header.Name)
+		if strings.HasPrefix(cleanName, "..") || filepath.IsAbs(cleanName) {
 			return fmt.Errorf("invalid tar path: %s", header.Name)
+		}
+		target := filepath.Join(destDir, cleanName)
+
+		// Double-check: target must be within destDir
+		if !strings.HasPrefix(target, destDir+string(os.PathSeparator)) && target != destDir {
+			return fmt.Errorf("path escapes destination: %s", header.Name)
 		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, os.FileMode(header.Mode)); err != nil {
+			// G301/G115: Permissions from archive are expected, 0755 is standard
+			if err := os.MkdirAll(target, 0755); err != nil { //nolint:gosec
 				return err
 			}
 		case tar.TypeReg:
 			// Ensure parent directory exists
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil { //nolint:gosec
 				return err
 			}
 
-			outFile, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.FileMode(header.Mode))
+			// Use sensible default permissions - executable if archive says so
+			mode := os.FileMode(0644)
+			if header.Mode&0111 != 0 {
+				mode = 0755 //nolint:gosec
+			}
+
+			outFile, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR|os.O_TRUNC, mode)
 			if err != nil {
 				return err
 			}
