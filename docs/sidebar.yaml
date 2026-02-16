@@ -3,6 +3,7 @@ sections:
     link: readme
 
   - name: Getting Started
+    link: /docs/
     items:
       - title: Installation
         file: installation
