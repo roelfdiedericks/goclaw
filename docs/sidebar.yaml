@@ -2,7 +2,7 @@ sections:
   - name: Getting Started
     items:
       - title: Installation
-        file: README
+        file: readme
       - title: Configuration
         file: configuration
       - title: First Run
