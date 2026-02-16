@@ -14,16 +14,14 @@ The xAI provider connects GoClaw to Grok models via the xAI API. It supports sta
 ```json
 {
   "llm": {
-    "registry": {
-      "providers": {
-        "xai": {
-          "type": "xai",
-          "apiKey": "YOUR_XAI_API_KEY"
-        }
-      },
-      "agent": {
-        "models": ["xai/grok-4-1-fast-reasoning"]
+    "providers": {
+      "xai": {
+        "type": "xai",
+        "apiKey": "YOUR_XAI_API_KEY"
       }
+    },
+    "agent": {
+      "models": ["xai/grok-4-1-fast-reasoning"]
     }
   }
 }

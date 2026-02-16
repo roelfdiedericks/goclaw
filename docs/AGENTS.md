@@ -50,6 +50,7 @@ Each major section should have a landing page (marked with `landing: true` in fr
 - `agent-memory.md` — Memory system overview
 - `advanced.md` — Advanced topics overview
 - `tools.md` — Tool index
+- `security.md` — Security overview
 
 ---
 
@@ -92,6 +93,7 @@ Pages must use one of these exact section names:
 - `Tools`
 - `Agent Memory`
 - `Advanced`
+- `Security`
 
 **Pages with unrecognized sections appear in "Other" (build warning).**
 

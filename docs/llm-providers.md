@@ -21,55 +21,58 @@ GoClaw supports multiple LLM providers through a unified registry system. This e
 
 ## Quick Setup
 
-### Single Provider (Simple)
+### Minimal Config (Single Provider)
 
-For basic usage with one provider:
+For basic usage with Anthropic:
 
 ```json
 {
   "llm": {
-    "provider": "anthropic",
-    "model": "claude-sonnet-4-20250514",
-    "apiKey": "sk-ant-...",
-    "maxTokens": 200000,
-    "promptCaching": true
+    "providers": {
+      "anthropic": {
+        "type": "anthropic",
+        "apiKey": "sk-ant-...",
+        "promptCaching": true
+      }
+    },
+    "agent": {
+      "models": ["anthropic/claude-sonnet-4-20250514"]
+    }
   }
 }
 ```
 
-### Multi-Provider (Registry)
+### Multi-Provider Setup
 
-For advanced setups with multiple providers and purpose chains:
+For advanced setups with multiple providers and purpose-specific chains:
 
 ```json
 {
   "llm": {
-    "registry": {
-      "providers": {
-        "claude": {
-          "type": "anthropic",
-          "apiKey": "sk-ant-...",
-          "promptCaching": true
-        },
-        "ollama-qwen": {
-          "type": "ollama",
-          "url": "http://localhost:11434"
-        },
-        "ollama-embed": {
-          "type": "ollama",
-          "url": "http://localhost:11434",
-          "embeddingOnly": true
-        }
+    "providers": {
+      "claude": {
+        "type": "anthropic",
+        "apiKey": "sk-ant-...",
+        "promptCaching": true
       },
-      "agent": {
-        "models": ["claude/claude-sonnet-4-20250514"]
+      "ollama-qwen": {
+        "type": "ollama",
+        "url": "http://localhost:11434"
       },
-      "summarization": {
-        "models": ["ollama-qwen/qwen2.5:7b", "claude/claude-3-haiku-20240307"]
-      },
-      "embeddings": {
-        "models": ["ollama-embed/nomic-embed-text"]
+      "ollama-embed": {
+        "type": "ollama",
+        "url": "http://localhost:11434",
+        "embeddingOnly": true
       }
+    },
+    "agent": {
+      "models": ["claude/claude-sonnet-4-20250514"]
+    },
+    "summarization": {
+      "models": ["ollama-qwen/qwen2.5:7b", "claude/claude-3-haiku-20240307"]
+    },
+    "embeddings": {
+      "models": ["ollama-embed/nomic-embed-text"]
     }
   }
 }
@@ -79,7 +82,7 @@ For advanced setups with multiple providers and purpose chains:
 
 ## Purpose Chains
 
-The registry routes requests based on **purpose**:
+GoClaw routes LLM requests based on **purpose**:
 
 | Purpose | Used For |
 |---------|----------|
@@ -91,14 +94,18 @@ Each purpose has a **model chain** — the first model is primary, others are fa
 
 ```json
 {
-  "summarization": {
-    "models": [
-      "ollama-qwen/qwen2.5:7b",     // Primary: local, free
-      "claude/claude-3-haiku-20240307"  // Fallback: cloud
-    ]
+  "llm": {
+    "summarization": {
+      "models": [
+        "ollama-qwen/qwen2.5:7b",
+        "claude/claude-3-haiku-20240307"
+      ]
+    }
   }
 }
 ```
+
+The first model (`ollama-qwen/qwen2.5:7b`) is tried first. If it fails, the next model in the chain is used as fallback.
 
 ### Automatic Failover
 

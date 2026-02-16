@@ -33,22 +33,20 @@ Embeddings use Ollama by default:
 }
 ```
 
-Or via the LLM registry for more control:
+Or via the LLM config for more control:
 
 ```json
 {
   "llm": {
-    "registry": {
-      "providers": {
-        "ollama-embed": {
-          "type": "ollama",
-          "url": "http://localhost:11434",
-          "embeddingOnly": true
-        }
-      },
-      "embeddings": {
-        "models": ["ollama-embed/nomic-embed-text"]
+    "providers": {
+      "ollama-embed": {
+        "type": "ollama",
+        "url": "http://localhost:11434",
+        "embeddingOnly": true
       }
+    },
+    "embeddings": {
+      "models": ["ollama-embed/nomic-embed-text"]
     }
   }
 }

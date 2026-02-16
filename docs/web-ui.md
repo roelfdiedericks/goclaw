@@ -128,12 +128,11 @@ When credentials are configured, the web UI prompts for login.
 
 ## Security
 
-- **Local only**: Bind to `127.0.0.1:8080` for local access
-- **All interfaces**: Use `0.0.0.0:8080` with caution
-- **Reverse proxy**: For production, use nginx/Caddy with TLS
+- **Local only**: Bind to `127.0.0.1:1337` for local access (default)
+- **All interfaces**: Use `0.0.0.0:1337` with caution
 - **Authentication**: Configure user credentials for access control
 
-Never expose the HTTP API directly to the internet without authentication and TLS.
+GoClaw is designed for trusted network environments. Do not expose directly to the internet.
 
 ## Development Mode
 
