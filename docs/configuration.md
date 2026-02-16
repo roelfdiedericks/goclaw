@@ -86,16 +86,17 @@ GoClaw is configured via `goclaw.json` in the working directory.
 {
   "session": {
     "store": "sqlite",
-    "storePath": "~/.openclaw/sessions.db"
+    "storePath": "~/.goclaw/sessions.db"
   }
 }
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `store` | string | `"sqlite"` | Storage backend: `"sqlite"` or `"jsonl"` |
-| `storePath` | string | `~/.openclaw/sessions.db` | SQLite database path |
-| `path` | string | - | JSONL sessions directory (legacy) |
+| `storePath` | string | `~/.goclaw/sessions.db` | SQLite database path |
+| `path` | string | - | OpenClaw sessions directory (for session inheritance) |
+
+Note: GoClaw uses SQLite exclusively for session storage. The `path` option points to an existing OpenClaw sessions directory for inheriting conversation history.
 
 ---
 

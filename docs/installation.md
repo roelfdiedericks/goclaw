@@ -128,26 +128,22 @@ GoClaw is a single static binary. These are optional but enhance functionality:
 
 ## Directory Structure
 
-GoClaw uses these directories:
+GoClaw stores all its data in `~/.goclaw/`:
 
 ```
 ~/.goclaw/
 ├── goclaw.json       # Main configuration
 ├── users.json        # User accounts and permissions
-└── browser/          # Managed Chromium installation + profiles
-
-~/.openclaw/
 ├── sessions.db       # SQLite database (sessions, transcripts, embeddings)
-├── workspace/        # Agent workspace (SOUL.md, memory/, etc.)
-└── openclaw.json     # OpenClaw config (if running side-by-side)
+├── memory.db         # Memory search embeddings
+└── browser/          # Managed Chromium installation + profiles
 ```
 
-**Why two directories?**
+The **workspace** (where your agent's SOUL.md, memory/, etc. live) is configured separately and defaults to `~/.openclaw/workspace/` for compatibility with OpenClaw.
 
-- `~/.goclaw/` — GoClaw-specific configuration
-- `~/.openclaw/` — Shared with OpenClaw for compatibility (sessions, workspace)
+**OpenClaw compatibility:**
 
-If you're running GoClaw standalone (no OpenClaw), you can configure it to use a different workspace path.
+If running alongside OpenClaw, GoClaw can inherit sessions from `~/.openclaw/agents/main/sessions/`. This is configured via `session.inherit` in goclaw.json. The inherited sessions are merged into GoClaw's own session database.
 
 ---
 
