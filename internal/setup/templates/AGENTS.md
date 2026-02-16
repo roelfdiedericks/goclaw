@@ -1,8 +1,3 @@
----
-description: Operating manual for the agent workspace
-alwaysApply: true
----
-
 # AGENTS.md - Your Workspace
 
 This folder is home. Treat it that way.
