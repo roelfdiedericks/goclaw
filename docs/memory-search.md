@@ -1,3 +1,10 @@
+---
+title: "Memory Search"
+description: "Semantic search over memory files using embeddings"
+section: "Agent Memory"
+weight: 20
+---
+
 # Memory Search
 
 GoClaw includes semantic search over memory files using embeddings.

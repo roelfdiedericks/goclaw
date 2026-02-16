@@ -1,3 +1,10 @@
+---
+title: "Message"
+description: "Send, edit, delete, and react to messages across channels"
+section: "Tools"
+weight: 70
+---
+
 # Message Tool
 
 Send, edit, delete, and react to messages across channels.

@@ -1,3 +1,10 @@
+---
+title: "Web UI"
+description: "Built-in HTTP server with web chat interface"
+section: "Channels"
+weight: 20
+---
+
 # Web UI
 
 GoClaw includes a built-in HTTP server that provides a web chat interface and REST API.

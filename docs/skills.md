@@ -1,3 +1,10 @@
+---
+title: "Skills"
+description: "Extend agent capabilities with domain-specific knowledge"
+section: "Advanced"
+weight: 20
+---
+
 # GoClaw Skills System
 
 GoClaw implements a skills system compatible with OpenClaw. Skills are markdown files that extend the agent's capabilities by providing domain-specific knowledge and instructions.

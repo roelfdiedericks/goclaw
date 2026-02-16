@@ -1,3 +1,11 @@
+---
+title: "Tools"
+description: "Agent tools for file operations, web access, and external services"
+section: "Tools"
+weight: 1
+landing: true
+---
+
 # Tools
 
 GoClaw provides tools that the agent can use to interact with the system, files, web, and external services.

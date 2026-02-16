@@ -1,3 +1,11 @@
+---
+title: "Advanced"
+description: "Advanced configuration, deployment, and troubleshooting"
+section: "Advanced"
+weight: 1
+landing: true
+---
+
 # Advanced Topics
 
 This section covers advanced configuration, deployment, and troubleshooting for GoClaw.

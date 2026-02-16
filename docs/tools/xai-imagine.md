@@ -1,3 +1,10 @@
+---
+title: "xAI Imagine"
+description: "Generate images using xAI's Grok image generation"
+section: "Tools"
+weight: 90
+---
+
 # xAI Imagine Tool
 
 Generate images using xAI's Grok image generation.

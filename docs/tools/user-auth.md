@@ -1,3 +1,10 @@
+---
+title: "User Auth"
+description: "Authenticate users and elevate their role"
+section: "Tools"
+weight: 80
+---
+
 # User Auth Tool
 
 Authenticate users and elevate their role.

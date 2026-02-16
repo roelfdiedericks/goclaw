@@ -1,3 +1,10 @@
+---
+title: "Embeddings"
+description: "Vector embeddings powering semantic search for memory and transcripts"
+section: "Agent Memory"
+weight: 10
+---
+
 # Embeddings
 
 Embeddings power semantic search in GoClaw, enabling `memory_search` and `transcript_search` to find content by meaning rather than exact keywords.

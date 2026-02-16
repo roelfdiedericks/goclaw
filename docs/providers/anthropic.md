@@ -1,3 +1,10 @@
+---
+title: "Anthropic"
+description: "Configure Claude models via the Anthropic API with prompt caching and extended thinking"
+section: "LLM Providers"
+weight: 10
+---
+
 # Anthropic Provider
 
 The Anthropic provider connects GoClaw to Claude models via the Anthropic API.

@@ -1,3 +1,10 @@
+---
+title: "Troubleshooting"
+description: "Common issues and solutions"
+section: "Advanced"
+weight: 70
+---
+
 # Troubleshooting
 
 Common issues and solutions for GoClaw.

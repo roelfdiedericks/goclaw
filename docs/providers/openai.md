@@ -1,3 +1,10 @@
+---
+title: "OpenAI"
+description: "Configure GPT models and OpenAI-compatible APIs (LM Studio, LocalAI, OpenRouter)"
+section: "LLM Providers"
+weight: 20
+---
+
 # OpenAI Provider
 
 The OpenAI provider connects GoClaw to OpenAI models and any OpenAI-compatible API (LM Studio, LocalAI, OpenRouter, Kimi, etc.).

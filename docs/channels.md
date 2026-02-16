@@ -1,3 +1,11 @@
+---
+title: "Channels"
+description: "Communication interfaces for GoClaw: Telegram, Web UI, and TUI"
+section: "Channels"
+weight: 1
+landing: true
+---
+
 # Channels
 
 Channels are communication interfaces that connect users to the GoClaw agent. Each channel adapts its input/output format but uses the same underlying gateway for processing.

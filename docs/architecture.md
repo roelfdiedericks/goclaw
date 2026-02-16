@@ -1,3 +1,10 @@
+---
+title: "Architecture"
+description: "Technical architecture of GoClaw: gateway, session manager, LLM clients, tools, and channels"
+section: "About"
+weight: 3
+---
+
 # Architecture Overview
 
 GoClaw is a Go implementation of an AI agent gateway, designed to orchestrate LLM interactions with tool execution and multi-channel communication.

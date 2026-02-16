@@ -1,3 +1,10 @@
+---
+title: "JQ"
+description: "Query and transform JSON using jq syntax"
+section: "Tools"
+weight: 60
+---
+
 # JQ Tool
 
 Query and transform JSON using jq syntax.
