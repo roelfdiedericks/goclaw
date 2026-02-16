@@ -1,3 +1,10 @@
+---
+title: "Telegram"
+description: "Configure and use the Telegram bot channel"
+section: "Channels"
+weight: 10
+---
+
 # Telegram Integration
 
 GoClaw includes a Telegram bot for interacting with the agent via chat.

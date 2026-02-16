@@ -1,3 +1,10 @@
+---
+title: "Sandboxing"
+description: "Security layers protecting your system from agent actions"
+section: "Advanced"
+weight: 50
+---
+
 # Sandboxing
 
 GoClaw implements multiple layers of sandboxing to protect your system from unintended or malicious actions by the agent.

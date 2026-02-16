@@ -1,3 +1,10 @@
+---
+title: "Metrics"
+description: "Monitoring and observability endpoints"
+section: "Advanced"
+weight: 40
+---
+
 # Metrics
 
 GoClaw exposes metrics for monitoring and observability.

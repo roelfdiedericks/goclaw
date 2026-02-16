@@ -1,3 +1,10 @@
+---
+title: "Roles & Access Control"
+description: "Role-based access control (RBAC) for user permissions"
+section: "Advanced"
+weight: 30
+---
+
 # Roles & Access Control
 
 GoClaw provides role-based access control (RBAC) to manage what users can do.

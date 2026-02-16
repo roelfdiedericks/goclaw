@@ -1,3 +1,10 @@
+---
+title: "xAI"
+description: "Configure Grok models via xAI API with reasoning and server-side tools"
+section: "LLM Providers"
+weight: 40
+---
+
 # xAI Provider
 
 The xAI provider connects GoClaw to Grok models via the xAI API. It supports stateful conversations, server-side tools, and reasoning.

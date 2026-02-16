@@ -1,3 +1,10 @@
+---
+title: "Core Concepts"
+description: "Key concepts that define how GoClaw operates: agent loop, sessions, tools, and channels"
+section: "About"
+weight: 2
+---
+
 # Core Concepts
 
 GoClaw is built around several key concepts that define how the agent operates. Understanding these will help you configure and extend the system effectively.

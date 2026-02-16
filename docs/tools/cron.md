@@ -1,3 +1,10 @@
+---
+title: "Cron"
+description: "Schedule tasks to run at specific times or intervals"
+section: "Tools"
+weight: 40
+---
+
 # Cron Tool
 
 Schedule tasks to run at specific times or intervals.

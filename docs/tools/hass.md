@@ -1,3 +1,10 @@
+---
+title: "Home Assistant"
+description: "Smart home control and automation via Home Assistant"
+section: "Tools"
+weight: 30
+---
+
 # Home Assistant Tool
 
 GoClaw integrates with Home Assistant for smart home control, automation, and monitoring.

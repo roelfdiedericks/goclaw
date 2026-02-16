@@ -1,92 +1,29 @@
+# Sidebar section definitions
+# Pages declare their section in frontmatter: section: "Section Name"
+# Pages are ordered by frontmatter weight within each section
+
 sections:
-  - name: About
-    link: readme
-    items:
-      - title: Core Concepts
-        file: concepts
-      - title: Architecture
-        file: architecture
-
-  - name: Getting Started
-    link: /docs/
-    items:
-      - title: Installation
-        file: installation
-      - title: Configuration
-        file: configuration
-      - title: First Run
-        file: first-run
-
-  - name: LLM Providers
-    link: llm-providers
-    items:
-      - title: Anthropic
-        file: providers/anthropic
-      - title: OpenAI Compatible
-        file: providers/openai
-      - title: Ollama
-        file: providers/ollama
-      - title: xAI
-        file: providers/xai
-
-  - name: Channels
-    link: channels
-    items:
-      - title: Telegram
-        file: telegram
-      - title: Web UI
-        file: web-ui
-      - title: Interactive TUI
-        file: tui
-      - title: Channel Commands
-        file: commands
-
-  - name: Tools
-    link: tools
-    items:
-      - title: Internal Tools
-        file: tools/internal
-      - title: Browser
-        file: tools/browser
-      - title: Home Assistant
-        file: tools/hass
-      - title: Cron & Scheduling
-        file: tools/cron
-      - title: Web Search
-        file: tools/web
-      - title: JQ
-        file: tools/jq
-      - title: Message
-        file: tools/message
-      - title: User Auth
-        file: tools/user-auth
-      - title: xAI Imagine
-        file: tools/xai-imagine
-
-  - name: Agent Memory
-    link: agent-memory
-    items:
-      - title: Embeddings
-        file: embeddings
-      - title: Memory Search
-        file: memory-search
-      - title: Transcript Search
-        file: transcript-search
-
-  - name: Advanced
-    link: advanced
-    items:
-      - title: Session Management
-        file: session-management
-      - title: Skills
-        file: skills
-      - title: Roles & Access
-        file: roles
-      - title: Metrics
-        file: metrics
-      - title: Sandbox & Security
-        file: sandbox
-      - title: Deployment
-        file: deployment
-      - title: Troubleshooting
-        file: troubleshooting
+  - name: "About"
+    weight: 1
+  
+  - name: "Getting Started"
+    weight: 2
+  
+  - name: "LLM Providers"
+    weight: 3
+  
+  - name: "Channels"
+    weight: 4
+  
+  - name: "Tools"
+    weight: 5
+  
+  - name: "Agent Memory"
+    weight: 6
+  
+  - name: "Advanced"
+    weight: 7
+  
+  - name: "Other"
+    weight: 999
+    auto: true  # Auto-populated with orphan pages
