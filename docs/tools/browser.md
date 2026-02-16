@@ -1,3 +1,10 @@
+---
+title: "Browser"
+description: "Managed Chromium for web automation and authenticated browsing"
+section: "Tools"
+weight: 20
+---
+
 # Browser Tool
 
 GoClaw includes a managed browser for JavaScript-rendered pages, sites with bot protection, and authenticated web automation.

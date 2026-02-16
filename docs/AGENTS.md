@@ -43,7 +43,8 @@ docs/
 
 ### Landing Pages
 
-Each major section should have a landing page:
+Each major section should have a landing page (marked with `landing: true` in frontmatter):
+- `readme.md` — About/project overview
 - `concepts.md` — Core concepts overview
 - `llm-providers.md` — LLM provider overview
 - `channels.md` — Channel overview
@@ -51,17 +52,79 @@ Each major section should have a landing page:
 - `advanced.md` — Advanced topics overview
 - `tools.md` — Tool index
 
-### No YAML Frontmatter
-Don't add YAML frontmatter to doc files. Navigation and metadata are handled by `sidebar.yaml`.
-
-```markdown
-# This is correct
-Just start with the H1 title.
-
 ---
-title: "Don't do this"
+
+## YAML Frontmatter — REQUIRED
+
+**Every documentation file MUST have YAML frontmatter** with these fields:
+
+```yaml
 ---
-# This adds unnecessary complexity
+title: "Page Title"
+description: "Brief description for SEO and page metadata"
+section: "Section Name"
+weight: 10
+---
+```
+
+### Required Fields
+
+| Field | Purpose | Example |
+|-------|---------|---------|
+| `title` | Page title for sidebar, breadcrumbs | `"Anthropic Provider"` |
+| `description` | SEO meta description | `"Configure the Anthropic Claude API"` |
+| `section` | Sidebar section this page belongs to | `"LLM Providers"` |
+| `weight` | Sort order within section (lower = higher) | `10`, `20`, `30` |
+
+### Optional Fields
+
+| Field | Purpose | Example |
+|-------|---------|---------|
+| `landing` | Marks page as section landing page | `true` |
+
+### Valid Section Names
+
+Pages must use one of these exact section names:
+
+- `About`
+- `Getting Started`
+- `LLM Providers`
+- `Channels`
+- `Tools`
+- `Agent Memory`
+- `Advanced`
+
+**Pages with unrecognized sections appear in "Other" (build warning).**
+
+### Example Frontmatter
+
+```yaml
+---
+title: "Browser Tool"
+description: "Headless browser automation for web scraping and testing"
+section: "Tools"
+weight: 20
+---
+
+# Browser Tool
+
+Content starts here...
+```
+
+### Landing Page Example
+
+```yaml
+---
+title: "LLM Providers"
+description: "Configure AI model providers for GoClaw"
+section: "LLM Providers"
+weight: 1
+landing: true
+---
+
+# LLM Providers
+
+Overview content...
 ```
 
 ---
@@ -187,59 +250,53 @@ Only include Go code in architecture/internals docs. User-facing docs should foc
 
 ## sidebar.yaml
 
-The sidebar is defined in `docs/sidebar.yaml`:
+The sidebar is defined in `docs/sidebar.yaml`. It only lists section names — **pages are discovered from frontmatter**.
 
 ```yaml
+# Sidebar section definitions
+# Pages declare their section in frontmatter: section: "Section Name"
+# Pages are ordered by frontmatter weight within each section
+
 sections:
-  - name: About
-    link: readme           # Clickable section → /docs/readme/
-    items:
-      - title: Core Concepts
-        file: concepts     # Landing page with links to sub-items
-      - title: Architecture
-        file: architecture
-
-  - name: Getting Started
-    link: /docs/           # Clickable header → /docs/
-    items:
-      - title: Installation
-        file: installation
-
-  - name: LLM Providers
-    link: llm-providers    # Landing page
-    items:
-      - title: Anthropic
-        file: providers/anthropic
-
-  - name: Tools
-    link: tools            # Index page
-    items:
-      - title: Browser
-        file: tools/browser
+  - name: "About"
+    weight: 1
+  
+  - name: "Getting Started"
+    weight: 2
+  
+  - name: "LLM Providers"
+    weight: 3
+  
+  - name: "Channels"
+    weight: 4
+  
+  - name: "Tools"
+    weight: 5
+  
+  - name: "Agent Memory"
+    weight: 6
+  
+  - name: "Advanced"
+    weight: 7
+  
+  - name: "Other"
+    weight: 999
+    auto: true  # Auto-populated with orphan pages
 ```
 
 ### Adding a New Doc
 
 1. Create the markdown file in `docs/` (or appropriate subdirectory)
-2. Add an entry to `sidebar.yaml` under the appropriate section
-3. `file:` is the path without `.md` (will be lowercased for URL)
-4. For subdirectories: `file: tools/browser` → `/docs/tools/browser/`
+2. Add YAML frontmatter with `title`, `description`, `section`, and `weight`
+3. The page automatically appears in the correct sidebar section
+4. **No need to edit sidebar.yaml** — it only defines section order
 
-### Section Types
+### Orphan Pages
 
-| Type | Syntax | Example |
-|------|--------|---------|
-| Clickable standalone | `link: filename` | About → readme |
-| Clickable with items | `link: filename` + `items:` | LLM Providers |
-| Header only | `items:` only | (avoid — use landing pages) |
-
-### Subdirectory Linking
-
-For docs in subdirectories:
-```yaml
-- title: Anthropic Provider
-  file: providers/anthropic    # → /docs/providers/anthropic/
-```
+Pages with missing or unrecognized `section` frontmatter:
+- Appear in the "Other" section (highlighted in yellow)
+- Generate a build warning: `Orphan page (no matching section): path/file.md`
+- Fix by adding correct `section` frontmatter
 
 ---
 
@@ -301,12 +358,13 @@ If you need realistic-looking examples, use:
 
 ## Don'ts
 
-- **Don't add YAML frontmatter** — sidebar.yaml handles metadata
+- **Don't skip frontmatter** — every doc file needs `title`, `description`, `section`, `weight`
 - **Don't use absolute URLs** for internal links — use relative `.md` links
 - **Don't include real secrets** — use placeholders (see Security section above)
 - **Don't include PII** — no real names, emails, IPs, or identifiable data
 - **Don't duplicate content** — link to the canonical source
 - **Don't explain code internals** in user-facing docs — focus on config and usage
+- **Don't use unrecognized section names** — stick to the defined sections
 
 ---
 

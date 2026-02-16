@@ -1,3 +1,10 @@
+---
+title: "Session Management"
+description: "Context management and compaction to stay within LLM token limits"
+section: "Advanced"
+weight: 10
+---
+
 # Session Management
 
 GoClaw manages conversation context to stay within LLM token limits while preserving important information.

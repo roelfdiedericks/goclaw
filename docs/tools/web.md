@@ -1,3 +1,10 @@
+---
+title: "Web Tools"
+description: "Search the web and fetch page content"
+section: "Tools"
+weight: 50
+---
+
 # Web Tools
 
 Search the web and fetch page content.

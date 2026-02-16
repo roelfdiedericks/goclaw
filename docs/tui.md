@@ -1,3 +1,10 @@
+---
+title: "Interactive TUI"
+description: "Terminal-based user interface for direct agent interaction"
+section: "Channels"
+weight: 30
+---
+
 # Interactive TUI
 
 GoClaw includes a terminal-based user interface (TUI) for direct interaction with your agent.

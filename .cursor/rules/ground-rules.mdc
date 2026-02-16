@@ -37,7 +37,9 @@ The user decides what approach to take. Your job is to present options, not make
 
 Whenever you output the text "Let me start." or something similar STOP! Do not proceed until given permission.
 
+## FORBIDDEN TOOLS
 
+Do not use rsync for anything, or ssh. You're not allowed.
 
 ## Manager patterns
 We like global singletons, for manager patterns */manager.go must be a singleton, passing references  around is just silly for things that have one global use and instance requirement, if we are the only people eating our own dogfood. This is not a library, this is an application.

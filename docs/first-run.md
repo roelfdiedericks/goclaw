@@ -1,3 +1,10 @@
+---
+title: "First Run"
+description: "Run GoClaw for the first time and verify your setup"
+section: "Getting Started"
+weight: 3
+---
+
 # First Run
 
 This guide walks you through running GoClaw for the first time after installation.

@@ -1,3 +1,10 @@
+---
+title: "Deployment"
+description: "Running GoClaw in production with systemd and containers"
+section: "Advanced"
+weight: 60
+---
+
 # Deployment
 
 Guide for running GoClaw in production.

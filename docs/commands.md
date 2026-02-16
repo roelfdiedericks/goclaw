@@ -1,3 +1,10 @@
+---
+title: "Channel Commands"
+description: "Slash commands available across all channels"
+section: "Channels"
+weight: 40
+---
+
 # Channel Commands
 
 GoClaw provides slash commands available across all channels (Telegram, TUI, HTTP).

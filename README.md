@@ -1,3 +1,11 @@
+---
+title: "About GoClaw"
+description: "GoClaw is a Golang AI agent gateway with transcript search, multi-channel support, and persistent memory"
+section: "About"
+weight: 1
+landing: true
+---
+
 # GoClaw
 
 GoClaw is a Golang implementation of a certain molty bot, compatible with OpenClaw session formats and "soul-ness".

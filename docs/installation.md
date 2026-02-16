@@ -1,3 +1,11 @@
+---
+title: "Installation"
+description: "Install GoClaw from binary releases or build from source"
+section: "Getting Started"
+weight: 1
+landing: true
+---
+
 # Installation
 
 This guide covers installing GoClaw and getting it running on your system.

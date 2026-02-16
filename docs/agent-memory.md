@@ -1,3 +1,11 @@
+---
+title: "Agent Memory"
+description: "Dual memory system combining file-based memory with semantic search"
+section: "Agent Memory"
+weight: 1
+landing: true
+---
+
 # Agent Memory
 
 GoClaw implements a dual memory system that combines traditional file-based memory with semantic search capabilities.

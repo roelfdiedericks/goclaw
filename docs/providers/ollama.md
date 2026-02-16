@@ -1,3 +1,10 @@
+---
+title: "Ollama"
+description: "Configure locally-running Ollama for inference, embeddings, and summarization"
+section: "LLM Providers"
+weight: 30
+---
+
 # Ollama Provider
 
 The Ollama provider connects GoClaw to locally-running Ollama for inference, embeddings, and summarization.

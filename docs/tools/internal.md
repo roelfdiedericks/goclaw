@@ -1,3 +1,10 @@
+---
+title: "Internal Tools"
+description: "Core file and system tools: read, write, edit, exec"
+section: "Tools"
+weight: 10
+---
+
 # Internal Tools
 
 Core file and system tools available to the agent.

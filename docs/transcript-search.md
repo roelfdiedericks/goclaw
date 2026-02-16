@@ -1,3 +1,10 @@
+---
+title: "Transcript Search"
+description: "Searchable conversation history that survives context compaction"
+section: "Agent Memory"
+weight: 30
+---
+
 # Transcript Search
 
 GoClaw indexes all conversations into a searchable database, giving your agent persistent memory that survives context compaction.

@@ -1,3 +1,11 @@
+---
+title: "LLM Providers"
+description: "Configure AI model providers: Anthropic, OpenAI, Ollama, and xAI"
+section: "LLM Providers"
+weight: 1
+landing: true
+---
+
 # LLM Providers
 
 GoClaw supports multiple LLM providers through a unified registry system. This enables flexible model selection, automatic failover, and purpose-specific provider chains.
