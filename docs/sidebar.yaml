@@ -1,8 +1,11 @@
 sections:
+  - name: About
+    link: readme
+
   - name: Getting Started
     items:
       - title: Installation
-        file: readme
+        file: installation
       - title: Configuration
         file: configuration
       - title: First Run
