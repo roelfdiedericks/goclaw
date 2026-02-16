@@ -11,13 +11,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Initial release
-- Gateway server with HTTP API
-- Multi-provider LLM support (Anthropic, OpenAI, xAI)
-- Session management with SQLite persistence
-- Tool execution framework
-- Telegram bot integration
-- Web UI with real-time streaming
-- Memory search with vector embeddings
-- Browser automation via Chromium
-- User authentication and roles
-- Supervisor mode for process management
