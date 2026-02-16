@@ -64,9 +64,6 @@ docker_manifests:
       - ghcr.io/roelfdiedericks/goclaw:{{ .Version }}-arm64
     skip_push: "{{ if not .Prerelease }}true{{ end }}"
 
-changelog:
-  disable: true  # We pass release notes from CHANGELOG.md via --release-notes
-
 release:
   prerelease: auto
   footer: |
