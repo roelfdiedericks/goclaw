@@ -40,7 +40,7 @@ This section covers advanced configuration, deployment, and troubleshooting for 
 GoClaw can run as a supervised daemon with automatic restart:
 
 ```bash
-goclaw supervisor start
+goclaw start
 ```
 
 Features:
@@ -52,14 +52,14 @@ Features:
 ### Commands
 
 ```bash
-# Start supervised gateway
-goclaw supervisor start
+# Start supervised gateway (daemon)
+goclaw start
 
 # Stop supervised gateway
-goclaw supervisor stop
+goclaw stop
 
 # View status
-goclaw supervisor status
+goclaw status
 ```
 
 ### Configuration
@@ -123,13 +123,10 @@ Enable request dumps for API debugging:
 ```json
 {
   "llm": {
-    "registry": {
-      "providers": {
-        "claude": {
-          "type": "anthropic",
-          "trace": true,
-          "dumpOnSuccess": true
-        }
+    "providers": {
+      "claude": {
+        "type": "anthropic",
+        "dumpOnSuccess": true
       }
     }
   }

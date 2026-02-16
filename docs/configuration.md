@@ -14,11 +14,17 @@ GoClaw is configured via `goclaw.json` in the working directory.
 ```json
 {
   "llm": {
-    "provider": "anthropic",
-    "model": "claude-sonnet-4-20250514",
-    "apiKey": "sk-ant-...",
-    "maxTokens": 200000,
-    "promptCaching": true
+    "providers": {
+      "anthropic": {
+        "type": "anthropic",
+        "apiKey": "sk-ant-...",
+        "promptCaching": true
+      }
+    },
+    "agent": {
+      "models": ["anthropic/claude-sonnet-4-20250514"],
+      "maxTokens": 8192
+    }
   },
 
   "telegram": {
@@ -177,24 +183,28 @@ GoClaw is configured via `goclaw.json` in the working directory.
 ```json
 {
   "llm": {
-    "provider": "anthropic",
-    "model": "claude-sonnet-4-20250514",
-    "apiKey": "sk-ant-...",
-    "maxTokens": 200000,
-    "promptCaching": true
+    "providers": {
+      "anthropic": {
+        "type": "anthropic",
+        "apiKey": "sk-ant-...",
+        "promptCaching": true
+      }
+    },
+    "agent": {
+      "models": ["anthropic/claude-sonnet-4-20250514"]
+    }
   }
 }
 ```
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `provider` | string | `"anthropic"` | LLM provider (anthropic, openai, ollama, xai) |
-| `model` | string | - | Model name |
-| `apiKey` | string | - | API key (or use `ANTHROPIC_API_KEY` env) |
-| `maxTokens` | int | `200000` | Context window size |
-| `promptCaching` | bool | `true` | Enable Anthropic prompt caching |
+| Field | Type | Description |
+|-------|------|-------------|
+| `providers` | object | Named provider instances (alias → config) |
+| `agent` | object | Model chain for main conversation |
+| `summarization` | object | Model chain for compaction/checkpoints |
+| `embeddings` | object | Model chain for semantic search |
 
-See [LLM Providers](llm-providers.md) for multi-provider setup and purpose chains.
+See [LLM Providers](llm-providers.md) for full configuration details.
 
 ### Telegram Settings
 
@@ -212,7 +222,7 @@ See [LLM Providers](llm-providers.md) for multi-provider setup and purpose chain
 | `enabled` | bool | `false` | Enable Telegram bot |
 | `botToken` | string | - | Bot token from @BotFather |
 
-Token can also be set via `TELEGRAM_BOT_TOKEN` environment variable.
+The setup wizard (`goclaw setup`) can detect `TELEGRAM_BOT_TOKEN` from your environment and offer to use it.
 
 ### Session Storage
 
@@ -313,6 +323,8 @@ Secrets and settings are read only from `goclaw.json` (and `users.json`). Enviro
 ### Why not environment variables at runtime
 
 GoClaw does **not** read API keys or tokens from environment variables at runtime. Reasons:
+
+For a fuller discussion (unintended behaviour, security concerns, best practice), see [Environment variables and secrets](security-envvars.md).
 
 - **Predictable behaviour** — No ambiguity about precedence (file vs env). The only source of secrets is the config file.
 - **Security** — Env vars are process-visible (any child process or user with proc access can read them), often appear in logs and crash dumps, and can be inherited by shells and subprocesses. Storing secrets in env is explicitly called out as risky (e.g. CWE-526: cleartext storage in environment variables). Env vars built from or passed through untrusted input can also be a vector for injection (e.g. Shellshock-style issues, or command injection when values are used in shell commands).

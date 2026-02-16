@@ -14,29 +14,33 @@ The Anthropic provider connects GoClaw to Claude models via the Anthropic API.
 ```json
 {
   "llm": {
-    "provider": "anthropic",
-    "model": "claude-sonnet-4-20250514",
-    "apiKey": "YOUR_API_KEY",
-    "maxTokens": 200000,
-    "promptCaching": true
+    "providers": {
+      "anthropic": {
+        "type": "anthropic",
+        "apiKey": "YOUR_API_KEY",
+        "promptCaching": true
+      }
+    },
+    "agent": {
+      "models": ["anthropic/claude-sonnet-4-20250514"]
+    }
   }
 }
 ```
 
-Or via environment variable:
-```bash
-export ANTHROPIC_API_KEY="YOUR_API_KEY"
-```
+**Note:** The setup wizard (`goclaw setup`) can detect `ANTHROPIC_API_KEY` from your environment and offer to write it to config.
 
-### Options
+### Provider Options
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `apiKey` | string | - | Anthropic API key (or use `ANTHROPIC_API_KEY` env) |
-| `model` | string | - | Model name (e.g., `claude-sonnet-4-20250514`) |
+| `type` | string | - | Must be `"anthropic"` |
+| `apiKey` | string | - | Anthropic API key |
 | `maxTokens` | int | 200000 | Context window size |
 | `promptCaching` | bool | true | Enable prompt caching (reduces cost) |
 | `timeoutSeconds` | int | 300 | Request timeout |
+
+Models are specified in the `agent.models` array using `provider/model` format (e.g., `anthropic/claude-sonnet-4-20250514`).
 
 ## Models
 
@@ -81,24 +85,29 @@ Anthropic supports extended thinking (reasoning) on Claude 3.5+ models. Configur
 | `high` | 25,000 | Deep reasoning |
 | `xhigh` | 50,000 | Maximum effort |
 
-## Registry Configuration
+## Multi-Provider Setup
 
-For multi-provider setups:
+For setups with multiple providers:
 
 ```json
 {
   "llm": {
-    "registry": {
-      "providers": {
-        "claude": {
-          "type": "anthropic",
-          "apiKey": "YOUR_API_KEY",
-          "promptCaching": true
-        }
+    "providers": {
+      "claude": {
+        "type": "anthropic",
+        "apiKey": "YOUR_API_KEY",
+        "promptCaching": true
       },
-      "agent": {
-        "models": ["claude/claude-sonnet-4-20250514"]
+      "ollama": {
+        "type": "ollama",
+        "url": "http://localhost:11434"
       }
+    },
+    "agent": {
+      "models": ["claude/claude-sonnet-4-20250514"]
+    },
+    "summarization": {
+      "models": ["ollama/qwen2.5:7b"]
     }
   }
 }
@@ -111,7 +120,7 @@ For multi-provider setups:
 Verify your API key:
 1. Check it starts with `sk-ant-`
 2. Verify it's not expired in the Anthropic console
-3. Check environment variable if using `ANTHROPIC_API_KEY`
+3. Check the `apiKey` field in `goclaw.json`
 
 ### Rate Limiting
 

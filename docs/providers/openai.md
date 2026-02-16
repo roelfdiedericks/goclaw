@@ -16,16 +16,14 @@ The OpenAI provider connects GoClaw to OpenAI models and any OpenAI-compatible A
 ```json
 {
   "llm": {
-    "registry": {
-      "providers": {
-        "openai": {
-          "type": "openai",
-          "apiKey": "YOUR_API_KEY"
-        }
-      },
-      "agent": {
-        "models": ["openai/gpt-4o"]
+    "providers": {
+      "openai": {
+        "type": "openai",
+        "apiKey": "YOUR_API_KEY"
       }
+    },
+    "agent": {
+      "models": ["openai/gpt-4o"]
     }
   }
 }
@@ -36,16 +34,14 @@ The OpenAI provider connects GoClaw to OpenAI models and any OpenAI-compatible A
 ```json
 {
   "llm": {
-    "registry": {
-      "providers": {
-        "lmstudio": {
-          "type": "openai",
-          "baseURL": "http://localhost:1234"
-        }
-      },
-      "agent": {
-        "models": ["lmstudio/your-model-name"]
+    "providers": {
+      "lmstudio": {
+        "type": "openai",
+        "baseURL": "http://localhost:1234"
       }
+    },
+    "agent": {
+      "models": ["lmstudio/your-model-name"]
     }
   }
 }
@@ -58,17 +54,15 @@ API key is optional for local servers.
 ```json
 {
   "llm": {
-    "registry": {
-      "providers": {
-        "openrouter": {
-          "type": "openai",
-          "apiKey": "YOUR_OPENROUTER_KEY",
-          "baseURL": "https://openrouter.ai/api"
-        }
-      },
-      "agent": {
-        "models": ["openrouter/anthropic/claude-3-opus"]
+    "providers": {
+      "openrouter": {
+        "type": "openai",
+        "apiKey": "YOUR_OPENROUTER_KEY",
+        "baseURL": "https://openrouter.ai/api"
       }
+    },
+    "agent": {
+      "models": ["openrouter/anthropic/claude-3-opus"]
     }
   }
 }
@@ -117,17 +111,15 @@ Can be used for embeddings with models like `text-embedding-3-small`:
 ```json
 {
   "llm": {
-    "registry": {
-      "providers": {
-        "openai-embed": {
-          "type": "openai",
-          "apiKey": "YOUR_API_KEY",
-          "embeddingOnly": true
-        }
-      },
-      "embeddings": {
-        "models": ["openai-embed/text-embedding-3-small"]
+    "providers": {
+      "openai-embed": {
+        "type": "openai",
+        "apiKey": "YOUR_API_KEY",
+        "embeddingOnly": true
       }
+    },
+    "embeddings": {
+      "models": ["openai-embed/text-embedding-3-small"]
     }
   }
 }

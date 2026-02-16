@@ -14,19 +14,17 @@ The Ollama provider connects GoClaw to locally-running Ollama for inference, emb
 ```json
 {
   "llm": {
-    "registry": {
-      "providers": {
-        "ollama": {
-          "type": "ollama",
-          "url": "http://localhost:11434"
-        }
-      },
-      "summarization": {
-        "models": ["ollama/qwen2.5:7b"]
-      },
-      "embeddings": {
-        "models": ["ollama/nomic-embed-text"]
+    "providers": {
+      "ollama": {
+        "type": "ollama",
+        "url": "http://localhost:11434"
       }
+    },
+    "summarization": {
+      "models": ["ollama/qwen2.5:7b"]
+    },
+    "embeddings": {
+      "models": ["ollama/nomic-embed-text"]
     }
   }
 }
@@ -51,23 +49,21 @@ Ollama is commonly used for compaction summaries to avoid cloud API costs:
 ```json
 {
   "llm": {
-    "registry": {
-      "providers": {
-        "ollama-summarize": {
-          "type": "ollama",
-          "url": "http://localhost:11434"
-        },
-        "claude": {
-          "type": "anthropic",
-          "apiKey": "YOUR_API_KEY"
-        }
+    "providers": {
+      "ollama-summarize": {
+        "type": "ollama",
+        "url": "http://localhost:11434"
       },
-      "agent": {
-        "models": ["claude/claude-sonnet-4-20250514"]
-      },
-      "summarization": {
-        "models": ["ollama-summarize/qwen2.5:7b", "claude/claude-3-haiku-20240307"]
+      "claude": {
+        "type": "anthropic",
+        "apiKey": "YOUR_API_KEY"
       }
+    },
+    "agent": {
+      "models": ["claude/claude-sonnet-4-20250514"]
+    },
+    "summarization": {
+      "models": ["ollama-summarize/qwen2.5:7b", "claude/claude-3-haiku-20240307"]
     }
   }
 }
@@ -91,22 +87,20 @@ For semantic search (memory_search, transcript_search):
 }
 ```
 
-Or via the registry:
+Or via the LLM config:
 
 ```json
 {
   "llm": {
-    "registry": {
-      "providers": {
-        "ollama-embed": {
-          "type": "ollama",
-          "url": "http://localhost:11434",
-          "embeddingOnly": true
-        }
-      },
-      "embeddings": {
-        "models": ["ollama-embed/nomic-embed-text"]
+    "providers": {
+      "ollama-embed": {
+        "type": "ollama",
+        "url": "http://localhost:11434",
+        "embeddingOnly": true
       }
+    },
+    "embeddings": {
+      "models": ["ollama-embed/nomic-embed-text"]
     }
   }
 }
@@ -119,23 +113,21 @@ For fully local operation:
 ```json
 {
   "llm": {
-    "registry": {
-      "providers": {
-        "ollama": {
-          "type": "ollama",
-          "url": "http://localhost:11434",
-          "contextTokens": 131072
-        }
-      },
-      "agent": {
-        "models": ["ollama/qwen2.5:32b"]
-      },
-      "summarization": {
-        "models": ["ollama/qwen2.5:7b"]
-      },
-      "embeddings": {
-        "models": ["ollama/nomic-embed-text"]
+    "providers": {
+      "ollama": {
+        "type": "ollama",
+        "url": "http://localhost:11434",
+        "contextTokens": 131072
       }
+    },
+    "agent": {
+      "models": ["ollama/qwen2.5:32b"]
+    },
+    "summarization": {
+      "models": ["ollama/qwen2.5:7b"]
+    },
+    "embeddings": {
+      "models": ["ollama/nomic-embed-text"]
     }
   }
 }

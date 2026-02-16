@@ -78,7 +78,7 @@ See [Channel Commands](commands.md) for detailed documentation.
 }
 ```
 
-Token can also be set via `TELEGRAM_BOT_TOKEN` environment variable.
+The setup wizard can detect `TELEGRAM_BOT_TOKEN` from your environment.
 
 ### HTTP/Web UI
 

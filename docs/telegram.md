@@ -28,10 +28,7 @@ GoClaw includes a Telegram bot for interacting with the agent via chat.
 }
 ```
 
-Or use environment variable:
-```bash
-export TELEGRAM_BOT_TOKEN="YOUR_BOT_TOKEN"
-```
+**Note:** The setup wizard (`goclaw setup`) can detect `TELEGRAM_BOT_TOKEN` from your environment and offer to use it.
 
 ### 3. Set Up User Access
 

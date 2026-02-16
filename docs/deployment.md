@@ -38,7 +38,7 @@ cp goclaw.example.json goclaw.json
 ```
 
 Required settings:
-- `llm.apiKey` or `ANTHROPIC_API_KEY` env var
+- `llm.providers.<name>.apiKey` — Your LLM provider API key
 - `telegram.botToken` (if using Telegram)
 
 ### 3. Create Users File
@@ -62,7 +62,7 @@ EOF
 ### 4. Run
 
 ```bash
-./bin/goclaw
+./bin/goclaw gateway
 ```
 
 ---
@@ -82,13 +82,9 @@ Type=simple
 User=goclaw
 Group=goclaw
 WorkingDirectory=/opt/goclaw
-ExecStart=/opt/goclaw/bin/goclaw
+ExecStart=/opt/goclaw/bin/goclaw gateway
 Restart=always
 RestartSec=5
-
-# Environment
-Environment=ANTHROPIC_API_KEY=sk-ant-...
-Environment=TELEGRAM_BOT_TOKEN=123456:ABC...
 
 # Logging
 StandardOutput=journal
@@ -98,12 +94,14 @@ StandardError=journal
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/opt/goclaw /home/goclaw/.openclaw
+ReadWritePaths=/opt/goclaw /home/goclaw/.goclaw
 
 [Install]
 WantedBy=multi-user.target
 EOF
 ```
+
+**Note:** All configuration (API keys, tokens) must be in `goclaw.json`. GoClaw does not read environment variables at runtime.
 
 ### Enable and Start
 
@@ -123,88 +121,70 @@ sudo journalctl -u goclaw -f
 
 ## Docker
 
-### Dockerfile
+GoClaw provides Docker files in the `docker/` directory of the repository.
 
-```dockerfile
-FROM golang:1.24-alpine AS builder
-
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN go build -o bin/goclaw ./cmd/goclaw
-
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates
-WORKDIR /app
-COPY --from=builder /app/bin/goclaw .
-COPY goclaw.json .
-COPY users.json .
-
-EXPOSE 8080
-CMD ["./goclaw"]
-```
-
-### Docker Compose
-
-```yaml
-version: '3.8'
-
-services:
-  goclaw:
-    build: .
-    restart: always
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./workspace:/workspace
-      - goclaw-data:/home/goclaw/.openclaw
-    environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-    
-  ollama:
-    image: ollama/ollama
-    restart: always
-    volumes:
-      - ollama-data:/root/.ollama
-    # GPU support (uncomment if available)
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - capabilities: [gpu]
-
-volumes:
-  goclaw-data:
-  ollama-data:
-```
-
-### Run with Docker Compose
+### Quick Start
 
 ```bash
-# Create .env file
-cat > .env << 'EOF'
-ANTHROPIC_API_KEY=sk-ant-...
-TELEGRAM_BOT_TOKEN=123456:ABC...
-EOF
-
-# Start
-docker-compose up -d
-
-# View logs
-docker-compose logs -f goclaw
+cd docker
+docker-compose up
 ```
 
----
+On first run, the container will:
+1. Generate default `goclaw.json` and `users.json`
+2. Create a random password for the owner account
+3. Print the password and exit
 
-## Environment Variables
+Then:
+1. Note the generated password from the output
+2. Edit the config to add your API key (see below)
+3. Run `docker-compose up -d` to start normally
 
-| Variable | Description |
-|----------|-------------|
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token |
-| `BRAVE_API_KEY` | Brave Search API key |
+### Editing the Config
+
+The config files are stored in a Docker volume. To edit them:
+
+```bash
+# Find where Docker stores the volume
+docker volume inspect docker_goclaw-config
+
+# Edit the config (path from above)
+sudo vim /var/lib/docker/volumes/docker_goclaw-config/_data/goclaw.json
+```
+
+At minimum, replace `YOUR_ANTHROPIC_API_KEY` with your actual API key.
+
+### Alternative: Pre-create Config Files
+
+If you prefer to manage configs outside Docker:
+
+```bash
+# Generate configs locally (if goclaw is installed)
+goclaw setup generate > goclaw.json
+goclaw setup generate --users --with-password > users.json
+```
+
+Then mount them in docker-compose.yml:
+
+```yaml
+volumes:
+  - ./goclaw.json:/home/goclaw/.goclaw/goclaw.json:ro
+  - ./users.json:/home/goclaw/.goclaw/users.json:ro
+```
+
+### Docker Files Reference
+
+The repository includes:
+
+- `docker/Dockerfile` — Multi-stage build for minimal image
+- `docker/docker-compose.yml` — Ready-to-use compose configuration
+- `docker/entrypoint.sh` — Handles first-run setup
+
+### View Logs
+
+```bash
+docker-compose logs -f goclaw
+```
 
 ---
 
@@ -231,83 +211,16 @@ cp users.json backup/
 
 ---
 
-## Ollama Setup
-
-GoClaw uses Ollama for:
-- Compaction/checkpoint summaries
-- Memory embeddings
-
-### Install Ollama
-
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-```
-
-### Pull Required Models
-
-```bash
-# For summaries (choose one)
-ollama pull qwen2.5:7b      # Good balance
-ollama pull qwen2.5:14b     # Better quality
-ollama pull llama3.2:3b     # Faster, smaller
-
-# For embeddings
-ollama pull nomic-embed-text
-```
-
-### Configure GoClaw
-
-```json
-{
-  "session": {
-    "compaction": {
-      "ollama": {
-        "url": "http://localhost:11434",
-        "model": "qwen2.5:7b"
-      }
-    }
-  },
-  "memorySearch": {
-    "enabled": true,
-    "ollama": {
-      "url": "http://localhost:11434",
-      "model": "nomic-embed-text"
-    }
-  }
-}
-```
-
-### Remote Ollama
-
-If running Ollama on a different machine:
-
-```json
-{
-  "session": {
-    "compaction": {
-      "ollama": {
-        "url": "http://192.168.1.100:11434",
-        "model": "qwen2.5:7b"
-      }
-    }
-  }
-}
-```
-
-Ensure Ollama is listening on all interfaces:
-```bash
-OLLAMA_HOST=0.0.0.0:11434 ollama serve
-```
-
----
-
 ## Monitoring
 
 ### Status Check
 
 ```bash
-# Check session status
-curl http://localhost:8080/api/status
+# Check if daemon is running (reads PID file)
+goclaw status
+
+# Or check systemd status
+sudo systemctl status goclaw
 ```
 
 ### Logging
@@ -335,52 +248,35 @@ See [Metrics](metrics.md) for details.
 
 ## Security Considerations
 
+For comprehensive security guidance, see the [Security](security.md) section.
+
 ### API Keys
 
 - Never commit API keys to git
-- Use environment variables or secure secret management
+- Store secrets only in `goclaw.json` (not environment variables)
+- Protect config with `chmod 0600`
 - Rotate keys periodically
+
+See [Environment variables and secrets](security-envvars.md) for why GoClaw uses config-only secrets.
 
 ### Network
 
-- Run behind a reverse proxy (nginx, caddy) for HTTPS
-- Limit network access to trusted IPs
-- Use firewall rules
+- Bind to localhost only (default) for local-only access
+- Use firewall rules to limit access
+- GoClaw is designed for trusted network environments
 
 ### File Access
 
 - GoClaw has read/write access to the workspace
-- Be careful what files are accessible
+- Config files are excluded from agent tool access
 - Consider running as unprivileged user
+- See [Sandbox](sandbox.md) for execution isolation
 
 ### User Authorization
 
 - Only authorized users can interact with the bot
 - Review `users.json` regularly
-- Implement rate limiting for public-facing deployments
-
----
-
-## Reverse Proxy (Nginx)
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name goclaw.example.com;
-
-    ssl_certificate /etc/letsencrypt/live/goclaw.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/goclaw.example.com/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
+- See [Roles](roles.md) for access control configuration
 
 ---
 

@@ -114,19 +114,11 @@ Define custom role permissions in `goclaw.json`:
 
 For web UI access:
 
-1. Generate a password hash:
-   ```bash
-   goclaw hash-password
-   ```
+```bash
+goclaw user set-password <username>
+```
 
-2. Add credentials to user config:
-   ```json
-   {
-     "credentials": [
-       {"type": "password", "hash": "<hash>", "label": "web-login"}
-     ]
-   }
-   ```
+This prompts for a password interactively and stores the hash in `users.json`.
 
 ### API Key Authentication
 
