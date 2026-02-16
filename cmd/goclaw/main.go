@@ -1481,15 +1481,21 @@ func buildLLMRegistry(cfg *config.Config) (*llm.Registry, error) {
 	}
 	for name, pCfg := range cfg.LLM.Providers {
 		regCfg.Providers[name] = llm.ProviderConfig{
-			Type:           pCfg.Type,
-			APIKey:         pCfg.APIKey,
-			BaseURL:        pCfg.BaseURL,
-			URL:            pCfg.URL,
-			MaxTokens:      pCfg.MaxTokens,
-			ContextTokens:  pCfg.ContextTokens,
-			TimeoutSeconds: pCfg.TimeoutSeconds,
-			PromptCaching:  pCfg.PromptCaching,
-			EmbeddingOnly:  pCfg.EmbeddingOnly,
+			Type:               pCfg.Type,
+			APIKey:             pCfg.APIKey,
+			BaseURL:            pCfg.BaseURL,
+			URL:                pCfg.URL,
+			MaxTokens:          pCfg.MaxTokens,
+			ContextTokens:      pCfg.ContextTokens,
+			TimeoutSeconds:     pCfg.TimeoutSeconds,
+			PromptCaching:      pCfg.PromptCaching,
+			EmbeddingOnly:      pCfg.EmbeddingOnly,
+			DumpOnSuccess:      pCfg.DumpOnSuccess,
+			ServerToolsAllowed: pCfg.ServerToolsAllowed,
+			MaxTurns:           pCfg.MaxTurns,
+			IncrementalContext: pCfg.IncrementalContext,
+			KeepaliveTime:      pCfg.KeepaliveTime,
+			KeepaliveTimeout:   pCfg.KeepaliveTimeout,
 		}
 	}
 	return llm.NewRegistry(regCfg)
@@ -1910,12 +1916,15 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	go func() {
 		sig := <-sigCh
 		L_info("received signal", "signal", sig)
+		signal.Stop(sigCh) // Prevent handling the same signal twice
+		// Cancel runCtx FIRST so goroutines (compaction retry, etc.) can exit.
+		// Otherwise Shutdown blocks waiting for them while they wait on I/O.
+		cancel()
 		// Stop transcript manager BEFORE gateway shutdown (uses gateway's SQLite DB)
 		if transcriptMgr != nil {
 			transcriptMgr.Stop()
 		}
 		gw.Shutdown()
-		cancel()
 	}()
 
 	// Start Telegram bot if configured (with persistent retry on connection failures)
