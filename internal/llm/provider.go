@@ -45,6 +45,19 @@ type Provider interface {
 	SupportsEmbeddings() bool
 }
 
+// ModelValidationResult describes validation outcome. Nil means OK.
+type ModelValidationResult struct {
+	Fatal   bool   // true = exit process; false = L_error and remove model from chain
+	Message string // logged at L_error
+}
+
+// ModelValidator is an optional interface for providers with model restrictions.
+// The registry validates models at startup for all purposes (agent, summarization, embeddings).
+// Returns nil if model is OK. Non-nil: Fatal=true exits process; Fatal=false logs L_error and removes model from chain.
+type ModelValidator interface {
+	ValidateModel(model string) *ModelValidationResult
+}
+
 // StatefulProvider is implemented by providers that need session-scoped state.
 // The registry automatically calls these methods around StreamMessage calls.
 // Examples: xAI (response_id for context chaining), future providers (cursor tokens, OAuth state).
@@ -114,6 +127,11 @@ type StreamOptions struct {
 	// OnThinkingDelta is called for each thinking content delta during streaming.
 	// If nil, thinking content is still captured but not streamed.
 	OnThinkingDelta func(delta string)
+
+	// OnServerToolCall is called when xAI (or other providers) invokes a server-side tool.
+	// name, args (JSON), status (pending/completed/failed), errMsg (non-empty when status=failed).
+	// Gateway emits EventToolStart/EventToolEnd.
+	OnServerToolCall func(name, args, status, errMsg string)
 }
 
 // Note: Response type is currently defined in anthropic.go
@@ -198,7 +216,7 @@ type ProviderConfig struct {
 	// xAI-specific fields
 	ServerToolsAllowed []string `json:"serverToolsAllowed"` // xAI server-side tools to enable (empty = all known tools)
 	MaxTurns           int      `json:"maxTurns"`           // xAI max agentic turns (0 = xai-go default)
-	StoreResponses     *bool    `json:"storeResponses"`     // xAI: store responses server-side for context preservation (nil = true)
+	IncrementalContext *bool    `json:"incrementalContext"` // xAI: chain context, send only new messages (nil = true)
 	KeepaliveTime      int      `json:"keepaliveTime"`      // xAI gRPC keepalive time in seconds (0 = xai-go default)
 	KeepaliveTimeout   int      `json:"keepaliveTimeout"`   // xAI gRPC keepalive timeout in seconds (0 = xai-go default)
 }

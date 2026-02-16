@@ -13,6 +13,7 @@ import (
 type Command struct {
 	Name        string   // e.g., "/status"
 	Description string   // e.g., "Show session info"
+	Usage       string   // Subcommand usage, e.g. "[debug|info|subs]" (optional)
 	Aliases     []string // e.g., ["/stat"]
 	Handler     CommandHandler
 }
@@ -25,6 +26,7 @@ type CommandArgs struct {
 	SessionKey string          // Session identifier
 	Provider   SessionProvider // Access to session/gateway functionality
 	RawArgs    string          // Everything after the command name
+	Usage      string          // Copy of Command.Usage for error messages
 }
 
 // Manager is the global command registry
@@ -128,6 +130,7 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string, sessionKey string)
 		SessionKey: sessionKey,
 		Provider:   m.provider,
 		RawArgs:    rawArgs,
+		Usage:      cmd.Usage,
 	}
 
 	return cmd.Handler(ctx, args)

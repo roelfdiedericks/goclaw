@@ -23,8 +23,9 @@ type CompactionManager struct {
 	inProgress atomic.Bool
 
 	// Background goroutine control
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	stopCh     chan struct{}
+	wg         sync.WaitGroup
+	shutdownCtx context.Context // Cancelled on shutdown; used for async summaries
 }
 
 // CompactionManagerConfig holds all compaction settings
@@ -146,6 +147,7 @@ func (m *CompactionManager) Start(ctx context.Context) {
 		return
 	}
 
+	m.shutdownCtx = ctx
 	m.wg.Add(1)
 	go m.runRetryLoop(ctx)
 	L_info("compaction: background retry started", "intervalSeconds", m.config.RetryIntervalSeconds)
@@ -308,7 +310,11 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 
 	// Fire off async summary generation if needed
 	if needsAsyncSummary && len(messagesToSummarize) > 0 {
-		go m.generateSummaryAsync(context.Background(), sessionKey, compactionID, messagesToSummarize)
+		asyncCtx := context.Background()
+		if m.shutdownCtx != nil {
+			asyncCtx = m.shutdownCtx
+		}
+		go m.generateSummaryAsync(asyncCtx, sessionKey, compactionID, messagesToSummarize)
 	}
 
 	result := &CompactionResult{
