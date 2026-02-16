@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,67 @@ const defaultXAIContextSize = 131072
 // Default model for xAI
 const defaultXAIModel = "grok-4-1-fast-reasoning"
 
+// =============================================================================
+// HARDCODED MODEL RESTRICTION - ATTENTION xAI / FUTURE MAINTAINERS
+// =============================================================================
+//
+// This provider ONLY supports models that can handle BOTH:
+//   1. Vision (image input) - e.g. user sends photo from Telegram
+//   2. Server-side tools (web_search, x_search, code_execution)
+//
+// Models like grok-2-vision support vision but REJECT requests that include
+// server-side tool definitions. The xAI API returns invalid_request_error and
+// refuses to process the request entirely. So we lock to grok-4 family only.
+//
+// If you configure an unsupported model (e.g. grok-2-vision), GoClaw will
+// exit immediately with a fatal error. Fix your goclaw.json.
+//
+// =============================================================================
+
+var allowedXAIModels = map[string]bool{
+	"grok-4-1-fast-reasoning":     true,
+	"grok-4-1-fast-non-reasoning": true,
+	"grok-4-fast-reasoning":       true,
+	"grok-4-fast-non-reasoning":   true,
+	"grok-4":                      true,
+	"grok-4-0414":                 true,
+	"grok-4-0709":                 true,
+	"grok-4-1":                    true,
+}
+
+// ValidateModel implements ModelValidator. Returns fatal result if model is not in allowlist.
+func (p *XAIProvider) ValidateModel(model string) *ModelValidationResult {
+	if model == "" || allowedXAIModels[model] {
+		return nil
+	}
+	return &ModelValidationResult{
+		Fatal: true,
+		Message: fmt.Sprintf(`xai: %s cannot be used for conversational AI agents.
+
+WHY: The xAI API rejects requests when %s is used with server-side tool
+definitions (web_search, x_search, code_execution). Error returned:
+"the model grok-2-vision is not supported when using server-side tools,
+only the grok-4 family of models are supported".
+
+We always attach tool definitions so the agent can use tools. grok-2-vision
+refuses the entire request before processing—so images never get analyzed either.
+Use the grok-4 family instead:
+
+  • xai/grok-4-1-fast-reasoning
+  • xai/grok-4-1-fast-non-reasoning
+
+Fix goclaw.json and try again.`, model, model),
+	}
+}
+
+// ensureModelAllowed exits the process if the configured model is not supported.
+func (p *XAIProvider) ensureModelAllowed() {
+	if r := p.ValidateModel(p.model); r != nil {
+		L_error("xai: unsupported model", "model", p.model, "message", r.Message)
+		os.Exit(1)
+	}
+}
+
 // NewXAIProvider creates a new xAI provider from ProviderConfig.
 // Client is lazily initialized on first use to support keepalive configuration.
 func NewXAIProvider(name string, cfg ProviderConfig) (*XAIProvider, error) {
@@ -83,17 +145,17 @@ func NewXAIProvider(name string, cfg ProviderConfig) (*XAIProvider, error) {
 		maxTokens = 4096
 	}
 
-	// Default StoreResponses to true if not explicitly set
-	// (nil means use default, which is true for context preservation)
-	storeResponses := true
-	if cfg.StoreResponses != nil {
-		storeResponses = *cfg.StoreResponses
+	// Default IncrementalContext to true if not explicitly set
+	// (nil means use default, which is true for context chaining)
+	incrementalContext := true
+	if cfg.IncrementalContext != nil {
+		incrementalContext = *cfg.IncrementalContext
 	}
 
 	L_debug("xai provider created",
 		"name", name,
 		"maxTokens", maxTokens,
-		"storeResponses", storeResponses,
+		"incrementalContext", incrementalContext,
 		"serverTools", cfg.ServerToolsAllowed,
 		"maxTurns", cfg.MaxTurns,
 	)
@@ -239,25 +301,51 @@ func (p *XAIProvider) StreamMessage(
 	onDelta func(delta string),
 	opts *StreamOptions,
 ) (*Response, error) {
+	p.ensureModelAllowed()
 	// Get or create client
 	client, err := p.getClient()
 	if err != nil {
 		return nil, err
 	}
 
+	// IncrementalContext: nil = true (default), explicit value = use it
+	incrementalMode := true
+	if p.config.IncrementalContext != nil {
+		incrementalMode = *p.config.IncrementalContext
+	}
+	L_debug("xai: incremental context config",
+		"configValue", p.config.IncrementalContext,
+		"incrementalMode", incrementalMode,
+	)
+
 	// Build request
 	req := xai.NewChatRequest().
 		WithModel(p.model).
-		WithMaxTokens(int32(p.maxTokens))
+		WithMaxTokens(int32(p.maxTokens)).
+		WithStoreMessages(incrementalMode)
 
-	// Add system prompt
-	if systemPrompt != "" {
-		req.SystemMessage(xai.SystemContent{Text: systemPrompt})
-	}
-
-	// Add conversation messages
-	for _, msg := range messages {
-		p.addMessageToRequest(req, msg)
+	usedPreviousResponseId := false
+	if incrementalMode && p.responseID != "" && p.lastMessageCount > 0 && len(messages) > p.lastMessageCount {
+		// Incremental mode: chain from previous response, send only new messages
+		req.WithPreviousResponseId(p.responseID)
+		for _, msg := range messages[p.lastMessageCount:] {
+			p.addMessageToRequest(req, msg)
+		}
+		usedPreviousResponseId = true
+		L_debug("xai: using incremental mode",
+			"responseID", p.responseID,
+			"previousCount", p.lastMessageCount,
+			"totalCount", len(messages),
+			"newMessages", len(messages)-p.lastMessageCount,
+		)
+	} else {
+		// Full mode: system prompt + all messages
+		if systemPrompt != "" {
+			req.SystemMessage(xai.SystemContent{Text: systemPrompt})
+		}
+		for _, msg := range messages {
+			p.addMessageToRequest(req, msg)
+		}
 	}
 
 	// Add server-side tools (web_search, x_search, etc.)
@@ -266,7 +354,8 @@ func (p *XAIProvider) StreamMessage(
 	// Add client-side tools (GoClaw tools)
 	p.addClientTools(req, toolDefs)
 
-	// Apply reasoning effort from options
+	// Apply reasoning effort from options. Only grok-3-mini uses it; other models
+	// (e.g. grok-4-1-fast-reasoning) ignore it. No harm in setting it for all.
 	if opts != nil && opts.ThinkingLevel != "" {
 		level := ThinkingLevel(opts.ThinkingLevel)
 		if effort := level.XAIEffort(); effort != nil {
@@ -280,32 +369,23 @@ func (p *XAIProvider) StreamMessage(
 		req.WithMaxTurns(int32(p.config.MaxTurns))
 	}
 
-	// Enable message storage for context preservation
-	// StoreResponses: nil = true (default), explicit value = use it
-	storeMode := true
-	if p.config.StoreResponses != nil {
-		storeMode = *p.config.StoreResponses
+	serverTools := p.getEnabledServerToolNames()
+	clientToolNames := make([]string, 0, len(toolDefs))
+	for _, td := range toolDefs {
+		name := td.Name
+		for _, sn := range serverTools {
+			if td.Name == sn {
+				name = clientToolPrefix + td.Name
+				break
+			}
+		}
+		clientToolNames = append(clientToolNames, name)
 	}
-	req.WithStoreMessages(storeMode)
-
-	// Incremental mode: if we have a responseID and storeMode is enabled,
-	// we can use the server's stored context and only send new messages
-	if storeMode && p.responseID != "" && p.lastMessageCount > 0 && len(messages) > p.lastMessageCount {
-		// Use previous response to chain context
-		req.WithPreviousResponseId(p.responseID)
-		L_debug("xai: using incremental mode",
-			"responseID", p.responseID,
-			"previousCount", p.lastMessageCount,
-			"totalCount", len(messages),
-			"newMessages", len(messages)-p.lastMessageCount,
-		)
-		// Note: We still send all messages because the request builder doesn't
-		// support partial messages. The server will use previousResponseId to
-		// avoid reprocessing old context.
-	}
-
-	// Track if we used previousResponseId (for 404 retry logic)
-	usedPreviousResponseId := storeMode && p.responseID != "" && p.lastMessageCount > 0 && len(messages) > p.lastMessageCount
+	L_info("xai: tools",
+		"model", p.model,
+		"server", serverTools,
+		"client", clientToolNames,
+	)
 
 	// Start streaming
 	stream, err := client.StreamChat(ctx, req)
@@ -340,7 +420,7 @@ func (p *XAIProvider) StreamMessage(
 			if p.config.MaxTurns > 0 {
 				req.WithMaxTurns(int32(p.config.MaxTurns))
 			}
-			req.WithStoreMessages(storeMode)
+			req.WithStoreMessages(incrementalMode)
 			// Note: NOT using previousResponseId this time
 
 			// Retry
@@ -354,14 +434,8 @@ func (p *XAIProvider) StreamMessage(
 	}
 	defer stream.Close()
 
-	// Get thinking delta callback from options
-	var onThinkingDelta func(string)
-	if opts != nil {
-		onThinkingDelta = opts.OnThinkingDelta
-	}
-
-	// Process stream
-	resp, err := p.processStream(stream, onDelta, onThinkingDelta)
+	// Process stream with opts for OnThinkingDelta and OnServerToolCall
+	resp, err := p.processStream(stream, onDelta, opts, toolDefs)
 	if err != nil {
 		return nil, err
 	}
@@ -373,9 +447,22 @@ func (p *XAIProvider) StreamMessage(
 	return resp, nil
 }
 
+// toolCallStatusString maps xai.ToolCallStatus to string for callbacks.
+func toolCallStatusString(s xai.ToolCallStatus) string {
+	switch s {
+	case xai.ToolCallStatusCompleted:
+		return "completed"
+	case xai.ToolCallStatusFailed:
+		return "failed"
+	default:
+		return "pending"
+	}
+}
+
 // SimpleMessage sends a single message without streaming (for summarization).
 // This is a simpler interface used for tasks like compaction/summarization.
 func (p *XAIProvider) SimpleMessage(ctx context.Context, userMessage, systemPrompt string) (string, error) {
+	p.ensureModelAllowed()
 	// Get or create client
 	client, err := p.getClient()
 	if err != nil {
@@ -497,7 +584,7 @@ func (p *XAIProvider) EmbeddingDimensions() int {
 // addMessageToRequest maps a GoClaw Message to the appropriate xai-go content type
 // and adds it to the ChatRequest.
 func (p *XAIProvider) addMessageToRequest(req *xai.ChatRequest, msg types.Message) {
-	L_debug("xai: adding message",
+	L_trace("xai: adding message",
 		"role", msg.Role,
 		"contentLen", len(msg.Content),
 		"hasImages", len(msg.Images) > 0,
@@ -513,14 +600,21 @@ func (p *XAIProvider) addMessageToRequest(req *xai.ChatRequest, msg types.Messag
 		// Convert base64 data to data URL format
 		if len(msg.Images) > 0 && msg.Images[0].Data != "" {
 			content.ImageURL = "data:" + msg.Images[0].MimeType + ";base64," + msg.Images[0].Data
-			L_debug("xai: user message with image", "mimeType", msg.Images[0].MimeType)
+			L_info("xai: user message with image",
+				"mimeType", msg.Images[0].MimeType,
+				"dataLen", len(msg.Images[0].Data),
+				"textLen", len(msg.Content))
+		} else if len(msg.Images) > 0 {
+			L_info("xai: user message has images but first image has no data",
+				"imageCount", len(msg.Images),
+				"firstDataEmpty", msg.Images[0].Data == "")
 		}
 		req.UserMessage(content)
 
 	case "assistant":
 		// Assistant message (may include thinking in Content)
 		if msg.Content == "" {
-			L_debug("xai: assistant message has empty content, skipping")
+			L_debug("xai: skipping empty assistant message")
 			return
 		}
 		req.AssistantMessage(xai.AssistantContent{Text: msg.Content})
@@ -539,11 +633,6 @@ func (p *XAIProvider) addMessageToRequest(req *xai.ChatRequest, msg types.Messag
 				},
 			},
 		})
-		L_debug("xai: tool_use message added",
-			"toolName", msg.ToolName,
-			"toolUseID", msg.ToolUseID,
-			"argsLen", len(msg.ToolInput),
-		)
 
 	case "tool_result":
 		// Tool result
@@ -555,10 +644,6 @@ func (p *XAIProvider) addMessageToRequest(req *xai.ChatRequest, msg types.Messag
 			CallID: msg.ToolUseID,
 			Result: msg.Content,
 		})
-		L_debug("xai: tool_result message added",
-			"toolUseID", msg.ToolUseID,
-			"resultLen", len(msg.Content),
-		)
 
 	default:
 		L_warn("xai: unknown message role, skipping",
@@ -568,86 +653,21 @@ func (p *XAIProvider) addMessageToRequest(req *xai.ChatRequest, msg types.Messag
 	}
 }
 
-// addServerTools adds xAI server-side tools to the request based on config.
-// If ServerToolsAllowed is empty, all known tools are enabled.
-// If ServerToolsAllowed contains "none", no server tools are added.
-// Otherwise, only tools in the allowlist are added.
+// addServerTools adds xAI server-side tools to the request.
+// HACK: Always add all three. xAI executes them internally (web search, X search, code).
+// Config ServerToolsAllowed is ignored for now.
 func (p *XAIProvider) addServerTools(req *xai.ChatRequest) {
-	allowed := p.config.ServerToolsAllowed
-
-	// Check for explicit "none" to disable all server tools
-	for _, a := range allowed {
-		if a == "none" {
-			L_trace("xai: server tools disabled via 'none'")
-			return
-		}
-	}
-
-	// Helper to check if a tool is allowed
-	isAllowed := func(name string) bool {
-		if len(allowed) == 0 {
-			return true // Empty list = all tools allowed
-		}
-		for _, a := range allowed {
-			if a == name {
-				return true
-			}
-		}
-		return false
-	}
-
-	// Add web_search if allowed
-	if isAllowed("web_search") {
-		req.AddTool(xai.NewWebSearchTool())
-	}
-
-	// Add x_search if allowed
-	if isAllowed("x_search") {
-		req.AddTool(xai.NewXSearchTool())
-	}
-
-	// Add code_execution if allowed
-	if isAllowed("code_execution") {
-		req.AddTool(xai.NewCodeExecutionTool())
-	}
-
-	// Note: collections_search requires collection IDs which we don't have configured
-	// Note: attachment_search requires attachments which we don't have configured
-	// Note: mcp requires server label/URL which we don't have configured
-	// These can be added later if config fields are added
-
-	L_trace("xai: server tools configured",
-		"allowed", allowed,
-		"addedAll", len(allowed) == 0,
+	req.AddTool(xai.NewWebSearchTool())
+	req.AddTool(xai.NewXSearchTool())
+	req.AddTool(xai.NewCodeExecutionTool())
+	L_debug("xai: server tools configured",
+		"added", []string{"web_search", "x_search", "code_execution"},
 	)
 }
 
 // getEnabledServerToolNames returns the names of server-side tools that will be added.
-// Used to detect conflicts with client tool names.
 func (p *XAIProvider) getEnabledServerToolNames() []string {
-	allowed := p.config.ServerToolsAllowed
-
-	// Check for explicit "none" - no server tools
-	for _, a := range allowed {
-		if a == "none" {
-			return nil
-		}
-	}
-
-	// If empty, all known tools are enabled
-	if len(allowed) == 0 {
-		// Only return tools we actually add (web_search, x_search, code_execution)
-		return []string{"web_search", "x_search", "code_execution"}
-	}
-
-	// Return only the allowed ones that we actually add
-	var result []string
-	for _, name := range allowed {
-		if name == "web_search" || name == "x_search" || name == "code_execution" {
-			result = append(result, name)
-		}
-	}
-	return result
+	return []string{"web_search", "x_search", "code_execution"}
 }
 
 // addClientTools converts GoClaw tool definitions to xai.FunctionTool and adds them.
@@ -693,7 +713,7 @@ func (p *XAIProvider) addClientTools(req *xai.ChatRequest, toolDefs []types.Tool
 	// Let the model decide when to use tools
 	req.WithToolChoice(xai.ToolChoiceAuto)
 
-	L_trace("xai: client tools configured", "count", len(toolDefs))
+	L_debug("xai: client tools configured", "count", len(toolDefs))
 }
 
 // =============================================================================
@@ -748,13 +768,20 @@ func isNotFoundError(err error) bool {
 
 // processStream iterates through streaming chunks and builds a Response.
 // It captures responseID, accumulates text/reasoning, extracts tool calls, and tracks usage.
-// The onDelta callback is invoked for each text delta.
-// The onThinkingDelta callback is invoked for each reasoning delta (may be nil).
+// opts provides OnThinkingDelta and OnServerToolCall callbacks (may be nil).
 func (p *XAIProvider) processStream(
 	stream *xai.ChunkStream,
 	onDelta func(delta string),
-	onThinkingDelta func(delta string),
+	opts *StreamOptions,
+	toolDefs []ToolDefinition,
 ) (*Response, error) {
+	// Build set of registered client tool names (canonical and prefixed versions)
+	clientToolNames := make(map[string]bool)
+	for _, td := range toolDefs {
+		clientToolNames[td.Name] = true
+		clientToolNames[clientToolPrefix+td.Name] = true // Also accept prefixed version
+	}
+
 	var (
 		textBuilder      strings.Builder
 		reasoningBuilder strings.Builder
@@ -789,14 +816,55 @@ func (p *XAIProvider) processStream(
 		// Accumulate reasoning delta
 		if chunk.ReasoningDelta != "" {
 			reasoningBuilder.WriteString(chunk.ReasoningDelta)
-			if onThinkingDelta != nil {
-				onThinkingDelta(chunk.ReasoningDelta)
+			if opts != nil && opts.OnThinkingDelta != nil {
+				opts.OnThinkingDelta(chunk.ReasoningDelta)
 			}
 		}
 
-		// Capture first tool call (GoClaw processes one at a time)
-		if toolCall == nil && len(chunk.ToolCalls) > 0 {
-			toolCall = chunk.ToolCalls[0]
+		// Process ALL tool calls in chunk (client and server)
+		for _, tc := range chunk.ToolCalls {
+			if tc.Function == nil {
+				continue
+			}
+			name := tc.Function.Name
+			args := tc.Function.Arguments
+			statusStr := toolCallStatusString(tc.Status)
+
+			if tc.IsServerSide() {
+				// Server-side: log at INFO, inject into thinking, emit via callback
+				L_info("xai: server tool",
+					"tool", name,
+					"args", args,
+					"status", statusStr,
+					"id", tc.ID,
+				)
+				if opts != nil && opts.OnThinkingDelta != nil {
+					formatted := fmt.Sprintf("\n[%s: %s] (%s)\n", name, args, statusStr)
+					if tc.ErrorMessage != "" {
+						formatted = fmt.Sprintf("\n[%s: %s] (failed: %s)\n", name, args, tc.ErrorMessage)
+					}
+					opts.OnThinkingDelta(formatted)
+				}
+				if opts != nil && opts.OnServerToolCall != nil {
+					opts.OnServerToolCall(name, args, statusStr, tc.ErrorMessage)
+				}
+				continue
+			}
+
+			// Client-side: capture first one for GoClaw to execute
+			if toolCall == nil && clientToolNames[name] {
+				L_debug("xai: client tool call received",
+					"name", name,
+					"id", tc.ID,
+				)
+				toolCall = tc
+			} else if toolCall == nil {
+				L_debug("xai: ignoring non-client tool call",
+					"name", name,
+					"id", tc.ID,
+					"type", tc.Type,
+				)
+			}
 		}
 
 		// Update finish reason and usage from each chunk (last one wins)
@@ -846,14 +914,21 @@ func (p *XAIProvider) processStream(
 		resp.StopReason = "tool_use"
 	}
 
-	L_debug("xai: stream processed",
+	L_debug("xai: stream complete",
 		"responseID", responseID,
 		"textLen", len(resp.Text),
 		"thinkingLen", len(resp.Thinking),
-		"hasToolCall", toolCall != nil,
+		"stopReason", resp.StopReason,
 		"inputTokens", resp.InputTokens,
 		"outputTokens", resp.OutputTokens,
 	)
+	if toolCall != nil {
+		L_debug("xai: tool call",
+			"tool", resp.ToolName,
+			"id", resp.ToolUseID,
+			"argsLen", len(toolCall.Function.Arguments),
+		)
+	}
 
 	return resp, nil
 }
