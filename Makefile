@@ -1,4 +1,4 @@
-.PHONY: build run debug trace clean install test lint audit install-lint-tools skills-update skills-check changelog release-check release release-monitor
+.PHONY: build run debug trace clean install test lint audit install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release
 
 BINARY := goclaw
 
@@ -136,7 +136,7 @@ changelog:
 	echo "Current: [$$current_ver] $$current_chan"; \
 	echo "New:     [$$new_ver] $$current_chan - $$today"; \
 	echo ""; \
-	sed -i '/^## \[Unreleased\]/a\\n## ['"$$new_ver"'] '"$$current_chan"' - '"$$today"'\n\n### Added\n- \n\n### Changed\n- \n\n### Fixed\n- ' CHANGELOG.md; \
+	sed -i '/^## \[Unreleased\]/a\\n## ['"$$new_ver"'] '"$$current_chan"' - '"$$today"'\n\n- ' CHANGELOG.md; \
 	echo "Opening editor..."; \
 	$${EDITOR:-vim} +11 CHANGELOG.md; \
 	echo ""; \
@@ -217,3 +217,23 @@ release-monitor:
 		elif command -v open >/dev/null 2>&1; then open "$$url"; \
 		else echo "Visit: $$url"; fi; \
 	fi
+
+# Re-release: delete existing tag and recreate on HEAD
+# Use when a release failed and you need to retry with the same version
+re-release:
+	@version=$(call get_tag); \
+	echo "=== Re-release $$version ==="; \
+	read -p "Delete and recreate tag $$version? [y/N] " confirm; \
+	if [ "$$confirm" != "y" ] && [ "$$confirm" != "Y" ]; then \
+		echo "Aborted."; exit 1; \
+	fi; \
+	echo "Deleting remote tag..."; \
+	git push origin --delete $$version 2>/dev/null || true; \
+	echo "Deleting local tag..."; \
+	git tag -d $$version 2>/dev/null || true; \
+	echo "Creating tag on HEAD..."; \
+	git tag -a $$version -m "Release $(VERSION) ($(CHANNEL))"; \
+	echo "Pushing tag..."; \
+	git push origin $$version; \
+	echo ""; \
+	echo "Done! Run: make release-monitor"
