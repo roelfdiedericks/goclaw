@@ -2,6 +2,7 @@
 package setup
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,8 +11,10 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/huh"
+	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
 // BackupCount is the number of backup versions to keep
@@ -128,6 +131,87 @@ func ShowConfigPath() error {
 
 	fmt.Println(configPath)
 	return nil
+}
+
+// GenerateDefault outputs a default configuration template to stdout
+func GenerateDefault() error {
+	cfg := config.DefaultConfig()
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	fmt.Println(string(data))
+	return nil
+}
+
+// GenerateDefaultUsers outputs a default users.json template to stdout
+// If withPassword is true, generates a random password and includes the hash
+func GenerateDefaultUsers(withPassword bool) error {
+	owner := &config.UserEntry{
+		Name: "Owner",
+		Role: "owner",
+	}
+
+	if withPassword {
+		// Generate random password
+		password, err := generateRandomPassword(16)
+		if err != nil {
+			return fmt.Errorf("failed to generate password: %w", err)
+		}
+
+		// Hash it
+		hash, err := user.HashPassword(password)
+		if err != nil {
+			return fmt.Errorf("failed to hash password: %w", err)
+		}
+
+		owner.HTTPPasswordHash = hash
+
+		// Print password to stderr so JSON goes to stdout
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "=== Generated Credentials ===")
+		fmt.Fprintln(os.Stderr, "Username: owner")
+		fmt.Fprintln(os.Stderr, "Password:", password)
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Save this password - it cannot be recovered!")
+		fmt.Fprintln(os.Stderr, "")
+	}
+
+	users := config.UsersConfig{
+		"owner": owner,
+	}
+
+	data, err := json.MarshalIndent(users, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal users: %w", err)
+	}
+
+	fmt.Println(string(data))
+
+	if !withPassword {
+		// Print warning to stderr
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "NOTE: The generated users.json has no authentication credentials.")
+		fmt.Fprintln(os.Stderr, "To enable HTTP authentication, run: goclaw user set-password owner")
+		fmt.Fprintln(os.Stderr, "To enable Telegram, add your telegram_id to the owner entry.")
+	}
+
+	return nil
+}
+
+// generateRandomPassword creates a random alphanumeric password
+func generateRandomPassword(length int) (string, error) {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, length)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	for i := range b {
+		b[i] = charset[int(b[i])%len(charset)]
+	}
+	return string(b), nil
 }
 
 // findExistingConfig searches for an existing goclaw.json

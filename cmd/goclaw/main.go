@@ -1592,9 +1592,10 @@ func openMemoryDB(cfg *config.Config) (*sql.DB, error) {
 
 // SetupCmd is the interactive setup wizard
 type SetupCmd struct {
-	Auto   SetupAutoCmd   `cmd:"" default:"withargs" help:"Run setup (auto-detect mode)"`
-	Wizard SetupWizardCmd `cmd:"wizard" help:"Run full setup wizard (even if config exists)"`
-	Edit   SetupEditCmd   `cmd:"edit" help:"Edit existing configuration"`
+	Auto     SetupAutoCmd     `cmd:"" default:"withargs" help:"Run setup (auto-detect mode)"`
+	Wizard   SetupWizardCmd   `cmd:"wizard" help:"Run full setup wizard (even if config exists)"`
+	Edit     SetupEditCmd     `cmd:"edit" help:"Edit existing configuration"`
+	Generate SetupGenerateCmd `cmd:"generate" help:"Output default config template to stdout"`
 }
 
 // SetupAutoCmd auto-detects mode: wizard if no config, edit if exists
@@ -1616,6 +1617,19 @@ type SetupEditCmd struct{}
 
 func (s *SetupEditCmd) Run(ctx *Context) error {
 	return setup.RunEdit()
+}
+
+// SetupGenerateCmd outputs default config template
+type SetupGenerateCmd struct {
+	Users        bool `help:"Generate users.json instead of goclaw.json"`
+	WithPassword bool `help:"Generate a random password for the owner (users.json only)"`
+}
+
+func (s *SetupGenerateCmd) Run(ctx *Context) error {
+	if s.Users {
+		return setup.GenerateDefaultUsers(s.WithPassword)
+	}
+	return setup.GenerateDefault()
 }
 
 // ConfigCmd shows configuration
