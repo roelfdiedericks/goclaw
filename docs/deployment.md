@@ -39,12 +39,15 @@ Required settings:
 ```bash
 cat > users.json << 'EOF'
 {
-  "users": {
-    "telegram:YOUR_USER_ID": {
+  "users": [
+    {
       "name": "Your Name",
-      "roles": ["admin"]
+      "role": "owner",
+      "identities": [
+        {"provider": "telegram", "id": "YOUR_USER_ID"}
+      ]
     }
-  }
+  ]
 }
 EOF
 ```
@@ -194,9 +197,7 @@ docker-compose logs -f goclaw
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token |
-| `GOCLAW_CONFIG` | Path to config file (default: `goclaw.json`) |
-| `GOCLAW_WORKSPACE` | Workspace directory |
-| `LOG_LEVEL` | Logging level (debug, info, warn, error) |
+| `BRAVE_API_KEY` | Brave Search API key |
 
 ---
 
@@ -204,9 +205,8 @@ docker-compose logs -f goclaw
 
 | Path | Purpose |
 |------|---------|
-| `~/.openclaw/sessions.db` | SQLite session database |
-| `~/.openclaw/media/` | Temporary media files |
-| `~/.openclaw/memory.db` | Memory search index |
+| `~/.goclaw/sessions.db` | SQLite session database |
+| `~/.goclaw/media/` | Temporary media files |
 | `./goclaw.json` | Configuration |
 | `./users.json` | User authorization |
 
@@ -215,7 +215,7 @@ docker-compose logs -f goclaw
 Back up these files regularly:
 ```bash
 # SQLite database (contains all conversation history)
-cp ~/.openclaw/sessions.db backup/sessions-$(date +%Y%m%d).db
+cp ~/.goclaw/sessions.db backup/sessions-$(date +%Y%m%d).db
 
 # Configuration
 cp goclaw.json backup/
@@ -296,33 +296,33 @@ OLLAMA_HOST=0.0.0.0:11434 ollama serve
 
 ## Monitoring
 
-### Health Check
+### Status Check
 
 ```bash
-# Check if running
-curl http://localhost:8080/health
-
 # Check session status
 curl http://localhost:8080/api/status
 ```
 
 ### Logging
 
-Set log level in config or environment:
+Enable debug or trace logging with flags:
+
 ```bash
-LOG_LEVEL=debug ./bin/goclaw
+# Debug logging
+./bin/goclaw gateway -d
+
+# Trace logging (very verbose)
+./bin/goclaw gateway -t
+
+# Or via make
+make debug
 ```
 
-Log levels:
-- `trace` - Very verbose (token counts, cache hits)
-- `debug` - Development details
-- `info` - Normal operation
-- `warn` - Potential issues
-- `error` - Errors only
+### Metrics
 
-### Metrics (Planned)
+GoClaw exposes metrics at `/metrics` (Prometheus format) and `/api/metrics` (JSON).
 
-Future versions will expose Prometheus metrics at `/metrics`.
+See [Metrics](metrics.md) for details.
 
 ---
 

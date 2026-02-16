@@ -1,6 +1,11 @@
 sections:
   - name: About
     link: readme
+    items:
+      - title: Core Concepts
+        file: concepts
+      - title: Architecture
+        file: architecture
 
   - name: Getting Started
     link: /docs/
@@ -12,38 +17,73 @@ sections:
       - title: First Run
         file: first-run
 
+  - name: LLM Providers
+    link: llm-providers
+    items:
+      - title: Anthropic
+        file: providers/anthropic
+      - title: OpenAI Compatible
+        file: providers/openai
+      - title: Ollama
+        file: providers/ollama
+      - title: xAI
+        file: providers/xai
+
   - name: Channels
+    link: channels
     items:
       - title: Telegram
         file: telegram
-      - title: HTTP API
-        file: http-api
+      - title: Web UI
+        file: web-ui
       - title: Interactive TUI
         file: tui
+      - title: Channel Commands
+        file: commands
 
   - name: Tools
+    link: tools
     items:
-      - title: Overview
-        file: tools
-      - title: Home Assistant
-        file: home-assistant
+      - title: Internal Tools
+        file: tools/internal
       - title: Browser
-        file: browser_tool
+        file: tools/browser
+      - title: Home Assistant
+        file: tools/hass
       - title: Cron & Scheduling
-        file: cron
+        file: tools/cron
+      - title: Web Search
+        file: tools/web
+      - title: JQ
+        file: tools/jq
+      - title: Message
+        file: tools/message
+      - title: User Auth
+        file: tools/user-auth
+      - title: xAI Imagine
+        file: tools/xai-imagine
 
-  - name: Advanced
+  - name: Agent Memory
+    link: agent-memory
     items:
-      - title: Architecture
-        file: architecture
-      - title: Memory & Embeddings
+      - title: Embeddings
+        file: embeddings
+      - title: Memory Search
         file: memory-search
-      - title: Session Management
-        file: session-management
       - title: Transcript Search
         file: transcript-search
+
+  - name: Advanced
+    link: advanced
+    items:
+      - title: Session Management
+        file: session-management
       - title: Skills
         file: skills
+      - title: Roles & Access
+        file: roles
+      - title: Metrics
+        file: metrics
       - title: Sandbox & Security
         file: sandbox
       - title: Deployment

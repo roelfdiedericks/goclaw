@@ -383,6 +383,8 @@ Embedding generation can be slow. Consider:
 
 ## See Also
 
-- [Memory Search](./memory-search.md) — Search workspace memory files
-- [Session Management](./session-management.md) — Compaction and checkpoints
-- [Configuration](./configuration.md) — Full config reference
+- [Embeddings](embeddings.md) — Embedding configuration
+- [Agent Memory](agent-memory.md) — Memory system overview
+- [Memory Search](memory-search.md) — Search workspace memory files
+- [Session Management](session-management.md) — Compaction and checkpoints
+- [Configuration](configuration.md) — Full config reference

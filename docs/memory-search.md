@@ -259,6 +259,7 @@ Embedding generation can be slow on CPU. Consider:
 
 ## See Also
 
-- [Configuration](./configuration.md) - Memory search config
-- [Architecture](./architecture.md) - System overview
-- [Tools](./tools.md) - All agent tools
+- [Embeddings](embeddings.md) — Embedding configuration
+- [Agent Memory](agent-memory.md) — Memory system overview
+- [Transcript Search](transcript-search.md) — Search conversation history
+- [Configuration](configuration.md) — Full config reference

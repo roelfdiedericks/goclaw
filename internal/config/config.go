@@ -740,9 +740,6 @@ func Load() (*LoadResult, error) {
 	}
 	logging.L_debug("config: loaded from goclaw.json", "path", goclawPath)
 
-	// Apply environment variable fallbacks (for secrets not in config file)
-	applyEnvFallbacks(cfg)
-
 	// Log final config summary
 	agentModel := ""
 	if len(cfg.LLM.Agent.Models) > 0 {
@@ -759,30 +756,6 @@ func Load() (*LoadResult, error) {
 		Config:     cfg,
 		SourcePath: goclawPath,
 	}, nil
-}
-
-// applyEnvFallbacks applies environment variable fallbacks for secrets
-func applyEnvFallbacks(cfg *Config) {
-	// Apply ANTHROPIC_API_KEY to anthropic provider if not already set
-	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
-		if prov, ok := cfg.LLM.Providers["anthropic"]; ok && prov.APIKey == "" {
-			logging.L_debug("config: using ANTHROPIC_API_KEY from environment")
-			prov.APIKey = key
-			cfg.LLM.Providers["anthropic"] = prov
-		}
-	}
-	if cfg.Tools.Web.BraveAPIKey == "" {
-		if key := os.Getenv("BRAVE_API_KEY"); key != "" {
-			logging.L_debug("config: using BRAVE_API_KEY from environment")
-			cfg.Tools.Web.BraveAPIKey = key
-		}
-	}
-	if cfg.Telegram.BotToken == "" {
-		if token := os.Getenv("TELEGRAM_BOT_TOKEN"); token != "" {
-			logging.L_debug("config: using TELEGRAM_BOT_TOKEN from environment")
-			cfg.Telegram.BotToken = token
-		}
-	}
 }
 
 // GetStoreType returns the effective store type ("jsonl" or "sqlite")

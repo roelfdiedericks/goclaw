@@ -32,27 +32,41 @@ Add authorized users to `users.json`:
 
 ```json
 {
-  "users": {
-    "telegram:123456789": {
-      "name": "Your Name",
-      "roles": ["admin"]
+  "users": [
+    {
+      "name": "TheRoDent",
+      "role": "owner",
+      "identities": [
+        {"provider": "telegram", "id": "123456789"}
+      ]
     }
-  }
+  ]
 }
 ```
 
-The user ID format is `telegram:<user_id>`. Find your user ID by messaging [@userinfobot](https://t.me/userinfobot).
+Find your Telegram user ID by messaging [@userinfobot](https://t.me/userinfobot).
 
 ---
 
 ## Commands
 
+All channel commands are available via Telegram:
+
 | Command | Description |
 |---------|-------------|
 | `/start` | Initialize bot conversation |
-| `/clear` | Clear session history |
+| `/status` | Show session info and compaction health |
+| `/clear` | Clear session history (alias: `/reset`) |
+| `/cleartool` | Delete tool messages (fixes corruption) |
 | `/compact` | Force context compaction |
-| `/status` | Show session information |
+| `/help` | List available commands |
+| `/skills` | List available skills |
+| `/heartbeat` | Trigger heartbeat check |
+| `/hass` | Home Assistant status/debug |
+| `/llm` | LLM provider status and cooldowns |
+| `/embeddings` | Embeddings status and rebuild |
+
+See [Channel Commands](commands.md) for full documentation.
 
 ### `/status` Output
 
@@ -178,12 +192,15 @@ To share a session across users, configure:
 Add your user ID to `users.json`:
 ```json
 {
-  "users": {
-    "telegram:YOUR_USER_ID": {
-      "name": "Your Name",
-      "roles": ["admin"]
+  "users": [
+    {
+      "name": "TheRoDent",
+      "role": "owner",
+      "identities": [
+        {"provider": "telegram", "id": "YOUR_USER_ID"}
+      ]
     }
-  }
+  ]
 }
 ```
 
@@ -196,7 +213,7 @@ Check for rate limiting. Telegram limits:
 
 ### Images Not Processing
 
-1. Check media directory exists: `~/.openclaw/media/`
+1. Check media directory exists: `~/.goclaw/media/`
 2. Verify file size under limit (default 5MB)
 3. Check supported format (JPEG, PNG, GIF, WebP)
 

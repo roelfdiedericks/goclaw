@@ -40,6 +40,9 @@ type Wizard struct {
 	telegramEnabled bool
 	telegramToken   string
 
+	// Web tools (Brave search)
+	braveAPIKey string
+
 	// HTTP
 	httpEnabled bool
 	httpListen  string
@@ -79,6 +82,11 @@ func (w *Wizard) Run() error {
 
 	// Step 2: OpenClaw detection
 	if err := w.handleOpenClawDetection(); err != nil {
+		return err
+	}
+
+	// Step 2a: Offer environment variable secrets (for OpenClaw migrants)
+	if err := w.offerEnvSecrets(); err != nil {
 		return err
 	}
 
@@ -283,6 +291,84 @@ func (w *Wizard) extractOpenClawSettings() {
 			}
 		}
 	}
+}
+
+// offerEnvSecrets checks for legacy env vars (ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN,
+// BRAVE_API_KEY) and asks the user whether to use them. Used to help OpenClaw migrants
+// who had these set in the environment.
+func (w *Wizard) offerEnvSecrets() error {
+	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
+	telegramToken := os.Getenv("TELEGRAM_BOT_TOKEN")
+	braveKey := os.Getenv("BRAVE_API_KEY")
+
+	if anthropicKey == "" && telegramToken == "" && braveKey == "" {
+		return nil
+	}
+
+	fmt.Println()
+	fmt.Println("Some credentials were found in your environment (e.g. from OpenClaw).")
+	fmt.Println("Would you like to use them in GoClaw?")
+	fmt.Println()
+
+	if anthropicKey != "" {
+		use := true
+		form := newForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Use ANTHROPIC_API_KEY from environment?").
+					Description("Anthropic API key for Claude models").
+					Value(&use),
+			),
+		)
+		if err := form.Run(); err != nil {
+			return err
+		}
+		if use {
+			w.importedAPIKeys["anthropic"] = anthropicKey
+			L_debug("setup: using ANTHROPIC_API_KEY from environment")
+		}
+	}
+
+	if telegramToken != "" {
+		use := true
+		form := newForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Use TELEGRAM_BOT_TOKEN from environment?").
+					Description("Telegram bot token for the Telegram channel").
+					Value(&use),
+			),
+		)
+		if err := form.Run(); err != nil {
+			return err
+		}
+		if use {
+			w.telegramToken = telegramToken
+			L_debug("setup: using TELEGRAM_BOT_TOKEN from environment")
+		}
+	}
+
+	if braveKey != "" {
+		use := true
+		form := newForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Use BRAVE_API_KEY from environment?").
+					Description("Brave Search API key for web search tool").
+					Value(&use),
+			),
+		)
+		if err := form.Run(); err != nil {
+			return err
+		}
+		if use {
+			w.braveAPIKey = braveKey
+			L_debug("setup: using BRAVE_API_KEY from environment")
+		}
+	}
+
+	fmt.Println()
+	return nil
 }
 
 func (w *Wizard) setupWorkspace() error {
@@ -1399,34 +1485,44 @@ func (w *Wizard) buildConfig() map[string]interface{} {
 			"enabled": w.httpEnabled,
 			"listen":  w.httpListen,
 		},
-		"tools": map[string]interface{}{
-			"bubblewrap": map[string]interface{}{
-				"path": "", // Use PATH lookup
-			},
-			"exec": map[string]interface{}{
-				"timeout": 1800, // 30 minutes (matches OpenClaw)
-				"bubblewrap": map[string]interface{}{
-					"enabled":      w.execBubblewrap,
-					"extraRoBind":  []string{},
-					"extraBind":    []string{},
-					"extraEnv":     map[string]string{},
-					"allowNetwork": true,
-					"clearEnv":     true,
-				},
-			},
-			"browser": map[string]interface{}{
-				"enabled": true,
-				"bubblewrap": map[string]interface{}{
-					"enabled":     w.browserBubblewrap,
-					"extraRoBind": []string{},
-					"extraBind":   []string{},
-					"gpu":         true,
-				},
-			},
-		},
+		"tools": w.buildToolsConfig(),
 	}
 
 	return config
+}
+
+func (w *Wizard) buildToolsConfig() map[string]interface{} {
+	tools := map[string]interface{}{
+		"bubblewrap": map[string]interface{}{
+			"path": "", // Use PATH lookup
+		},
+		"exec": map[string]interface{}{
+			"timeout": 1800, // 30 minutes (matches OpenClaw)
+			"bubblewrap": map[string]interface{}{
+				"enabled":      w.execBubblewrap,
+				"extraRoBind":  []string{},
+				"extraBind":    []string{},
+				"extraEnv":     map[string]string{},
+				"allowNetwork": true,
+				"clearEnv":     true,
+			},
+		},
+		"browser": map[string]interface{}{
+			"enabled": true,
+			"bubblewrap": map[string]interface{}{
+				"enabled":     w.browserBubblewrap,
+				"extraRoBind": []string{},
+				"extraBind":   []string{},
+				"gpu":         true,
+			},
+		},
+	}
+	if w.braveAPIKey != "" {
+		tools["web"] = map[string]interface{}{
+			"braveApiKey": w.braveAPIKey,
+		}
+	}
+	return tools
 }
 
 func (w *Wizard) saveUsers(configPath string) error {
