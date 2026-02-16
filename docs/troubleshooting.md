@@ -18,7 +18,7 @@ cat users.json | jq .
 curl http://localhost:11434/api/tags
 
 # Check SQLite database
-sqlite3 ~/.openclaw/sessions.db ".tables"
+sqlite3 ~/.goclaw/sessions.db ".tables"
 ```
 
 ---
@@ -56,12 +56,12 @@ sqlite3 ~/.openclaw/sessions.db ".tables"
 **Solutions:**
 1. Check SQLite path is writable:
    ```bash
-   touch ~/.openclaw/sessions.db
+   touch ~/.goclaw/sessions.db
    ```
 2. Check disk space
 3. Try removing corrupted database:
    ```bash
-   rm ~/.openclaw/sessions.db
+   rm ~/.goclaw/sessions.db
    ```
 
 ---
@@ -91,12 +91,15 @@ sqlite3 ~/.openclaw/sessions.db ".tables"
 **Solution:** Add user to `users.json`:
 ```json
 {
-  "users": {
-    "telegram:YOUR_USER_ID": {
-      "name": "Your Name",
-      "roles": ["admin"]
+  "users": [
+    {
+      "name": "TheRoDent",
+      "role": "owner",
+      "identities": [
+        {"provider": "telegram", "id": "YOUR_USER_ID"}
+      ]
     }
-  }
+  ]
 }
 ```
 
@@ -109,7 +112,7 @@ Find your user ID: message [@userinfobot](https://t.me/userinfobot)
 **Solutions:**
 1. Check media directory:
    ```bash
-   ls -la ~/.openclaw/media/
+   ls -la ~/.goclaw/media/
    ```
 2. Check file size (default max: 5MB)
 3. Check supported format (JPEG, PNG, GIF, WebP)
@@ -140,7 +143,7 @@ Find your user ID: message [@userinfobot](https://t.me/userinfobot)
 **Solutions:**
 1. Increase timeout:
    ```json
-   {"session": {"compaction": {"ollama": {"timeoutSeconds": 600}}}}
+   {"session": {"summarization": {"ollama": {"timeoutSeconds": 600}}}}
    ```
 2. Use smaller model (`qwen2.5:7b` instead of `14b`)
 3. Check Ollama server resources (CPU/GPU/memory)
@@ -152,7 +155,7 @@ Find your user ID: message [@userinfobot](https://t.me/userinfobot)
 **Solutions:**
 1. Set explicit context size:
    ```json
-   {"session": {"compaction": {"ollama": {"contextTokens": 131072}}}}
+   {"session": {"summarization": {"ollama": {"contextTokens": 131072}}}}
    ```
 2. Use model with larger context
 3. Check model's actual context limit:
@@ -177,7 +180,7 @@ Find your user ID: message [@userinfobot](https://t.me/userinfobot)
 **Solutions:**
 1. Lower reserve tokens (triggers compaction earlier):
    ```json
-   {"session": {"compaction": {"reserveTokens": 40000}}}
+   {"session": {"summarization": {"compaction": {"reserveTokens": 40000}}}}
    ```
 2. Force compaction: `/compact` in Telegram
 3. Clear session: `/clear` in Telegram
@@ -309,11 +312,11 @@ Find your user ID: message [@userinfobot](https://t.me/userinfobot)
 1. Stop GoClaw
 2. Try integrity check:
    ```bash
-   sqlite3 ~/.openclaw/sessions.db "PRAGMA integrity_check"
+   sqlite3 ~/.goclaw/sessions.db "PRAGMA integrity_check"
    ```
 3. If corrupted, backup and recreate:
    ```bash
-   mv ~/.openclaw/sessions.db ~/.openclaw/sessions.db.bak
+   mv ~/.goclaw/sessions.db ~/.goclaw/sessions.db.bak
    # GoClaw will create new database on start
    ```
 
@@ -343,11 +346,9 @@ Find your user ID: message [@userinfobot](https://t.me/userinfobot)
 # Via make
 make debug
 
-# Via environment
-LOG_LEVEL=debug ./bin/goclaw
-
-# Via config (if supported)
-{"gateway": {"logLevel": "debug"}}
+# Via flags
+./bin/goclaw gateway -d   # Debug logging
+./bin/goclaw gateway -t   # Trace logging (very verbose)
 ```
 
 ### Log Levels
