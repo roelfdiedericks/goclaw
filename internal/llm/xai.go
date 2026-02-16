@@ -7,15 +7,27 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/roelfdiedericks/xai-go"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/types"
+	"github.com/roelfdiedericks/xai-go"
 )
+
+// safeInt32 converts int to int32 with bounds checking to prevent overflow.
+func safeInt32(n int) int32 {
+	if n > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if n < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(n)
+}
 
 // XAIProvider implements the Provider interface for xAI's Grok API.
 // Supports streaming, native tool calling, server-side tools, and context preservation.
@@ -35,16 +47,6 @@ type XAIProvider struct {
 	lastMessageCount int    // Message count at last successful stream
 }
 
-// Known xAI server-side tools
-var knownXAIServerTools = []string{
-	"web_search",
-	"x_search",
-	"code_execution",
-	"collections_search",
-	"attachment_search",
-	"mcp",
-}
-
 // clientToolPrefix is added to client tool names that conflict with xAI server tools.
 // This allows both tools to be available to the LLM. The prefix is stripped when
 // processing tool calls, so persisted data uses the canonical tool name.
@@ -52,24 +54,21 @@ const clientToolPrefix = "local_"
 
 // xAI model context window sizes (tokens)
 var xaiModelContextSizes = map[string]int{
-	"grok-4":                 131072,
-	"grok-4-0414":            131072,
-	"grok-4-1":               131072,
+	"grok-4":                  131072,
+	"grok-4-0414":             131072,
+	"grok-4-1":                131072,
 	"grok-4-1-fast-reasoning": 131072,
-	"grok-3":                 131072,
-	"grok-3-fast":            131072,
-	"grok-3-mini":            131072,
-	"grok-3-mini-fast":       131072,
-	"grok-2":                 131072,
-	"grok-2-mini":            131072,
-	"grok-vision-beta":       8192,
+	"grok-3":                  131072,
+	"grok-3-fast":             131072,
+	"grok-3-mini":             131072,
+	"grok-3-mini-fast":        131072,
+	"grok-2":                  131072,
+	"grok-2-mini":             131072,
+	"grok-vision-beta":        8192,
 }
 
 // Default context size for unknown models
 const defaultXAIContextSize = 131072
-
-// Default model for xAI
-const defaultXAIModel = "grok-4-1-fast-reasoning"
 
 // =============================================================================
 // HARDCODED MODEL RESTRICTION - ATTENTION xAI / FUTURE MAINTAINERS
@@ -321,7 +320,7 @@ func (p *XAIProvider) StreamMessage(
 	// Build request
 	req := xai.NewChatRequest().
 		WithModel(p.model).
-		WithMaxTokens(int32(p.maxTokens)).
+		WithMaxTokens(safeInt32(p.maxTokens)).
 		WithStoreMessages(incrementalMode)
 
 	usedPreviousResponseId := false
@@ -366,7 +365,7 @@ func (p *XAIProvider) StreamMessage(
 
 	// Apply max turns if configured
 	if p.config.MaxTurns > 0 {
-		req.WithMaxTurns(int32(p.config.MaxTurns))
+		req.WithMaxTurns(safeInt32(p.config.MaxTurns))
 	}
 
 	serverTools := p.getEnabledServerToolNames()
@@ -402,7 +401,7 @@ func (p *XAIProvider) StreamMessage(
 			// Rebuild request without previousResponseId
 			req = xai.NewChatRequest().
 				WithModel(p.model).
-				WithMaxTokens(int32(p.maxTokens))
+				WithMaxTokens(safeInt32(p.maxTokens))
 			if systemPrompt != "" {
 				req.SystemMessage(xai.SystemContent{Text: systemPrompt})
 			}
@@ -418,7 +417,7 @@ func (p *XAIProvider) StreamMessage(
 				}
 			}
 			if p.config.MaxTurns > 0 {
-				req.WithMaxTurns(int32(p.config.MaxTurns))
+				req.WithMaxTurns(safeInt32(p.config.MaxTurns))
 			}
 			req.WithStoreMessages(incrementalMode)
 			// Note: NOT using previousResponseId this time
@@ -472,7 +471,7 @@ func (p *XAIProvider) SimpleMessage(ctx context.Context, userMessage, systemProm
 	// Build request
 	req := xai.NewChatRequest().
 		WithModel(p.model).
-		WithMaxTokens(int32(p.maxTokens))
+		WithMaxTokens(safeInt32(p.maxTokens))
 
 	// Add system prompt
 	if systemPrompt != "" {
@@ -719,38 +718,6 @@ func (p *XAIProvider) addClientTools(req *xai.ChatRequest, toolDefs []types.Tool
 // =============================================================================
 // Error Helpers
 // =============================================================================
-
-// classifyXAIError maps an xai.Error to GoClaw's ErrorType.
-func classifyXAIError(err error) ErrorType {
-	var xaiErr *xai.Error
-	if !errors.As(err, &xaiErr) {
-		return ErrorTypeUnknown
-	}
-
-	switch xaiErr.Code {
-	case xai.ErrAuth:
-		return ErrorTypeAuth
-	case xai.ErrRateLimit, xai.ErrResourceExhausted:
-		return ErrorTypeRateLimit
-	case xai.ErrUnavailable, xai.ErrServerError:
-		return ErrorTypeOverloaded
-	case xai.ErrTimeout:
-		return ErrorTypeTimeout
-	case xai.ErrInvalidRequest:
-		return ErrorTypeFormat
-	default:
-		return ErrorTypeUnknown
-	}
-}
-
-// isXAIRetryable returns true if the error is transient and can be retried.
-func isXAIRetryable(err error) bool {
-	var xaiErr *xai.Error
-	if errors.As(err, &xaiErr) {
-		return xaiErr.IsRetryable()
-	}
-	return false
-}
 
 // isNotFoundError returns true if the error is a 404 not found error.
 // This is used to detect expired responseIDs for context preservation.

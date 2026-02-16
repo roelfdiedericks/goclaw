@@ -2,6 +2,7 @@
 package update
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -73,6 +75,7 @@ type UpdateInfo struct {
 	NewVersion     string
 	Channel        string
 	Changelog      string
+	ArchiveName    string // e.g., "goclaw_0.1.0_linux_amd64.tar.gz"
 	DownloadURL    string
 	ChecksumURL    string
 	IsNewer        bool
@@ -145,6 +148,7 @@ func (u *Updater) CheckForUpdate(channel string) (*UpdateInfo, error) {
 		NewVersion:     newVersion,
 		Channel:        release.Channel(),
 		Changelog:      release.Body,
+		ArchiveName:    archiveName,
 		DownloadURL:    downloadURL,
 		ChecksumURL:    checksumURL,
 		IsNewer:        isNewer,
@@ -153,10 +157,13 @@ func (u *Updater) CheckForUpdate(channel string) (*UpdateInfo, error) {
 
 // getLatestRelease fetches the latest release for a channel
 func (u *Updater) getLatestRelease(channel string) (*Release, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	if channel == "stable" {
 		// Use /releases/latest for stable
 		url := fmt.Sprintf("%s/repos/%s/releases/latest", GitHubAPIBase, GitHubRepo)
-		req, err := http.NewRequest("GET", url, nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -185,7 +192,7 @@ func (u *Updater) getLatestRelease(channel string) (*Release, error) {
 
 	// For other channels (beta, rc), fetch all releases and filter
 	url := fmt.Sprintf("%s/repos/%s/releases", GitHubAPIBase, GitHubRepo)
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +248,7 @@ func (u *Updater) Download(info *UpdateInfo, onProgress func(downloaded, total i
 	}
 
 	// Download and verify checksum
-	if err := u.verifyChecksum(archivePath, info.ChecksumURL); err != nil {
+	if err := u.verifyChecksum(archivePath, info.ArchiveName, info.ChecksumURL); err != nil {
 		os.RemoveAll(tmpDir)
 		return "", fmt.Errorf("checksum verification failed: %w", err)
 	}
@@ -266,7 +273,15 @@ func (u *Updater) Download(info *UpdateInfo, onProgress func(downloaded, total i
 
 // downloadFile downloads a file from URL to dest
 func (u *Updater) downloadFile(url, dest string, onProgress func(downloaded, total int64)) error {
-	resp, err := u.httpClient.Get(url)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute) // Long timeout for downloads
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := u.httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -312,9 +327,17 @@ func (u *Updater) downloadFile(url, dest string, onProgress func(downloaded, tot
 }
 
 // verifyChecksum verifies the file's SHA256 checksum
-func (u *Updater) verifyChecksum(filePath, checksumURL string) error {
+func (u *Updater) verifyChecksum(filePath, archiveName, checksumURL string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	// Download checksums.txt
-	resp, err := u.httpClient.Get(checksumURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", checksumURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := u.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to download checksums: %w", err)
 	}
@@ -330,25 +353,18 @@ func (u *Updater) verifyChecksum(filePath, checksumURL string) error {
 	}
 
 	// Parse checksums (format: "hash  filename")
-	fileName := filepath.Base(filePath)
-	fileName = "goclaw.tar.gz" // We renamed it, need original name
-	archiveName := fmt.Sprintf("goclaw_%s_%s_%s.tar.gz", "", runtime.GOOS, runtime.GOARCH)
-
+	// Look for exact match on the archive name we downloaded
 	var expectedHash string
 	for _, line := range strings.Split(string(checksumData), "\n") {
 		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			// Match by suffix since we don't know exact version in filename
-			if strings.HasSuffix(parts[1], fmt.Sprintf("_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)) {
-				expectedHash = parts[0]
-				archiveName = parts[1]
-				break
-			}
+		if len(parts) >= 2 && parts[1] == archiveName {
+			expectedHash = parts[0]
+			break
 		}
 	}
 
 	if expectedHash == "" {
-		return fmt.Errorf("checksum not found for %s_%s", runtime.GOOS, runtime.GOARCH)
+		return fmt.Errorf("checksum not found for %s", archiveName)
 	}
 
 	// Calculate actual hash
@@ -382,7 +398,8 @@ func (u *Updater) Apply(newBinaryPath string, noRestart bool) error {
 	L_info("update: applying", "current", currentExe, "new", newBinaryPath)
 
 	// Make new binary executable
-	if err := os.Chmod(newBinaryPath, 0755); err != nil {
+	// G302: 0755 is intentional - this is an executable binary
+	if err := os.Chmod(newBinaryPath, 0755); err != nil { //nolint:gosec
 		return fmt.Errorf("failed to make binary executable: %w", err)
 	}
 
@@ -394,13 +411,13 @@ func (u *Updater) Apply(newBinaryPath string, noRestart bool) error {
 
 	// Move new binary into place
 	if err := copyFile(newBinaryPath, currentExe); err != nil {
-		// Try to restore backup
-		os.Rename(backupPath, currentExe)
+		// Try to restore backup - best effort, ignore error since we're already returning one
+		_ = os.Rename(backupPath, currentExe)
 		return fmt.Errorf("failed to install new binary: %w", err)
 	}
 
-	// Clean up backup
-	os.Remove(backupPath)
+	// Clean up backup - best effort
+	_ = os.Remove(backupPath)
 
 	L_info("update: binary replaced successfully")
 
@@ -421,7 +438,8 @@ func restart(exePath string) error {
 	args := os.Args
 
 	// Use syscall.Exec to replace current process
-	return syscall.Exec(exePath, args, os.Environ())
+	// G204: exePath is the path to ourselves after update, not arbitrary user input
+	return syscall.Exec(exePath, args, os.Environ()) //nolint:gosec
 }
 
 // copyFile copies src to dst
@@ -460,11 +478,11 @@ func isNewerVersion(current, new string) bool {
 		if i < len(currentParts) {
 			// Handle suffixes like "0-beta.1"
 			part := strings.Split(currentParts[i], "-")[0]
-			fmt.Sscanf(part, "%d", &c)
+			c, _ = strconv.Atoi(part) // Ignore error, defaults to 0
 		}
 		if i < len(newParts) {
 			part := strings.Split(newParts[i], "-")[0]
-			fmt.Sscanf(part, "%d", &n)
+			n, _ = strconv.Atoi(part) // Ignore error, defaults to 0
 		}
 
 		if n > c {
