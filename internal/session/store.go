@@ -7,7 +7,8 @@ import (
 )
 
 // Store is the interface for session storage backends.
-// Implementations: SQLiteStore (primary), JSONLStore (read-only, OpenClaw compat)
+// Currently only SQLiteStore is supported for read/write operations.
+// For reading OpenClaw sessions, use JSONLReader directly.
 type Store interface {
 	// Session operations
 	GetSession(ctx context.Context, key string) (*StoredSession, error)
@@ -167,22 +168,17 @@ type StoredCompaction struct {
 
 // StoreConfig configures the storage backend
 type StoreConfig struct {
-	Type string // "sqlite" or "jsonl"
-	Path string // Database file path or sessions directory
+	Type string // Currently only "sqlite" is supported
+	Path string // Database file path
 
 	// SQLite specific
 	WALMode     bool // Enable WAL mode (default: true)
 	BusyTimeout int  // Busy timeout in ms (default: 5000)
 }
 
-// NewStore creates a storage backend based on config
+// NewStore creates a storage backend based on config.
+// Currently only SQLite is supported. For OpenClaw session reading, use JSONLReader.
 func NewStore(cfg StoreConfig) (Store, error) {
-	switch cfg.Type {
-	case "sqlite":
-		return NewSQLiteStore(cfg)
-	case "jsonl":
-		return NewJSONLStore(cfg)
-	default:
-		return NewSQLiteStore(cfg) // Default to SQLite
-	}
+	// SQLite is the only supported backend
+	return NewSQLiteStore(cfg)
 }

@@ -44,10 +44,14 @@ GoClaw is a Go implementation of an AI agent gateway, designed to orchestrate LL
                           ▼
               ┌───────────────────────────┐
               │      Storage Layer        │
-              │  ┌─────────┐ ┌─────────┐  │
-              │  │ SQLite  │ │  JSONL  │  │
-              │  │ (main)  │ │(legacy) │  │
-              │  └─────────┘ └─────────┘  │
+              │  ┌─────────────────────┐  │
+              │  │       SQLite        │  │
+              │  │  (primary storage)  │  │
+              │  └─────────────────────┘  │
+              │  ┌─────────────────────┐  │
+              │  │    JSONLReader      │  │
+              │  │ (OpenClaw compat)   │  │
+              │  └─────────────────────┘  │
               └───────────────────────────┘
 ```
 
@@ -84,7 +88,8 @@ Manages conversation state:
 | `Session` | In-memory message buffer, token tracking |
 | `CompactionManager` | Context overflow handling, fallback logic |
 | `CheckpointGenerator` | Rolling snapshot generation |
-| `SQLiteStore` | Persistent storage |
+| `SQLiteStore` | Persistent storage (primary) |
+| `JSONLReader` | Read-only OpenClaw session inheritance |
 
 ### LLM Clients (`internal/llm`)
 
@@ -277,8 +282,9 @@ goclaw/
 │   │   ├── session.go       # In-memory state
 │   │   ├── compaction.go    # CompactionManager
 │   │   ├── checkpoint.go    # CheckpointGenerator
-│   │   ├── sqlite_store.go  # SQLite backend
-│   │   └── jsonl_store.go   # JSONL backend (legacy)
+│   │   ├── sqlite_store.go  # SQLite storage backend
+│   │   ├── jsonl.go         # JSONL reader (OpenClaw compat)
+│   │   └── types.go         # Record type definitions
 │   │
 │   ├── llm/             # LLM clients
 │   │   ├── client.go        # Anthropic client
