@@ -1,0 +1,16 @@
+services:
+  goclaw:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "1337:1337"
+    volumes:
+      # Config directory - configs generated here on first run
+      - goclaw-config:/home/goclaw/.goclaw
+      # Workspace - where the agent works
+      - ./workspace:/home/goclaw/.goclaw/workspace
+
+volumes:
+  goclaw-config:
