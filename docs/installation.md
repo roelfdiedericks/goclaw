@@ -99,11 +99,8 @@ goclaw start         # Daemon mode (background)
 - **GCC** — Required for SQLite with FTS5 (full-text search)
 
 ```bash
-# Ubuntu/Debian
+# Debian/Ubuntu
 sudo apt install build-essential
-
-# Fedora
-sudo dnf install gcc
 ```
 
 ### Build Steps
@@ -152,7 +149,7 @@ source ~/.bashrc
 
 ### Recommended
 
-- 2 GB RAM (for local embeddings with Ollama)
+- 2 GB RAM
 - 1 GB disk space (for browser profiles and session storage)
 - Bubblewrap installed (for sandboxed command execution)
 
@@ -250,9 +247,9 @@ goclaw update --no-restart  # Update but don't restart (for manual control)
 For Debian/Ubuntu users who installed via `.deb`:
 
 ```bash
-# Download new version
-curl -LO https://github.com/roelfdiedericks/goclaw/releases/latest/download/goclaw_VERSION_linux_amd64.deb
-sudo dpkg -i goclaw_VERSION_linux_amd64.deb
+VERSION=$(curl -s https://api.github.com/repos/roelfdiedericks/goclaw/releases/latest | grep tag_name | cut -d'"' -f4 | tr -d 'v') && \
+curl -LO "https://github.com/roelfdiedericks/goclaw/releases/download/v${VERSION}/goclaw_${VERSION}_linux_amd64.deb" && \
+sudo dpkg -i goclaw_${VERSION}_linux_amd64.deb
 ```
 
 ### Source Upgrade

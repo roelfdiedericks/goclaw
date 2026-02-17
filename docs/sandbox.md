@@ -75,9 +75,6 @@ Install bubblewrap:
 # Debian/Ubuntu
 sudo apt install bubblewrap
 
-# Fedora/RHEL
-sudo dnf install bubblewrap
-
 # Arch
 sudo pacman -S bubblewrap
 ```
