@@ -34,7 +34,7 @@ builds:
       - CC=gcc
       - CXX=g++
 
-  # Darwin AMD64 - built on macos-latest (native)
+  # Darwin AMD64 - built on macos-latest (M1/arm64 runner, cross-arch via clang)
   - id: darwin-amd64
     binary: goclaw
     main: ./cmd/goclaw
@@ -47,8 +47,10 @@ builds:
     env:
       - CC=clang
       - CXX=clang++
+      - CGO_CFLAGS=-arch x86_64
+      - CGO_LDFLAGS=-arch x86_64
 
-  # Darwin ARM64 - built on macos-latest (cross-arch via clang)
+  # Darwin ARM64 - built on macos-latest (M1/arm64 runner, native)
   - id: darwin-arm64
     binary: goclaw
     main: ./cmd/goclaw
@@ -61,8 +63,6 @@ builds:
     env:
       - CC=clang
       - CXX=clang++
-      - CGO_CFLAGS=-arch arm64
-      - CGO_LDFLAGS=-arch arm64
 
 archives:
   - format: tar.gz

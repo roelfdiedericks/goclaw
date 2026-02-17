@@ -99,7 +99,6 @@ jobs:
         env:
           CGO_ENABLED: 1
           SDKROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
-          GOARCH: arm64
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
