@@ -95,7 +95,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
-          args: build --id darwin-arm64 --skip=post-hooks --dirty
+          args: build --id darwin-arm64 --skip=post-hooks,validate
         env:
           CGO_ENABLED: 1
           SDKROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
