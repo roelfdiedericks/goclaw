@@ -197,11 +197,42 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Extract release notes from CHANGELOG
+      - name: Read changelog
+        id: changelog
+        uses: mindsers/changelog-reader-action@v2
+        with:
+          path: ./CHANGELOG.md
+
+      - name: Write release notes
+        run: |
+          echo "${{ steps.changelog.outputs.changes }}" > /tmp/release_notes.md
+
+      - name: Append auto-generated PR list
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          PREV_TAG=$(git describe --tags --abbrev=0 ${TAG}^ 2>/dev/null || echo "")
+          
+          echo "" >> /tmp/release_notes.md
+          
+          if [ -n "$PREV_TAG" ]; then
+            gh api repos/${{ github.repository }}/releases/generate-notes \
+              -f tag_name="$TAG" \
+              -f previous_tag_name="$PREV_TAG" \
+              --jq '.body' >> /tmp/release_notes.md
+          else
+            gh api repos/${{ github.repository }}/releases/generate-notes \
+              -f tag_name="$TAG" \
+              --jq '.body' >> /tmp/release_notes.md
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       # Merge and release
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser-pro
-          args: continue --merge
+          args: continue --merge --release-notes /tmp/release_notes.md
         env:
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
