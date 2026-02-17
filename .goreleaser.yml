@@ -2,6 +2,10 @@ version: 2
 
 project_name: goclaw
 
+# Split by target (GOOS+GOARCH) for distributed builds
+partial:
+  by: target
+
 env:
   - CGO_ENABLED=1
 

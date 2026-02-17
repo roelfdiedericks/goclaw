@@ -9,7 +9,7 @@ permissions:
   packages: write
 
 jobs:
-  # Build Linux AMD64 natively on x64 runner
+  # Build Linux AMD64 natively
   build-linux-amd64:
     runs-on: ubuntu-latest
     steps:
@@ -24,22 +24,24 @@ jobs:
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y gcc g++ build-essential
 
-      - name: Build linux/amd64
-        uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
-          args: build --id linux-amd64 --clean --skip=post-hooks
+          distribution: goreleaser-pro
+          args: release --clean --split
         env:
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CGO_ENABLED: 1
+          GGOOS: linux
+          GGOARCH: amd64
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: dist-linux-amd64
           path: dist/
           retention-days: 1
 
-  # Build Linux ARM64 natively on arm64 runner
+  # Build Linux ARM64 natively
   build-linux-arm64:
     runs-on: ubuntu-24.04-arm
     steps:
@@ -54,22 +56,24 @@ jobs:
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y gcc g++ build-essential
 
-      - name: Build linux/arm64
-        uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
-          args: build --id linux-arm64 --clean --skip=post-hooks
+          distribution: goreleaser-pro
+          args: release --clean --split
         env:
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CGO_ENABLED: 1
+          GGOOS: linux
+          GGOARCH: arm64
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: dist-linux-arm64
           path: dist/
           retention-days: 1
 
-  # Build Darwin AMD64 (cross-compile from arm64 runner)
+  # Build Darwin AMD64 (cross-compile from M1 runner)
   build-darwin-amd64:
     runs-on: macos-latest
     steps:
@@ -81,23 +85,25 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Build darwin/amd64
-        uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
-          args: build --id darwin-amd64 --clean --skip=post-hooks
+          distribution: goreleaser-pro
+          args: release --clean --split
         env:
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CGO_ENABLED: 1
           SDKROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
+          GGOOS: darwin
+          GGOARCH: amd64
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: dist-darwin-amd64
           path: dist/
           retention-days: 1
 
-  # Build Darwin ARM64 natively on arm64 runner
+  # Build Darwin ARM64 natively on M1 runner
   build-darwin-arm64:
     runs-on: macos-latest
     steps:
@@ -109,23 +115,25 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Build darwin/arm64
-        uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
-          args: build --id darwin-arm64 --clean --skip=post-hooks
+          distribution: goreleaser-pro
+          args: release --clean --split
         env:
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CGO_ENABLED: 1
           SDKROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
+          GGOOS: darwin
+          GGOARCH: arm64
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: dist-darwin-arm64
           path: dist/
           retention-days: 1
 
-  # Collect all artifacts and create release
+  # Merge all builds and create release
   release:
     needs: [build-linux-amd64, build-linux-arm64, build-darwin-amd64, build-darwin-arm64]
     runs-on: ubuntu-latest
@@ -138,27 +146,23 @@ jobs:
         with:
           go-version: '1.25'
 
-      # Download all build artifacts
-      - name: Download linux-amd64 artifacts
-        uses: actions/download-artifact@v4
+      # Download all build artifacts into dist/
+      - uses: actions/download-artifact@v4
         with:
           name: dist-linux-amd64
           path: dist/
 
-      - name: Download linux-arm64 artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: dist-linux-arm64
           path: dist/
 
-      - name: Download darwin-amd64 artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: dist-darwin-amd64
           path: dist/
 
-      - name: Download darwin-arm64 artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: dist-darwin-arm64
           path: dist/
@@ -177,43 +181,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Extract release notes from CHANGELOG
-      - name: Read changelog
-        id: changelog
-        uses: mindsers/changelog-reader-action@v2
+      # Merge and release
+      - uses: goreleaser/goreleaser-action@v6
         with:
-          path: ./CHANGELOG.md
-
-      - name: Write release notes
-        run: |
-          echo "${{ steps.changelog.outputs.changes }}" > /tmp/release_notes.md
-
-      - name: Append auto-generated PR list
-        run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          PREV_TAG=$(git describe --tags --abbrev=0 ${TAG}^ 2>/dev/null || echo "")
-          
-          echo "" >> /tmp/release_notes.md
-          
-          if [ -n "$PREV_TAG" ]; then
-            gh api repos/${{ github.repository }}/releases/generate-notes \
-              -f tag_name="$TAG" \
-              -f previous_tag_name="$PREV_TAG" \
-              --jq '.body' >> /tmp/release_notes.md
-          else
-            gh api repos/${{ github.repository }}/releases/generate-notes \
-              -f tag_name="$TAG" \
-              --jq '.body' >> /tmp/release_notes.md
-          fi
+          distribution: goreleaser-pro
+          args: continue --merge
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Run goreleaser to create archives, checksums, Docker images, and release
-      # Skip the build step since we already have binaries
-      - name: Create release
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          version: latest
-          args: release --skip=build --clean --release-notes /tmp/release_notes.md
-        env:
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
