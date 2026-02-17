@@ -192,13 +192,21 @@ func (r *RoleConfig) GetSkillsList() ([]string, bool) {
 	return nil, false
 }
 
+// CredentialHint describes a credential the auth script accepts
+type CredentialHint struct {
+	Key      string `json:"key"`                // JSON field name to pass to script
+	Label    string `json:"label,omitempty"`    // Friendly name to ask user for (defaults to Key)
+	Required bool   `json:"required,omitempty"` // Whether this credential is required
+}
+
 // AuthConfig configures role elevation via external authentication
 type AuthConfig struct {
-	Enabled      bool     `json:"enabled"`      // Enable user_auth tool
-	Script       string   `json:"script"`       // Path to auth script
-	AllowedRoles []string `json:"allowedRoles"` // Roles script can return (empty = disabled)
-	RateLimit    int      `json:"rateLimit"`    // Max attempts per minute (default: 3)
-	Timeout      int      `json:"timeout"`      // Script timeout in seconds (default: 10)
+	Enabled         bool             `json:"enabled"`         // Enable user_auth tool
+	Script          string           `json:"script"`          // Path to auth script
+	AllowedRoles    []string         `json:"allowedRoles"`    // Roles script can return (empty = disabled)
+	CredentialHints []CredentialHint `json:"credentialHints"` // Credentials the script accepts (shown to agent)
+	RateLimit       int              `json:"rateLimit"`       // Max attempts per minute (default: 3)
+	Timeout         int              `json:"timeout"`         // Script timeout in seconds (default: 10)
 }
 
 // AgentIdentityConfig configures the agent's display identity

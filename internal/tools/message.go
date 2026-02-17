@@ -20,13 +20,20 @@ type MessageChannel interface {
 	React(chatID string, messageID string, emoji string) error
 }
 
+// SessionElevator is the interface for elevating user roles in a session.
+// Implemented by session.Session.
+type SessionElevator interface {
+	ElevateUser(name, username, role, id string)
+}
+
 // SessionContext provides current session information for tools.
 type SessionContext struct {
-	Channel         string     // Current channel name (e.g., "telegram", "tui")
-	ChatID          string     // Current chat ID
-	OwnerChatID     string     // Owner's telegram chat ID (fallback for cron/heartbeat)
-	User            *user.User // Current user (for permission checks in tools)
-	TranscriptScope string     // Transcript access scope: "all", "own", or "none"
+	Channel         string          // Current channel name (e.g., "telegram", "tui")
+	ChatID          string          // Current chat ID
+	OwnerChatID     string          // Owner's telegram chat ID (fallback for cron/heartbeat)
+	User            *user.User      // Current user (for permission checks in tools)
+	TranscriptScope string          // Transcript access scope: "all", "own", or "none"
+	Session         SessionElevator // Session for role elevation (user_auth tool)
 }
 
 // sessionContextKey is used to store SessionContext in context.Context

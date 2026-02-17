@@ -1778,6 +1778,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				OwnerChatID:     ownerChatID,
 				User:            req.User,
 				TranscriptScope: transcriptScope,
+				Session:         sess,
 			})
 			result, err := g.tools.Execute(toolCtx, response.ToolName, response.ToolInput)
 			toolDuration := time.Since(toolStartTime)

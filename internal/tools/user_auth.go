@@ -15,11 +15,6 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
-// SessionElevator is the interface for elevating user roles in a session
-type SessionElevator interface {
-	ElevateUser(name, username, role, id string)
-}
-
 // UserAuthTool handles user authentication and role elevation
 type UserAuthTool struct {
 	config      config.AuthConfig
@@ -61,7 +56,25 @@ func (t *UserAuthTool) Name() string {
 }
 
 func (t *UserAuthTool) Description() string {
-	return "Authenticate a user and elevate their role. Use when a guest user provides credentials (ID, phone, email, etc.) to identify themselves. Returns authentication result with user info or error message."
+	base := "Authenticate a user and elevate their role. Use when a guest user provides identifying information. Returns authentication result with user info or error message."
+	if len(t.config.CredentialHints) == 0 {
+		return base
+	}
+
+	// Format credential hints for the agent
+	var hints []string
+	for _, h := range t.config.CredentialHints {
+		label := h.Label
+		if label == "" {
+			label = h.Key
+		}
+		hint := fmt.Sprintf("%s (%s)", label, h.Key)
+		if h.Required {
+			hint += " [required]"
+		}
+		hints = append(hints, hint)
+	}
+	return base + " Accepted credentials: " + strings.Join(hints, ", ") + "."
 }
 
 func (t *UserAuthTool) Schema() map[string]any {
@@ -142,15 +155,18 @@ func (t *UserAuthTool) Execute(ctx context.Context, input json.RawMessage) (stri
 		return t.formatResult(false, "", fmt.Sprintf("Role '%s' is not defined in configuration.", result.User.Role)), nil
 	}
 
-	// Get session from context and elevate
-	// Note: We need SessionElevator interface to be passed through context
-	// For now, we'll return success and let the gateway handle elevation
-	L_info("user_auth: authentication successful",
-		"name", result.User.Name,
-		"username", result.User.Username,
-		"role", result.User.Role,
-		"id", result.User.ID,
-	)
+	// Elevate the session
+	if sessionCtx.Session != nil {
+		sessionCtx.Session.ElevateUser(result.User.Name, result.User.Username, result.User.Role, result.User.ID)
+		L_info("user_auth: session elevated",
+			"name", result.User.Name,
+			"username", result.User.Username,
+			"role", result.User.Role,
+			"id", result.User.ID,
+		)
+	} else {
+		L_warn("user_auth: no session in context, elevation not applied")
+	}
 
 	return t.formatSuccessResult(result), nil
 }

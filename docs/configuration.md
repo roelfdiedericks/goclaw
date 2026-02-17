@@ -173,6 +173,7 @@ GoClaw is configured via `goclaw.json` in the working directory.
 | `media` | Temporary media storage | Below |
 | `promptCache` | Workspace file caching | Below |
 | `gateway` | Server settings | Below |
+| `auth` | Role elevation via external script | [User Auth Tool](tools/user-auth.md) |
 
 ---
 
@@ -309,6 +310,43 @@ The prompt cache watches workspace identity files (SOUL.md, AGENTS.md, etc.) for
 Secrets and settings are read only from `goclaw.json` (and `users.json`). Environment variables are not used at runtime, to avoid unexpected overrides.
 
 **During setup:** If you run `goclaw setup` and have `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, or `BRAVE_API_KEY` set in your environment (e.g. from OpenClaw), the wizard will detect them and ask whether to use each one. If you accept, they are written into `goclaw.json`. After that, runtime uses only the config file.
+
+---
+
+### Auth (Role Elevation)
+
+```json
+{
+  "auth": {
+    "enabled": true,
+    "script": "/home/user/.goclaw/scripts/auth.sh",
+    "credentialHints": [
+      {"key": "customer_id", "label": "Customer ID", "required": true},
+      {"key": "phone", "label": "phone number"},
+      {"key": "email", "label": "email address"}
+    ],
+    "allowedRoles": ["customer", "user"],
+    "rateLimit": 3,
+    "timeout": 10
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `false` | Enable the `user_auth` tool |
+| `script` | string | - | Path to authentication script |
+| `credentialHints` | object[] | `[]` | Credentials the script accepts |
+| `credentialHints[].key` | string | - | JSON field name |
+| `credentialHints[].label` | string | key | Friendly name for agent to use |
+| `credentialHints[].required` | boolean | `false` | Mark as required |
+| `allowedRoles` | string[] | `[]` | Roles the script can return |
+| `rateLimit` | int | `3` | Max auth attempts per minute |
+| `timeout` | int | `10` | Script timeout in seconds |
+
+The `user_auth` tool allows guest users to authenticate mid-session and be elevated to a higher role. The `credentialHints` tell the agent what information to ask for (with friendly labels) and which credentials are required.
+
+See [User Auth Tool](tools/user-auth.md) for full documentation.
 
 ---
 
