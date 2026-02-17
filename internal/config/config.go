@@ -17,12 +17,103 @@ type LoadResult struct {
 }
 
 // isMinimalJSON checks if JSON content is essentially empty (just {} or whitespace)
+// Returns false for parse errors so we can give better error messages later
 func isMinimalJSON(data []byte) bool {
 	var m map[string]interface{}
 	if err := json.Unmarshal(data, &m); err != nil {
-		return true // Can't parse = treat as empty
+		return false // Parse error - let mergeJSONConfig handle it with better error message
 	}
 	return len(m) == 0
+}
+
+// formatJSONError enhances JSON parsing errors with line/column info and context
+func formatJSONError(data []byte, err error) error {
+	if err == nil {
+		return nil
+	}
+
+	// Check if it's a syntax error with offset
+	if syntaxErr, ok := err.(*json.SyntaxError); ok {
+		return formatJSONSyntaxError(data, syntaxErr)
+	}
+
+	// Check for unmarshal type errors
+	if typeErr, ok := err.(*json.UnmarshalTypeError); ok {
+		line, col := offsetToLineCol(data, typeErr.Offset)
+		return fmt.Errorf("JSON type error at line %d, column %d: expected %s but got %s for field '%s'",
+			line, col, typeErr.Type, typeErr.Value, typeErr.Field)
+	}
+
+	return err
+}
+
+// formatJSONSyntaxError creates a detailed error message for JSON syntax errors
+func formatJSONSyntaxError(data []byte, syntaxErr *json.SyntaxError) error {
+	line, col := offsetToLineCol(data, syntaxErr.Offset)
+
+	// Get the problematic line for context
+	lines := splitLines(data)
+	var context string
+	if line > 0 && line <= len(lines) {
+		problemLine := lines[line-1]
+		// Truncate very long lines
+		if len(problemLine) > 80 {
+			if col > 40 {
+				start := col - 40
+				problemLine = "..." + problemLine[start:]
+				col = 43 // Adjust for "..."
+			}
+			if len(problemLine) > 80 {
+				problemLine = problemLine[:77] + "..."
+			}
+		}
+		// Build pointer line
+		pointer := ""
+		for i := 0; i < col-1 && i < len(problemLine); i++ {
+			if problemLine[i] == '\t' {
+				pointer += "\t"
+			} else {
+				pointer += " "
+			}
+		}
+		pointer += "^"
+		context = fmt.Sprintf("\n  %s\n  %s", problemLine, pointer)
+	}
+
+	return fmt.Errorf("JSON syntax error at line %d, column %d: %s%s",
+		line, col, syntaxErr.Error(), context)
+}
+
+// offsetToLineCol converts a byte offset to line and column numbers (1-indexed)
+func offsetToLineCol(data []byte, offset int64) (line, col int) {
+	line = 1
+	col = 1
+	for i := int64(0); i < offset && i < int64(len(data)); i++ {
+		if data[i] == '\n' {
+			line++
+			col = 1
+		} else {
+			col++
+		}
+	}
+	return line, col
+}
+
+// splitLines splits data into lines, preserving empty lines
+func splitLines(data []byte) []string {
+	var lines []string
+	start := 0
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\n' {
+			lines = append(lines, string(data[start:i]))
+			start = i + 1
+		}
+	}
+	// Don't forget the last line if it doesn't end with newline
+	if start < len(data) {
+		lines = append(lines, string(data[start:]))
+	}
+	return lines
 }
 
 // Config represents the merged goclaw configuration
@@ -856,7 +947,7 @@ func mergeJSONConfig(dst *Config, jsonData []byte) error {
 	// First, parse JSON to a map to see what fields are actually specified
 	var rawMap map[string]interface{}
 	if err := json.Unmarshal(jsonData, &rawMap); err != nil {
-		return fmt.Errorf("parse JSON: %w", err)
+		return formatJSONError(jsonData, err)
 	}
 
 	// Re-marshal only the specified fields, then unmarshal to a Config
@@ -868,7 +959,8 @@ func mergeJSONConfig(dst *Config, jsonData []byte) error {
 
 	var src Config
 	if err := json.Unmarshal(specifiedJSON, &src); err != nil {
-		return fmt.Errorf("parse to config: %w", err)
+		// This is re-marshaled JSON, so type errors are more likely than syntax
+		return formatJSONError(specifiedJSON, err)
 	}
 
 	// Use custom merge that only overwrites if the source struct was actually

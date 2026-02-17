@@ -416,6 +416,14 @@ func (u *Updater) Apply(newBinaryPath string, noRestart bool) error {
 		return fmt.Errorf("failed to install new binary: %w", err)
 	}
 
+	// Make the installed binary executable
+	// G302: 0755 is intentional - this is an executable binary
+	if err := os.Chmod(currentExe, 0755); err != nil { //nolint:gosec
+		// Try to restore backup
+		_ = os.Rename(backupPath, currentExe)
+		return fmt.Errorf("failed to make installed binary executable: %w", err)
+	}
+
 	// Clean up backup - best effort
 	_ = os.Remove(backupPath)
 

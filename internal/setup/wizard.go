@@ -25,7 +25,8 @@ type Wizard struct {
 	openclawConfig    map[string]interface{}
 	selectedProviders []string
 	providerConfigs   map[string]ProviderConfig
-	importedAPIKeys   map[string]string // provider -> API key from OpenClaw
+	importedAPIKeys   map[string]string   // provider -> API key from OpenClaw
+	fetchedModels     map[string][]string // provider -> models fetched from API
 	agentModel        string
 	embeddingModel    string
 	skipEmbeddings    bool
@@ -67,6 +68,7 @@ func NewWizard() *Wizard {
 	return &Wizard{
 		providerConfigs: make(map[string]ProviderConfig),
 		importedAPIKeys: make(map[string]string),
+		fetchedModels:   make(map[string][]string),
 		httpEnabled:     true,
 		httpListen:      ":1337",
 		userRole:        "owner",
@@ -606,6 +608,7 @@ func (w *Wizard) configureProvider(key string) error {
 			fmt.Println("You can still proceed, but this provider may not work.")
 		} else {
 			fmt.Printf("✓ Connected! Found %d models\n", len(models))
+			w.fetchedModels[key] = models
 		}
 
 		w.providerConfigs[key] = ProviderConfig{
@@ -651,6 +654,7 @@ func (w *Wizard) configureProvider(key string) error {
 			fmt.Println("You can still proceed, but check your API key.")
 		} else {
 			fmt.Printf("✓ Valid! Found %d models\n", len(models))
+			w.fetchedModels[key] = models
 		}
 
 		w.providerConfigs[key] = ProviderConfig{
@@ -679,13 +683,19 @@ func (w *Wizard) selectModels() error {
 			continue
 		}
 
-		// Add known chat models
-		for _, model := range preset.KnownChatModels {
+		// Use fetched models if available, otherwise fall back to hardcoded list
+		chatModels := w.fetchedModels[key]
+		if len(chatModels) == 0 {
+			chatModels = preset.KnownChatModels
+		}
+
+		// Add chat models
+		for _, model := range chatModels {
 			label := fmt.Sprintf("%s/%s", key, model)
 			agentOptions = append(agentOptions, huh.NewOption(label, label))
 		}
 
-		// Add known embedding models
+		// Add known embedding models (these are less dynamic, keep hardcoded for now)
 		if preset.SupportsEmbeddings {
 			for _, model := range preset.KnownEmbedModels {
 				parts := strings.Split(model, "|")

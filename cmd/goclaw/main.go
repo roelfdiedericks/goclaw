@@ -42,7 +42,9 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
-const version = "0.0.1"
+// version is set by goreleaser via ldflags: -X main.version=...
+// Default "dev" indicates a local/non-release build
+var version = "dev"
 
 // RuntimePaths holds derived paths for daemon operation
 type RuntimePaths struct {
