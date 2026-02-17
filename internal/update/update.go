@@ -101,6 +101,7 @@ func NewUpdater(currentVersion string) *Updater {
 func IsSystemManaged() bool {
 	exe, err := os.Executable()
 	if err != nil {
+		L_debug("update: failed to get executable path", "error", err)
 		return false
 	}
 	exe, _ = filepath.EvalSymlinks(exe)
@@ -109,9 +110,11 @@ func IsSystemManaged() bool {
 	systemPaths := []string{"/usr/bin/", "/usr/local/bin/", "/opt/"}
 	for _, prefix := range systemPaths {
 		if strings.HasPrefix(exe, prefix) {
+			L_debug("update: system-managed installation detected", "path", exe, "prefix", prefix)
 			return true
 		}
 	}
+	L_debug("update: user installation detected", "path", exe)
 	return false
 }
 
@@ -126,7 +129,12 @@ func GetExecutablePath() (string, error) {
 
 // CheckForUpdate checks if a newer version is available
 func (u *Updater) CheckForUpdate(channel string) (*UpdateInfo, error) {
-	L_debug("update: checking for updates", "channel", channel, "current", u.currentVersion)
+	L_info("update: checking for updates",
+		"channel", channel,
+		"current", u.currentVersion,
+		"os", runtime.GOOS,
+		"arch", runtime.GOARCH,
+	)
 
 	release, err := u.getLatestRelease(channel)
 	if err != nil {
@@ -136,12 +144,26 @@ func (u *Updater) CheckForUpdate(channel string) (*UpdateInfo, error) {
 	newVersion := release.Version()
 	isNewer := isNewerVersion(u.currentVersion, newVersion)
 
+	L_info("update: version check complete",
+		"current", u.currentVersion,
+		"latest", newVersion,
+		"channel", release.Channel(),
+		"isNewer", isNewer,
+		"tag", release.TagName,
+	)
+
 	// Build download URLs
 	archiveName := fmt.Sprintf("goclaw_%s_%s_%s.tar.gz", newVersion, runtime.GOOS, runtime.GOARCH)
 	downloadURL := fmt.Sprintf("%s/%s/releases/download/%s/%s",
 		GitHubReleasesBase, GitHubRepo, release.TagName, archiveName)
 	checksumURL := fmt.Sprintf("%s/%s/releases/download/%s/checksums.txt",
 		GitHubReleasesBase, GitHubRepo, release.TagName)
+
+	L_debug("update: download URLs prepared",
+		"archive", archiveName,
+		"downloadURL", downloadURL,
+		"checksumURL", checksumURL,
+	)
 
 	return &UpdateInfo{
 		CurrentVersion: u.currentVersion,
@@ -163,6 +185,8 @@ func (u *Updater) getLatestRelease(channel string) (*Release, error) {
 	if channel == "stable" {
 		// Use /releases/latest for stable
 		url := fmt.Sprintf("%s/repos/%s/releases/latest", GitHubAPIBase, GitHubRepo)
+		L_debug("update: fetching latest stable release", "url", url)
+
 		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
 			return nil, err
@@ -172,9 +196,12 @@ func (u *Updater) getLatestRelease(channel string) (*Release, error) {
 
 		resp, err := u.httpClient.Do(req)
 		if err != nil {
+			L_debug("update: GitHub API request failed", "error", err)
 			return nil, err
 		}
 		defer resp.Body.Close()
+
+		L_debug("update: GitHub API response", "status", resp.StatusCode)
 
 		if resp.StatusCode == http.StatusNotFound {
 			return nil, fmt.Errorf("no stable releases found")
@@ -187,11 +214,19 @@ func (u *Updater) getLatestRelease(channel string) (*Release, error) {
 		if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 			return nil, err
 		}
+
+		L_debug("update: found stable release",
+			"tag", release.TagName,
+			"name", release.Name,
+			"assets", len(release.Assets),
+		)
 		return &release, nil
 	}
 
 	// For other channels (beta, rc), fetch all releases and filter
 	url := fmt.Sprintf("%s/repos/%s/releases", GitHubAPIBase, GitHubRepo)
+	L_debug("update: fetching releases list", "url", url, "channel", channel)
+
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -201,9 +236,12 @@ func (u *Updater) getLatestRelease(channel string) (*Release, error) {
 
 	resp, err := u.httpClient.Do(req)
 	if err != nil {
+		L_debug("update: GitHub API request failed", "error", err)
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	L_debug("update: GitHub API response", "status", resp.StatusCode)
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
@@ -214,15 +252,20 @@ func (u *Updater) getLatestRelease(channel string) (*Release, error) {
 		return nil, err
 	}
 
+	L_debug("update: fetched releases", "total", len(releases))
+
 	// Find latest matching release
 	for _, r := range releases {
 		if r.Draft {
+			L_trace("update: skipping draft release", "tag", r.TagName)
 			continue
 		}
 		if channel == "beta" && strings.Contains(r.TagName, "-beta") {
+			L_debug("update: found beta release", "tag", r.TagName)
 			return &r, nil
 		}
 		if channel == "rc" && strings.Contains(r.TagName, "-rc") {
+			L_debug("update: found rc release", "tag", r.TagName)
 			return &r, nil
 		}
 	}
@@ -232,30 +275,44 @@ func (u *Updater) getLatestRelease(channel string) (*Release, error) {
 
 // Download downloads the release archive and verifies its checksum
 func (u *Updater) Download(info *UpdateInfo, onProgress func(downloaded, total int64)) (string, error) {
-	L_debug("update: downloading", "url", info.DownloadURL)
+	L_info("update: starting download",
+		"version", info.NewVersion,
+		"archive", info.ArchiveName,
+	)
+	L_debug("update: download URL", "url", info.DownloadURL)
 
 	// Create temp directory
 	tmpDir, err := os.MkdirTemp("", "goclaw-update-*")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
+	L_debug("update: temp directory created", "path", tmpDir)
 
 	// Download archive
 	archivePath := filepath.Join(tmpDir, "goclaw.tar.gz")
+	L_debug("update: downloading archive", "dest", archivePath)
+
 	if err := u.downloadFile(info.DownloadURL, archivePath, onProgress); err != nil {
 		os.RemoveAll(tmpDir)
 		return "", fmt.Errorf("failed to download: %w", err)
 	}
 
+	// Get downloaded file size
+	if fi, err := os.Stat(archivePath); err == nil {
+		L_info("update: download complete", "size", formatBytes(fi.Size()))
+	}
+
 	// Download and verify checksum
+	L_debug("update: verifying checksum", "checksumURL", info.ChecksumURL)
 	if err := u.verifyChecksum(archivePath, info.ArchiveName, info.ChecksumURL); err != nil {
 		os.RemoveAll(tmpDir)
 		return "", fmt.Errorf("checksum verification failed: %w", err)
 	}
 
-	L_debug("update: checksum verified")
+	L_info("update: checksum verified successfully")
 
 	// Extract archive
+	L_debug("update: extracting archive", "dest", tmpDir)
 	binaryPath := filepath.Join(tmpDir, "goclaw")
 	if err := extractTarGz(archivePath, tmpDir); err != nil {
 		os.RemoveAll(tmpDir)
@@ -263,10 +320,16 @@ func (u *Updater) Download(info *UpdateInfo, onProgress func(downloaded, total i
 	}
 
 	// Verify binary exists
-	if _, err := os.Stat(binaryPath); err != nil {
+	fi, err := os.Stat(binaryPath)
+	if err != nil {
 		os.RemoveAll(tmpDir)
 		return "", fmt.Errorf("binary not found in archive")
 	}
+
+	L_info("update: extraction complete",
+		"binary", binaryPath,
+		"size", formatBytes(fi.Size()),
+	)
 
 	return binaryPath, nil
 }
@@ -332,6 +395,7 @@ func (u *Updater) verifyChecksum(filePath, archiveName, checksumURL string) erro
 	defer cancel()
 
 	// Download checksums.txt
+	L_debug("update: fetching checksums", "url", checksumURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", checksumURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -352,22 +416,34 @@ func (u *Updater) verifyChecksum(filePath, archiveName, checksumURL string) erro
 		return err
 	}
 
+	L_debug("update: checksums file downloaded", "size", len(checksumData))
+
 	// Parse checksums (format: "hash  filename")
 	// Look for exact match on the archive name we downloaded
 	var expectedHash string
-	for _, line := range strings.Split(string(checksumData), "\n") {
+	checksumLines := strings.Split(string(checksumData), "\n")
+	for _, line := range checksumLines {
 		parts := strings.Fields(line)
 		if len(parts) >= 2 && parts[1] == archiveName {
 			expectedHash = parts[0]
+			L_debug("update: found expected checksum",
+				"archive", archiveName,
+				"sha256", expectedHash[:16]+"...",
+			)
 			break
 		}
 	}
 
 	if expectedHash == "" {
+		L_debug("update: checksum not found in file",
+			"archive", archiveName,
+			"entriesChecked", len(checksumLines),
+		)
 		return fmt.Errorf("checksum not found for %s", archiveName)
 	}
 
 	// Calculate actual hash
+	L_debug("update: calculating SHA256", "file", filePath)
 	f, err := os.Open(filePath)
 	if err != nil {
 		return err
@@ -380,12 +456,31 @@ func (u *Updater) verifyChecksum(filePath, archiveName, checksumURL string) erro
 	}
 	actualHash := hex.EncodeToString(h.Sum(nil))
 
+	L_debug("update: checksum comparison",
+		"expected", expectedHash[:16]+"...",
+		"actual", actualHash[:16]+"...",
+	)
+
 	if actualHash != expectedHash {
 		return fmt.Errorf("checksum mismatch for %s: expected %s, got %s",
 			archiveName, expectedHash[:16]+"...", actualHash[:16]+"...")
 	}
 
 	return nil
+}
+
+// formatBytes formats bytes as human-readable string
+func formatBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
 // Apply replaces the current binary with the new one
@@ -395,9 +490,13 @@ func (u *Updater) Apply(newBinaryPath string, noRestart bool) error {
 		return err
 	}
 
-	L_info("update: applying", "current", currentExe, "new", newBinaryPath)
+	L_info("update: applying update",
+		"currentPath", currentExe,
+		"newPath", newBinaryPath,
+	)
 
 	// Make new binary executable
+	L_debug("update: setting executable permissions", "path", newBinaryPath)
 	// G302: 0755 is intentional - this is an executable binary
 	if err := os.Chmod(newBinaryPath, 0755); err != nil { //nolint:gosec
 		return fmt.Errorf("failed to make binary executable: %w", err)
@@ -405,13 +504,16 @@ func (u *Updater) Apply(newBinaryPath string, noRestart bool) error {
 
 	// Backup current binary
 	backupPath := currentExe + ".old"
+	L_debug("update: backing up current binary", "from", currentExe, "to", backupPath)
 	if err := os.Rename(currentExe, backupPath); err != nil {
 		return fmt.Errorf("failed to backup current binary: %w", err)
 	}
 
 	// Move new binary into place
+	L_debug("update: installing new binary", "from", newBinaryPath, "to", currentExe)
 	if err := copyFile(newBinaryPath, currentExe); err != nil {
 		// Try to restore backup - best effort, ignore error since we're already returning one
+		L_warn("update: install failed, restoring backup", "error", err)
 		_ = os.Rename(backupPath, currentExe)
 		return fmt.Errorf("failed to install new binary: %w", err)
 	}
@@ -420,17 +522,19 @@ func (u *Updater) Apply(newBinaryPath string, noRestart bool) error {
 	// G302: 0755 is intentional - this is an executable binary
 	if err := os.Chmod(currentExe, 0755); err != nil { //nolint:gosec
 		// Try to restore backup
+		L_warn("update: chmod failed, restoring backup", "error", err)
 		_ = os.Rename(backupPath, currentExe)
 		return fmt.Errorf("failed to make installed binary executable: %w", err)
 	}
 
 	// Clean up backup - best effort
+	L_debug("update: removing backup", "path", backupPath)
 	_ = os.Remove(backupPath)
 
-	L_info("update: binary replaced successfully")
+	L_info("update: binary replaced successfully", "path", currentExe)
 
 	if noRestart {
-		L_info("update: skipping restart (--no-restart)")
+		L_info("update: skipping restart (noRestart=true)")
 		return nil
 	}
 

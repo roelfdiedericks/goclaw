@@ -52,23 +52,123 @@ type XAIProvider struct {
 // processing tool calls, so persisted data uses the canonical tool name.
 const clientToolPrefix = "local_"
 
-// xAI model context window sizes (tokens)
-var xaiModelContextSizes = map[string]int{
-	"grok-4":                  131072,
-	"grok-4-0414":             131072,
-	"grok-4-1":                131072,
-	"grok-4-1-fast-reasoning": 131072,
-	"grok-3":                  131072,
-	"grok-3-fast":             131072,
-	"grok-3-mini":             131072,
-	"grok-3-mini-fast":        131072,
-	"grok-2":                  131072,
-	"grok-2-mini":             131072,
-	"grok-vision-beta":        8192,
+// =============================================================================
+// Model Info Cache - Fetched from API on startup, fallback to hardcoded
+// =============================================================================
+
+// xaiModelInfo holds cached model information from the API.
+type xaiModelInfo struct {
+	ContextTokens int     // MaxPromptLength from API
+	InputPrice    float64 // USD per million tokens
+	OutputPrice   float64 // USD per million tokens
+}
+
+var (
+	// xaiModelInfoCache holds model info fetched from API (model name -> info)
+	xaiModelInfoCache   = make(map[string]*xaiModelInfo)
+	xaiModelInfoCacheMu sync.RWMutex
+	xaiModelInfoFetched bool // true once we've attempted to fetch from API
+)
+
+// xaiModelContextFallback contains hardcoded context sizes as fallback
+// Source: https://console.x.ai/ model availability page (2026-02)
+var xaiModelContextFallback = map[string]int{
+	// Grok-4-1 series: 2M context
+	"grok-4-1-fast-reasoning":     2000000,
+	"grok-4-1-fast-non-reasoning": 2000000,
+	"grok-4-1":                    2000000,
+	// Grok-4 series: 2M for fast, 256K for dated
+	"grok-4-fast-reasoning":     2000000,
+	"grok-4-fast-non-reasoning": 2000000,
+	"grok-4-0709":               256000,
+	"grok-4-0414":               256000,
+	"grok-4":                    256000,
+	// Grok-3 series: 131K context
+	"grok-3":           131072,
+	"grok-3-fast":      131072,
+	"grok-3-mini":      131072,
+	"grok-3-mini-fast": 131072,
+	// Legacy
+	"grok-2":           131072,
+	"grok-2-mini":      131072,
+	"grok-vision-beta": 8192,
 }
 
 // Default context size for unknown models
-const defaultXAIContextSize = 131072
+const defaultXAIContextSize = 2000000
+
+// FetchXAIModelInfo queries the xAI API for model information and caches it.
+// Called once on startup. If it fails, we fall back to hardcoded values.
+// Thread-safe.
+func FetchXAIModelInfo(apiKey string) {
+	xaiModelInfoCacheMu.Lock()
+	defer xaiModelInfoCacheMu.Unlock()
+
+	if xaiModelInfoFetched {
+		return // Already fetched (or attempted)
+	}
+	xaiModelInfoFetched = true
+
+	// Create temporary client for model listing
+	client, err := xai.New(xai.Config{
+		APIKey:  xai.NewSecureString(apiKey),
+		Timeout: 10 * time.Second, // Short timeout for startup
+	})
+	if err != nil {
+		L_warn("xai: failed to create client for model info", "error", err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	models, err := client.ListModels(ctx)
+	if err != nil {
+		L_warn("xai: failed to fetch model info from API, using fallback", "error", err)
+		return
+	}
+
+	// Cache model info
+	for _, m := range models {
+		xaiModelInfoCache[m.Name] = &xaiModelInfo{
+			ContextTokens: int(m.MaxPromptLength),
+			InputPrice:    m.PromptTextPricing.PerMillionTokens,
+			OutputPrice:   m.CompletionPricing.PerMillionTokens,
+		}
+		// Also cache by aliases
+		for _, alias := range m.Aliases {
+			xaiModelInfoCache[alias] = xaiModelInfoCache[m.Name]
+		}
+	}
+
+	L_info("xai: fetched model info from API", "models", len(models))
+	for name, info := range xaiModelInfoCache {
+		L_debug("xai: model info cached",
+			"model", name,
+			"contextTokens", info.ContextTokens,
+			"inputPrice", info.InputPrice,
+			"outputPrice", info.OutputPrice,
+		)
+	}
+}
+
+// getXAIModelContextTokens returns the context window size for a model.
+// Checks API cache first, then falls back to hardcoded values.
+func getXAIModelContextTokens(model string) int {
+	// Check API cache first
+	xaiModelInfoCacheMu.RLock()
+	if info, ok := xaiModelInfoCache[model]; ok {
+		xaiModelInfoCacheMu.RUnlock()
+		return info.ContextTokens
+	}
+	xaiModelInfoCacheMu.RUnlock()
+
+	// Fallback to hardcoded
+	if size, ok := xaiModelContextFallback[model]; ok {
+		return size
+	}
+	return defaultXAIContextSize
+}
 
 // =============================================================================
 // HARDCODED MODEL RESTRICTION - ATTENTION xAI / FUTURE MAINTAINERS
@@ -137,6 +237,9 @@ func NewXAIProvider(name string, cfg ProviderConfig) (*XAIProvider, error) {
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("xai API key not configured")
 	}
+
+	// Fetch model info from API on first provider creation (async-safe, only runs once)
+	go FetchXAIModelInfo(cfg.APIKey)
 
 	// Default maxTokens
 	maxTokens := cfg.MaxTokens
@@ -280,11 +383,8 @@ func (p *XAIProvider) ContextTokens() int {
 	if p.config.ContextTokens > 0 {
 		return p.config.ContextTokens
 	}
-	// Look up known model sizes
-	if size, ok := xaiModelContextSizes[p.model]; ok {
-		return size
-	}
-	return defaultXAIContextSize
+	// Use API cache with hardcoded fallback
+	return getXAIModelContextTokens(p.model)
 }
 
 // =============================================================================
