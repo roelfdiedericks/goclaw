@@ -61,6 +61,8 @@ builds:
     env:
       - CC=clang
       - CXX=clang++
+      - CGO_CFLAGS=-arch arm64
+      - CGO_LDFLAGS=-arch arm64
 
 archives:
   - format: tar.gz
