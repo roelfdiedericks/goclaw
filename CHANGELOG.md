@@ -14,3 +14,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions release workflow with auto-generated notes
 - Debian package (.deb) distribution
 - Docker images on GHCR
+- user_auth tool update, docs and exampless
