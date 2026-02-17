@@ -69,9 +69,8 @@ jobs:
           path: dist/
           retention-days: 1
 
-  # Build Darwin (both amd64 and arm64) on macOS
-  # macOS clang supports cross-arch compilation natively
-  build-darwin:
+  # Build Darwin AMD64 (cross-compile from arm64 runner)
+  build-darwin-amd64:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -91,11 +90,30 @@ jobs:
           CGO_ENABLED: 1
           SDKROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
 
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-darwin-amd64
+          path: dist/
+          retention-days: 1
+
+  # Build Darwin ARM64 natively on arm64 runner
+  build-darwin-arm64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
       - name: Build darwin/arm64
         uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
-          args: build --id darwin-arm64 --skip=post-hooks,validate
+          args: build --id darwin-arm64 --clean --skip=post-hooks
         env:
           CGO_ENABLED: 1
           SDKROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
@@ -103,13 +121,13 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist-darwin
+          name: dist-darwin-arm64
           path: dist/
           retention-days: 1
 
   # Collect all artifacts and create release
   release:
-    needs: [build-linux-amd64, build-linux-arm64, build-darwin]
+    needs: [build-linux-amd64, build-linux-arm64, build-darwin-amd64, build-darwin-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -133,10 +151,16 @@ jobs:
           name: dist-linux-arm64
           path: dist/
 
-      - name: Download darwin artifacts
+      - name: Download darwin-amd64 artifacts
         uses: actions/download-artifact@v4
         with:
-          name: dist-darwin
+          name: dist-darwin-amd64
+          path: dist/
+
+      - name: Download darwin-arm64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-darwin-arm64
           path: dist/
 
       - name: List dist contents
