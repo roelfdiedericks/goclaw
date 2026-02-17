@@ -2,13 +2,65 @@ version: 2
 
 project_name: goclaw
 
+env:
+  - CGO_ENABLED=1
+
 builds:
-  - binary: goclaw
+  # Linux AMD64 - built natively on ubuntu-latest
+  - id: linux-amd64
+    binary: goclaw
     main: ./cmd/goclaw
-    goos: [linux, darwin]
-    goarch: [amd64, arm64]
+    goos: [linux]
+    goarch: [amd64]
+    tags:
+      - sqlite_fts5
     ldflags:
       - -X main.version={{.Version}}
+    env:
+      - CC=gcc
+      - CXX=g++
+
+  # Linux ARM64 - built natively on ubuntu-24.04-arm
+  - id: linux-arm64
+    binary: goclaw
+    main: ./cmd/goclaw
+    goos: [linux]
+    goarch: [arm64]
+    tags:
+      - sqlite_fts5
+    ldflags:
+      - -X main.version={{.Version}}
+    env:
+      - CC=gcc
+      - CXX=g++
+
+  # Darwin AMD64 - built on macos-latest (native)
+  - id: darwin-amd64
+    binary: goclaw
+    main: ./cmd/goclaw
+    goos: [darwin]
+    goarch: [amd64]
+    tags:
+      - sqlite_fts5
+    ldflags:
+      - -X main.version={{.Version}}
+    env:
+      - CC=clang
+      - CXX=clang++
+
+  # Darwin ARM64 - built on macos-latest (cross-arch via clang)
+  - id: darwin-arm64
+    binary: goclaw
+    main: ./cmd/goclaw
+    goos: [darwin]
+    goarch: [arm64]
+    tags:
+      - sqlite_fts5
+    ldflags:
+      - -X main.version={{.Version}}
+    env:
+      - CC=clang
+      - CXX=clang++
 
 archives:
   - format: tar.gz
@@ -29,6 +81,7 @@ nfpms:
 dockers:
   - image_templates:
       - ghcr.io/roelfdiedericks/goclaw:{{ .Version }}-amd64
+    ids: [linux-amd64]
     goos: linux
     goarch: amd64
     use: buildx
@@ -39,6 +92,7 @@ dockers:
       - "--platform=linux/amd64"
   - image_templates:
       - ghcr.io/roelfdiedericks/goclaw:{{ .Version }}-arm64
+    ids: [linux-arm64]
     goos: linux
     goarch: arm64
     use: buildx

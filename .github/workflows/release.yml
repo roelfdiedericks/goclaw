@@ -9,7 +9,8 @@ permissions:
   packages: write
 
 jobs:
-  release:
+  # Build Linux AMD64 natively on x64 runner
+  build-linux-amd64:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,7 +21,129 @@ jobs:
         with:
           go-version: '1.25'
 
-      # Required for multi-arch Docker builds
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc g++ build-essential
+
+      - name: Build linux/amd64
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: build --id linux-amd64 --clean --skip=post-hooks
+        env:
+          CGO_ENABLED: 1
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux-amd64
+          path: dist/
+          retention-days: 1
+
+  # Build Linux ARM64 natively on arm64 runner
+  build-linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc g++ build-essential
+
+      - name: Build linux/arm64
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: build --id linux-arm64 --clean --skip=post-hooks
+        env:
+          CGO_ENABLED: 1
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux-arm64
+          path: dist/
+          retention-days: 1
+
+  # Build Darwin (both amd64 and arm64) on macOS
+  # macOS clang supports cross-arch compilation natively
+  build-darwin:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Build darwin/amd64
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: build --id darwin-amd64 --clean --skip=post-hooks
+        env:
+          CGO_ENABLED: 1
+          SDKROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
+
+      - name: Build darwin/arm64
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: build --id darwin-arm64 --skip=post-hooks
+        env:
+          CGO_ENABLED: 1
+          SDKROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
+          GOARCH: arm64
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-darwin
+          path: dist/
+          retention-days: 1
+
+  # Collect all artifacts and create release
+  release:
+    needs: [build-linux-amd64, build-linux-arm64, build-darwin]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      # Download all build artifacts
+      - name: Download linux-amd64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-linux-amd64
+          path: dist/
+
+      - name: Download linux-arm64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-linux-arm64
+          path: dist/
+
+      - name: Download darwin artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-darwin
+          path: dist/
+
+      - name: List dist contents
+        run: find dist -type f | head -50
+
+      # Docker setup for multi-arch images
       - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
@@ -31,7 +154,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Try changelog-reader-action (understands Keep a Changelog format)
+      # Extract release notes from CHANGELOG
       - name: Read changelog
         id: changelog
         uses: mindsers/changelog-reader-action@v2
@@ -40,50 +163,34 @@ jobs:
 
       - name: Write release notes
         run: |
-          echo "=== Changelog reader output ==="
-          echo "Version: ${{ steps.changelog.outputs.version }}"
-          echo "Changes:"
-          echo "${{ steps.changelog.outputs.changes }}"
-          echo "==="
           echo "${{ steps.changelog.outputs.changes }}" > /tmp/release_notes.md
-
-      # FALLBACK: awk approach if changelog-reader doesn't work with our format
-      # - name: Extract release notes from CHANGELOG
-      #   run: |
-      #     VERSION=${GITHUB_REF#refs/tags/v}
-      #     # Extract content between current version and next version header
-      #     awk "/^## \\[$VERSION\\]/{found=1; next} /^## \\[/{found=0} found" CHANGELOG.md > /tmp/release_notes.md
-      #     cat /tmp/release_notes.md
 
       - name: Append auto-generated PR list
         run: |
           TAG=${GITHUB_REF#refs/tags/}
-          # Get previous tag for comparison
           PREV_TAG=$(git describe --tags --abbrev=0 ${TAG}^ 2>/dev/null || echo "")
           
           echo "" >> /tmp/release_notes.md
           
           if [ -n "$PREV_TAG" ]; then
-            # Generate release notes comparing to previous tag
             gh api repos/${{ github.repository }}/releases/generate-notes \
               -f tag_name="$TAG" \
               -f previous_tag_name="$PREV_TAG" \
               --jq '.body' >> /tmp/release_notes.md
           else
-            # First release, no previous tag
             gh api repos/${{ github.repository }}/releases/generate-notes \
               -f tag_name="$TAG" \
               --jq '.body' >> /tmp/release_notes.md
           fi
-          
-          echo "=== Final release notes ==="
-          cat /tmp/release_notes.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: goreleaser/goreleaser-action@v6
+      # Run goreleaser to create archives, checksums, Docker images, and release
+      # Skip the build step since we already have binaries
+      - name: Create release
+        uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
-          args: release --clean --release-notes /tmp/release_notes.md
+          args: release --skip=build --clean --release-notes /tmp/release_notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
