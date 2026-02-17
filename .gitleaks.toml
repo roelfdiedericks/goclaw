@@ -1,0 +1,76 @@
+# Gitleaks configuration for GoClaw
+# Extends default secret detection with custom PII rules
+# Run: gitleaks detect --source . --verbose
+
+title = "GoClaw Gitleaks Config"
+
+[extend]
+useDefault = true
+
+# =============================================================================
+# Custom PII Detection Rules
+# =============================================================================
+
+[[rules]]
+id = "telegram-user-id"
+description = "Potential real Telegram user ID (8-10 digit number in Telegram context)"
+regex = '''["']?(?:telegram[_-]?id|user[_-]?id|chat[_-]?id)["']?\s*[:=]\s*["']?([1-9]\d{7,9})["']?'''
+keywords = ["telegram", "userid", "user_id", "chatid", "chat_id"]
+
+[[rules]]
+id = "private-ipv4-address"
+description = "Private network IPv4 address (192.168.x.x, 10.x.x.x, 172.16-31.x.x)"
+regex = '''(?:192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})'''
+keywords = ["url", "host", "address", "ip", "server"]
+
+[[rules]]
+id = "real-phone-number"
+description = "Potential real phone number with country code"
+regex = '''\+[1-9]\d{10,14}'''
+keywords = ["phone", "mobile", "tel", "contact"]
+
+# =============================================================================
+# Allowlist - Patterns to ignore (false positives)
+# =============================================================================
+
+[allowlist]
+description = "Global allowlist for known safe patterns"
+
+# Safe example patterns used in documentation
+regexes = [
+  # Clearly fake IDs used in docs
+  '''123456789''',
+  '''987654321''',
+  '''111111111''',
+  '''222222222''',
+  '''999999999''',
+  # Example email domains
+  '''@example\.com''',
+  '''@example\.org''',
+  # Standard documentation IPs
+  '''192\.168\.1\.1''',
+  '''192\.168\.1\.100''',
+  '''127\.0\.0\.1''',
+  '''0\.0\.0\.0''',
+  '''localhost''',
+  # Example phone numbers (555 is reserved for fiction)
+  '''\+1555\d{7}''',
+  '''\+1415555\d{4}''',
+  '''555-555-5555''',
+  # Home Assistant example domain
+  '''homeassistant\.local''',
+]
+
+# Paths to ignore
+paths = [
+  # Skills directory (synced from upstream OpenClaw, not our code)
+  '''skills/.*''',
+  # Test files may contain intentional test data
+  '''.*_test\.go$''',
+  # Vendor directory
+  '''vendor/.*''',
+  # Go module cache
+  '''go\.sum''',
+  # URL safety test file (contains intentional examples)
+  '''internal/browser/urlsafety_test\.go''',
+]
