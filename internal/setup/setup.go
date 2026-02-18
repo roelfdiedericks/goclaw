@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -19,6 +20,37 @@ import (
 
 // BackupCount is the number of backup versions to keep
 const BackupCount = 5
+
+// blueTheme creates a blue-colored theme for huh forms (no pink/purple!)
+func blueTheme() *huh.Theme {
+	t := huh.ThemeBase()
+
+	// Colors matching our website
+	blue := lipgloss.Color("39")      // Primary blue
+	cyan := lipgloss.Color("87")      // Cyan/light blue
+	white := lipgloss.Color("255")    // White
+	gray := lipgloss.Color("245")     // Gray
+	darkGray := lipgloss.Color("240") // Dark gray
+
+	// Focused styles - use blue/white instead of pink
+	t.Focused.Title = t.Focused.Title.Foreground(cyan)
+	t.Focused.Description = t.Focused.Description.Foreground(gray)
+	t.Focused.Base = t.Focused.Base.BorderForeground(blue)
+	t.Focused.SelectSelector = t.Focused.SelectSelector.Foreground(white)
+	t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(white)
+	t.Focused.Option = t.Focused.Option.Foreground(gray)
+	t.Focused.FocusedButton = t.Focused.FocusedButton.Background(blue).Foreground(white)
+	t.Focused.BlurredButton = t.Focused.BlurredButton.Background(darkGray).Foreground(white)
+	t.Focused.TextInput.Cursor = t.Focused.TextInput.Cursor.Foreground(white)
+	t.Focused.TextInput.Placeholder = t.Focused.TextInput.Placeholder.Foreground(gray)
+
+	// Blurred styles
+	t.Blurred.Title = t.Blurred.Title.Foreground(gray)
+	t.Blurred.Description = t.Blurred.Description.Foreground(darkGray)
+	t.Blurred.SelectSelector = t.Blurred.SelectSelector.Foreground(gray)
+
+	return t
+}
 
 // escKeyMap returns a keymap with Escape added to Quit and proper help text
 func escKeyMap() *huh.KeyMap {
@@ -38,9 +70,28 @@ func escKeyMap() *huh.KeyMap {
 	return km
 }
 
+// formKeyMap returns a keymap optimized for multi-field forms with arrow navigation
+func formKeyMap() *huh.KeyMap {
+	km := huh.NewDefaultKeyMap()
+	// Escape to go back
+	km.Quit = key.NewBinding(key.WithKeys("ctrl+c", "esc"), key.WithHelp("esc", "back"))
+	// Arrow keys + tab for field navigation
+	km.Input.Prev = key.NewBinding(key.WithKeys("shift+tab", "up"), key.WithHelp("↑/shift+tab", "prev"))
+	km.Input.Next = key.NewBinding(key.WithKeys("tab", "down", "enter"), key.WithHelp("↓/tab/enter", "next"))
+	km.Input.Submit = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "next"))
+	km.Text.Prev = key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev"))
+	km.Text.Next = key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next"))
+	km.Confirm.Prev = key.NewBinding(key.WithKeys("shift+tab", "up"), key.WithHelp("↑", "prev"))
+	km.Confirm.Next = key.NewBinding(key.WithKeys("tab", "down", "enter"), key.WithHelp("↓/enter", "next"))
+	return km
+}
+
 // newForm wraps huh.NewForm and applies escape-to-quit keymap with help shown
 func newForm(groups ...*huh.Group) *huh.Form {
-	return huh.NewForm(groups...).WithKeyMap(escKeyMap()).WithShowHelp(true)
+	return huh.NewForm(groups...).
+		WithKeyMap(escKeyMap()).
+		WithShowHelp(true).
+		WithTheme(blueTheme())
 }
 
 // suppressLogs sets log level to error-only and returns the previous level

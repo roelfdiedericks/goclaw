@@ -50,18 +50,20 @@ func (e *UserEditor) Run() error {
 	prevLevel := suppressLogs()
 	defer restoreLogs(prevLevel)
 
+	// Start a session if not already in one (might be called from setup editor)
+	needsSession := GetSession() == nil
+	if needsSession {
+		StartSession(FrameTitleUsers)
+		defer EndSession()
+	}
+
 	return e.mainMenu()
 }
 
 func (e *UserEditor) mainMenu() error {
 	for {
-		fmt.Println()
-		fmt.Println("User Management")
-		fmt.Printf("Users file: %s\n", e.usersPath)
-		fmt.Println()
-
-		// Show current users
-		e.showUserList()
+		// Build user summary
+		userSummary := e.getUserSummary()
 
 		// Build menu options
 		options := []huh.Option[string]{
@@ -78,7 +80,7 @@ func (e *UserEditor) mainMenu() error {
 		}
 
 		options = append(options,
-			huh.NewOption("---", "---"),
+			huh.NewOption("───────────────────", "---"),
 		)
 
 		if e.modified {
@@ -93,16 +95,11 @@ func (e *UserEditor) mainMenu() error {
 		}
 
 		var choice string
-		form := newForm(
-			huh.NewGroup(
-				huh.NewSelect[string]().
-					Title("Select action").
-					Options(options...).
-					Value(&choice),
-			),
-		)
-
-		if err := form.Run(); err != nil {
+		subtitle := userSummary
+		if e.modified {
+			subtitle += " (modified)"
+		}
+		if err := RunMenu(FrameTitleUsers, subtitle, options, &choice); err != nil {
 			if isAbort(err) {
 				// Escape pressed - treat as exit/back
 				choice = "exit"
@@ -146,7 +143,7 @@ func (e *UserEditor) mainMenu() error {
 							Value(&confirm),
 					),
 				)
-				if err := form.Run(); err != nil {
+				if err := RunForm(FrameTitleUsers, form); err != nil {
 					return err
 				}
 				if !confirm {
@@ -156,6 +153,29 @@ func (e *UserEditor) mainMenu() error {
 			return nil
 		}
 	}
+}
+
+func (e *UserEditor) getUserSummary() string {
+	if len(e.users) == 0 {
+		return "No users configured"
+	}
+
+	// Sort usernames for consistent display
+	var usernames []string
+	for username := range e.users {
+		usernames = append(usernames, username)
+	}
+	sort.Strings(usernames)
+
+	// Find owner
+	for _, username := range usernames {
+		entry := e.users[username]
+		if entry.Role == "owner" {
+			return fmt.Sprintf("%d user(s): %s (owner)", len(e.users), username)
+		}
+	}
+
+	return fmt.Sprintf("%d user(s)", len(e.users))
 }
 
 func (e *UserEditor) showUserList() {
@@ -225,7 +245,7 @@ func (e *UserEditor) addUser() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleUsers, "Add User", form); err != nil {
 		if isAbort(err) {
 			return nil // Escape pressed, go back
 		}
@@ -272,7 +292,7 @@ func (e *UserEditor) addUser() error {
 				Value(&setPassword),
 		),
 	)
-	if err := form.Run(); err != nil {
+	if err := RunForm(FrameTitleUsers, form); err != nil {
 		if isAbort(err) {
 			return nil // Escape pressed, skip password setup
 		}
@@ -321,7 +341,7 @@ func (e *UserEditor) editUser() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleUsers, fmt.Sprintf("Edit: %s", username), form); err != nil {
 		if isAbort(err) {
 			return nil // Escape pressed, go back
 		}
@@ -379,7 +399,7 @@ func (e *UserEditor) deleteUser() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleUsers, "Delete User", form); err != nil {
 		if isAbort(err) {
 			return nil // Escape pressed, go back
 		}
@@ -419,7 +439,7 @@ func (e *UserEditor) setTelegramID() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleUsers, fmt.Sprintf("Telegram ID: %s", username), form); err != nil {
 		if isAbort(err) {
 			return nil // Escape pressed, go back
 		}
@@ -470,7 +490,7 @@ func (e *UserEditor) setPasswordFor(username string) error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleUsers, fmt.Sprintf("Password: %s", username), form); err != nil {
 		if isAbort(err) {
 			return nil // Escape pressed, go back
 		}
@@ -488,7 +508,7 @@ func (e *UserEditor) setPasswordFor(username string) error {
 					Value(&clearConfirm),
 			),
 		)
-		if err := form.Run(); err != nil {
+		if err := RunForm(FrameTitleUsers, form); err != nil {
 			if isAbort(err) {
 				return nil // Escape pressed, go back
 			}
@@ -551,7 +571,7 @@ func (e *UserEditor) selectUser(title string) (string, error) {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunForm(FrameTitleUsers, form); err != nil {
 		if isAbort(err) {
 			return "", nil // Escape pressed, go back
 		}

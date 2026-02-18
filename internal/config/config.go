@@ -783,12 +783,13 @@ func Load() (*LoadResult, error) {
 			Paths: []string{}, // Only memory/ and MEMORY.md by default
 		},
 		Transcript: TranscriptConfig{
-			Enabled:                true,  // Transcript indexing enabled by default
-			IndexIntervalSeconds:   30,    // Check every 30 seconds
-			BatchSize:              100,   // Process up to 100 messages per batch
-			MaxGroupGapSeconds:     300,   // 5 minute gap = new conversation chunk
-			MaxMessagesPerChunk:    8,     // Keep chunks focused
-			MaxEmbeddingContentLen: 16000, // Conservative for nomic-embed-text
+			Enabled:                true,
+			IndexIntervalSeconds:   30,
+			BatchSize:              100,
+			BackfillBatchSize:      10,
+			MaxGroupGapSeconds:     300,
+			MaxMessagesPerChunk:    8,
+			MaxEmbeddingContentLen: 16000,
 			Query: TranscriptQueryConfig{
 				MaxResults:    10,
 				MinScore:      0.3,

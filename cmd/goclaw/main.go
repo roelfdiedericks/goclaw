@@ -21,6 +21,7 @@ import (
 	"github.com/sevlyar/go-daemon"
 	"golang.org/x/term"
 
+	"github.com/roelfdiedericks/goclaw/internal/actions"
 	"github.com/roelfdiedericks/goclaw/internal/browser"
 	"github.com/roelfdiedericks/goclaw/internal/bwrap"
 	"github.com/roelfdiedericks/goclaw/internal/config"
@@ -89,6 +90,7 @@ type CLI struct {
 	Browser    BrowserCmd    `cmd:"" help:"Manage browser (download, profiles, setup)"`
 	Embeddings EmbeddingsCmd `cmd:"" help:"Manage embeddings (status, rebuild)"`
 	Setup      SetupCmd      `cmd:"" help:"Interactive setup wizard"`
+	Onboard    OnboardCmd    `cmd:"" help:"Run onboarding wizard"`
 	Cfg        ConfigCmd     `cmd:"config" help:"View configuration"`
 	TUI        TUICmd        `cmd:"tui" help:"Run gateway with interactive TUI"`
 }
@@ -1608,10 +1610,12 @@ func openMemoryDB(cfg *config.Config) (*sql.DB, error) {
 
 // SetupCmd is the interactive setup wizard
 type SetupCmd struct {
-	Auto     SetupAutoCmd     `cmd:"" default:"withargs" help:"Run setup (auto-detect mode)"`
-	Wizard   SetupWizardCmd   `cmd:"wizard" help:"Run full setup wizard (even if config exists)"`
-	Edit     SetupEditCmd     `cmd:"edit" help:"Edit existing configuration"`
-	Generate SetupGenerateCmd `cmd:"generate" help:"Output default config template to stdout"`
+	Auto       SetupAutoCmd       `cmd:"" default:"withargs" help:"Run setup (auto-detect mode)"`
+	Wizard     SetupWizardCmd     `cmd:"wizard" help:"Run full setup wizard (even if config exists)"`
+	Edit       SetupEditCmd       `cmd:"edit" help:"Edit existing configuration"`
+	Generate   SetupGenerateCmd   `cmd:"generate" help:"Output default config template to stdout"`
+	Transcript SetupTranscriptCmd `cmd:"transcript" help:"Configure transcript indexing"`
+	Telegram   SetupTelegramCmd   `cmd:"telegram" help:"Configure Telegram bot"`
 }
 
 // SetupAutoCmd auto-detects mode: wizard if no config, edit if exists
@@ -1646,6 +1650,32 @@ func (s *SetupGenerateCmd) Run(ctx *Context) error {
 		return setup.GenerateDefaultUsers(s.WithPassword)
 	}
 	return setup.GenerateDefault()
+}
+
+// SetupTranscriptCmd configures transcript indexing (tview version)
+type SetupTranscriptCmd struct {
+	Huh bool `help:"Use old huh-based form (for comparison)"`
+}
+
+func (s *SetupTranscriptCmd) Run(ctx *Context) error {
+	if s.Huh {
+		return setup.RunTranscriptSetup()
+	}
+	return setup.RunTranscriptSetupTview()
+}
+
+// SetupTelegramCmd configures Telegram bot
+type SetupTelegramCmd struct{}
+
+func (s *SetupTelegramCmd) Run(ctx *Context) error {
+	return setup.RunTelegramSetupTview()
+}
+
+// OnboardCmd runs the onboarding wizard
+type OnboardCmd struct{}
+
+func (o *OnboardCmd) Run(ctx *Context) error {
+	return setup.RunOnboardWizard()
 }
 
 // ConfigCmd shows configuration
@@ -2027,6 +2057,59 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	} else {
 		L_info("telegram: disabled by configuration")
 	}
+
+	// Register telegram:apply action handler with closure access to bot instance
+	// TODO: Consider refactoring to a ChannelManager when we have more channels
+	// or need multiple instances of the same channel type
+	actions.Register("telegram", "apply", func(action actions.Action) actions.Result {
+		newCfg, ok := action.Payload.(*config.TelegramConfig)
+		if !ok {
+			return actions.Result{
+				Error:   fmt.Errorf("invalid payload type"),
+				Message: "Internal error: invalid config type",
+			}
+		}
+
+		telegramBotMu.Lock()
+		defer telegramBotMu.Unlock()
+
+		// Stop existing bot if running
+		if telegramBot != nil {
+			L_info("telegram: stopping for config reload")
+			telegramBot.Stop()
+			gw.UnregisterChannel("telegram")
+			telegramBot = nil
+		}
+
+		// If disabled, just stop
+		if !newCfg.Enabled || newCfg.BotToken == "" {
+			L_info("telegram: disabled by new config")
+			return actions.Result{
+				Success: true,
+				Message: "Telegram bot stopped",
+			}
+		}
+
+		// Create new bot with new config
+		bot, err := telegram.New(newCfg, gw, users)
+		if err != nil {
+			L_error("telegram: failed to create bot with new config", "error", err)
+			return actions.Result{
+				Error:   err,
+				Message: fmt.Sprintf("Failed to connect: %s", err),
+			}
+		}
+
+		bot.Start()
+		gw.RegisterChannel(bot)
+		telegramBot = bot
+		L_info("telegram: reloaded with new config")
+
+		return actions.Result{
+			Success: true,
+			Message: "Telegram bot reloaded",
+		}
+	})
 
 	// Start HTTP server if configured (enabled by default if users have HTTP credentials)
 	var httpServer *goclawhttp.Server

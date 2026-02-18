@@ -51,16 +51,15 @@ func (e *Editor) Run() error {
 	prevLevel := suppressLogs()
 	defer restoreLogs(prevLevel)
 
+	// Start a persistent session to avoid screen flashing between forms
+	StartSession(FrameTitleSetup)
+	defer EndSession()
+
 	return e.mainMenu()
 }
 
 func (e *Editor) mainMenu() error {
 	for {
-		fmt.Println()
-		fmt.Println("GoClaw Configuration")
-		fmt.Printf("Config: %s\n", e.configPath)
-		fmt.Println()
-
 		// Build menu with current values
 		options := []huh.Option[string]{
 			huh.NewOption(fmt.Sprintf("Workspace             [%s]", e.getWorkspace()), "workspace"),
@@ -72,23 +71,19 @@ func (e *Editor) mainMenu() error {
 			huh.NewOption(fmt.Sprintf("HTTP Server           [%s]", e.getHTTPStatus()), "http"),
 			huh.NewOption(fmt.Sprintf("Sandboxing            [%s]", e.getSandboxStatus()), "sandbox"),
 			huh.NewOption("Browser Profiles", "browser"),
-			huh.NewOption("---", "---"),
+			huh.NewOption("───────────────────", "---"),
 			huh.NewOption("View Current Config", "view"),
 			huh.NewOption("Save and Exit", "save"),
 			huh.NewOption("Exit without Saving", "exit"),
 		}
 
 		var choice string
-		form := newForm(
-			huh.NewGroup(
-				huh.NewSelect[string]().
-					Title("Select option to edit").
-					Options(options...).
-					Value(&choice),
-			),
-		)
+		subtitle := fmt.Sprintf("Config: %s", e.configPath)
+		if e.modified {
+			subtitle += " (modified)"
+		}
 
-		if err := form.Run(); err != nil {
+		if err := RunMenu(FrameTitleSetup, subtitle, options, &choice); err != nil {
 			if isUserAbort(err) {
 				// Escape pressed - treat as exit
 				choice = "exit"
@@ -150,7 +145,7 @@ func (e *Editor) mainMenu() error {
 							Value(&confirm),
 					),
 				)
-				if err := form.Run(); err != nil {
+				if err := RunForm(FrameTitleSetup, form); err != nil {
 					return err
 				}
 				if !confirm {
@@ -312,7 +307,7 @@ func (e *Editor) editWorkspace() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleSetup, "Workspace Configuration", form); err != nil {
 		if isUserAbort(err) {
 			return nil // Escape pressed, go back
 		}
@@ -336,7 +331,7 @@ func (e *Editor) editWorkspace() error {
 				),
 			)
 
-			if err := initForm.Run(); err != nil {
+			if err := RunForm(FrameTitleSetup, initForm); err != nil {
 				if isUserAbort(err) {
 					return nil // Escape = cancel the whole edit
 				}
@@ -409,7 +404,7 @@ func (e *Editor) editProviders() error {
 			),
 		)
 
-		if err := form.Run(); err != nil {
+		if err := RunForm(FrameTitleSetup, form); err != nil {
 			if isUserAbort(err) {
 				return nil
 			}
@@ -478,7 +473,7 @@ func (e *Editor) addProvider() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleSetup, "Add LLM Provider", form); err != nil {
 		if isUserAbort(err) {
 			return nil
 		}
@@ -536,7 +531,7 @@ func (e *Editor) addPresetProvider(preset *ProviderPreset) error {
 			),
 		)
 
-		if err := form.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleSetup, fmt.Sprintf("Configure %s", preset.Name), form); err != nil {
 			if isUserAbort(err) {
 				return nil
 			}
@@ -557,7 +552,7 @@ func (e *Editor) addPresetProvider(preset *ProviderPreset) error {
 			),
 		)
 
-		if err := form.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleSetup, fmt.Sprintf("Configure %s", preset.Name), form); err != nil {
 			if isUserAbort(err) {
 				return nil
 			}
@@ -621,7 +616,7 @@ func (e *Editor) addCustomProvider() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleSetup, "Custom Provider", form); err != nil {
 		if isUserAbort(err) {
 			return nil
 		}
@@ -724,7 +719,7 @@ func (e *Editor) editSingleProvider(name string) error {
 			),
 		)
 
-		if err := form.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleSetup, "Provider Configuration", form); err != nil {
 			if isUserAbort(err) {
 				return nil
 			}
@@ -751,7 +746,7 @@ func (e *Editor) editSingleProvider(name string) error {
 						Value(&newType),
 				),
 			)
-			if err := typeForm.Run(); err == nil {
+			if err := RunForm(FrameTitleSetup, typeForm); err == nil {
 				provCfg["type"] = newType
 				e.modified = true
 			}
@@ -773,7 +768,7 @@ func (e *Editor) editSingleProvider(name string) error {
 						Value(&newURL),
 				),
 			)
-			if err := urlForm.Run(); err == nil && newURL != currentURL {
+			if err := RunForm(FrameTitleSetup, urlForm); err == nil && newURL != currentURL {
 				provCfg[urlKey] = newURL
 				e.modified = true
 			}
@@ -786,7 +781,7 @@ func (e *Editor) editSingleProvider(name string) error {
 						Value(&newKey),
 				),
 			)
-			if err := keyForm.Run(); err == nil && newKey != apiKey {
+			if err := RunForm(FrameTitleSetup, keyForm); err == nil && newKey != apiKey {
 				if newKey == "" {
 					delete(provCfg, "apiKey")
 				} else {
@@ -838,7 +833,7 @@ func (e *Editor) editSingleProvider(name string) error {
 						Value(&confirm),
 				),
 			)
-			if err := confirmForm.Run(); err == nil && confirm {
+			if err := RunForm(FrameTitleSetup, confirmForm); err == nil && confirm {
 				delete(providers, name)
 				e.modified = true
 				fmt.Printf("\nProvider '%s' deleted.\n", name)
@@ -861,7 +856,7 @@ func (e *Editor) editAgentModel() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleSetup, "Agent Model", form); err != nil {
 		if isUserAbort(err) {
 			return nil // Escape pressed, go back
 		}
@@ -900,7 +895,7 @@ func (e *Editor) editEmbeddingModel() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleSetup, "Embedding Model", form); err != nil {
 		if isUserAbort(err) {
 			return nil // Escape pressed, go back
 		}
@@ -948,7 +943,7 @@ func (e *Editor) editTelegram() error {
 	// Set initial value
 	enabled = currentEnabled
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleSetup, "Telegram Configuration", form); err != nil {
 		if isUserAbort(err) {
 			return nil // Escape pressed, go back
 		}
@@ -981,7 +976,7 @@ func (e *Editor) editTelegram() error {
 			),
 		)
 
-		if err := form.Run(); err != nil {
+		if err := RunForm(FrameTitleSetup, form); err != nil {
 			if isUserAbort(err) {
 				return nil // Escape pressed, go back
 			}
@@ -1018,7 +1013,7 @@ func (e *Editor) editHTTP() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleSetup, "HTTP Server", form); err != nil {
 		if isUserAbort(err) {
 			return nil // Escape pressed, go back
 		}
@@ -1110,7 +1105,7 @@ func (e *Editor) editSandbox() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleSetup, "Sandbox Configuration", form); err != nil {
 		if isUserAbort(err) {
 			return nil // Escape pressed, go back
 		}
@@ -1248,7 +1243,7 @@ func (e *Editor) launchBrowserSetup() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleSetup, "Browser Profile Setup", form); err != nil {
 		if isUserAbort(err) {
 			return nil
 		}

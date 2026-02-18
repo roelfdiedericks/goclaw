@@ -74,6 +74,35 @@ func (idx *Indexer) SetAgentName(name string) {
 	idx.agentName = name
 }
 
+// UpdateConfig updates the indexer configuration
+func (idx *Indexer) UpdateConfig(cfg config.TranscriptConfig) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	// Apply defaults for zero values
+	if cfg.IndexIntervalSeconds <= 0 {
+		cfg.IndexIntervalSeconds = 30
+	}
+	if cfg.BatchSize <= 0 {
+		cfg.BatchSize = 100
+	}
+	if cfg.BackfillBatchSize <= 0 {
+		cfg.BackfillBatchSize = 10
+	}
+	if cfg.MaxGroupGapSeconds <= 0 {
+		cfg.MaxGroupGapSeconds = 300
+	}
+	if cfg.MaxMessagesPerChunk <= 0 {
+		cfg.MaxMessagesPerChunk = 8
+	}
+	if cfg.MaxEmbeddingContentLen <= 0 {
+		cfg.MaxEmbeddingContentLen = 16000
+	}
+
+	idx.config = cfg
+	L_debug("transcript: config updated", "enabled", cfg.Enabled)
+}
+
 // Start begins the background indexer goroutine
 func (idx *Indexer) Start() {
 	L_info("transcript: starting indexer")

@@ -77,6 +77,10 @@ func NewWizard() *Wizard {
 
 // Run executes the full wizard
 func (w *Wizard) Run() error {
+	// Start a persistent session to avoid screen flashing between forms
+	StartSession(FrameTitleOnboarding)
+	defer EndSession()
+
 	// Step 1: Welcome
 	if err := w.showWelcome(); err != nil {
 		return err
@@ -139,32 +143,19 @@ func (w *Wizard) Run() error {
 }
 
 func (w *Wizard) showWelcome() error {
-	fmt.Println()
-	fmt.Println("╔════════════════════════════════════════╗")
-	fmt.Println("║        Welcome to GoClaw Setup         ║")
-	fmt.Println("╚════════════════════════════════════════╝")
-	fmt.Println()
-	fmt.Println("This wizard will help you configure GoClaw.")
-	fmt.Println("We'll set up:")
-	fmt.Println("  • LLM providers (Anthropic, OpenAI, local models)")
-	fmt.Println("  • Agent workspace")
-	fmt.Println("  • User authentication")
-	fmt.Println("  • Telegram bot (optional)")
-	fmt.Println("  • HTTP server")
-	fmt.Println("  • Browser profiles (for authenticated web access)")
-	fmt.Println("  • Sandboxing (restrict agent file/exec access)")
-	fmt.Println()
-
 	var proceed bool
 	form := newForm(
 		huh.NewGroup(
+			huh.NewNote().
+				Title("Welcome!").
+				Description("This wizard will help you configure GoClaw.\n\nWe'll set up:\n  • LLM providers (Anthropic, OpenAI, local models)\n  • Agent workspace\n  • User authentication\n  • Telegram bot (optional)\n  • HTTP server\n  • Browser profiles (for web access)\n  • Sandboxing (restrict agent access)"),
 			huh.NewConfirm().
 				Title("Ready to begin?").
 				Value(&proceed),
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunForm(FrameTitleOnboarding, form); err != nil {
 		return err
 	}
 
@@ -181,13 +172,12 @@ func (w *Wizard) handleOpenClawDetection() error {
 		return nil
 	}
 
-	fmt.Println()
-	fmt.Println("Detected existing OpenClaw installation at ~/.openclaw/")
-	fmt.Println()
-
 	var importConfig bool
 	form := newForm(
 		huh.NewGroup(
+			huh.NewNote().
+				Title("OpenClaw Detected").
+				Description("Found existing OpenClaw installation at ~/.openclaw/"),
 			huh.NewConfirm().
 				Title("Import settings from OpenClaw?").
 				Description("We can import API keys, workspace path, and Telegram config").
@@ -195,7 +185,7 @@ func (w *Wizard) handleOpenClawDetection() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleOnboarding, "Migration", form); err != nil {
 		return err
 	}
 
@@ -307,22 +297,20 @@ func (w *Wizard) offerEnvSecrets() error {
 		return nil
 	}
 
-	fmt.Println()
-	fmt.Println("Some credentials were found in your environment (e.g. from OpenClaw).")
-	fmt.Println("Would you like to use them in GoClaw?")
-	fmt.Println()
-
 	if anthropicKey != "" {
 		use := true
 		form := newForm(
 			huh.NewGroup(
+				huh.NewNote().
+					Title("Environment Credentials").
+					Description("Some credentials were found in your environment."),
 				huh.NewConfirm().
 					Title("Use ANTHROPIC_API_KEY from environment?").
 					Description("Anthropic API key for Claude models").
 					Value(&use),
 			),
 		)
-		if err := form.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleOnboarding, "Import Credentials", form); err != nil {
 			return err
 		}
 		if use {
@@ -341,7 +329,7 @@ func (w *Wizard) offerEnvSecrets() error {
 					Value(&use),
 			),
 		)
-		if err := form.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleOnboarding, "Import Credentials", form); err != nil {
 			return err
 		}
 		if use {
@@ -360,7 +348,7 @@ func (w *Wizard) offerEnvSecrets() error {
 					Value(&use),
 			),
 		)
-		if err := form.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleOnboarding, "Import Credentials", form); err != nil {
 			return err
 		}
 		if use {
@@ -369,13 +357,10 @@ func (w *Wizard) offerEnvSecrets() error {
 		}
 	}
 
-	fmt.Println()
 	return nil
 }
 
 func (w *Wizard) setupWorkspace() error {
-	fmt.Println()
-
 	// If workspace already set from OpenClaw import, just confirm
 	if w.workspacePath != "" && w.openclawImport {
 		fmt.Printf("Using workspace from OpenClaw: %s\n", w.workspacePath)
@@ -409,7 +394,7 @@ func (w *Wizard) setupWorkspace() error {
 				),
 			)
 
-			if err := form.Run(); err != nil {
+			if err := RunFormWithSubtitle(FrameTitleOnboarding, "Workspace", form); err != nil {
 				return err // Escape at top-level selection = abort
 			}
 
@@ -428,7 +413,7 @@ func (w *Wizard) setupWorkspace() error {
 							Value(&w.workspacePath),
 					),
 				)
-				if err := customForm.Run(); err != nil {
+				if err := RunFormWithSubtitle(FrameTitleOnboarding, "Custom Workspace", customForm); err != nil {
 					if isUserAbort(err) {
 						continue // Go back to workspace selection
 					}
@@ -450,7 +435,7 @@ func (w *Wizard) setupWorkspace() error {
 			),
 		)
 
-		if err := form.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleOnboarding, "Workspace", form); err != nil {
 			return err
 		}
 	}
@@ -471,8 +456,6 @@ func (w *Wizard) setupWorkspace() error {
 }
 
 func (w *Wizard) selectProviders() error {
-	fmt.Println()
-
 	configured := make(map[string]bool)
 	first := true
 
@@ -512,7 +495,7 @@ func (w *Wizard) selectProviders() error {
 			),
 		)
 
-		if err := form.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleOnboarding, "LLM Providers", form); err != nil {
 			if isUserAbort(err) {
 				if first {
 					return fmt.Errorf("at least one provider must be configured")
@@ -565,7 +548,7 @@ func (w *Wizard) configureProvider(key string) error {
 			),
 		)
 
-		if err := form.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleOnboarding, "Custom Provider", form); err != nil {
 			return err // Escape = go back to provider selection (handled by caller)
 		}
 
@@ -592,7 +575,7 @@ func (w *Wizard) configureProvider(key string) error {
 			),
 		)
 
-		if err := form.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleOnboarding, fmt.Sprintf("Configure %s", preset.Name), form); err != nil {
 			return err // Escape = go back to provider selection (handled by caller)
 		}
 
@@ -636,7 +619,7 @@ func (w *Wizard) configureProvider(key string) error {
 			),
 		)
 
-		if err := form.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleOnboarding, fmt.Sprintf("Configure %s", preset.Name), form); err != nil {
 			return err // Escape = go back to provider selection (handled by caller)
 		}
 
@@ -668,7 +651,6 @@ func (w *Wizard) configureProvider(key string) error {
 }
 
 func (w *Wizard) selectModels() error {
-	fmt.Println()
 
 	// Collect available models from configured providers
 	var agentOptions []huh.Option[string]
@@ -729,7 +711,7 @@ agentLoop:
 			),
 		)
 
-		if err := form.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleOnboarding, "Agent Model", form); err != nil {
 			return err // Escape at selection = abort
 		}
 
@@ -742,7 +724,7 @@ agentLoop:
 						Value(&w.agentModel),
 				),
 			)
-			if err := manualForm.Run(); err != nil {
+			if err := RunFormWithSubtitle(FrameTitleOnboarding, "Agent Model", manualForm); err != nil {
 				if isUserAbort(err) {
 					w.agentModel = "" // Reset and go back to selection
 					continue agentLoop
@@ -766,28 +748,24 @@ embedLoop:
 			),
 		)
 
-		if err := form.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleOnboarding, "Embedding Model", form); err != nil {
 			return err // Escape at selection = abort
 		}
 
 		if w.embeddingModel == "skip" {
-			// Show warning
-			fmt.Println()
-			fmt.Println("⚠️  Without embeddings, semantic search will be unavailable:")
-			fmt.Println("   - Memory search: keyword search only (no semantic matching)")
-			fmt.Println("   - Transcript search: keyword search only (no semantic matching)")
-			fmt.Println()
-
 			var confirmSkip bool
 			confirmForm := newForm(
 				huh.NewGroup(
+					huh.NewNote().
+						Title("Warning").
+						Description("Without embeddings, semantic search will be unavailable:\n• Memory search: keyword search only\n• Transcript search: keyword search only"),
 					huh.NewConfirm().
 						Title("Continue without embeddings?").
 						Value(&confirmSkip),
 				),
 			)
 
-			if err := confirmForm.Run(); err != nil {
+			if err := RunFormWithSubtitle(FrameTitleOnboarding, "Embedding Model", confirmForm); err != nil {
 				if isUserAbort(err) {
 					w.embeddingModel = "" // Reset and go back to selection
 					continue embedLoop
@@ -811,7 +789,7 @@ embedLoop:
 						Value(&w.embeddingModel),
 				),
 			)
-			if err := manualForm.Run(); err != nil {
+			if err := RunFormWithSubtitle(FrameTitleOnboarding, "Embedding Model", manualForm); err != nil {
 				if isUserAbort(err) {
 					w.embeddingModel = "" // Reset and go back to selection
 					continue embedLoop
@@ -826,8 +804,6 @@ embedLoop:
 }
 
 func (w *Wizard) setupUser() error {
-	fmt.Println()
-
 	// Pre-fill telegram ID if imported
 	telegramPlaceholder := "Optional - for Telegram authentication"
 	if w.userTelegramID != "" {
@@ -853,7 +829,7 @@ func (w *Wizard) setupUser() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleOnboarding, "User Profile", form); err != nil {
 		return err
 	}
 
@@ -866,8 +842,6 @@ func (w *Wizard) setupUser() error {
 }
 
 func (w *Wizard) setupTelegram() error {
-	fmt.Println()
-
 	// Skip if already configured from OpenClaw import
 	if w.telegramEnabled && w.telegramToken != "" {
 		fmt.Println("✓ Telegram already configured from OpenClaw import")
@@ -881,7 +855,7 @@ func (w *Wizard) setupTelegram() error {
 			),
 		)
 
-		if err := form.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleOnboarding, "Telegram", form); err != nil {
 			return err // Escape = skip test
 		}
 
@@ -908,7 +882,7 @@ func (w *Wizard) setupTelegram() error {
 			),
 		)
 
-		if err := form.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleOnboarding, "Telegram", form); err != nil {
 			return err // Escape at enable question = abort
 		}
 
@@ -925,7 +899,7 @@ func (w *Wizard) setupTelegram() error {
 			),
 		)
 
-		if err := tokenForm.Run(); err != nil {
+		if err := RunFormWithSubtitle(FrameTitleOnboarding, "Telegram", tokenForm); err != nil {
 			if isUserAbort(err) {
 				w.telegramEnabled = false // Reset and go back to enable question
 				continue
@@ -948,8 +922,6 @@ func (w *Wizard) setupTelegram() error {
 }
 
 func (w *Wizard) setupHTTP() error {
-	fmt.Println()
-
 	// First ask about access scope
 	accessChoice := "local"
 	form := newForm(
@@ -966,7 +938,7 @@ func (w *Wizard) setupHTTP() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleOnboarding, "HTTP Server", form); err != nil {
 		return err
 	}
 
@@ -1013,7 +985,7 @@ func (w *Wizard) setupHTTP() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleOnboarding, "HTTP Server", form); err != nil {
 		return err
 	}
 
@@ -1030,8 +1002,6 @@ func (w *Wizard) setupHTTP() error {
 }
 
 func (w *Wizard) offerBrowserSetup() error {
-	fmt.Println()
-
 	form := newForm(
 		huh.NewGroup(
 			huh.NewConfirm().
@@ -1041,7 +1011,7 @@ func (w *Wizard) offerBrowserSetup() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleOnboarding, "Browser Setup", form); err != nil {
 		return err
 	}
 
@@ -1055,8 +1025,6 @@ func (w *Wizard) offerBrowserSetup() error {
 }
 
 func (w *Wizard) setupSandbox() error {
-	fmt.Println()
-
 	// Non-Linux: sandboxing not available
 	if !bwrap.IsLinux() {
 		fmt.Println("Note: Bubblewrap sandboxing is only available on Linux.")
@@ -1065,19 +1033,13 @@ func (w *Wizard) setupSandbox() error {
 		return nil
 	}
 
-	fmt.Println("═══════════════════════════════════════")
-	fmt.Println("    Sandboxing (Highly Recommended)")
-	fmt.Println("═══════════════════════════════════════")
-	fmt.Println()
-	fmt.Println("Sandboxing restricts the exec tool to only access files")
-	fmt.Println("within your workspace directory, preventing accidental")
-	fmt.Println("or malicious access to system files and credentials.")
-	fmt.Println()
-
 	// Step 1: Ask about exec sandboxing
 	w.execBubblewrap = true // Default to yes (recommended)
 	form := newForm(
 		huh.NewGroup(
+			huh.NewNote().
+				Title("Sandboxing (Highly Recommended)").
+				Description("Sandboxing restricts the exec tool to only access files\nwithin your workspace directory, preventing accidental\nor malicious access to system files and credentials."),
 			huh.NewConfirm().
 				Title("Enable exec sandboxing? (Highly recommended)").
 				Description("Restricts shell commands to workspace directory only").
@@ -1087,7 +1049,7 @@ func (w *Wizard) setupSandbox() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleOnboarding, "Sandboxing", form); err != nil {
 		return err
 	}
 
@@ -1104,7 +1066,7 @@ func (w *Wizard) setupSandbox() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleOnboarding, "Sandboxing", form); err != nil {
 		return err
 	}
 
@@ -1130,13 +1092,12 @@ func (w *Wizard) setupSandbox() error {
 	}
 
 	// bwrap not found - show install options
-	fmt.Println()
-	fmt.Println("⚠ Bubblewrap (bwrap) is required but not installed.")
-	fmt.Println()
-
 	var installChoice string
 	form = newForm(
 		huh.NewGroup(
+			huh.NewNote().
+				Title("Bubblewrap Required").
+				Description("Bubblewrap (bwrap) is required for sandboxing but not installed."),
 			huh.NewSelect[string]().
 				Title("How would you like to install bubblewrap?").
 				Options(
@@ -1150,7 +1111,7 @@ func (w *Wizard) setupSandbox() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleOnboarding, "Sandboxing", form); err != nil {
 		return err
 	}
 
@@ -1225,36 +1186,33 @@ func (w *Wizard) runInstallCommand(name string, args ...string) error {
 }
 
 func (w *Wizard) reviewAndSave() error {
-	fmt.Println()
-	fmt.Println("═══════════════════════════════════════")
-	fmt.Println("           Configuration Summary")
-	fmt.Println("═══════════════════════════════════════")
-	fmt.Println()
-
-	fmt.Printf("Workspace:     %s\n", w.workspacePath)
-	fmt.Printf("User:          %s (%s)\n", w.userDisplayName, w.userName)
-	fmt.Printf("Agent model:   %s\n", w.agentModel)
+	// Build summary
+	var summary strings.Builder
+	fmt.Fprintf(&summary, "Workspace:  %s\n", w.workspacePath)
+	fmt.Fprintf(&summary, "User:       %s (%s)\n", w.userDisplayName, w.userName)
+	fmt.Fprintf(&summary, "Agent:      %s\n", w.agentModel)
 	if w.skipEmbeddings {
-		fmt.Println("Embeddings:    disabled")
+		fmt.Fprintf(&summary, "Embeddings: disabled\n")
 	} else {
-		fmt.Printf("Embeddings:    %s\n", w.embeddingModel)
+		fmt.Fprintf(&summary, "Embeddings: %s\n", w.embeddingModel)
 	}
-	fmt.Printf("Telegram:      %v\n", w.telegramEnabled)
+	fmt.Fprintf(&summary, "Telegram:   %v\n", w.telegramEnabled)
 	if w.httpEnabled {
-		fmt.Printf("HTTP server:   %s\n", w.httpListen)
+		fmt.Fprintf(&summary, "HTTP:       %s\n", w.httpListen)
 	} else {
-		fmt.Println("HTTP server:   disabled")
+		fmt.Fprintf(&summary, "HTTP:       disabled\n")
 	}
-	fmt.Printf("Providers:     %s\n", strings.Join(w.selectedProviders, ", "))
+	fmt.Fprintf(&summary, "Providers:  %s\n", strings.Join(w.selectedProviders, ", "))
 	if bwrap.IsLinux() {
-		fmt.Printf("Exec sandbox:  %v\n", w.execBubblewrap)
-		fmt.Printf("Browser sandbox: %v\n", w.browserBubblewrap)
+		fmt.Fprintf(&summary, "Sandbox:    exec=%v, browser=%v", w.execBubblewrap, w.browserBubblewrap)
 	}
-	fmt.Println()
 
 	var action string
 	form := newForm(
 		huh.NewGroup(
+			huh.NewNote().
+				Title("Configuration Summary").
+				Description(summary.String()),
 			huh.NewSelect[string]().
 				Title("What would you like to do?").
 				Options(
@@ -1266,7 +1224,7 @@ func (w *Wizard) reviewAndSave() error {
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := RunFormWithSubtitle(FrameTitleOnboarding, "Review", form); err != nil {
 		return err
 	}
 

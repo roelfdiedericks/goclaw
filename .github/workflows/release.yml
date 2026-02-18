@@ -232,7 +232,15 @@ jobs:
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser-pro
-          args: continue --merge --release-notes /tmp/release_notes.md
+          args: continue --merge
         env:
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Update release notes (goreleaser continue doesn't support --release-notes)
+      - name: Update release notes
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          gh release edit "$TAG" --notes-file /tmp/release_notes.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

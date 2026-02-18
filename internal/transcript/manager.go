@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/actions"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
@@ -431,4 +432,102 @@ type QueryFilter struct {
 
 	// Role filter
 	Role string // Filter by role ("user" or "assistant")
+}
+
+// RegisterActions registers transcript action handlers with the action bus
+func (m *Manager) RegisterActions() {
+	actions.Register("transcript", "test", m.handleTest)
+	actions.Register("transcript", "apply", m.handleApply)
+	actions.Register("transcript", "stats", m.handleStats)
+	actions.Register("transcript", "reindex", m.handleReindex)
+	L_info("transcript: actions registered")
+}
+
+// UnregisterActions removes transcript action handlers
+func (m *Manager) UnregisterActions() {
+	actions.UnregisterComponent("transcript")
+}
+
+// handleTest verifies database and embedding provider connectivity
+func (m *Manager) handleTest(action actions.Action) actions.Result {
+	L_debug("transcript: testing connection")
+
+	// Test database
+	if err := m.db.Ping(); err != nil {
+		return actions.Result{
+			Error:   err,
+			Message: fmt.Sprintf("database connection failed: %v", err),
+		}
+	}
+
+	// Test embedding provider
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := m.provider.EmbedQuery(ctx, "test")
+	if err != nil {
+		return actions.Result{
+			Error:   err,
+			Message: fmt.Sprintf("embedding provider failed: %v", err),
+		}
+	}
+
+	return actions.Result{
+		Success: true,
+		Message: "Database and embedding provider OK",
+	}
+}
+
+// handleApply applies new config to the running manager
+func (m *Manager) handleApply(action actions.Action) actions.Result {
+	cfg, ok := action.Payload.(config.TranscriptConfig)
+	if !ok {
+		return actions.Result{
+			Error:   fmt.Errorf("expected config.TranscriptConfig payload, got %T", action.Payload),
+			Message: "invalid payload type",
+		}
+	}
+
+	// Validate
+	if err := ValidateConfig(cfg); err != nil {
+		return actions.Result{
+			Error:   err,
+			Message: fmt.Sprintf("config validation failed: %v", err),
+		}
+	}
+
+	// Apply config
+	m.config = cfg
+	m.indexer.UpdateConfig(cfg)
+
+	L_info("transcript: config applied",
+		"enabled", cfg.Enabled,
+		"indexInterval", cfg.IndexIntervalSeconds,
+	)
+
+	return actions.Result{
+		Success: true,
+		Message: "Config applied successfully",
+	}
+}
+
+// handleStats returns current indexing statistics
+func (m *Manager) handleStats(action actions.Action) actions.Result {
+	stats := m.Stats()
+	return actions.Result{
+		Success: true,
+		Message: fmt.Sprintf("Chunks: %d indexed (%d session), %d pending | Last sync: %s",
+			stats.TotalChunks, stats.ChunksIndexedSession, stats.PendingMessages,
+			stats.LastSync.Format("15:04:05")),
+		Data: stats,
+	}
+}
+
+// handleReindex triggers a full reindex
+func (m *Manager) handleReindex(action actions.Action) actions.Result {
+	m.TriggerIndex()
+	return actions.Result{
+		Success: true,
+		Message: "Reindex triggered",
+	}
 }

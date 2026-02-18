@@ -10,6 +10,7 @@ import (
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/telegram"
 )
 
 // Model represents a model from an API response
@@ -158,39 +159,7 @@ func ListOllamaModels(ctx context.Context, baseURL string) ([]string, error) {
 
 // TestTelegramToken validates a Telegram bot token by calling getMe
 func TestTelegramToken(token string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/getMe", token)
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return "", err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("connection failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		OK     bool `json:"ok"`
-		Result struct {
-			Username string `json:"username"`
-		} `json:"result"`
-		Description string `json:"description"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if !result.OK {
-		return "", fmt.Errorf("invalid token: %s", result.Description)
-	}
-
-	L_debug("setup: validated Telegram token", "username", result.Result.Username)
-	return result.Result.Username, nil
+	return telegram.TestToken(token)
 }
 
 // TestConnection tests basic connectivity to a URL
