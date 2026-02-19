@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/roelfdiedericks/goclaw/internal/actions"
+	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -55,24 +55,24 @@ func ConfigFormDef() forms.FormDef {
 	}
 }
 
-// RegisterActions registers telegram config action handlers
-// Note: "apply" action is registered by gateway (main.go) which owns channel lifecycle
-func RegisterActions() {
-	actions.Register("telegram", "test", handleTest)
+// RegisterCommands registers telegram config command handlers
+// Note: "apply" command is registered by gateway (main.go) which owns channel lifecycle
+func RegisterCommands() {
+	bus.RegisterCommand("telegram", "test", handleTest)
 }
 
 // handleTest validates the bot token via Telegram API
-func handleTest(action actions.Action) actions.Result {
-	cfg, ok := action.Payload.(*TConfig)
+func handleTest(cmd bus.Command) bus.CommandResult {
+	cfg, ok := cmd.Payload.(*TConfig)
 	if !ok {
-		return actions.Result{
+		return bus.CommandResult{
 			Error:   fmt.Errorf("invalid payload type"),
 			Message: "Internal error: invalid config type",
 		}
 	}
 
 	if cfg.BotToken == "" {
-		return actions.Result{
+		return bus.CommandResult{
 			Error:   fmt.Errorf("bot token is empty"),
 			Message: "Bot token is required",
 		}
@@ -81,14 +81,14 @@ func handleTest(action actions.Action) actions.Result {
 	username, err := TestToken(cfg.BotToken)
 	if err != nil {
 		L_warn("telegram: test connection failed", "error", err)
-		return actions.Result{
+		return bus.CommandResult{
 			Error:   err,
 			Message: fmt.Sprintf("Connection failed: %s", err),
 		}
 	}
 
 	L_info("telegram: test connection successful", "bot", "@"+username)
-	return actions.Result{
+	return bus.CommandResult{
 		Success: true,
 		Message: fmt.Sprintf("Connected to @%s", username),
 	}

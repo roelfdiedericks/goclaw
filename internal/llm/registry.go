@@ -54,7 +54,7 @@ type ProviderStatus struct {
 // It supports multiple provider instances and purpose-based model selection.
 type Registry struct {
 	providers  map[string]providerInstance  // provider name -> instance
-	purposes   map[string]PurposeConfig     // purpose -> config with models array
+	purposes   map[string]LLMPurposeConfig  // purpose -> config with models array
 	cooldowns  map[string]*providerCooldown // provider alias -> cooldown state
 	mu         sync.RWMutex
 	cooldownMu sync.RWMutex
@@ -62,30 +62,23 @@ type Registry struct {
 
 // providerInstance holds a provider and its config
 type providerInstance struct {
-	config   ProviderConfig
+	config   LLMProviderConfig
 	provider interface{} // *AnthropicProvider or *OllamaProvider
-}
-
-// PurposeConfig defines the model chain for a specific purpose
-type PurposeConfig struct {
-	Models         []string `json:"models"`         // First = primary, rest = fallbacks
-	MaxTokens      int      `json:"maxTokens"`      // Output limit override (0 = use model default)
-	MaxInputTokens int      `json:"maxInputTokens"` // Input limit for summarization (0 = use model context - buffer)
 }
 
 // RegistryConfig is the configuration for the LLM registry
 type RegistryConfig struct {
-	Providers     map[string]ProviderConfig `json:"providers"`
-	Agent         PurposeConfig             `json:"agent"`
-	Summarization PurposeConfig             `json:"summarization"`
-	Embeddings    PurposeConfig             `json:"embeddings"`
+	Providers     map[string]LLMProviderConfig `json:"providers"`
+	Agent         LLMPurposeConfig             `json:"agent"`
+	Summarization LLMPurposeConfig             `json:"summarization"`
+	Embeddings    LLMPurposeConfig             `json:"embeddings"`
 }
 
 // NewRegistry creates a new provider registry from configuration
 func NewRegistry(cfg RegistryConfig) (*Registry, error) {
 	r := &Registry{
 		providers: make(map[string]providerInstance),
-		purposes: map[string]PurposeConfig{
+		purposes: map[string]LLMPurposeConfig{
 			"agent":         cfg.Agent,
 			"summarization": cfg.Summarization,
 			"embeddings":    cfg.Embeddings,
@@ -117,7 +110,7 @@ func NewRegistry(cfg RegistryConfig) (*Registry, error) {
 }
 
 // initProvider initializes a provider instance
-func (r *Registry) initProvider(name string, cfg ProviderConfig) error {
+func (r *Registry) initProvider(name string, cfg LLMProviderConfig) error {
 	var provider interface{}
 	var err error
 
@@ -203,7 +196,7 @@ func (r *Registry) validatePurposeModels(purpose string) error {
 	}
 
 	r.mu.Lock()
-	r.purposes[purpose] = PurposeConfig{Models: kept, MaxTokens: cfg.MaxTokens, MaxInputTokens: cfg.MaxInputTokens}
+	r.purposes[purpose] = LLMPurposeConfig{Models: kept, MaxTokens: cfg.MaxTokens, MaxInputTokens: cfg.MaxInputTokens}
 	r.mu.Unlock()
 
 	return nil
@@ -211,7 +204,7 @@ func (r *Registry) validatePurposeModels(purpose string) error {
 
 // GetProvider returns the first available provider for a purpose.
 // Iterates through the model chain until one is available.
-// Also applies maxTokens override from PurposeConfig if set.
+// Also applies maxTokens override from LLMPurposeConfig if set.
 func (r *Registry) GetProvider(purpose string) (Provider, error) {
 	r.mu.RLock()
 	cfg, ok := r.purposes[purpose]

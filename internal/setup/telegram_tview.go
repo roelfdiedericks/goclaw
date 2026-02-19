@@ -13,8 +13,8 @@ import (
 
 // RunTelegramSetupTview runs the tview-based telegram configuration UI
 func RunTelegramSetupTview() error {
-	// Register action handlers
-	telegram.RegisterActions()
+	// Register command handlers
+	telegram.RegisterCommands()
 
 	// Load config
 	cfg, configPath, err := loadTelegramConfigTV()

@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/user"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -26,21 +26,21 @@ func RunUserEditor() error {
 // UserEditor manages the user management TUI
 type UserEditor struct {
 	usersPath string
-	users     config.UsersConfig
+	users     user.UsersConfig
 	modified  bool
 }
 
 // NewUserEditor creates a new user editor
 func NewUserEditor() *UserEditor {
 	return &UserEditor{
-		usersPath: config.GetUsersFilePath(),
+		usersPath: user.GetUsersFilePath(),
 	}
 }
 
 // Run executes the user editor
 func (e *UserEditor) Run() error {
 	// Load existing users
-	users, err := config.LoadUsers()
+	users, err := user.LoadUsers()
 	if err != nil {
 		return fmt.Errorf("failed to load users: %w", err)
 	}
@@ -224,7 +224,7 @@ func (e *UserEditor) addUser() error {
 				Placeholder("john_doe").
 				Value(&username).
 				Validate(func(s string) error {
-					return config.ValidateUsername(s)
+					return user.ValidateUsername(s)
 				}),
 			huh.NewInput().
 				Title("Display name").
@@ -274,7 +274,7 @@ func (e *UserEditor) addUser() error {
 	}
 
 	// Create user entry
-	e.users[username] = &config.UserEntry{
+	e.users[username] = &user.UserEntry{
 		Name:       displayName,
 		Role:       role,
 		TelegramID: telegramID,
@@ -585,7 +585,7 @@ func (e *UserEditor) selectUser(title string) (string, error) {
 }
 
 func (e *UserEditor) save() error {
-	if err := config.SaveUsers(e.users, e.usersPath); err != nil {
+	if err := user.SaveUsers(e.users, e.usersPath); err != nil {
 		return fmt.Errorf("failed to save users: %w", err)
 	}
 

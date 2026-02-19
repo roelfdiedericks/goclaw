@@ -13,12 +13,13 @@ import (
 
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
 // UserAuthTool handles user authentication and role elevation
 type UserAuthTool struct {
 	config      config.AuthConfig
-	rolesConfig config.RolesConfig
+	rolesConfig user.RolesConfig
 
 	// Rate limiting
 	mu       sync.Mutex
@@ -43,7 +44,7 @@ type AuthResult struct {
 }
 
 // NewUserAuthTool creates a new user_auth tool
-func NewUserAuthTool(authConfig config.AuthConfig, rolesConfig config.RolesConfig) *UserAuthTool {
+func NewUserAuthTool(authConfig config.AuthConfig, rolesConfig user.RolesConfig) *UserAuthTool {
 	return &UserAuthTool{
 		config:      authConfig,
 		rolesConfig: rolesConfig,

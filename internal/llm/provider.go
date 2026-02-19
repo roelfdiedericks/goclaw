@@ -87,6 +87,41 @@ type ProviderStateAccessor interface {
 	SetProviderState(providerKey string, state map[string]any)
 }
 
+// ModelInfo describes an available model from a provider.
+type ModelInfo struct {
+	ID            string // Model identifier (e.g., "claude-sonnet-4-20250514")
+	DisplayName   string // Human-readable name (may be same as ID)
+	ContextTokens int    // Context window size (0 if unknown)
+}
+
+// ModelLister is implemented by providers that can list available models.
+// Used by the LLM editor to show available models for selection.
+type ModelLister interface {
+	ListModels(ctx context.Context) ([]ModelInfo, error)
+}
+
+// ConnectionTester is implemented by providers that can verify credentials.
+// Used by the LLM editor "Test Connection" button.
+type ConnectionTester interface {
+	TestConnection(ctx context.Context) error
+}
+
+// ProviderSubtype describes a variant of a provider type (e.g., OpenRouter for openai).
+type ProviderSubtype struct {
+	ID             string // Subtype identifier (e.g., "openrouter")
+	Name           string // Display name (e.g., "OpenRouter")
+	Description    string // Help text
+	DefaultBaseURL string // Pre-filled URL for this subtype
+	RequiresAPIKey bool   // Whether API key is required
+}
+
+// SubtypeProvider is implemented by providers that have subtypes.
+// Used by the LLM editor to show subtype selection for openai-compatible providers.
+// The provider can filter/augment metadata-based subtypes with its own logic.
+type SubtypeProvider interface {
+	GetSubtypes() []ProviderSubtype
+}
+
 // Message represents a conversation message (provider-agnostic).
 // Can be converted from session.Message for use with providers.
 type Message struct {
@@ -197,26 +232,4 @@ func (e ErrUnavailable) Error() string {
 		return e.Provider + " is unavailable: " + e.Reason
 	}
 	return e.Provider + " is unavailable"
-}
-
-// ProviderConfig is the configuration for a single provider instance
-type ProviderConfig struct {
-	Type           string `json:"type"`           // "anthropic", "openai", "ollama", "xai"
-	APIKey         string `json:"apiKey"`         // For cloud providers
-	BaseURL        string `json:"baseURL"`        // For OpenAI-compatible endpoints
-	URL            string `json:"url"`            // For Ollama
-	MaxTokens      int    `json:"maxTokens"`      // Output limit override
-	ContextTokens  int    `json:"contextTokens"`  // Context window size override (0 = auto-detect)
-	TimeoutSeconds int    `json:"timeoutSeconds"` // Request timeout
-	PromptCaching  bool   `json:"promptCaching"`  // Anthropic-specific
-	EmbeddingOnly  bool   `json:"embeddingOnly"`  // For embedding-only models (skip chat availability check)
-	Trace          *bool  `json:"trace"`          // Per-provider trace logging (nil = default enabled when -t flag used)
-	DumpOnSuccess  bool   `json:"dumpOnSuccess"`  // Keep request dumps even on success (for debugging)
-
-	// xAI-specific fields
-	ServerToolsAllowed []string `json:"serverToolsAllowed"` // xAI server-side tools to enable (empty = all known tools)
-	MaxTurns           int      `json:"maxTurns"`           // xAI max agentic turns (0 = xai-go default)
-	IncrementalContext *bool    `json:"incrementalContext"` // xAI: chain context, send only new messages (nil = true)
-	KeepaliveTime      int      `json:"keepaliveTime"`      // xAI gRPC keepalive time in seconds (0 = xai-go default)
-	KeepaliveTimeout   int      `json:"keepaliveTimeout"`   // xAI gRPC keepalive timeout in seconds (0 = xai-go default)
 }

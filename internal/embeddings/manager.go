@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
@@ -20,7 +19,7 @@ type Manager struct {
 	sessionsDB *sql.DB
 	memoryDB   *sql.DB
 	registry   *llm.Registry
-	cfg        config.LLMPurposeConfig
+	cfg        llm.LLMPurposeConfig
 }
 
 var (
@@ -30,7 +29,7 @@ var (
 
 // InitManager initializes the global embeddings manager.
 // Must be called once at startup before using embeddings commands.
-func InitManager(sessionsDB, memoryDB *sql.DB, registry *llm.Registry, cfg config.LLMPurposeConfig) *Manager {
+func InitManager(sessionsDB, memoryDB *sql.DB, registry *llm.Registry, cfg llm.LLMPurposeConfig) *Manager {
 	managerOnce.Do(func() {
 		globalManager = &Manager{
 			sessionsDB: sessionsDB,
@@ -77,7 +76,7 @@ type ModelCount struct {
 }
 
 // GetStatus queries embedding status - for gateway backward compat
-func GetStatus(sessionsDB, memoryDB *sql.DB, cfg config.LLMPurposeConfig) (*Status, error) {
+func GetStatus(sessionsDB, memoryDB *sql.DB, cfg llm.LLMPurposeConfig) (*Status, error) {
 	if len(cfg.Models) == 0 {
 		return nil, fmt.Errorf("no embedding models configured")
 	}
@@ -155,7 +154,7 @@ func getTableStatusPublic(db *sql.DB, tableName, primaryModel string) (*TableSta
 }
 
 // Rebuild re-embeds all chunks - for gateway backward compat
-func Rebuild(ctx context.Context, sessionsDB, memoryDB *sql.DB, cfg config.LLMPurposeConfig, registry *llm.Registry, batchSize int, force bool, onProgress ProgressFunc) error {
+func Rebuild(ctx context.Context, sessionsDB, memoryDB *sql.DB, cfg llm.LLMPurposeConfig, registry *llm.Registry, batchSize int, force bool, onProgress ProgressFunc) error {
 	// Create temp manager for this call
 	m := &Manager{
 		sessionsDB: sessionsDB,
@@ -359,9 +358,9 @@ func (m *Manager) Rebuild(ctx context.Context, force bool, onProgress ProgressFu
 }
 
 // GetConfig returns the embeddings config
-func (m *Manager) GetConfig() config.LLMPurposeConfig {
+func (m *Manager) GetConfig() llm.LLMPurposeConfig {
 	if m == nil {
-		return config.LLMPurposeConfig{}
+		return llm.LLMPurposeConfig{}
 	}
 	return m.cfg
 }

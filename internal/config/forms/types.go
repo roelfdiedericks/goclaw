@@ -6,12 +6,13 @@ package forms
 type FieldType int
 
 const (
-	Toggle   FieldType = iota // Boolean on/off
-	Text                      // Single-line text input
-	Number                    // Numeric input (int or float)
-	Secret                    // Password/token input (masked)
-	Select                    // Dropdown selection
-	TextArea                  // Multi-line text input
+	Toggle     FieldType = iota // Boolean on/off
+	Text                        // Single-line text input
+	Number                      // Numeric input (int or float)
+	Secret                      // Password/token input (masked)
+	Select                      // Dropdown selection
+	TextArea                    // Multi-line text input
+	StringList                  // Comma-separated string list (for []string fields)
 )
 
 // FormDef defines a form for editing a config struct
@@ -30,6 +31,7 @@ type Section struct {
 	Collapsed bool     // Start collapsed in UI
 	Nested    *FormDef // For nested config structs
 	FieldName string   // Struct field name for nested sections (e.g., "Query")
+	ShowWhen  string   // Conditional visibility: "fieldName=value" (empty = always show)
 }
 
 // Field defines a single form field

@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -253,7 +252,7 @@ func (m *Manager) generateStartupWarning() {
 // GetEligibleSkills returns skills that are eligible and enabled.
 // If user is nil, all eligible+enabled skills are returned.
 // Otherwise, skills are filtered by the user's role permissions.
-func (m *Manager) GetEligibleSkills(u *user.User, rolesConfig config.RolesConfig) []*Skill {
+func (m *Manager) GetEligibleSkills(u *user.User, rolesConfig user.RolesConfig) []*Skill {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -346,7 +345,7 @@ func (m *Manager) FormatPrompt() string {
 }
 
 // FormatPromptForUser generates the skills section filtered by user's role.
-func (m *Manager) FormatPromptForUser(u *user.User, rolesConfig config.RolesConfig) string {
+func (m *Manager) FormatPromptForUser(u *user.User, rolesConfig user.RolesConfig) string {
 	skills := m.GetEligibleSkills(u, rolesConfig)
 	return FormatSkillsPrompt(skills)
 }

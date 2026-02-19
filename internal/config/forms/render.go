@@ -6,7 +6,7 @@ import (
 	"strconv"
 
 	"github.com/charmbracelet/huh"
-	"github.com/roelfdiedericks/goclaw/internal/actions"
+	"github.com/roelfdiedericks/goclaw/internal/bus"
 )
 
 // FormResult holds the result of running a form
@@ -289,7 +289,7 @@ func findFieldByJSONTag(rv reflect.Value, jsonName string) reflect.Value {
 	return reflect.Value{}
 }
 
-// ExecuteAction sends an action through the action bus
-func ExecuteAction(component string, action ActionDef, payload any) actions.Result {
-	return actions.SendWithSource(component, action.Name, payload, "tui", "")
+// ExecuteAction sends a command through the bus
+func ExecuteAction(component string, action ActionDef, payload any) bus.CommandResult {
+	return bus.SendCommandWithSource(component, action.Name, payload, "tui", "")
 }

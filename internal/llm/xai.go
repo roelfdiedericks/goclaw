@@ -33,10 +33,10 @@ func safeInt32(n int) int32 {
 // Supports streaming, native tool calling, server-side tools, and context preservation.
 // Also implements StatefulProvider for session-scoped state (responseID).
 type XAIProvider struct {
-	name      string         // Provider instance name (e.g., "xai")
-	config    ProviderConfig // Full provider configuration
-	model     string         // Current model (e.g., "grok-4-1-fast-reasoning")
-	maxTokens int            // Output token limit
+	name      string            // Provider instance name (e.g., "xai")
+	config    LLMProviderConfig // Full provider configuration
+	model     string            // Current model (e.g., "grok-4-1-fast-reasoning")
+	maxTokens int               // Output token limit
 
 	// Client management (lazy initialization)
 	client   *xai.Client
@@ -231,15 +231,13 @@ func (p *XAIProvider) ensureModelAllowed() {
 	}
 }
 
-// NewXAIProvider creates a new xAI provider from ProviderConfig.
+// NewXAIProvider creates a new xAI provider from LLMProviderConfig.
 // Client is lazily initialized on first use to support keepalive configuration.
-func NewXAIProvider(name string, cfg ProviderConfig) (*XAIProvider, error) {
-	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("xai API key not configured")
-	}
-
+func NewXAIProvider(name string, cfg LLMProviderConfig) (*XAIProvider, error) {
 	// Fetch model info from API on first provider creation (async-safe, only runs once)
-	go FetchXAIModelInfo(cfg.APIKey)
+	if cfg.APIKey != "" {
+		go FetchXAIModelInfo(cfg.APIKey)
+	}
 
 	// Default maxTokens
 	maxTokens := cfg.MaxTokens
@@ -998,4 +996,52 @@ func (p *XAIProvider) processStream(
 	}
 
 	return resp, nil
+}
+
+// ListModels fetches available models from xAI's API.
+// Implements ModelLister interface.
+func (p *XAIProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	if p.config.APIKey == "" {
+		return nil, fmt.Errorf("API key required to list models")
+	}
+
+	client, err := xai.New(xai.Config{
+		APIKey:  xai.NewSecureString(p.config.APIKey),
+		Timeout: 10 * time.Second,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create client: %w", err)
+	}
+
+	models, err := client.ListModels(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
+	}
+
+	result := make([]ModelInfo, len(models))
+	for i, m := range models {
+		result[i] = ModelInfo{
+			ID:            m.Name,
+			DisplayName:   m.Name,
+			ContextTokens: int(m.MaxPromptLength),
+		}
+	}
+
+	return result, nil
+}
+
+// TestConnection verifies the API key is valid by listing models.
+// Implements ConnectionTester interface.
+func (p *XAIProvider) TestConnection(ctx context.Context) error {
+	_, err := p.ListModels(ctx)
+	if err != nil {
+		return fmt.Errorf("connection test failed: %w", err)
+	}
+	return nil
+}
+
+// GetSubtypes returns available subtypes. xAI has no subtypes.
+// Implements SubtypeProvider interface.
+func (p *XAIProvider) GetSubtypes() []ProviderSubtype {
+	return []ProviderSubtype{}
 }

@@ -200,7 +200,7 @@ func GenerateDefault() error {
 // GenerateDefaultUsers outputs a default users.json template to stdout
 // If withPassword is true, generates a random password and includes the hash
 func GenerateDefaultUsers(withPassword bool) error {
-	owner := &config.UserEntry{
+	owner := &user.UserEntry{
 		Name: "Owner",
 		Role: "owner",
 	}
@@ -230,7 +230,7 @@ func GenerateDefaultUsers(withPassword bool) error {
 		fmt.Fprintln(os.Stderr, "")
 	}
 
-	users := config.UsersConfig{
+	users := user.UsersConfig{
 		"owner": owner,
 	}
 

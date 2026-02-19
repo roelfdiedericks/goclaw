@@ -79,13 +79,9 @@ type ollamaChatResponse struct {
 	Done    bool              `json:"done"`
 }
 
-// NewOllamaProvider creates a new Ollama provider from ProviderConfig.
+// NewOllamaProvider creates a new Ollama provider from LLMProviderConfig.
 // This is the preferred constructor for the unified provider system.
-func NewOllamaProvider(name string, cfg ProviderConfig) (*OllamaProvider, error) {
-	if cfg.URL == "" {
-		return nil, fmt.Errorf("ollama URL not configured")
-	}
-
+func NewOllamaProvider(name string, cfg LLMProviderConfig) (*OllamaProvider, error) {
 	url := strings.TrimSuffix(cfg.URL, "/")
 
 	timeoutSeconds := cfg.TimeoutSeconds
@@ -736,4 +732,74 @@ func (p *OllamaProvider) embedSingle(ctx context.Context, text string) ([]float3
 	}
 
 	return embedding, nil
+}
+
+// ListModels fetches available models from Ollama's /api/tags endpoint.
+// Implements ModelLister interface.
+func (p *OllamaProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	if p.url == "" {
+		return nil, fmt.Errorf("Ollama URL required to list models")
+	}
+
+	tagsURL := strings.TrimSuffix(p.url, "/") + "/api/tags"
+
+	req, err := http.NewRequestWithContext(ctx, "GET", tagsURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Models []struct {
+			Name    string `json:"name"`
+			Details struct {
+				ParameterSize   string `json:"parameter_size"`
+				QuantizationLvl string `json:"quantization_level"`
+			} `json:"details"`
+		} `json:"models"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	models := make([]ModelInfo, len(result.Models))
+	for i, m := range result.Models {
+		displayName := m.Name
+		if m.Details.ParameterSize != "" {
+			displayName = m.Name + " (" + m.Details.ParameterSize + ")"
+		}
+		models[i] = ModelInfo{
+			ID:          m.Name,
+			DisplayName: displayName,
+		}
+	}
+
+	return models, nil
+}
+
+// TestConnection verifies Ollama is reachable by listing models.
+// Implements ConnectionTester interface.
+func (p *OllamaProvider) TestConnection(ctx context.Context) error {
+	_, err := p.ListModels(ctx)
+	if err != nil {
+		return fmt.Errorf("connection test failed: %w", err)
+	}
+	return nil
+}
+
+// GetSubtypes returns available subtypes. Ollama has no subtypes.
+// Implements SubtypeProvider interface.
+func (p *OllamaProvider) GetSubtypes() []ProviderSubtype {
+	return []ProviderSubtype{}
 }

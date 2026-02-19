@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -33,7 +32,7 @@ type ResolvedRole struct {
 }
 
 // BuiltinOwnerRole is the default role config for owner when not explicitly configured
-var BuiltinOwnerRole = config.RoleConfig{
+var BuiltinOwnerRole = RoleConfig{
 	Tools:       "*",
 	Skills:      "*",
 	Memory:      "full",
@@ -43,7 +42,7 @@ var BuiltinOwnerRole = config.RoleConfig{
 
 // ResolveRole resolves a role name to its permissions using the config.
 // Returns error if role cannot be resolved (non-owner role not defined).
-func ResolveRole(roleName string, rolesConfig config.RolesConfig) (*ResolvedRole, error) {
+func ResolveRole(roleName string, rolesConfig RolesConfig) (*ResolvedRole, error) {
 	// Check if role is explicitly defined in config
 	if roleConfig, ok := rolesConfig[roleName]; ok {
 		return resolveFromConfig(roleName, &roleConfig), nil
@@ -66,7 +65,7 @@ func ResolveRole(roleName string, rolesConfig config.RolesConfig) (*ResolvedRole
 }
 
 // resolveFromConfig converts a RoleConfig to a ResolvedRole
-func resolveFromConfig(name string, cfg *config.RoleConfig) *ResolvedRole {
+func resolveFromConfig(name string, cfg *RoleConfig) *ResolvedRole {
 	resolved := &ResolvedRole{
 		Name:             name,
 		Memory:           cfg.Memory,

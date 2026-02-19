@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/roelfdiedericks/goclaw/internal/actions"
+	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
@@ -434,27 +434,27 @@ type QueryFilter struct {
 	Role string // Filter by role ("user" or "assistant")
 }
 
-// RegisterActions registers transcript action handlers with the action bus
-func (m *Manager) RegisterActions() {
-	actions.Register("transcript", "test", m.handleTest)
-	actions.Register("transcript", "apply", m.handleApply)
-	actions.Register("transcript", "stats", m.handleStats)
-	actions.Register("transcript", "reindex", m.handleReindex)
-	L_info("transcript: actions registered")
+// RegisterCommands registers transcript command handlers with the bus
+func (m *Manager) RegisterCommands() {
+	bus.RegisterCommand("transcript", "test", m.handleTest)
+	bus.RegisterCommand("transcript", "apply", m.handleApply)
+	bus.RegisterCommand("transcript", "stats", m.handleStats)
+	bus.RegisterCommand("transcript", "reindex", m.handleReindex)
+	L_info("transcript: commands registered")
 }
 
-// UnregisterActions removes transcript action handlers
-func (m *Manager) UnregisterActions() {
-	actions.UnregisterComponent("transcript")
+// UnregisterCommands removes transcript command handlers
+func (m *Manager) UnregisterCommands() {
+	bus.UnregisterComponent("transcript")
 }
 
 // handleTest verifies database and embedding provider connectivity
-func (m *Manager) handleTest(action actions.Action) actions.Result {
+func (m *Manager) handleTest(cmd bus.Command) bus.CommandResult {
 	L_debug("transcript: testing connection")
 
 	// Test database
 	if err := m.db.Ping(); err != nil {
-		return actions.Result{
+		return bus.CommandResult{
 			Error:   err,
 			Message: fmt.Sprintf("database connection failed: %v", err),
 		}
@@ -466,31 +466,31 @@ func (m *Manager) handleTest(action actions.Action) actions.Result {
 
 	_, err := m.provider.EmbedQuery(ctx, "test")
 	if err != nil {
-		return actions.Result{
+		return bus.CommandResult{
 			Error:   err,
 			Message: fmt.Sprintf("embedding provider failed: %v", err),
 		}
 	}
 
-	return actions.Result{
+	return bus.CommandResult{
 		Success: true,
 		Message: "Database and embedding provider OK",
 	}
 }
 
 // handleApply applies new config to the running manager
-func (m *Manager) handleApply(action actions.Action) actions.Result {
-	cfg, ok := action.Payload.(config.TranscriptConfig)
+func (m *Manager) handleApply(cmd bus.Command) bus.CommandResult {
+	cfg, ok := cmd.Payload.(config.TranscriptConfig)
 	if !ok {
-		return actions.Result{
-			Error:   fmt.Errorf("expected config.TranscriptConfig payload, got %T", action.Payload),
+		return bus.CommandResult{
+			Error:   fmt.Errorf("expected config.TranscriptConfig payload, got %T", cmd.Payload),
 			Message: "invalid payload type",
 		}
 	}
 
 	// Validate
 	if err := ValidateConfig(cfg); err != nil {
-		return actions.Result{
+		return bus.CommandResult{
 			Error:   err,
 			Message: fmt.Sprintf("config validation failed: %v", err),
 		}
@@ -505,16 +505,16 @@ func (m *Manager) handleApply(action actions.Action) actions.Result {
 		"indexInterval", cfg.IndexIntervalSeconds,
 	)
 
-	return actions.Result{
+	return bus.CommandResult{
 		Success: true,
 		Message: "Config applied successfully",
 	}
 }
 
 // handleStats returns current indexing statistics
-func (m *Manager) handleStats(action actions.Action) actions.Result {
+func (m *Manager) handleStats(cmd bus.Command) bus.CommandResult {
 	stats := m.Stats()
-	return actions.Result{
+	return bus.CommandResult{
 		Success: true,
 		Message: fmt.Sprintf("Chunks: %d indexed (%d session), %d pending | Last sync: %s",
 			stats.TotalChunks, stats.ChunksIndexedSession, stats.PendingMessages,
@@ -524,9 +524,9 @@ func (m *Manager) handleStats(action actions.Action) actions.Result {
 }
 
 // handleReindex triggers a full reindex
-func (m *Manager) handleReindex(action actions.Action) actions.Result {
+func (m *Manager) handleReindex(cmd bus.Command) bus.CommandResult {
 	m.TriggerIndex()
-	return actions.Result{
+	return bus.CommandResult{
 		Success: true,
 		Message: "Reindex triggered",
 	}

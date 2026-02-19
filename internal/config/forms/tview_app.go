@@ -3,6 +3,7 @@ package forms
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -10,8 +11,15 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
+// Status bar text constants for different screen types
+const (
+	StatusMenu = "[gray]↑↓ Navigate  │  Enter Select  │  Esc Back"
+	StatusList = "[gray]↑↓ Navigate  │  Enter Edit  │  d Delete  │  Esc Back"
+	StatusForm = "[gray]Tab Navigate  │  Enter Edit  │  Esc Cancel"
+)
+
 // TviewApp is the reusable application shell providing:
-// - Outer frame with title
+// - Outer frame with title and breadcrumb navigation
 // - Log panel with capture
 // - Status bar
 // - Ctrl+L switching between content and log panel
@@ -27,11 +35,13 @@ type TviewApp struct {
 	contentFlex  *tview.Flex
 	innerContent tview.Primitive // the actual content inside contentFlex
 
-	title      string
-	appRunning bool
+	title       string
+	breadcrumbs []string // navigation path shown in title
+	appRunning  bool
 
 	// Callbacks
-	onEscape func() // called when Escape is pressed
+	onEscape         func()                                   // called when Escape is pressed
+	formInputCapture func(*tcell.EventKey) *tcell.EventKey // form-specific input handler
 }
 
 // NewTviewApp creates a new application shell
@@ -68,12 +78,12 @@ func NewTviewApp(title string) *TviewApp {
 		SetTitleAlign(tview.AlignLeft).
 		SetBorderColor(tcell.ColorDodgerBlue)
 
-	// Main layout
+	// Main layout: content, status bar, then log panel at bottom
 	a.layout = tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(a.frame, 0, 1, true).
-		AddItem(a.logPanel, 6, 0, false).
-		AddItem(a.statusBar, 1, 0, false)
+		AddItem(a.statusBar, 1, 0, false).
+		AddItem(a.logPanel, 6, 0, false)
 
 	// Set up log hook
 	a.setupLogHook()
@@ -89,11 +99,77 @@ func (a *TviewApp) SetContent(content tview.Primitive) {
 	a.innerContent = content
 	a.contentFlex.Clear()
 	a.contentFlex.AddItem(content, 0, 1, true)
+	a.app.SetFocus(content)
 }
 
-// SetTitle updates the frame title
+// SetMenuContent sets a MenuListResult as the main content, handling focus correctly
+func (a *TviewApp) SetMenuContent(menu *MenuListResult) {
+	a.innerContent = menu.Primitive()
+	a.formInputCapture = nil // Clear form input capture
+	a.contentFlex.Clear()
+	a.contentFlex.AddItem(menu.Primitive(), 0, 1, true)
+	a.app.SetFocus(menu.Focusable())
+}
+
+// SetFormContent sets a FormContent as the main content, handling input capture and focus
+func (a *TviewApp) SetFormContent(content *FormContent) {
+	a.innerContent = content.Frame
+	a.formInputCapture = content.InputCapture // Store form's input handler
+	a.contentFlex.Clear()
+	a.contentFlex.AddItem(content.Frame, 0, 1, true)
+	a.app.SetFocus(content.Focusable)
+	a.SetStatusText(StatusForm)
+}
+
+// SetSplitPaneContent sets a SplitPane as the main content, handling focus correctly
+func (a *TviewApp) SetSplitPaneContent(pane *SplitPane) {
+	a.innerContent = pane.Primitive()
+	a.formInputCapture = nil // Clear form input capture
+	a.contentFlex.Clear()
+	a.contentFlex.AddItem(pane.Primitive(), 0, 1, true)
+	a.app.SetFocus(pane.Focusable())
+}
+
+// SetTitle updates the frame title (also clears breadcrumbs)
 func (a *TviewApp) SetTitle(title string) {
 	a.title = title
+	a.breadcrumbs = nil
+	a.updateFrameTitle()
+}
+
+// PushBreadcrumb adds a navigation level and updates the title
+func (a *TviewApp) PushBreadcrumb(name string) {
+	a.breadcrumbs = append(a.breadcrumbs, name)
+	a.updateFrameTitle()
+}
+
+// PopBreadcrumb removes the last navigation level and updates the title
+func (a *TviewApp) PopBreadcrumb() {
+	if len(a.breadcrumbs) > 0 {
+		a.breadcrumbs = a.breadcrumbs[:len(a.breadcrumbs)-1]
+		a.updateFrameTitle()
+	}
+}
+
+// SetBreadcrumbs replaces all breadcrumbs and updates the title
+func (a *TviewApp) SetBreadcrumbs(crumbs []string) {
+	a.breadcrumbs = crumbs
+	a.updateFrameTitle()
+}
+
+// GetBreadcrumbs returns the current breadcrumb path
+func (a *TviewApp) GetBreadcrumbs() []string {
+	return a.breadcrumbs
+}
+
+// updateFrameTitle updates the frame title based on breadcrumbs
+func (a *TviewApp) updateFrameTitle() {
+	var title string
+	if len(a.breadcrumbs) > 0 {
+		title = strings.Join(a.breadcrumbs, " > ")
+	} else {
+		title = a.title
+	}
 	a.frame.SetTitle(fmt.Sprintf(" 🐾 %s ", title))
 }
 
@@ -147,6 +223,16 @@ func (a *TviewApp) RunWithCleanup() error {
 	return a.Run()
 }
 
+// ResumeAfterSuspend restores app state after a Suspend() call
+// This re-establishes the logging hook and forces a screen sync
+func (a *TviewApp) ResumeAfterSuspend() {
+	// Re-establish logging hook (form cleared it)
+	a.setupLogHook()
+
+	// Force a complete screen redraw
+	a.app.Sync()
+}
+
 // setupLogHook configures log capture
 func (a *TviewApp) setupLogHook() {
 	logging.SetHookExclusive(func(level, msg string) {
@@ -184,14 +270,6 @@ func (a *TviewApp) setupLogHook() {
 func (a *TviewApp) setupInputCapture() {
 	a.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
-		case tcell.KeyEscape:
-			if a.onEscape != nil {
-				a.onEscape()
-			} else {
-				a.app.Stop()
-			}
-			return nil
-
 		case tcell.KeyCtrlL:
 			// Toggle focus between log panel and content
 			if a.logPanel.HasFocus() {
@@ -201,6 +279,13 @@ func (a *TviewApp) setupInputCapture() {
 			}
 			return nil
 		}
+
+		// If a form-specific input handler is set, call it
+		if a.formInputCapture != nil {
+			return a.formInputCapture(event)
+		}
+
+		// Default: pass through to content handlers
 		return event
 	})
 }

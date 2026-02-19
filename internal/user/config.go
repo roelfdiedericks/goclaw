@@ -1,5 +1,8 @@
-// Package config provides configuration loading for GoClaw.
-package config
+// Package user - User and role configuration types
+//
+// This file contains the canonical configuration types for users and roles.
+// These types define the shape of users.json and the roles section of goclaw.json.
+package user
 
 import (
 	"encoding/json"
@@ -10,6 +13,64 @@ import (
 
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 )
+
+// --- Role Configuration ---
+
+// RolesConfig maps role names to their permission configurations
+type RolesConfig map[string]RoleConfig
+
+// RoleConfig defines permissions for a role
+type RoleConfig struct {
+	Tools            interface{} `json:"tools"`                      // "*" for all, or []string of allowed tools
+	Skills           interface{} `json:"skills"`                     // "*" for all, or []string of allowed skills
+	Memory           string      `json:"memory"`                     // "full" or "none"
+	Transcripts      string      `json:"transcripts"`                // "all", "own", or "none"
+	Commands         bool        `json:"commands"`                   // Whether slash commands are enabled
+	SystemPrompt     string      `json:"systemPrompt,omitempty"`     // Inline system prompt text
+	SystemPromptFile string      `json:"systemPromptFile,omitempty"` // Path to system prompt file (relative to workspace)
+}
+
+// GetToolsList returns the tools as a string slice, or nil if "*" (all tools)
+func (r *RoleConfig) GetToolsList() ([]string, bool) {
+	if r.Tools == nil {
+		return nil, false
+	}
+	if s, ok := r.Tools.(string); ok && s == "*" {
+		return nil, true // All tools allowed
+	}
+	if arr, ok := r.Tools.([]interface{}); ok {
+		result := make([]string, 0, len(arr))
+		for _, v := range arr {
+			if s, ok := v.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result, false
+	}
+	return nil, false
+}
+
+// GetSkillsList returns the skills as a string slice, or nil if "*" (all skills)
+func (r *RoleConfig) GetSkillsList() ([]string, bool) {
+	if r.Skills == nil {
+		return nil, false
+	}
+	if s, ok := r.Skills.(string); ok && s == "*" {
+		return nil, true // All skills allowed
+	}
+	if arr, ok := r.Skills.([]interface{}); ok {
+		result := make([]string, 0, len(arr))
+		for _, v := range arr {
+			if s, ok := v.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result, false
+	}
+	return nil, false
+}
+
+// --- User Configuration ---
 
 // UsersConfig is the root of users.json
 // Map key is the username (also used for HTTP auth and session keys)
@@ -51,6 +112,8 @@ func ValidateUsername(username string) error {
 	}
 	return nil
 }
+
+// --- User File Operations ---
 
 // LoadUsers loads users from users.json
 // Search order (highest priority first):

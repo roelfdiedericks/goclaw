@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -71,14 +72,10 @@ func (r *Response) HasToolUse() bool {
 // StreamMessage signature needs to be updated. Legacy callers still work.
 // TODO: Complete Provider implementation by updating StreamMessage signature.
 
-// NewAnthropicProvider creates a new Anthropic provider from ProviderConfig.
+// NewAnthropicProvider creates a new Anthropic provider from LLMProviderConfig.
 // This is the preferred constructor for the unified provider system.
 // Supports custom BaseURL for Anthropic-compatible APIs (e.g., Kimi K2).
-func NewAnthropicProvider(name string, cfg ProviderConfig) (*AnthropicProvider, error) {
-	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("anthropic API key not configured")
-	}
-
+func NewAnthropicProvider(name string, cfg LLMProviderConfig) (*AnthropicProvider, error) {
 	// Create capturing transport for request/response debugging
 	transport := &CapturingTransport{Base: http.DefaultTransport}
 	httpClient := &http.Client{Transport: transport}
@@ -1014,4 +1011,73 @@ func isThinkingNotSupportedError(errStr string) bool {
 		}
 	}
 	return false
+}
+
+// ListModels fetches available models from Anthropic's API.
+// Implements ModelLister interface.
+func (p *AnthropicProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	if p.apiKey == "" {
+		return nil, fmt.Errorf("API key required to list models")
+	}
+
+	baseURL := p.baseURL
+	if baseURL == "" {
+		baseURL = "https://api.anthropic.com"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/v1/models", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("x-api-key", p.apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Data []struct {
+			ID          string `json:"id"`
+			DisplayName string `json:"display_name"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	models := make([]ModelInfo, len(result.Data))
+	for i, m := range result.Data {
+		models[i] = ModelInfo{
+			ID:          m.ID,
+			DisplayName: m.DisplayName,
+		}
+	}
+
+	return models, nil
+}
+
+// TestConnection verifies the API key is valid by listing models.
+// Implements ConnectionTester interface.
+func (p *AnthropicProvider) TestConnection(ctx context.Context) error {
+	_, err := p.ListModels(ctx)
+	if err != nil {
+		return fmt.Errorf("connection test failed: %w", err)
+	}
+	return nil
+}
+
+// GetSubtypes returns available subtypes. Anthropic has no subtypes.
+// Implements SubtypeProvider interface.
+func (p *AnthropicProvider) GetSubtypes() []ProviderSubtype {
+	return []ProviderSubtype{}
 }

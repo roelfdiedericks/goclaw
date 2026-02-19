@@ -1,15 +1,22 @@
 // Package forms - tview renderer for FormDef
+//
+// TVIEW GOTCHAS:
+//   - Never use app.QueueEvent(nil) - causes UI freeze
+//   - Never call app.SetFocus() from within SetInputCapture handlers directly
+//     (use goroutines or app.QueueUpdateDraw if needed)
+//   - Form button callbacks run on the main thread, safe to call methods directly
 package forms
 
 import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
-	"github.com/roelfdiedericks/goclaw/internal/actions"
+	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -22,7 +29,242 @@ const (
 	ResultError
 )
 
-// RenderTview renders a FormDef using tview
+// FormContent represents a rendered form that can be embedded in any app
+type FormContent struct {
+	Frame        tview.Primitive                        // The visual content (titled frame with form + buttonbar)
+	Focusable    tview.Primitive                        // The form, to receive initial focus
+	InputCapture func(*tcell.EventKey) *tcell.EventKey // Navigation handler for Tab/Backtab
+	OnResult     func(TviewResult)                      // Callback when Save/Cancel pressed
+	form         *tview.Form                            // internal reference for navigation
+	buttonBar    *tview.Form                            // internal reference for navigation
+}
+
+// BuildFormContent creates embeddable form content for use within an existing app
+// - def: form definition
+// - value: config struct pointer
+// - component: for action bus
+// - onResult: called when user saves or cancels
+// - app: the tview.Application for queuing events (navigation)
+func BuildFormContent(def FormDef, value any, component string, onResult func(TviewResult), app *tview.Application) (*FormContent, error) {
+	rv := reflect.ValueOf(value)
+	if rv.Kind() != reflect.Ptr || rv.Elem().Kind() != reflect.Struct {
+		return nil, fmt.Errorf("value must be a pointer to struct, got %T", value)
+	}
+	rv = rv.Elem()
+
+	form := tview.NewForm()
+	content := &FormContent{
+		OnResult: onResult,
+		form:     form,
+	}
+
+	// Add fields for each section
+	for _, section := range def.Sections {
+		// Check ShowWhen condition
+		if section.ShowWhen != "" {
+			if !evaluateShowWhen(section.ShowWhen, rv) {
+				continue // Skip this section
+			}
+		}
+
+		// Add section header as a separator
+		if section.Title != "" {
+			form.AddTextView(fmt.Sprintf("─── %s ", section.Title), section.Desc, 0, 1, false, false)
+		}
+
+		// Handle nested FormDef
+		if section.Nested != nil {
+			fieldName := section.FieldName
+			if fieldName == "" {
+				fieldName = section.Title
+			}
+			nestedField := findFieldByName(rv, fieldName)
+			if !nestedField.IsValid() {
+				nestedField = findFieldByJSONTag(rv, fieldName)
+			}
+			if nestedField.IsValid() {
+				addFieldsToForm(form, section.Nested.Sections, nestedField)
+			}
+			continue
+		}
+
+		// Add fields
+		addFieldsToForm(form, []Section{section}, rv)
+	}
+
+	// Fields form - borderless
+	form.SetBorder(false)
+
+	// Create separate button bar form - borderless
+	buttonBar := tview.NewForm()
+	buttonBar.SetBorder(false)
+	buttonBar.SetButtonsAlign(tview.AlignCenter)
+	content.buttonBar = buttonBar
+
+	// Add action buttons to button bar
+	for _, action := range def.Actions {
+		actionCopy := action
+		buttonBar.AddButton(action.Label, func() {
+			logging.L_info("action: running", "action", actionCopy.Label)
+			res := bus.SendCommand(component, actionCopy.Name, value)
+			if res.Error != nil {
+				logging.L_error("action: failed", "action", actionCopy.Label, "error", res.Message)
+			} else {
+				logging.L_info("action: completed", "action", actionCopy.Label, "result", res.Message)
+			}
+		})
+	}
+
+	// Add Save button
+	buttonBar.AddButton("Save", func() {
+		if content.OnResult != nil {
+			content.OnResult(ResultSaved)
+		}
+	})
+
+	// Add Cancel button
+	buttonBar.AddButton("Cancel", func() {
+		if content.OnResult != nil {
+			content.OnResult(ResultCancelled)
+		}
+	})
+
+	// Helper to navigate to first/last item after a delay (lets tview settle)
+	navigateAfterFocus := func(targetForm *tview.Form, toFirst bool, isButtonBar bool) {
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+
+			var currentIdx int
+			if isButtonBar {
+				_, currentIdx = targetForm.GetFocusedItemIndex()
+			} else {
+				currentIdx, _ = targetForm.GetFocusedItemIndex()
+			}
+
+			var count int
+			var key tcell.Key
+			if toFirst {
+				count = currentIdx
+				key = tcell.KeyBacktab
+			} else {
+				var lastIdx int
+				if isButtonBar {
+					lastIdx = targetForm.GetButtonCount() - 1
+				} else {
+					lastIdx = targetForm.GetFormItemCount() - 1
+				}
+				count = lastIdx - currentIdx
+				key = tcell.KeyTab
+			}
+
+			for i := 0; i < count; i++ {
+				app.QueueEvent(tcell.NewEventKey(key, 0, tcell.ModNone))
+			}
+		}()
+	}
+
+	// Inner layout: fields form + button bar
+	innerLayout := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(form, 0, 1, true).
+		AddItem(buttonBar, 3, 0, false)
+
+	// Outer frame with title and border
+	frame := tview.NewFrame(innerLayout).
+		SetBorders(0, 0, 0, 0, 0, 0)
+	frame.SetBorder(true).
+		SetTitle(fmt.Sprintf(" 🐾 %s ", def.Title)).
+		SetTitleAlign(tview.AlignLeft).
+		SetBorderColor(tcell.ColorDodgerBlue)
+
+	content.Frame = frame
+	content.Focusable = form
+
+	// Input capture for cross-form navigation
+	content.InputCapture = func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			if content.OnResult != nil {
+				content.OnResult(ResultCancelled)
+			}
+			return nil
+
+		case tcell.KeyTab, tcell.KeyPgDn:
+			// Check if at last item of fields form → switch to buttonBar
+			if form.HasFocus() {
+				idx, _ := form.GetFocusedItemIndex()
+				lastIdx := form.GetFormItemCount() - 1
+				if idx == lastIdx {
+					app.SetFocus(buttonBar)
+					navigateAfterFocus(buttonBar, true, true)
+					return nil
+				}
+			}
+			// Check if at last button of buttonBar → wrap to fields form
+			if buttonBar.HasFocus() {
+				_, buttonIdx := buttonBar.GetFocusedItemIndex()
+				lastBtnIdx := buttonBar.GetButtonCount() - 1
+				if buttonIdx == lastBtnIdx {
+					app.SetFocus(form)
+					navigateAfterFocus(form, true, false)
+					return nil
+				}
+			}
+			if event.Key() == tcell.KeyPgDn {
+				return tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone)
+			}
+			return event
+
+		case tcell.KeyBacktab, tcell.KeyPgUp:
+			// Check if at first item of fields form → switch to buttonBar (last)
+			if form.HasFocus() {
+				idx, _ := form.GetFocusedItemIndex()
+				if idx == 0 {
+					app.SetFocus(buttonBar)
+					navigateAfterFocus(buttonBar, false, true)
+					return nil
+				}
+			}
+			// Check if at first button of buttonBar → switch to fields form (last)
+			if buttonBar.HasFocus() {
+				_, buttonIdx := buttonBar.GetFocusedItemIndex()
+				if buttonIdx == 0 {
+					app.SetFocus(form)
+					navigateAfterFocus(form, false, false)
+					return nil
+				}
+			}
+			if event.Key() == tcell.KeyPgUp {
+				return tcell.NewEventKey(tcell.KeyBacktab, 0, tcell.ModNone)
+			}
+			return event
+		}
+		return event
+	}
+
+	// Mouse scroll handling
+	form.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		switch action {
+		case tview.MouseScrollUp:
+			go func() {
+				app.QueueEvent(tcell.NewEventKey(tcell.KeyBacktab, 0, tcell.ModNone))
+			}()
+			return 0, nil
+		case tview.MouseScrollDown:
+			go func() {
+				app.QueueEvent(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone))
+			}()
+			return 0, nil
+		}
+		return action, event
+	})
+
+	logging.L_info("setup: built form", "title", def.Title)
+
+	return content, nil
+}
+
+// RenderTview renders a FormDef using tview (standalone CLI mode)
 // - def: the form definition
 // - value: pointer to the config struct (for get/set via reflection)
 // - component: name for action bus (e.g., "transcript")
@@ -100,6 +342,13 @@ func RenderTview(def FormDef, value any, component string) (TviewResult, error) 
 
 	// Add fields for each section
 	for _, section := range def.Sections {
+		// Check ShowWhen condition
+		if section.ShowWhen != "" {
+			if !evaluateShowWhen(section.ShowWhen, rv) {
+				continue // Skip this section
+			}
+		}
+
 		// Add section header as a separator
 		if section.Title != "" {
 			form.AddTextView(fmt.Sprintf("─── %s ", section.Title), section.Desc, 0, 1, false, false)
@@ -140,7 +389,7 @@ func RenderTview(def FormDef, value any, component string) (TviewResult, error) 
 		buttonBar.AddButton(action.Label, func() {
 			logging.L_info("action: running", "action", actionCopy.Label)
 
-			res := actions.Send(component, actionCopy.Name, value)
+			res := bus.SendCommand(component, actionCopy.Name, value)
 			if res.Error != nil {
 				logging.L_error("action: failed", "action", actionCopy.Label, "error", res.Message)
 			} else {
@@ -343,13 +592,26 @@ func addFieldToForm(form *tview.Form, field Field, fv reflect.Value) {
 
 	switch field.Type {
 	case Toggle:
-		val := fv.Bool()
+		// Handle both bool and *bool
+		var val bool
+		if fv.Kind() == reflect.Ptr {
+			if !fv.IsNil() && fv.Elem().Kind() == reflect.Bool {
+				val = fv.Elem().Bool()
+			}
+		} else {
+			val = fv.Bool()
+		}
 		checkbox := tview.NewCheckbox().
 			SetLabel(label + " ").
 			SetChecked(val).
 			SetCheckedString("[✓]").
 			SetChangedFunc(func(checked bool) {
-				if fv.CanSet() {
+				if !fv.CanSet() {
+					return
+				}
+				if fv.Kind() == reflect.Ptr && fv.Type().Elem().Kind() == reflect.Bool {
+					fv.Set(reflect.ValueOf(&checked))
+				} else {
 					fv.SetBool(checked)
 				}
 			})
@@ -392,7 +654,19 @@ func addFieldToForm(form *tview.Form, field Field, fv reflect.Value) {
 	case Select:
 		options := make([]string, len(field.Options))
 		currentIdx := 0
-		currentVal := fmt.Sprintf("%v", fv.Interface())
+
+		// Handle *bool specially - nil maps to "default"
+		var currentVal string
+		if fv.Kind() == reflect.Ptr && fv.Type().Elem().Kind() == reflect.Bool {
+			if fv.IsNil() {
+				currentVal = "default"
+			} else {
+				currentVal = fmt.Sprintf("%v", fv.Elem().Bool())
+			}
+		} else {
+			currentVal = fmt.Sprintf("%v", fv.Interface())
+		}
+
 		for i, opt := range field.Options {
 			options[i] = opt.Label
 			if opt.Value == currentVal {
@@ -400,8 +674,24 @@ func addFieldToForm(form *tview.Form, field Field, fv reflect.Value) {
 			}
 		}
 		form.AddDropDown(label, options, currentIdx, func(option string, index int) {
-			if fv.CanSet() && index >= 0 && index < len(field.Options) {
-				fv.SetString(field.Options[index].Value)
+			if !fv.CanSet() || index < 0 || index >= len(field.Options) {
+				return
+			}
+			val := field.Options[index].Value
+
+			// Handle *bool specially
+			if fv.Kind() == reflect.Ptr && fv.Type().Elem().Kind() == reflect.Bool {
+				if val == "default" || val == "" {
+					fv.Set(reflect.Zero(fv.Type())) // nil
+				} else if val == "true" {
+					b := true
+					fv.Set(reflect.ValueOf(&b))
+				} else if val == "false" {
+					b := false
+					fv.Set(reflect.ValueOf(&b))
+				}
+			} else {
+				fv.SetString(val)
 			}
 		})
 
@@ -411,6 +701,34 @@ func addFieldToForm(form *tview.Form, field Field, fv reflect.Value) {
 			if fv.CanSet() {
 				fv.SetString(text)
 			}
+		})
+
+	case StringList:
+		// Handle []string as comma-separated text
+		var val string
+		if fv.Kind() == reflect.Slice && fv.Type().Elem().Kind() == reflect.String {
+			parts := make([]string, fv.Len())
+			for i := 0; i < fv.Len(); i++ {
+				parts[i] = fv.Index(i).String()
+			}
+			val = strings.Join(parts, ", ")
+		} else {
+			val = fmt.Sprintf("%v", fv.Interface())
+		}
+		form.AddInputField(label, val, 0, nil, func(text string) {
+			if !fv.CanSet() {
+				return
+			}
+			// Parse comma-separated values
+			parts := strings.Split(text, ",")
+			result := make([]string, 0, len(parts))
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					result = append(result, p)
+				}
+			}
+			fv.Set(reflect.ValueOf(result))
 		})
 	}
 }
@@ -444,4 +762,30 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max-3] + "..."
+}
+
+// evaluateShowWhen checks if a ShowWhen condition is satisfied
+// Format: "fieldName=value" (e.g., "type=xai")
+func evaluateShowWhen(condition string, rv reflect.Value) bool {
+	parts := strings.SplitN(condition, "=", 2)
+	if len(parts) != 2 {
+		return true // Invalid condition, show by default
+	}
+
+	fieldName := strings.TrimSpace(parts[0])
+	expectedValue := strings.TrimSpace(parts[1])
+
+	// Find the field
+	fv := findFieldByJSONTag(rv, fieldName)
+	if !fv.IsValid() {
+		fv = findFieldByName(rv, fieldName)
+	}
+	if !fv.IsValid() {
+		return true // Field not found, show by default
+	}
+
+	// Get current value as string
+	actualValue := fmt.Sprintf("%v", fv.Interface())
+
+	return actualValue == expectedValue
 }

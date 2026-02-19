@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/charmbracelet/huh"
-	"github.com/roelfdiedericks/goclaw/internal/actions"
+	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -274,7 +274,7 @@ func (e *TranscriptEditor) editSearch() error {
 
 // doTest tests the connection
 func (e *TranscriptEditor) doTest() {
-	result := actions.Send("transcript", "test", nil)
+	result := bus.SendCommand("transcript", "test", nil)
 	if result.Error != nil {
 		e.showMessage("Test Failed", result.Message)
 	} else {
@@ -284,7 +284,7 @@ func (e *TranscriptEditor) doTest() {
 
 // doApply applies config to running service
 func (e *TranscriptEditor) doApply() {
-	result := actions.Send("transcript", "apply", e.cfg)
+	result := bus.SendCommand("transcript", "apply", e.cfg)
 	if result.Error != nil {
 		e.showMessage("Apply Failed", result.Message)
 	} else {
@@ -294,7 +294,7 @@ func (e *TranscriptEditor) doApply() {
 
 // doStats shows indexing stats
 func (e *TranscriptEditor) doStats() {
-	result := actions.Send("transcript", "stats", nil)
+	result := bus.SendCommand("transcript", "stats", nil)
 	if result.Error != nil {
 		e.showMessage("Stats Failed", result.Message)
 	} else {

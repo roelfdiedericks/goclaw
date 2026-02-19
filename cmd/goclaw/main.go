@@ -21,8 +21,8 @@ import (
 	"github.com/sevlyar/go-daemon"
 	"golang.org/x/term"
 
-	"github.com/roelfdiedericks/goclaw/internal/actions"
 	"github.com/roelfdiedericks/goclaw/internal/browser"
+	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/bwrap"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
@@ -637,12 +637,12 @@ type UserAddCmd struct {
 
 func (u *UserAddCmd) Run(ctx *Context) error {
 	// Validate username
-	if err := config.ValidateUsername(u.Username); err != nil {
+	if err := user.ValidateUsername(u.Username); err != nil {
 		return err
 	}
 
 	// Load existing users
-	users, err := config.LoadUsers()
+	users, err := user.LoadUsers()
 	if err != nil {
 		return fmt.Errorf("failed to load users: %w", err)
 	}
@@ -653,14 +653,14 @@ func (u *UserAddCmd) Run(ctx *Context) error {
 	}
 
 	// Add new user
-	users[u.Username] = &config.UserEntry{
+	users[u.Username] = &user.UserEntry{
 		Name: u.Name,
 		Role: u.Role,
 	}
 
 	// Save
-	path := config.GetUsersFilePath()
-	if err := config.SaveUsers(users, path); err != nil {
+	path := user.GetUsersFilePath()
+	if err := user.SaveUsers(users, path); err != nil {
 		return err
 	}
 
@@ -672,7 +672,7 @@ func (u *UserAddCmd) Run(ctx *Context) error {
 type UserListCmd struct{}
 
 func (u *UserListCmd) Run(ctx *Context) error {
-	users, err := config.LoadUsers()
+	users, err := user.LoadUsers()
 	if err != nil {
 		return fmt.Errorf("failed to load users: %w", err)
 	}
@@ -704,7 +704,7 @@ type UserTelegramCmd struct {
 }
 
 func (u *UserTelegramCmd) Run(ctx *Context) error {
-	users, err := config.LoadUsers()
+	users, err := user.LoadUsers()
 	if err != nil {
 		return fmt.Errorf("failed to load users: %w", err)
 	}
@@ -716,8 +716,8 @@ func (u *UserTelegramCmd) Run(ctx *Context) error {
 
 	entry.TelegramID = u.TelegramID
 
-	path := config.GetUsersFilePath()
-	if err := config.SaveUsers(users, path); err != nil {
+	path := user.GetUsersFilePath()
+	if err := user.SaveUsers(users, path); err != nil {
 		return err
 	}
 
@@ -732,7 +732,7 @@ type UserPasswordCmd struct {
 }
 
 func (u *UserPasswordCmd) Run(ctx *Context) error {
-	users, err := config.LoadUsers()
+	users, err := user.LoadUsers()
 	if err != nil {
 		return fmt.Errorf("failed to load users: %w", err)
 	}
@@ -775,8 +775,8 @@ func (u *UserPasswordCmd) Run(ctx *Context) error {
 
 	entry.HTTPPasswordHash = hash
 
-	path := config.GetUsersFilePath()
-	if err := config.SaveUsers(users, path); err != nil {
+	path := user.GetUsersFilePath()
+	if err := user.SaveUsers(users, path); err != nil {
 		return err
 	}
 
@@ -792,7 +792,7 @@ type UserDeleteCmd struct {
 }
 
 func (u *UserDeleteCmd) Run(ctx *Context) error {
-	users, err := config.LoadUsers()
+	users, err := user.LoadUsers()
 	if err != nil {
 		return fmt.Errorf("failed to load users: %w", err)
 	}
@@ -822,8 +822,8 @@ func (u *UserDeleteCmd) Run(ctx *Context) error {
 	// Delete user
 	delete(users, u.Username)
 
-	path := config.GetUsersFilePath()
-	if err := config.SaveUsers(users, path); err != nil {
+	path := user.GetUsersFilePath()
+	if err := user.SaveUsers(users, path); err != nil {
 		return err
 	}
 
@@ -1492,29 +1492,10 @@ func runEmbeddingsStatus() error {
 // buildLLMRegistry creates an LLM registry from config
 func buildLLMRegistry(cfg *config.Config) (*llm.Registry, error) {
 	regCfg := llm.RegistryConfig{
-		Providers:     make(map[string]llm.ProviderConfig),
-		Agent:         llm.PurposeConfig{Models: cfg.LLM.Agent.Models, MaxTokens: cfg.LLM.Agent.MaxTokens},
-		Summarization: llm.PurposeConfig{Models: cfg.LLM.Summarization.Models, MaxTokens: cfg.LLM.Summarization.MaxTokens, MaxInputTokens: cfg.LLM.Summarization.MaxInputTokens},
-		Embeddings:    llm.PurposeConfig{Models: cfg.LLM.Embeddings.Models, MaxTokens: cfg.LLM.Embeddings.MaxTokens},
-	}
-	for name, pCfg := range cfg.LLM.Providers {
-		regCfg.Providers[name] = llm.ProviderConfig{
-			Type:               pCfg.Type,
-			APIKey:             pCfg.APIKey,
-			BaseURL:            pCfg.BaseURL,
-			URL:                pCfg.URL,
-			MaxTokens:          pCfg.MaxTokens,
-			ContextTokens:      pCfg.ContextTokens,
-			TimeoutSeconds:     pCfg.TimeoutSeconds,
-			PromptCaching:      pCfg.PromptCaching,
-			EmbeddingOnly:      pCfg.EmbeddingOnly,
-			DumpOnSuccess:      pCfg.DumpOnSuccess,
-			ServerToolsAllowed: pCfg.ServerToolsAllowed,
-			MaxTurns:           pCfg.MaxTurns,
-			IncrementalContext: pCfg.IncrementalContext,
-			KeepaliveTime:      pCfg.KeepaliveTime,
-			KeepaliveTimeout:   pCfg.KeepaliveTimeout,
-		}
+		Providers:     cfg.LLM.Providers,
+		Agent:         cfg.LLM.Agent,
+		Summarization: cfg.LLM.Summarization,
+		Embeddings:    cfg.LLM.Embeddings,
 	}
 	return llm.NewRegistry(regCfg)
 }
@@ -1613,6 +1594,7 @@ type SetupCmd struct {
 	Auto       SetupAutoCmd       `cmd:"" default:"withargs" help:"Run setup (auto-detect mode)"`
 	Wizard     SetupWizardCmd     `cmd:"wizard" help:"Run full setup wizard (even if config exists)"`
 	Edit       SetupEditCmd       `cmd:"edit" help:"Edit existing configuration"`
+	Editor     SetupEditorCmd     `cmd:"editor" help:"Edit config (new tview UI)"`
 	Generate   SetupGenerateCmd   `cmd:"generate" help:"Output default config template to stdout"`
 	Transcript SetupTranscriptCmd `cmd:"transcript" help:"Configure transcript indexing"`
 	Telegram   SetupTelegramCmd   `cmd:"telegram" help:"Configure Telegram bot"`
@@ -1637,6 +1619,13 @@ type SetupEditCmd struct{}
 
 func (s *SetupEditCmd) Run(ctx *Context) error {
 	return setup.RunEdit()
+}
+
+// SetupEditorCmd runs the new tview-based editor
+type SetupEditorCmd struct{}
+
+func (s *SetupEditorCmd) Run(ctx *Context) error {
+	return setup.RunEditorTview()
 }
 
 // SetupGenerateCmd outputs default config template
@@ -1727,7 +1716,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	L_debug("config loaded", "path", loadResult.SourcePath)
 
 	// Load users from users.json (new format)
-	usersConfig, err := config.LoadUsers()
+	usersConfig, err := user.LoadUsers()
 	if err != nil {
 		L_error("failed to load users", "error", err)
 		return err
@@ -2058,13 +2047,13 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		L_info("telegram: disabled by configuration")
 	}
 
-	// Register telegram:apply action handler with closure access to bot instance
+	// Register telegram:apply command handler with closure access to bot instance
 	// TODO: Consider refactoring to a ChannelManager when we have more channels
 	// or need multiple instances of the same channel type
-	actions.Register("telegram", "apply", func(action actions.Action) actions.Result {
-		newCfg, ok := action.Payload.(*config.TelegramConfig)
+	bus.RegisterCommand("telegram", "apply", func(cmd bus.Command) bus.CommandResult {
+		newCfg, ok := cmd.Payload.(*config.TelegramConfig)
 		if !ok {
-			return actions.Result{
+			return bus.CommandResult{
 				Error:   fmt.Errorf("invalid payload type"),
 				Message: "Internal error: invalid config type",
 			}
@@ -2084,7 +2073,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		// If disabled, just stop
 		if !newCfg.Enabled || newCfg.BotToken == "" {
 			L_info("telegram: disabled by new config")
-			return actions.Result{
+			return bus.CommandResult{
 				Success: true,
 				Message: "Telegram bot stopped",
 			}
@@ -2094,7 +2083,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		bot, err := telegram.New(newCfg, gw, users)
 		if err != nil {
 			L_error("telegram: failed to create bot with new config", "error", err)
-			return actions.Result{
+			return bus.CommandResult{
 				Error:   err,
 				Message: fmt.Sprintf("Failed to connect: %s", err),
 			}
@@ -2105,7 +2094,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		telegramBot = bot
 		L_info("telegram: reloaded with new config")
 
-		return actions.Result{
+		return bus.CommandResult{
 			Success: true,
 			Message: "Telegram bot reloaded",
 		}

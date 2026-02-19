@@ -14,6 +14,7 @@ import (
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	. "github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/tokens"
 	"github.com/roelfdiedericks/goclaw/internal/types"
@@ -67,10 +68,10 @@ type OpenAIProvider struct {
 	available bool
 }
 
-// NewOpenAIProvider creates a new OpenAI-compatible provider from ProviderConfig.
+// NewOpenAIProvider creates a new OpenAI-compatible provider from LLMProviderConfig.
 // Supports both "baseUrl" (standard) and "url" (for compatibility with Ollama-style configs).
 // API key is optional for local servers like LM Studio.
-func NewOpenAIProvider(name string, cfg ProviderConfig) (*OpenAIProvider, error) {
+func NewOpenAIProvider(name string, cfg LLMProviderConfig) (*OpenAIProvider, error) {
 	// Determine the base URL - accept both "baseUrl" and "url" fields
 	baseURL := cfg.BaseURL
 	if baseURL == "" && cfg.URL != "" {
@@ -1623,4 +1624,101 @@ func estimateOpenAITokens(messages []openai.ChatCompletionMessage, systemPrompt 
 	}
 
 	return total
+}
+
+// ListModels fetches available models from the OpenAI-compatible endpoint.
+// Implements ModelLister interface.
+func (p *OpenAIProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	modelsURL := strings.TrimSuffix(p.baseURL, "/") + "/models"
+
+	req, err := http.NewRequestWithContext(ctx, "GET", modelsURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if p.apiKey != "" && p.apiKey != "not-needed" {
+		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Data []struct {
+			ID               string `json:"id"`
+			ContextLength    *int   `json:"context_length"`
+			MaxContextLength *int   `json:"max_context_length"`
+			ContextWindow    *int   `json:"context_window"`
+			NCtx             *int   `json:"n_ctx"`
+			MaxModelLen      *int   `json:"max_model_len"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	models := make([]ModelInfo, 0, len(result.Data))
+	for _, m := range result.Data {
+		if m.ID == "" {
+			continue
+		}
+		info := ModelInfo{ID: m.ID, DisplayName: m.ID}
+		// Coalesce context length from various fields
+		switch {
+		case m.ContextLength != nil && *m.ContextLength > 0:
+			info.ContextTokens = *m.ContextLength
+		case m.MaxContextLength != nil && *m.MaxContextLength > 0:
+			info.ContextTokens = *m.MaxContextLength
+		case m.ContextWindow != nil && *m.ContextWindow > 0:
+			info.ContextTokens = *m.ContextWindow
+		case m.NCtx != nil && *m.NCtx > 0:
+			info.ContextTokens = *m.NCtx
+		case m.MaxModelLen != nil && *m.MaxModelLen > 0:
+			info.ContextTokens = *m.MaxModelLen
+		}
+		models = append(models, info)
+	}
+
+	return models, nil
+}
+
+// TestConnection verifies the API credentials by listing models.
+// Implements ConnectionTester interface.
+func (p *OpenAIProvider) TestConnection(ctx context.Context) error {
+	_, err := p.ListModels(ctx)
+	if err != nil {
+		return fmt.Errorf("connection test failed: %w", err)
+	}
+	return nil
+}
+
+// GetSubtypes returns available subtypes for OpenAI-compatible providers.
+// Implements SubtypeProvider interface.
+func (p *OpenAIProvider) GetSubtypes() []ProviderSubtype {
+	provider, ok := metadata.Get().GetProvider("openai")
+	if !ok {
+		return []ProviderSubtype{}
+	}
+
+	subtypes := make([]ProviderSubtype, len(provider.Subtypes))
+	for i, st := range provider.Subtypes {
+		subtypes[i] = ProviderSubtype{
+			ID:             st.ID,
+			Name:           st.Name,
+			Description:    st.Description,
+			DefaultBaseURL: st.DefaultBaseURL,
+			RequiresAPIKey: st.RequiresAPIKey,
+		}
+	}
+	return subtypes
 }

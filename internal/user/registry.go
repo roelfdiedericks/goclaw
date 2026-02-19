@@ -3,22 +3,21 @@ package user
 import (
 	"sync"
 
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
 // Registry maintains the set of known users and provides lookup by identity
 type Registry struct {
-	users       map[string]*User   // by username (user ID)
-	telegramID  map[string]string  // telegram user ID -> username
-	ownerID     string             // cached owner username
-	rolesConfig config.RolesConfig // role definitions from goclaw.json
+	users       map[string]*User  // by username (user ID)
+	telegramID  map[string]string // telegram user ID -> username
+	ownerID     string            // cached owner username
+	rolesConfig RolesConfig       // role definitions from goclaw.json
 	mu          sync.RWMutex
 }
 
 // NewRegistryFromUsers creates a user registry from UsersConfig
 // The rolesConfig is used to validate user roles and resolve permissions
-func NewRegistryFromUsers(users config.UsersConfig, rolesConfig config.RolesConfig) *Registry {
+func NewRegistryFromUsers(users UsersConfig, rolesConfig RolesConfig) *Registry {
 	r := &Registry{
 		users:       make(map[string]*User),
 		telegramID:  make(map[string]string),
@@ -70,7 +69,7 @@ func NewRegistryFromUsers(users config.UsersConfig, rolesConfig config.RolesConf
 }
 
 // GetRolesConfig returns the roles configuration
-func (r *Registry) GetRolesConfig() config.RolesConfig {
+func (r *Registry) GetRolesConfig() RolesConfig {
 	return r.rolesConfig
 }
 

@@ -1,4 +1,8 @@
 // Package forms - wizard support for tview
+//
+// IMPORTANT: Never use app.QueueEvent(nil) - it causes the UI to freeze.
+// If you need to trigger actions from button callbacks, just call the
+// method directly (e.g., w.NextStep()) without trying to queue events.
 package forms
 
 import (
@@ -10,10 +14,10 @@ import (
 
 // WizardStep defines a single step in the wizard
 type WizardStep struct {
-	Title   string                            // Step title (shown in frame)
-	Content func(w *Wizard) tview.Primitive  // Builds the step's UI
-	OnEnter func(w *Wizard)                  // Called when step becomes active
-	OnExit  func(w *Wizard) error            // Called before leaving step (validate)
+	Title   string                          // Step title (shown in frame)
+	Content func(w *Wizard) tview.Primitive // Builds the step's UI
+	OnEnter func(w *Wizard)                 // Called when step becomes active
+	OnExit  func(w *Wizard) error           // Called before leaving step (validate)
 }
 
 // WizardResult indicates how the wizard was closed
@@ -23,6 +27,7 @@ const (
 	WizardCompleted WizardResult = iota
 	WizardCancelled
 	WizardError
+	WizardEditor // User chose to open editor instead
 )
 
 // Wizard manages a multi-step wizard flow
@@ -39,6 +44,9 @@ type Wizard struct {
 
 	// Data storage for steps to share data
 	Data map[string]any
+
+	// Options
+	ShowEditorButton bool // Show "Editor" button on first step
 }
 
 // NewWizard creates a new wizard with the given steps
@@ -163,14 +171,23 @@ func (w *Wizard) updateButtons() {
 	// Remove and re-add buttons to update labels
 	w.buttonBar.Clear(true)
 
-	// Back button (disabled on first step)
+	// Back button (or Exit/Editor on first step)
 	if w.stepIndex > 0 {
 		w.buttonBar.AddButton("< Back", func() {
 			w.prevStep()
 		})
+	} else if w.ShowEditorButton {
+		// Config exists - show Editor button
+		w.buttonBar.AddButton("Editor", func() {
+			w.result = WizardEditor
+			w.app.Stop()
+		})
 	} else {
-		// Add disabled-looking back button
-		w.buttonBar.AddButton("      ", nil) // spacer
+		// No config - show Exit button
+		w.buttonBar.AddButton("Exit", func() {
+			w.result = WizardCancelled
+			w.app.Stop()
+		})
 	}
 
 	// Next/Finish button
@@ -191,7 +208,7 @@ func (w *Wizard) updateButtons() {
 	})
 }
 
-// nextStep advances to the next step
+// nextStep advances to the next step (internal)
 func (w *Wizard) nextStep() {
 	// Validate current step
 	step := w.steps[w.stepIndex]
@@ -205,6 +222,11 @@ func (w *Wizard) nextStep() {
 	if w.stepIndex < len(w.steps)-1 {
 		w.showStep(w.stepIndex + 1)
 	}
+}
+
+// NextStep advances to the next step (public, for use from step content)
+func (w *Wizard) NextStep() {
+	w.nextStep()
 }
 
 // prevStep goes back to the previous step

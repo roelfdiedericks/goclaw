@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 
 	"dario.cat/mergo"
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
 // LoadResult contains the loaded config and metadata about where it came from
@@ -120,7 +122,7 @@ func splitLines(data []byte) []string {
 type Config struct {
 	Gateway       GatewayConfig       `json:"gateway"`
 	Agent         AgentIdentityConfig `json:"agent"`
-	LLM           LLMConfig           `json:"llm"`
+	LLM           llm.LLMConfig       `json:"llm"`
 	HomeAssistant HomeAssistantConfig `json:"homeassistant"` // Top-level Home Assistant config
 	Tools         ToolsConfig         `json:"tools"`
 	Telegram      TelegramConfig      `json:"telegram"`
@@ -134,62 +136,8 @@ type Config struct {
 	Skills        SkillsConfig        `json:"skills"`
 	Cron          CronConfig          `json:"cron"`
 	Supervision   SupervisionConfig   `json:"supervision"`
-	Roles         RolesConfig         `json:"roles"` // Role-based access control
+	Roles         user.RolesConfig    `json:"roles"` // Role-based access control
 	Auth          AuthConfig          `json:"auth"`  // Role elevation authentication
-}
-
-// RolesConfig maps role names to their permission configurations
-type RolesConfig map[string]RoleConfig
-
-// RoleConfig defines permissions for a role
-type RoleConfig struct {
-	Tools            interface{} `json:"tools"`                      // "*" for all, or []string of allowed tools
-	Skills           interface{} `json:"skills"`                     // "*" for all, or []string of allowed skills
-	Memory           string      `json:"memory"`                     // "full" or "none"
-	Transcripts      string      `json:"transcripts"`                // "all", "own", or "none"
-	Commands         bool        `json:"commands"`                   // Whether slash commands are enabled
-	SystemPrompt     string      `json:"systemPrompt,omitempty"`     // Inline system prompt text
-	SystemPromptFile string      `json:"systemPromptFile,omitempty"` // Path to system prompt file (relative to workspace)
-}
-
-// GetToolsList returns the tools as a string slice, or nil if "*" (all tools)
-func (r *RoleConfig) GetToolsList() ([]string, bool) {
-	if r.Tools == nil {
-		return nil, false
-	}
-	if s, ok := r.Tools.(string); ok && s == "*" {
-		return nil, true // All tools allowed
-	}
-	if arr, ok := r.Tools.([]interface{}); ok {
-		result := make([]string, 0, len(arr))
-		for _, v := range arr {
-			if s, ok := v.(string); ok {
-				result = append(result, s)
-			}
-		}
-		return result, false
-	}
-	return nil, false
-}
-
-// GetSkillsList returns the skills as a string slice, or nil if "*" (all skills)
-func (r *RoleConfig) GetSkillsList() ([]string, bool) {
-	if r.Skills == nil {
-		return nil, false
-	}
-	if s, ok := r.Skills.(string); ok && s == "*" {
-		return nil, true // All skills allowed
-	}
-	if arr, ok := r.Skills.([]interface{}); ok {
-		result := make([]string, 0, len(arr))
-		for _, v := range arr {
-			if s, ok := v.(string); ok {
-				result = append(result, s)
-			}
-		}
-		return result, false
-	}
-	return nil, false
 }
 
 // CredentialHint describes a credential the auth script accepts
@@ -447,61 +395,6 @@ type GatewayConfig struct {
 	WorkingDir string `json:"workingDir"`
 }
 
-// LLMConfig contains LLM provider settings
-// Providers are aliased instances; models reference them via "alias/model" format.
-type LLMConfig struct {
-	Providers     map[string]LLMProviderConfig `json:"providers"`
-	Agent         LLMPurposeConfig             `json:"agent"`         // Main chat
-	Summarization LLMPurposeConfig             `json:"summarization"` // Checkpoint/compaction
-	Embeddings    LLMPurposeConfig             `json:"embeddings"`    // Memory/transcript
-	Thinking      ThinkingConfig               `json:"thinking"`      // Extended thinking settings
-	SystemPrompt  string                       `json:"systemPrompt"`  // System prompt for agent
-}
-
-// ThinkingConfig configures extended thinking for models that support it
-type ThinkingConfig struct {
-	BudgetTokens int    `json:"budgetTokens"` // Token budget for thinking (default: 10000) - legacy, kept for compatibility
-	DefaultLevel string `json:"defaultLevel"` // Global default level: off/minimal/low/medium/high/xhigh (default: "medium")
-}
-
-// LLMProviderConfig is the configuration for a single provider instance
-type LLMProviderConfig struct {
-	Type           string `json:"type"`                     // "anthropic", "openai", "ollama", "xai"
-	APIKey         string `json:"apiKey,omitempty"`         // For cloud providers
-	BaseURL        string `json:"baseURL,omitempty"`        // For OpenAI-compatible endpoints
-	URL            string `json:"url,omitempty"`            // For Ollama
-	MaxTokens      int    `json:"maxTokens,omitempty"`      // Default output limit
-	ContextTokens  int    `json:"contextTokens,omitempty"`  // Context window override (0 = auto-detect)
-	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"` // Request timeout
-	PromptCaching  bool   `json:"promptCaching,omitempty"`  // Anthropic-specific
-	EmbeddingOnly  bool   `json:"embeddingOnly,omitempty"`  // For embedding-only models
-	DumpOnSuccess  bool   `json:"dumpOnSuccess,omitempty"`  // Keep request dumps even on success (for debugging)
-	ThinkingLevel  string `json:"thinkingLevel,omitempty"`  // Default thinking level for this provider: off/minimal/low/medium/high/xhigh
-
-	// xAI-specific fields
-	ServerToolsAllowed []string `json:"serverToolsAllowed,omitempty"` // xAI server-side tools to enable (empty = all known tools)
-	MaxTurns           int      `json:"maxTurns,omitempty"`           // xAI max agentic turns (0 = xai-go default)
-	IncrementalContext *bool    `json:"incrementalContext,omitempty"` // xAI: chain context, send only new messages (nil = true)
-	KeepaliveTime      int      `json:"keepaliveTime,omitempty"`      // xAI gRPC keepalive time in seconds (0 = xai-go default)
-	KeepaliveTimeout   int      `json:"keepaliveTimeout,omitempty"`   // xAI gRPC keepalive timeout in seconds (0 = xai-go default)
-}
-
-// LLMPurposeConfig defines the model chain for a specific purpose
-type LLMPurposeConfig struct {
-	Models         []string `json:"models"`                   // First = primary, rest = fallbacks
-	MaxTokens      int      `json:"maxTokens,omitempty"`      // Output limit override (0 = use model default)
-	MaxInputTokens int      `json:"maxInputTokens,omitempty"` // Input limit for summarization (0 = use model context - buffer)
-	AutoRebuild    *bool    `json:"autoRebuild,omitempty"`    // Embeddings: auto-rebuild on model mismatch (default: true)
-}
-
-// GetAutoRebuild returns the AutoRebuild setting, defaulting to true if not set
-func (c *LLMPurposeConfig) GetAutoRebuild() bool {
-	if c.AutoRebuild == nil {
-		return true // Default: auto-rebuild enabled
-	}
-	return *c.AutoRebuild
-}
-
 // TelegramConfig contains Telegram channel settings
 type TelegramConfig struct {
 	Enabled  bool   `json:"enabled"`
@@ -653,24 +546,24 @@ func Load() (*LoadResult, error) {
 			Name:  "GoClaw",
 			Emoji: "",
 		},
-		LLM: LLMConfig{
-			Providers: map[string]LLMProviderConfig{
+		LLM: llm.LLMConfig{
+			Providers: map[string]llm.LLMProviderConfig{
 				"anthropic": {
 					Type:          "anthropic",
 					PromptCaching: true,
 				},
 			},
-			Agent: LLMPurposeConfig{
+			Agent: llm.LLMPurposeConfig{
 				Models:    []string{"anthropic/claude-sonnet-4-20250514"},
 				MaxTokens: 8192,
 			},
-			Summarization: LLMPurposeConfig{
+			Summarization: llm.LLMPurposeConfig{
 				Models: []string{}, // Empty = use agent fallback
 			},
-			Embeddings: LLMPurposeConfig{
+			Embeddings: llm.LLMPurposeConfig{
 				Models: []string{}, // Empty = disabled
 			},
-			Thinking: ThinkingConfig{
+			Thinking: llm.ThinkingConfig{
 				BudgetTokens: 10000, // Default budget for extended thinking
 			},
 		},
@@ -865,12 +758,12 @@ type DefaultConfigTemplate struct {
 	LLM     DefaultLLMTemplate     `json:"llm"`
 	Gateway DefaultGatewayTemplate `json:"gateway,omitempty"`
 	HTTP    DefaultHTTPTemplate    `json:"http,omitempty"`
-	Roles   RolesConfig            `json:"roles,omitempty"`
+	Roles   user.RolesConfig       `json:"roles,omitempty"`
 }
 
 type DefaultLLMTemplate struct {
-	Providers map[string]LLMProviderConfig `json:"providers"`
-	Agent     LLMPurposeConfig             `json:"agent"`
+	Providers map[string]llm.LLMProviderConfig `json:"providers"`
+	Agent     llm.LLMPurposeConfig             `json:"agent"`
 }
 
 type DefaultGatewayTemplate struct {
@@ -887,14 +780,14 @@ type DefaultHTTPTemplate struct {
 func DefaultConfig() *DefaultConfigTemplate {
 	return &DefaultConfigTemplate{
 		LLM: DefaultLLMTemplate{
-			Providers: map[string]LLMProviderConfig{
+			Providers: map[string]llm.LLMProviderConfig{
 				"anthropic": {
 					Type:          "anthropic",
 					APIKey:        "YOUR_ANTHROPIC_API_KEY",
 					PromptCaching: true,
 				},
 			},
-			Agent: LLMPurposeConfig{
+			Agent: llm.LLMPurposeConfig{
 				Models: []string{"anthropic/claude-sonnet-4-20250514"},
 			},
 		},
@@ -904,15 +797,15 @@ func DefaultConfig() *DefaultConfigTemplate {
 		HTTP: DefaultHTTPTemplate{
 			Listen: ":1337",
 		},
-		Roles: RolesConfig{
-			"owner": RoleConfig{
+		Roles: user.RolesConfig{
+			"owner": user.RoleConfig{
 				Tools:       "*",
 				Skills:      "*",
 				Memory:      "full",
 				Transcripts: "all",
 				Commands:    true,
 			},
-			"user": RoleConfig{
+			"user": user.RoleConfig{
 				Tools:       []interface{}{"read_file", "write_file", "web_search", "web_fetch"},
 				Skills:      "*",
 				Memory:      "none",
