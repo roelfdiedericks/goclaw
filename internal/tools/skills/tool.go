@@ -9,6 +9,7 @@ import (
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	skillspkg "github.com/roelfdiedericks/goclaw/internal/skills"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
 // Tool provides agent access to the skills registry
@@ -56,7 +57,7 @@ func (t *Tool) Schema() map[string]interface{} {
 	}
 }
 
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params struct {
 		Action  string `json:"action"`
 		Skill   string `json:"skill"`
@@ -65,31 +66,39 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	}
 
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	if t.manager == nil {
-		return "", fmt.Errorf("skills manager not available")
+		return nil, fmt.Errorf("skills manager not available")
 	}
 
 	L_debug("skills tool: executing", "action", params.Action, "skill", params.Skill, "filter", params.Filter)
 
+	var result string
+	var err error
+
 	switch params.Action {
 	case "list":
-		return t.executeList(params.Filter, params.Verbose)
+		result, err = t.executeList(params.Filter, params.Verbose)
 	case "info":
 		if params.Skill == "" {
-			return "", fmt.Errorf("skill name required for 'info' action")
+			return nil, fmt.Errorf("skill name required for 'info' action")
 		}
-		return t.executeInfo(params.Skill)
+		result, err = t.executeInfo(params.Skill)
 	case "check":
 		if params.Skill == "" {
-			return "", fmt.Errorf("skill name required for 'check' action")
+			return nil, fmt.Errorf("skill name required for 'check' action")
 		}
-		return t.executeCheck(params.Skill)
+		result, err = t.executeCheck(params.Skill)
 	default:
-		return "", fmt.Errorf("unknown action: %s (valid: list, info, check)", params.Action)
+		return nil, fmt.Errorf("unknown action: %s (valid: list, info, check)", params.Action)
 	}
+
+	if err != nil {
+		return nil, err
+	}
+	return types.TextResult(result), nil
 }
 
 func (t *Tool) executeList(filter string, verbose bool) (string, error) {

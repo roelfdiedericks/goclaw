@@ -23,8 +23,8 @@ type Tool interface {
 	// Schema returns the JSON Schema for the tool's input parameters
 	Schema() map[string]any
 
-	// Execute runs the tool with the given input
-	Execute(ctx context.Context, input json.RawMessage) (string, error)
+	// Execute runs the tool with the given input and returns a structured result
+	Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error)
 }
 
 // ToDefinition converts a Tool to the API format

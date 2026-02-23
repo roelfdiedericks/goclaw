@@ -12,7 +12,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/roelfdiedericks/goclaw/internal/session"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
@@ -442,7 +442,7 @@ func (c *HTTPChannel) GetSessionsInfo() []SessionInfo {
 }
 
 // RunAgentRequest runs an agent request and streams events to the session
-func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *user.User, message string, images []session.ImageAttachment) error {
+func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *user.User, message string, contentBlocks []types.ContentBlock) error {
 	if c.gateway == nil {
 		return fmt.Errorf("gateway not configured")
 	}
@@ -458,7 +458,7 @@ func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *
 		User:           u,
 		Source:         "http",
 		UserMsg:        message,
-		Images:         images,
+		ContentBlocks:  contentBlocks,
 		EnableThinking: sess.ShowThinking,  // Extended thinking based on session preference
 		ThinkingLevel:  sess.ThinkingLevel, // Thinking intensity level
 	}

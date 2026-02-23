@@ -16,13 +16,14 @@ import (
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
-	"github.com/roelfdiedericks/goclaw/internal/channels/types"
+	chtypes "github.com/roelfdiedericks/goclaw/internal/channels/types"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/session"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
@@ -402,8 +403,9 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		"dimensions", fmt.Sprintf("%dx%d", imageData.Width, imageData.Height),
 	)
 
-	// Create image attachment
-	imageAttachment := session.ImageAttachment{
+	// Create image content block
+	imageBlock := types.ContentBlock{
+		Type:     "image",
 		Data:     imageData.Base64(),
 		MimeType: imageData.MimeType,
 		Source:   "telegram",
@@ -425,7 +427,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		ChatID:         fmt.Sprintf("%d", chatID),
 		IsGroup:        isGroup,
 		UserMsg:        caption,
-		Images:         []session.ImageAttachment{imageAttachment},
+		ContentBlocks:  []types.ContentBlock{imageBlock},
 		EnableThinking: prefs.ShowThinking,  // Extended thinking based on chat preference
 		ThinkingLevel:  prefs.ThinkingLevel, // Thinking intensity level
 		OnMediaToSend: func(path, caption string) error {
@@ -507,9 +509,11 @@ func (b *Bot) handleVoice(c tele.Context) error {
 
 	logging.L_debug("telegram: voice downloaded", "size", len(voiceData))
 
-	// Create audio attachment
-	audioAttachment := session.AudioAttachment{
-		Data:     voiceData,
+	// Create audio content block
+	// Note: For now, we store the raw data. The gateway will handle conversion.
+	audioBlock := types.ContentBlock{
+		Type:     "audio",
+		Data:     string(voiceData), // Raw bytes as string for now - will be base64 encoded by gateway
 		MimeType: voice.MIME,
 		Duration: voice.Duration,
 		Source:   "telegram",
@@ -524,14 +528,14 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	// Get chat preferences for thinking level
 	prefs := b.getChatPrefs(chatID, u)
 
-	// Create agent request with audio attachment
+	// Create agent request with audio content block
 	req := gateway.AgentRequest{
 		User:           u,
 		Source:         "telegram",
 		ChatID:         fmt.Sprintf("%d", chatID),
 		IsGroup:        isGroup,
 		UserMsg:        caption,
-		Audio:          []session.AudioAttachment{audioAttachment},
+		ContentBlocks:  []types.ContentBlock{audioBlock},
 		EnableThinking: prefs.ShowThinking,
 		ThinkingLevel:  prefs.ThinkingLevel,
 		OnMediaToSend: func(path, caption string) error {
@@ -907,7 +911,7 @@ func (b *Bot) Reload(cfg any) error {
 }
 
 // Status returns current channel status (implements ManagedChannel)
-func (b *Bot) Status() types.ChannelStatus {
+func (b *Bot) Status() chtypes.ChannelStatus {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
@@ -916,7 +920,7 @@ func (b *Bot) Status() types.ChannelStatus {
 		info = "@" + b.bot.Me.Username
 	}
 
-	return types.ChannelStatus{
+	return chtypes.ChannelStatus{
 		Running:   b.running,
 		Connected: b.running, // If running, we're connected (bot.Start succeeded)
 		Error:     b.lastError,

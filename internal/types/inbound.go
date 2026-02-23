@@ -21,8 +21,8 @@ type InboundMessage struct {
 	Source string // "telegram", "http", "tui", "cron", "hass", "system", "guidance"
 
 	// === Content ===
-	Text   string            // Message text (empty = use existing session)
-	Images []ImageAttachment // Attached images (multimodal)
+	Text          string         // Message text (empty = use existing session)
+	ContentBlocks []ContentBlock // Attached media (images, audio, etc.)
 
 	// === Routing ===
 	ReplyTo string            // Channel-specific reply target (chat_id, conn_id)
@@ -67,9 +67,9 @@ func (m *InboundMessage) WithSessionKey(key string) *InboundMessage {
 	return m
 }
 
-// WithImages attaches images to the message.
-func (m *InboundMessage) WithImages(images []ImageAttachment) *InboundMessage {
-	m.Images = images
+// WithContentBlocks attaches content blocks (images, audio, etc.) to the message.
+func (m *InboundMessage) WithContentBlocks(blocks []ContentBlock) *InboundMessage {
+	m.ContentBlocks = blocks
 	return m
 }
 

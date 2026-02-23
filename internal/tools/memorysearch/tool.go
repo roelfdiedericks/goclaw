@@ -7,6 +7,7 @@ import (
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
 // Tool searches memory files semantically
@@ -60,14 +61,14 @@ type memorySearchOutput struct {
 	Error    string                `json:"error,omitempty"`
 }
 
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params memorySearchInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	if params.Query == "" {
-		return "", fmt.Errorf("query is required")
+		return nil, fmt.Errorf("query is required")
 	}
 
 	L_debug("memory_search: executing", "query", truncate(params.Query, 50), "maxResults", params.MaxResults)
@@ -110,10 +111,10 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-func marshalOutput(v any) (string, error) {
+func marshalOutput(v any) (*types.ToolResult, error) {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return string(b), nil
+	return types.TextResult(string(b)), nil
 }

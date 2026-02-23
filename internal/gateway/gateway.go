@@ -1042,16 +1042,9 @@ func (g *Gateway) ProcessMessage(ctx context.Context, msg *types.InboundMessage,
 		SkipMirror:     msg.SkipMirror,
 	}
 
-	// Add images if present (types.ImageAttachment and session.ImageAttachment are the same type)
-	if len(msg.Images) > 0 {
-		req.Images = make([]session.ImageAttachment, len(msg.Images))
-		for i, img := range msg.Images {
-			req.Images[i] = session.ImageAttachment{
-				Data:     img.Data,
-				MimeType: img.MimeType,
-				Source:   img.Source,
-			}
-		}
+	// Add content blocks if present
+	if len(msg.ContentBlocks) > 0 {
+		req.ContentBlocks = msg.ContentBlocks
 	}
 
 	var finalText string
@@ -1362,13 +1355,11 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		messageCountBefore = sess.MessageCount()
 	}
 
-	// Add user message with images/audio if any (skip if already added by supervision)
+	// Add user message with content blocks if any (skip if already added by supervision)
 	if !req.SkipAddMessage {
 		L_debug("RunAgent: adding user message", "session", sessionKey, "source", req.Source, "msgLen", len(req.UserMsg))
-		if len(req.Images) > 0 {
-			sess.AddUserMessageWithImages(req.UserMsg, req.Source, req.Images)
-		} else if len(req.Audio) > 0 {
-			sess.AddUserMessageWithAudio(req.UserMsg, req.Source, req.Audio)
+		if len(req.ContentBlocks) > 0 {
+			sess.AddUserMessageWithContent(req.UserMsg, req.Source, req.ContentBlocks)
 		} else {
 			sess.AddUserMessage(req.UserMsg, req.Source)
 		}
@@ -1746,52 +1737,55 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				transcriptScope = resolvedRole.GetTranscriptScope()
 			}
 			toolCtx := tools.WithSessionContext(ctx, &tools.SessionContext{
-				Channel:         req.Source,
-				ChatID:          req.ChatID,
-				OwnerChatID:     ownerChatID,
-				User:            req.User,
-				TranscriptScope: transcriptScope,
-				Session:         sess,
-			})
-			result, err := g.tools.Execute(toolCtx, response.ToolName, response.ToolInput)
-			toolDuration := time.Since(toolStartTime)
+			Channel:         req.Source,
+			ChatID:          req.ChatID,
+			OwnerChatID:     ownerChatID,
+			User:            req.User,
+			TranscriptScope: transcriptScope,
+			Session:         sess,
+		})
+		toolResult, err := g.tools.Execute(toolCtx, response.ToolName, response.ToolInput)
+		toolDuration := time.Since(toolStartTime)
 
-			errStr := ""
-			if err != nil {
-				errStr = err.Error()
-				result = fmt.Sprintf("Error: %s", err.Error())
-			}
+		errStr := ""
+		if err != nil {
+			errStr = err.Error()
+			toolResult = types.ErrorResult(err.Error())
+		}
 
-			// Check for media in tool output
-			if req.OnMediaToSend != nil {
-				parseResult := media.SplitMediaFromOutput(result)
-				result = parseResult.Text
-				for _, mediaPath := range parseResult.MediaURLs {
-					if mediaErr := req.OnMediaToSend(mediaPath, ""); mediaErr != nil {
-						L_warn("failed to send media", "path", mediaPath, "error", mediaErr)
-					}
+		// Get text content for downstream processing
+		resultText := toolResult.GetText()
+
+		// Check for media in tool output
+		if req.OnMediaToSend != nil {
+			parseResult := media.SplitMediaFromOutput(resultText)
+			resultText = parseResult.Text
+			for _, mediaPath := range parseResult.MediaURLs {
+				if mediaErr := req.OnMediaToSend(mediaPath, ""); mediaErr != nil {
+					L_warn("failed to send media", "path", mediaPath, "error", mediaErr)
 				}
 			}
-
-			sendEvent(EventToolEnd{
-				RunID:      runID,
-				ToolName:   response.ToolName,
-				ToolID:     response.ToolUseID,
-				Result:     result,
-				Error:      errStr,
-				DurationMs: toolDuration.Milliseconds(),
-			})
-
-			// Add to session and continue loop
-			sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
-			sess.AddToolResult(response.ToolUseID, result)
-			// Persist tool use and result to SQLite (skip for heartbeat - ephemeral)
-			if !req.IsHeartbeat {
-				g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
-				g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, errStr, "", "", "")
-			}
-			continue
 		}
+
+		sendEvent(EventToolEnd{
+			RunID:      runID,
+			ToolName:   response.ToolName,
+			ToolID:     response.ToolUseID,
+			Result:     resultText,
+			Error:      errStr,
+			DurationMs: toolDuration.Milliseconds(),
+		})
+
+		// Add to session and continue loop
+		sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
+		sess.AddToolResult(response.ToolUseID, resultText)
+		// Persist tool use and result to SQLite (skip for heartbeat - ephemeral)
+		if !req.IsHeartbeat {
+			g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
+			g.persistMessage(ctx, sessionKey, "tool_result", resultText, req.Source, response.ToolUseID, "", nil, errStr, "", "", "")
+		}
+		continue
+	}
 
 		// No tool use - we're done
 		finalText = response.Text

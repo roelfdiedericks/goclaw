@@ -95,20 +95,20 @@ func (t *Tool) Schema() map[string]any {
 	}
 }
 
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params AuthInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	if len(params.Credentials) == 0 {
-		return t.formatResult(false, "", "No credentials provided. Ask the user for their identifying information."), nil
+		return types.TextResult(t.formatResult(false, "", "No credentials provided. Ask the user for their identifying information.")), nil
 	}
 
 	// Check rate limit
 	if blocked, msg := t.checkRateLimit(); blocked {
 		L_warn("user_auth: rate limited", "credentials", params.Credentials)
-		return t.formatResult(false, "", msg), nil
+		return types.TextResult(t.formatResult(false, "", msg)), nil
 	}
 
 	// Record attempt
@@ -118,43 +118,43 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	sessionCtx := types.GetSessionContext(ctx)
 	if sessionCtx == nil {
 		L_error("user_auth: no session context")
-		return "", fmt.Errorf("user_auth requires session context")
+		return nil, fmt.Errorf("user_auth requires session context")
 	}
 
 	// Run auth script
 	result, err := t.runScript(ctx, params.Credentials)
 	if err != nil {
 		L_error("user_auth: script error", "error", err)
-		return t.formatResult(false, "", fmt.Sprintf("Authentication failed: %v", err)), nil
+		return types.TextResult(t.formatResult(false, "", fmt.Sprintf("Authentication failed: %v", err))), nil
 	}
 
 	// Handle failure
 	if !result.Success {
 		L_info("user_auth: authentication failed", "message", result.Message)
-		return t.formatResult(false, "", result.Message), nil
+		return types.TextResult(t.formatResult(false, "", result.Message)), nil
 	}
 
 	// Validate result
 	if result.User == nil {
-		return t.formatResult(false, "", "Authentication script returned success but no user info."), nil
+		return types.TextResult(t.formatResult(false, "", "Authentication script returned success but no user info.")), nil
 	}
 
 	// Security: Cannot elevate to owner
 	if strings.ToLower(result.User.Role) == "owner" {
 		L_warn("user_auth: attempted elevation to owner blocked", "user", result.User.Username)
-		return t.formatResult(false, "", "Cannot elevate to owner role."), nil
+		return types.TextResult(t.formatResult(false, "", "Cannot elevate to owner role.")), nil
 	}
 
 	// Security: Role must be in allowedRoles
 	if len(t.config.AllowedRoles) > 0 && !slices.Contains(t.config.AllowedRoles, result.User.Role) {
 		L_warn("user_auth: role not in allowedRoles", "role", result.User.Role, "allowed", t.config.AllowedRoles)
-		return t.formatResult(false, "", fmt.Sprintf("Role '%s' is not permitted for elevation.", result.User.Role)), nil
+		return types.TextResult(t.formatResult(false, "", fmt.Sprintf("Role '%s' is not permitted for elevation.", result.User.Role))), nil
 	}
 
 	// Security: Role must exist in roles config (unless empty = no roles defined = fail)
 	if _, ok := t.rolesConfig[result.User.Role]; !ok {
 		L_warn("user_auth: role not defined in config", "role", result.User.Role)
-		return t.formatResult(false, "", fmt.Sprintf("Role '%s' is not defined in configuration.", result.User.Role)), nil
+		return types.TextResult(t.formatResult(false, "", fmt.Sprintf("Role '%s' is not defined in configuration.", result.User.Role))), nil
 	}
 
 	// Elevate the session
@@ -170,7 +170,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 		L_warn("user_auth: no session in context, elevation not applied")
 	}
 
-	return t.formatSuccessResult(result), nil
+	return types.TextResult(t.formatSuccessResult(result)), nil
 }
 
 // runScript executes the auth script with credentials.

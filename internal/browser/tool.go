@@ -16,6 +16,7 @@ import (
 	"github.com/go-shiori/go-readability"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
 // Tool provides comprehensive browser automation
@@ -189,7 +190,7 @@ func (t *Tool) Schema() map[string]interface{} {
 }
 
 // Execute runs the browser action
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params struct {
 		Action       string `json:"action"`
 		URL          string `json:"url"`
@@ -213,11 +214,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	}
 
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	if params.Action == "" {
-		return "", fmt.Errorf("action is required")
+		return nil, fmt.Errorf("action is required")
 	}
 
 	if params.MaxLength <= 0 {
@@ -260,14 +261,17 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 
 	// Execute action and potentially append profile note
 	result, err := t.executeAction(ctx, sessionID, params)
+	if err != nil {
+		return nil, err
+	}
 
 	// If we ignored a profile request, append helpful note to successful results
-	if err == nil && ignoredProfile != "" {
+	if ignoredProfile != "" {
 		profileNote := fmt.Sprintf("\n\n---\nNote: Requested profile '%s' was ignored. GoClaw uses config-driven profile selection based on URL domain. To allow explicit profiles, set allowAgentProfiles: true in goclaw.json. If authentication fails, run: goclaw browser setup <profile>", ignoredProfile)
 		result = result + profileNote
 	}
 
-	return result, err
+	return types.TextResult(result), nil
 }
 
 // executeAction dispatches to the appropriate action handler

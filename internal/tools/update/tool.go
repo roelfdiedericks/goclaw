@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 	updatepkg "github.com/roelfdiedericks/goclaw/internal/update"
 )
 
@@ -61,10 +62,10 @@ type updateInput struct {
 	Force   bool   `json:"force"`
 }
 
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params updateInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	// Default channel
@@ -83,10 +84,10 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	if updatepkg.IsSystemManaged() {
 		exePath, _ := updatepkg.GetExecutablePath()
 		L_info("goclaw_update: system-managed installation, self-update disabled", "path", exePath)
-		return fmt.Sprintf("GoClaw is installed at a system-managed location (%s).\n\n"+
+		return types.TextResult(fmt.Sprintf("GoClaw is installed at a system-managed location (%s).\n\n"+
 			"Self-update is disabled to prevent conflicts with the package manager.\n\n"+
 			"To update, use the system package manager or download the latest .deb from:\n"+
-			"https://github.com/roelfdiedericks/goclaw/releases/latest", exePath), nil
+			"https://github.com/roelfdiedericks/goclaw/releases/latest", exePath)), nil
 	}
 
 	updater := updatepkg.NewUpdater(t.currentVersion)
@@ -95,7 +96,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	info, err := updater.CheckForUpdate(params.Channel)
 	if err != nil {
 		L_error("goclaw_update: check failed", "error", err)
-		return "", fmt.Errorf("failed to check for updates: %w", err)
+		return nil, fmt.Errorf("failed to check for updates: %w", err)
 	}
 
 	var result strings.Builder
@@ -109,7 +110,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 			"latest", info.NewVersion,
 		)
 		result.WriteString("\nGoClaw is already up to date.")
-		return result.String(), nil
+		return types.TextResult(result.String()), nil
 	}
 
 	if info.IsNewer {
@@ -139,7 +140,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	if params.Action == "check" {
 		L_debug("goclaw_update: check-only mode, not installing")
 		result.WriteString("\nTo install this update, call goclaw_update with action='update'.")
-		return result.String(), nil
+		return types.TextResult(result.String()), nil
 	}
 
 	// Action is "update" - proceed with download and install
@@ -149,7 +150,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	binaryPath, err := updater.Download(info, nil)
 	if err != nil {
 		L_error("goclaw_update: download failed", "error", err)
-		return "", fmt.Errorf("download failed: %w", err)
+		return nil, fmt.Errorf("download failed: %w", err)
 	}
 
 	result.WriteString("Download complete. Checksum verified.\n")
@@ -161,10 +162,10 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	// Note: This will replace the current process, so we won't return
 	if err := updater.Apply(binaryPath, false); err != nil {
 		L_error("goclaw_update: apply failed", "error", err)
-		return "", fmt.Errorf("failed to apply update: %w", err)
+		return nil, fmt.Errorf("failed to apply update: %w", err)
 	}
 
 	// This line is reached only if noRestart was true (which it's not in this case)
 	result.WriteString("Update installed! GoClaw will restart.\n")
-	return result.String(), nil
+	return types.TextResult(result.String()), nil
 }

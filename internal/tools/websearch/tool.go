@@ -11,6 +11,7 @@ import (
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
 // Tool searches the web using Brave Search API
@@ -52,22 +53,22 @@ func (t *Tool) Schema() map[string]interface{} {
 	}
 }
 
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params struct {
 		Query string `json:"query"`
 		Count int    `json:"count"`
 	}
 
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	if params.Query == "" {
-		return "", fmt.Errorf("query is required")
+		return nil, fmt.Errorf("query is required")
 	}
 
 	if t.apiKey == "" {
-		return "", fmt.Errorf("Brave API key not configured")
+		return nil, fmt.Errorf("Brave API key not configured")
 	}
 
 	count := params.Count
@@ -91,7 +92,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	// Create request
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL.String(), nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Accept", "application/json")
@@ -102,24 +103,24 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	resp, err := t.client.Do(req)
 	if err != nil {
 		L_error("web_search: request failed", "error", err)
-		return "", fmt.Errorf("search request failed: %w", err)
+		return nil, fmt.Errorf("search request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		L_error("web_search: API error", "status", resp.StatusCode, "body", string(body))
-		return "", fmt.Errorf("search API error: %s", resp.Status)
+		return nil, fmt.Errorf("search API error: %s", resp.Status)
 	}
 
 	// Parse response
 	var searchResp BraveSearchResponse
 	if err := json.Unmarshal(body, &searchResp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
+		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
 	// Format results
@@ -135,11 +136,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	}
 
 	if len(results) == 0 {
-		return "No results found.", nil
+		return types.TextResult("No results found."), nil
 	}
 
 	L_debug("web_search: completed", "results", len(results))
-	return strings.Join(results, "\n\n"), nil
+	return types.TextResult(strings.Join(results, "\n\n")), nil
 }
 
 // BraveSearchResponse represents the Brave Search API response

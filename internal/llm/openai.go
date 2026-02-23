@@ -1289,13 +1289,12 @@ func convertToOpenAIMessages(messages []types.Message) ([]openai.ChatCompletionM
 				pendingReasoning = ""
 			}
 
-			// Handle images
-			if len(msg.Images) > 0 {
-				var parts []openai.ChatMessagePart
-				// Add images first
-				for _, img := range msg.Images {
-					dataURL := fmt.Sprintf("data:%s;base64,%s", img.MimeType, img.Data)
-					parts = append(parts, openai.ChatMessagePart{
+			// Handle images from ContentBlocks (already resolved by gateway)
+			var imageParts []openai.ChatMessagePart
+			for _, block := range msg.ContentBlocks {
+				if block.Type == "image" && block.Data != "" {
+					dataURL := fmt.Sprintf("data:%s;base64,%s", block.MimeType, block.Data)
+					imageParts = append(imageParts, openai.ChatMessagePart{
 						Type: openai.ChatMessagePartTypeImageURL,
 						ImageURL: &openai.ChatMessageImageURL{
 							URL:    dataURL,
@@ -1303,16 +1302,18 @@ func convertToOpenAIMessages(messages []types.Message) ([]openai.ChatCompletionM
 						},
 					})
 				}
+			}
+			if len(imageParts) > 0 {
 				// Add text if present
 				if msg.Content != "" {
-					parts = append(parts, openai.ChatMessagePart{
+					imageParts = append(imageParts, openai.ChatMessagePart{
 						Type: openai.ChatMessagePartTypeText,
 						Text: msg.Content,
 					})
 				}
 				result = append(result, openai.ChatCompletionMessage{
 					Role:         openai.ChatMessageRoleUser,
-					MultiContent: parts,
+					MultiContent: imageParts,
 				})
 			} else if msg.Content != "" {
 				result = append(result, openai.ChatCompletionMessage{

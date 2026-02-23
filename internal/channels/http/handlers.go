@@ -16,7 +16,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/metrics"
-	"github.com/roelfdiedericks/goclaw/internal/session"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
 // handleIndex serves the dashboard page
@@ -173,17 +173,18 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Convert images to ImageAttachments
-	var images []session.ImageAttachment
+	// Convert images to ContentBlocks
+	var contentBlocks []types.ContentBlock
 	for _, img := range req.Images {
-		images = append(images, session.ImageAttachment{
+		contentBlocks = append(contentBlocks, types.ContentBlock{
+			Type:     "image",
 			Data:     img.Data,
 			MimeType: img.MimeType,
 			Source:   "http",
 		})
 	}
 
-	logging.L_info("http: message received", "user", u.ID, "session", sessionID[:8]+"...", "length", len(req.Message), "images", len(images))
+	logging.L_info("http: message received", "user", u.ID, "session", sessionID[:8]+"...", "length", len(req.Message), "images", len(contentBlocks))
 
 	// Handle /thinking command locally (channel-specific preference)
 	if strings.HasPrefix(strings.TrimSpace(req.Message), "/thinking") {
@@ -205,7 +206,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	// Run agent request (will stream via SSE)
 	msgID := fmt.Sprintf("msg_%d", time.Now().UnixNano())
-	err := s.channel.RunAgentRequest(r.Context(), sessionID, u, req.Message, images)
+	err := s.channel.RunAgentRequest(r.Context(), sessionID, u, req.Message, contentBlocks)
 	if err != nil {
 		logging.L_error("http: failed to run agent", "user", u.ID, "error", err)
 		http.Error(w, fmt.Sprintf("Failed to process: %v", err), http.StatusInternalServerError)

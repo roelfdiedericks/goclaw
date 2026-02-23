@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
 // Registry holds all registered tools
@@ -46,13 +48,13 @@ func (r *Registry) Has(name string) bool {
 }
 
 // Execute runs a tool by name with the given input
-func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessage) (string, error) {
+func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessage) (*types.ToolResult, error) {
 	r.mu.RLock()
 	tool, ok := r.tools[name]
 	r.mu.RUnlock()
 
 	if !ok {
-		return "", fmt.Errorf("unknown tool: %s", name)
+		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
 
 	return tool.Execute(ctx, input)

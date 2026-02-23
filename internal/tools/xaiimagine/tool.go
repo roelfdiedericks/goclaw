@@ -12,6 +12,7 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	toolsconfig "github.com/roelfdiedericks/goclaw/internal/tools/config"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 	"github.com/roelfdiedericks/xai-go"
 )
 
@@ -169,14 +170,14 @@ func parseResolution(res string) *xai.ImageResolution {
 	}
 }
 
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params xaiImagineInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	if params.Prompt == "" {
-		return "", fmt.Errorf("prompt is required")
+		return nil, fmt.Errorf("prompt is required")
 	}
 
 	// Build request
@@ -230,15 +231,18 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	// Execute request
 	resp, err := t.client.GenerateImage(ctx, req)
 	if err != nil {
-		return "", fmt.Errorf("image generation failed: %w", err)
+		return nil, fmt.Errorf("image generation failed: %w", err)
 	}
 
 	if len(resp.Images) == 0 {
-		return "", fmt.Errorf("no images generated")
+		return nil, fmt.Errorf("no images generated")
 	}
 
-	// Process results
-	var results []string
+	// Process results - build content blocks
+	var blocks []types.ContentBlock
+	var savedCount int
+	var textResults []string
+
 	for i, img := range resp.Images {
 		if img.URL == "" {
 			continue
@@ -246,68 +250,81 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 
 		// Download and save to media store if enabled
 		if saveToMedia && t.mediaStore != nil {
-			localPath, err := t.downloadAndSave(ctx, img.URL, i)
+			absPath, relPath, mimeType, err := t.downloadAndSave(ctx, img.URL, i)
 			if err != nil {
 				L_warn("xai_imagine: failed to save image", "error", err)
-				results = append(results, fmt.Sprintf("Image %d: %s", i+1, img.URL))
+				textResults = append(textResults, fmt.Sprintf("Image %d: %s (save failed: %v)", i+1, img.URL, err))
 			} else {
-				// Use MEDIA: prefix for automatic delivery
-				results = append(results, fmt.Sprintf("MEDIA:%s", localPath))
+				// Add image block so agent can "see" the generated image
+				blocks = append(blocks, types.ImageBlock(absPath, mimeType, "xai_imagine"))
+				// Also track for MEDIA: delivery to user
+				textResults = append(textResults, fmt.Sprintf("MEDIA:%s", relPath))
+				savedCount++
 			}
 		} else {
-			results = append(results, fmt.Sprintf("Image %d: %s", i+1, img.URL))
+			textResults = append(textResults, fmt.Sprintf("Image %d: %s", i+1, img.URL))
 		}
 	}
 
 	L_info("xai_imagine: generated",
 		"count", len(resp.Images),
-		"saved", saveToMedia,
+		"saved", savedCount,
 	)
 
-	// Build output with summary line
-	summary := fmt.Sprintf("Generated %d image(s):", len(results))
-	output := summary + "\n" + strings.Join(results, "\n")
-	return output, nil
+	// Build summary text block
+	summary := fmt.Sprintf("Generated %d image(s):", len(textResults))
+	if len(textResults) > 0 {
+		summary += "\n" + strings.Join(textResults, "\n")
+	}
+
+	// Prepend text summary, then image blocks
+	result := &types.ToolResult{
+		Content: append([]types.ContentBlock{types.TextBlock(summary)}, blocks...),
+	}
+	return result, nil
 }
 
-// downloadAndSave downloads an image URL and saves it to the media store
-func (t *Tool) downloadAndSave(ctx context.Context, url string, index int) (string, error) {
+// downloadAndSave downloads an image URL and saves it to the media store.
+// Returns absolute path, relative path, and MIME type.
+func (t *Tool) downloadAndSave(ctx context.Context, url string, index int) (absPath, relPath, mimeType string, err error) {
 	// Create HTTP request with context
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download failed: %s", resp.Status)
+		return "", "", "", fmt.Errorf("download failed: %s", resp.Status)
 	}
 
 	// Read body
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
 
 	// Detect content type and extension
 	contentType := resp.Header.Get("Content-Type")
 	ext := ".png"
+	mimeType = "image/png"
 	if strings.Contains(contentType, "jpeg") || strings.Contains(contentType, "jpg") {
 		ext = ".jpg"
+		mimeType = "image/jpeg"
 	} else if strings.Contains(contentType, "webp") {
 		ext = ".webp"
+		mimeType = "image/webp"
 	}
 
 	// Save to media store using Save(data, subdir, ext)
-	// Returns (absPath, relPath, error) - we return relPath for MEDIA: prefix
-	_, relPath, err := t.mediaStore.Save(data, "generated", ext)
+	absPath, relPath, err = t.mediaStore.Save(data, "generated", ext)
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
-	return relPath, nil
+	return absPath, relPath, mimeType, nil
 }

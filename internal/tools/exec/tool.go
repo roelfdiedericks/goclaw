@@ -77,10 +77,10 @@ type execInput struct {
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 }
 
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params execInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	// Set working directory
@@ -118,7 +118,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	// Run command using shared runner
 	result, err := t.runner.RunFull(execCtx, params.Command, workDir, useSandbox)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// Build formatted result (ExecTool shows both stdout and stderr with headers)
@@ -149,7 +149,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 		output.WriteString("Command completed successfully (no output)")
 	}
 
-	return output.String(), nil
+	return types.TextResult(output.String()), nil
 }
 
 // ToolConfig holds configuration for the exec tool

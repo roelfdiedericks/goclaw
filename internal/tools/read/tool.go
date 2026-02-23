@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
@@ -63,10 +64,10 @@ type readInput struct {
 	EndLine   int    `json:"end_line,omitempty"`
 }
 
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params readInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	// Check if user has sandbox disabled
@@ -78,24 +79,40 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	L_debug("read tool: reading file", "path", params.Path, "startLine", params.StartLine, "endLine", params.EndLine, "sandboxed", sandboxed)
 
 	var content []byte
+	var resolvedPath string
 	var err error
 
 	if sandboxed {
 		// Validate path and read file (sandbox validation)
 		content, err = sandbox.ReadFile(params.Path, t.workingDir, t.workspaceRoot)
+		// Resolve path for image reference
+		resolvedPath = params.Path
+		if !filepath.IsAbs(resolvedPath) {
+			resolvedPath = filepath.Join(t.workingDir, resolvedPath)
+		}
 	} else {
 		// No sandbox: resolve relative paths from workingDir, allow any absolute path
-		resolved := params.Path
-		if !filepath.IsAbs(resolved) {
-			resolved = filepath.Join(t.workingDir, resolved)
+		resolvedPath = params.Path
+		if !filepath.IsAbs(resolvedPath) {
+			resolvedPath = filepath.Join(t.workingDir, resolvedPath)
 		}
-		content, err = os.ReadFile(resolved)
+		content, err = os.ReadFile(resolvedPath)
 	}
 	if err != nil {
 		L_warn("read tool: failed", "path", params.Path, "error", err)
-		return "", err
+		return nil, err
 	}
 
+	// Detect MIME type from content (not extension)
+	mimeType := media.DetectMIME(content)
+
+	// If it's a supported image type, return as image reference
+	if media.IsSupported(mimeType) {
+		L_info("read tool: image detected", "path", params.Path, "mimeType", mimeType, "bytes", len(content))
+		return types.ImageRefResult(resolvedPath, mimeType, params.Path), nil
+	}
+
+	// Otherwise treat as text
 	text := string(content)
 	totalLines := len(strings.Split(text, "\n"))
 
@@ -111,7 +128,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 			end = len(lines)
 		}
 		if start > len(lines) {
-			return "", fmt.Errorf("start_line %d exceeds file length %d", start, len(lines))
+			return nil, fmt.Errorf("start_line %d exceeds file length %d", start, len(lines))
 		}
 		// Convert to 0-indexed
 		text = strings.Join(lines[start-1:end], "\n")
@@ -120,5 +137,5 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 		L_info("read tool: file read", "path", params.Path, "lines", totalLines, "bytes", len(text))
 	}
 
-	return text, nil
+	return types.TextResult(text), nil
 }

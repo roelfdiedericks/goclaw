@@ -111,14 +111,14 @@ type transcriptInput struct {
 	MatchType string `json:"matchType"` // "exact", "semantic", "hybrid" (default)
 }
 
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params transcriptInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	if params.Action == "" {
-		return "", fmt.Errorf("action is required")
+		return nil, fmt.Errorf("action is required")
 	}
 
 	// Get user context for scoping
@@ -146,25 +146,34 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	)
 
 	if t.manager == nil {
-		return marshalOutput(map[string]string{
+		result, _ := marshalOutput(map[string]string{
 			"error": "transcript manager not available",
 		})
+		return types.TextResult(result), nil
 	}
+
+	var result string
+	var err error
 
 	switch params.Action {
 	case "semantic":
-		return t.executeSemantic(ctx, params, userID, isOwner)
+		result, err = t.executeSemantic(ctx, params, userID, isOwner)
 	case "recent":
-		return t.executeRecent(ctx, params, userID, isOwner)
+		result, err = t.executeRecent(ctx, params, userID, isOwner)
 	case "search":
-		return t.executeSearch(ctx, params, userID, isOwner)
+		result, err = t.executeSearch(ctx, params, userID, isOwner)
 	case "gaps":
-		return t.executeGaps(ctx, params, userID, isOwner)
+		result, err = t.executeGaps(ctx, params, userID, isOwner)
 	case "stats":
-		return t.executeStats(ctx)
+		result, err = t.executeStats(ctx)
 	default:
-		return "", fmt.Errorf("unknown action: %s", params.Action)
+		return nil, fmt.Errorf("unknown action: %s", params.Action)
 	}
+
+	if err != nil {
+		return nil, err
+	}
+	return types.TextResult(result), nil
 }
 
 func (t *Tool) executeSemantic(ctx context.Context, params transcriptInput, userID string, isOwner bool) (string, error) {

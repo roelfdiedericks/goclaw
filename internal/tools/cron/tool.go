@@ -9,6 +9,7 @@ import (
 
 	cronpkg "github.com/roelfdiedericks/goclaw/internal/cron"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
 // Tool allows the agent to manage scheduled tasks.
@@ -127,11 +128,11 @@ type cronInput struct {
 	Text          string `json:"text"`
 }
 
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var in cronInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		L_error("cron tool: invalid input", "error", err, "raw", string(input))
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	L_info("cron tool invoked",
@@ -148,7 +149,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	service := cronpkg.GetService()
 	if service == nil {
 		L_warn("cron tool: service not running")
-		return "Cron service is not enabled. Enable it in config with cron.enabled: true", nil
+		return types.TextResult("Cron service is not enabled. Enable it in config with cron.enabled: true"), nil
 	}
 
 	var result string
@@ -179,11 +180,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 
 	if err != nil {
 		L_error("cron tool failed", "action", in.Action, "error", err)
-		return "", err
+		return nil, err
 	}
 
 	L_info("cron tool completed", "action", in.Action, "resultLen", len(result))
-	return result, nil
+	return types.TextResult(result), nil
 }
 
 func truncate(s string, max int) string {

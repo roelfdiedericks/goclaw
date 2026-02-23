@@ -14,6 +14,7 @@ import (
 	"github.com/go-shiori/go-readability"
 	"github.com/roelfdiedericks/goclaw/internal/browser"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
 // Tool fetches and extracts readable content from URLs
@@ -84,28 +85,28 @@ func (t *Tool) Schema() map[string]interface{} {
 	}
 }
 
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params struct {
 		URL       string `json:"url"`
 		MaxLength int    `json:"max_length"`
 	}
 
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	if params.URL == "" {
-		return "", fmt.Errorf("url is required")
+		return nil, fmt.Errorf("url is required")
 	}
 
 	// Validate URL for SSRF safety
 	if err := browser.ValidateURLSafety(params.URL); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	parsedURL, err := url.Parse(params.URL)
 	if err != nil {
-		return "", fmt.Errorf("invalid URL: %w", err)
+		return nil, fmt.Errorf("invalid URL: %w", err)
 	}
 
 	maxLen := params.MaxLength
@@ -116,24 +117,32 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	L_debug("web_fetch: fetching", "url", params.URL, "maxLength", maxLen, "useBrowser", t.useBrowser)
 
 	if t.useBrowser == "never" {
-		return t.fetchWithHTTP(ctx, params.URL, maxLen, parsedURL)
+		content, err := t.fetchWithHTTP(ctx, params.URL, maxLen, parsedURL)
+		if err != nil {
+			return nil, err
+		}
+		return types.TextResult(content), nil
 	}
 
 	mgr := browser.GetManager()
 	if mgr != nil {
 		content, err := t.fetchWithBrowser(ctx, params.URL, maxLen)
 		if err == nil {
-			return content, nil
+			return types.TextResult(content), nil
 		}
 		if t.useBrowser == "always" {
-			return "", err
+			return nil, err
 		}
 		L_warn("web_fetch: browser failed, falling back to HTTP", "url", params.URL, "error", err)
 	} else {
 		L_debug("web_fetch: browser not available, using HTTP", "url", params.URL)
 	}
 
-	return t.fetchWithHTTP(ctx, params.URL, maxLen, parsedURL)
+	content, err := t.fetchWithHTTP(ctx, params.URL, maxLen, parsedURL)
+	if err != nil {
+		return nil, err
+	}
+	return types.TextResult(content), nil
 }
 
 func (t *Tool) fetchWithHTTP(ctx context.Context, urlStr string, maxLen int, parsedURL *url.URL) (string, error) {

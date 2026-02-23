@@ -57,14 +57,14 @@ type writeInput struct {
 	Content string `json:"content"`
 }
 
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params writeInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	if params.Path == "" {
-		return "", fmt.Errorf("path is required")
+		return nil, fmt.Errorf("path is required")
 	}
 
 	// Check if user has sandbox disabled
@@ -88,15 +88,15 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 		// Create parent directories if needed
 		if err := os.MkdirAll(filepath.Dir(resolved), 0750); err != nil {
 			L_error("write tool: failed to create parent dirs", "path", params.Path, "error", err)
-			return "", err
+			return nil, err
 		}
 		err = os.WriteFile(resolved, []byte(params.Content), 0600)
 	}
 	if err != nil {
 		L_error("write tool failed", "path", params.Path, "error", err)
-		return "", err
+		return nil, err
 	}
 
 	L_info("write tool: file written", "path", params.Path, "bytes", len(params.Content))
-	return fmt.Sprintf("Successfully wrote %d bytes to %s", len(params.Content), params.Path), nil
+	return types.TextResult(fmt.Sprintf("Successfully wrote %d bytes to %s", len(params.Content), params.Path)), nil
 }

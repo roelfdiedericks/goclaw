@@ -139,7 +139,7 @@ func (t *Tool) Schema() map[string]interface{} {
 	}
 }
 
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params struct {
 		Action    string        `json:"action"`
 		Channel   string        `json:"channel"`
@@ -153,11 +153,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	}
 
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	if params.Action == "" {
-		return "", fmt.Errorf("action is required")
+		return nil, fmt.Errorf("action is required")
 	}
 
 	// Get session context from context.Context for defaults
@@ -188,15 +188,23 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 			L_debug("message: broadcasting (channel not available)", "requestedChannel", channel)
 			// Content array takes priority
 			if len(params.Content) > 0 {
-				return t.broadcastContentWith(sessionCtx, params.Content, channelsCopy)
+				result, err := t.broadcastContentWith(sessionCtx, params.Content, channelsCopy)
+				if err != nil {
+					return nil, err
+				}
+				return types.TextResult(result), nil
 			}
-			return t.broadcastSendWith(sessionCtx, params.Message, params.FilePath, params.Caption, channelsCopy)
+			result, err := t.broadcastSendWith(sessionCtx, params.Message, params.FilePath, params.Caption, channelsCopy)
+			if err != nil {
+				return nil, err
+			}
+			return types.TextResult(result), nil
 		}
 	}
 
 	// For non-send actions: require valid channel
 	if channel == "" {
-		return "", fmt.Errorf("channel is required (not in active session)")
+		return nil, fmt.Errorf("channel is required (not in active session)")
 	}
 
 	chatID := params.To
@@ -209,13 +217,13 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 		L_debug("message: using owner chat ID fallback", "chatID", chatID)
 	}
 	if chatID == "" && params.Action != "react" {
-		return "", fmt.Errorf("to (chat ID) is required (not in active session)")
+		return nil, fmt.Errorf("to (chat ID) is required (not in active session)")
 	}
 
 	// Get channel implementation from snapshot
 	ch, ok := channelsCopy[channel]
 	if !ok {
-		return "", fmt.Errorf("unknown channel: %s", channel)
+		return nil, fmt.Errorf("unknown channel: %s", channel)
 	}
 
 	L_debug("message: executing",
@@ -226,22 +234,31 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 		"hasContent", len(params.Content) > 0,
 	)
 
+	var result string
+	var err error
+
 	switch params.Action {
 	case "send":
 		// Content array takes priority over message/filePath
 		if len(params.Content) > 0 {
-			return t.sendContent(ch, chatID, params.Content)
+			result, err = t.sendContent(ch, chatID, params.Content)
+		} else {
+			result, err = t.send(ch, chatID, params.Message, params.FilePath, params.Caption)
 		}
-		return t.send(ch, chatID, params.Message, params.FilePath, params.Caption)
 	case "edit":
-		return t.edit(ch, chatID, params.MessageID, params.Message)
+		result, err = t.edit(ch, chatID, params.MessageID, params.Message)
 	case "delete":
-		return t.delete(ch, chatID, params.MessageID)
+		result, err = t.delete(ch, chatID, params.MessageID)
 	case "react":
-		return t.react(ch, chatID, params.MessageID, params.Emoji)
+		result, err = t.react(ch, chatID, params.MessageID, params.Emoji)
 	default:
-		return "", fmt.Errorf("unknown action: %s", params.Action)
+		return nil, fmt.Errorf("unknown action: %s", params.Action)
 	}
+
+	if err != nil {
+		return nil, err
+	}
+	return types.TextResult(result), nil
 }
 
 // broadcastSendWith broadcasts using a provided channels map.

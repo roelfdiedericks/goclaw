@@ -630,11 +630,13 @@ func convertMessages(messages []types.Message) []anthropic.MessageParam {
 				contentBlocks = append(contentBlocks, anthropic.NewTextBlock(msg.Content))
 			}
 
-			// Add image blocks if present
-			for _, img := range msg.Images {
-				imageBlock := anthropic.NewImageBlockBase64(img.MimeType, img.Data)
-				contentBlocks = append(contentBlocks, imageBlock)
-				L_trace("added image block to message", "mimeType", img.MimeType, "source", img.Source)
+			// Add image blocks from ContentBlocks (already resolved by gateway)
+			for _, block := range msg.ContentBlocks {
+				if block.Type == "image" && block.Data != "" {
+					imageBlock := anthropic.NewImageBlockBase64(block.MimeType, block.Data)
+					contentBlocks = append(contentBlocks, imageBlock)
+					L_trace("added image block to message", "mimeType", block.MimeType, "source", block.Source)
+				}
 			}
 
 			result = append(result, anthropic.NewUserMessage(contentBlocks...))

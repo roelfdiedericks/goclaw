@@ -80,14 +80,14 @@ type jqInput struct {
 	Compact bool   `json:"compact,omitempty"`
 }
 
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params jqInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	if params.Query == "" {
-		return "", errors.New("query is required")
+		return nil, errors.New("query is required")
 	}
 
 	// Count how many input sources specified
@@ -103,10 +103,10 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	}
 
 	if sources > 1 {
-		return "", errors.New("cannot specify multiple input sources (file, input, exec)")
+		return nil, errors.New("cannot specify multiple input sources (file, input, exec)")
 	}
 	if sources == 0 {
-		return "", errors.New("must specify one of: 'file', 'input', or 'exec'")
+		return nil, errors.New("must specify one of: 'file', 'input', or 'exec'")
 	}
 
 	// Check if user has sandbox disabled
@@ -122,7 +122,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	if params.File != "" {
 		data, err = t.readFile(params.File, sandboxed)
 		if err != nil {
-			return "", fmt.Errorf("failed to read file: %w", err)
+			return nil, fmt.Errorf("failed to read file: %w", err)
 		}
 		L_debug("jq tool: read file", "file", params.File, "bytes", len(data), "sandboxed", sandboxed)
 	} else if params.Input != "" {
@@ -133,9 +133,9 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 		if err != nil {
 			var execErr *exec.Error
 			if errors.As(err, &execErr) {
-				return "", fmt.Errorf("command exited with code %d", execErr.ExitCode)
+				return nil, fmt.Errorf("command exited with code %d", execErr.ExitCode)
 			}
-			return "", fmt.Errorf("exec failed: %w", err)
+			return nil, fmt.Errorf("exec failed: %w", err)
 		}
 		L_debug("jq tool: exec completed", "bytes", len(data))
 	}
@@ -143,11 +143,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	// Execute jq query
 	result, err := executeJQ(params.Query, data, params.Raw, params.Compact)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	L_debug("jq tool: query completed", "query", truncate(params.Query, 50), "resultLen", len(result))
-	return result, nil
+	return types.TextResult(result), nil
 }
 
 // readFile reads a JSON file, respecting sandbox settings

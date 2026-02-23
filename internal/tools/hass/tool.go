@@ -14,6 +14,7 @@ import (
 	hasspkg "github.com/roelfdiedericks/goclaw/internal/hass"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
 // Tool implements the Home Assistant tool for the agent.
@@ -225,15 +226,16 @@ func (t *Tool) Schema() map[string]any {
 }
 
 // Execute runs the tool with the given input.
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var in hassInput
 	if err := json.Unmarshal(input, &in); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	L_debug("hass: executing", "action", in.Action, "entity", in.Entity)
 
 	var result json.RawMessage
+	var strResult string
 	var err error
 
 	switch in.Action {
@@ -244,7 +246,17 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	case "call":
 		result, err = t.callService(ctx, in)
 	case "camera":
-		return t.getCamera(ctx, in)
+		absPath, mimeType, cameraErr := t.getCamera(ctx, in)
+		if cameraErr != nil {
+			// Return error as tool result (not Go error) so agent sees it
+			if hassErr, ok := cameraErr.(*Error); ok {
+				strResult, _ = t.errorResult(hassErr.Status, hassErr.Message)
+			} else {
+				strResult, _ = t.errorResult("error", cameraErr.Error())
+			}
+			return types.TextResult(strResult), nil
+		}
+		return types.ImageRefResult(absPath, mimeType, in.Entity), nil
 	case "services":
 		result, err = t.getServices(ctx, in)
 	case "history":
@@ -256,28 +268,51 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	case "entities":
 		result, err = t.listEntities(ctx, in)
 	case "subscribe":
-		return t.subscribe(ctx, in)
+		strResult, err = t.subscribe(ctx, in)
+		if err != nil {
+			return nil, err
+		}
+		return types.TextResult(strResult), nil
 	case "unsubscribe":
-		return t.unsubscribe(ctx, in)
+		strResult, err = t.unsubscribe(ctx, in)
+		if err != nil {
+			return nil, err
+		}
+		return types.TextResult(strResult), nil
 	case "enable":
-		return t.enableSubscription(ctx, in)
+		strResult, err = t.enableSubscription(ctx, in)
+		if err != nil {
+			return nil, err
+		}
+		return types.TextResult(strResult), nil
 	case "disable":
-		return t.disableSubscription(ctx, in)
+		strResult, err = t.disableSubscription(ctx, in)
+		if err != nil {
+			return nil, err
+		}
+		return types.TextResult(strResult), nil
 	case "subscriptions":
-		return t.listSubscriptions(ctx)
+		strResult, err = t.listSubscriptions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return types.TextResult(strResult), nil
 	default:
-		return t.errorResult("invalid action", fmt.Sprintf("unknown action: %s", in.Action))
+		strResult, _ = t.errorResult("invalid action", fmt.Sprintf("unknown action: %s", in.Action))
+		return types.TextResult(strResult), nil
 	}
 
 	if err != nil {
 		// Check if it's a HASS error
 		if hassErr, ok := err.(*Error); ok {
-			return t.errorResult(hassErr.Status, hassErr.Message)
+			strResult, _ = t.errorResult(hassErr.Status, hassErr.Message)
+			return types.TextResult(strResult), nil
 		}
-		return t.errorResult("error", err.Error())
+		strResult, _ = t.errorResult("error", err.Error())
+		return types.TextResult(strResult), nil
 	}
 
-	return string(result), nil
+	return types.TextResult(string(result)), nil
 }
 
 // getState retrieves a single entity state.
@@ -415,29 +450,29 @@ func (t *Tool) callService(ctx context.Context, in hassInput) (json.RawMessage, 
 }
 
 // getCamera captures a camera snapshot and saves it to media storage.
-func (t *Tool) getCamera(ctx context.Context, in hassInput) (string, error) {
+// Returns the absolute path and MIME type for image reference.
+func (t *Tool) getCamera(ctx context.Context, in hassInput) (absPath, mimeType string, err error) {
 	if in.Entity == "" {
-		return t.errorResult("error", "entity is required for camera action")
+		return "", "", fmt.Errorf("entity is required for camera action")
 	}
 
 	if t.mediaStore == nil {
-		return t.errorResult("error", "media store not configured")
+		return "", "", fmt.Errorf("media store not configured")
 	}
 
 	// Get camera image
 	path := fmt.Sprintf("/api/camera_proxy/%s", url.PathEscape(in.Entity))
 	imageData, contentType, err := t.client.GetBinary(ctx, path)
 	if err != nil {
-		if hassErr, ok := err.(*Error); ok {
-			return t.errorResult(hassErr.Status, hassErr.Message)
-		}
-		return t.errorResult("error", err.Error())
+		return "", "", err
 	}
 
-	// Determine extension from content type
+	// Determine extension and MIME type from content type
 	ext := ".jpg"
+	mimeType = "image/jpeg"
 	if strings.Contains(contentType, "png") {
 		ext = ".png"
+		mimeType = "image/png"
 	}
 
 	// Build filename
@@ -461,23 +496,18 @@ func (t *Tool) getCamera(ctx context.Context, in hassInput) (string, error) {
 	// Ensure camera subdirectory exists
 	cameraDir := filepath.Join(t.mediaStore.BaseDir(), "camera")
 	if err := os.MkdirAll(cameraDir, 0700); err != nil {
-		return t.errorResult("error", fmt.Sprintf("failed to create camera directory: %v", err))
+		return "", "", fmt.Errorf("failed to create camera directory: %v", err)
 	}
 
 	// Save file
-	absPath := filepath.Join(cameraDir, filename)
+	absPath = filepath.Join(cameraDir, filename)
 	if err := os.WriteFile(absPath, imageData, 0600); err != nil {
-		return t.errorResult("error", fmt.Sprintf("failed to save image: %v", err))
+		return "", "", fmt.Errorf("failed to save image: %v", err)
 	}
 
-	// Return relative path (relative to media root)
-	relPath := "camera/" + filename
+	L_info("hass: camera snapshot saved", "entity", in.Entity, "path", absPath, "size", len(imageData))
 
-	L_info("hass: camera snapshot saved", "entity", in.Entity, "path", relPath, "size", len(imageData))
-
-	result := map[string]string{"path": relPath}
-	jsonResult, _ := json.Marshal(result)
-	return string(jsonResult), nil
+	return absPath, mimeType, nil
 }
 
 // getServices retrieves available services.

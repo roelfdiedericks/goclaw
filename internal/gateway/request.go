@@ -1,7 +1,7 @@
 package gateway
 
 import (
-	"github.com/roelfdiedericks/goclaw/internal/session"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
@@ -10,14 +10,13 @@ type MediaCallback func(path, caption string) error
 
 // AgentRequest contains all info needed to route and execute an agent run
 type AgentRequest struct {
-	User          *user.User                // authenticated user (nil = reject)
-	Source        string                    // "tui", "telegram"
-	ChatID        string                    // for telegram: chat ID; for TUI: empty
-	IsGroup       bool                      // true if group chat (MVP: always false)
-	UserMsg       string                    // the user's message
-	Images        []session.ImageAttachment // image attachments (for multimodal)
-	Audio         []session.AudioAttachment // audio attachments (voice notes)
-	OnMediaToSend MediaCallback             // optional callback for sending media to channel
+	User          *user.User           // authenticated user (nil = reject)
+	Source        string               // "tui", "telegram"
+	ChatID        string               // for telegram: chat ID; for TUI: empty
+	IsGroup       bool                 // true if group chat (MVP: always false)
+	UserMsg       string               // the user's message
+	ContentBlocks []types.ContentBlock // content blocks (images, audio, etc.)
+	OnMediaToSend MediaCallback        // optional callback for sending media to channel
 
 	// Cron-specific fields
 	SessionID    string // Override session ID (e.g., "cron:<jobId>" for isolated jobs)

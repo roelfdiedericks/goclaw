@@ -684,7 +684,7 @@ func (p *XAIProvider) addMessageToRequest(req *xai.ChatRequest, msg types.Messag
 	L_trace("xai: adding message",
 		"role", msg.Role,
 		"contentLen", len(msg.Content),
-		"hasImages", len(msg.Images) > 0,
+		"hasImages", msg.HasImages(),
 		"toolName", msg.ToolName,
 		"toolUseID", msg.ToolUseID,
 	)
@@ -693,18 +693,16 @@ func (p *XAIProvider) addMessageToRequest(req *xai.ChatRequest, msg types.Messag
 	case "user":
 		// User message with optional image
 		content := xai.UserContent{Text: msg.Content}
-		// Add first image if present (xai-go UserContent only supports one image)
-		// Convert base64 data to data URL format
-		if len(msg.Images) > 0 && msg.Images[0].Data != "" {
-			content.ImageURL = "data:" + msg.Images[0].MimeType + ";base64," + msg.Images[0].Data
-			L_info("xai: user message with image",
-				"mimeType", msg.Images[0].MimeType,
-				"dataLen", len(msg.Images[0].Data),
-				"textLen", len(msg.Content))
-		} else if len(msg.Images) > 0 {
-			L_info("xai: user message has images but first image has no data",
-				"imageCount", len(msg.Images),
-				"firstDataEmpty", msg.Images[0].Data == "")
+		// Find first image in ContentBlocks (xai-go UserContent only supports one image)
+		for _, block := range msg.ContentBlocks {
+			if block.Type == "image" && block.Data != "" {
+				content.ImageURL = "data:" + block.MimeType + ";base64," + block.Data
+				L_info("xai: user message with image",
+					"mimeType", block.MimeType,
+					"dataLen", len(block.Data),
+					"textLen", len(msg.Content))
+				break
+			}
 		}
 		req.UserMessage(content)
 

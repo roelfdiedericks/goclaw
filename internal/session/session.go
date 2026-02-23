@@ -16,9 +16,8 @@ var _ = json.RawMessage{}
 // Type aliases for shared types - allows session code to use session.Message
 // while the actual definition lives in types package (avoiding import cycles)
 type (
-	AudioAttachment = types.AudioAttachment
-	ImageAttachment = types.ImageAttachment
-	Message         = types.Message
+	ContentBlock = types.ContentBlock
+	Message      = types.Message
 )
 
 // Session holds the conversation state for a single session
@@ -157,33 +156,17 @@ func (s *Session) AddUserMessage(content, source string) {
 }
 
 // AddUserMessageWithImages adds a user message with image attachments to the session
-func (s *Session) AddUserMessageWithImages(content, source string, images []ImageAttachment) {
+func (s *Session) AddUserMessageWithContent(content, source string, blocks []ContentBlock) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.Messages = append(s.Messages, Message{
-		ID:        generateMessageID(),
-		Role:      "user",
-		Content:   content,
-		Source:    source,
-		Images:    images,
-		Timestamp: time.Now(),
-	})
-	s.UpdatedAt = time.Now()
-}
-
-// AddUserMessageWithAudio adds a user message with audio attachments to the session
-func (s *Session) AddUserMessageWithAudio(content, source string, audio []AudioAttachment) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.Messages = append(s.Messages, Message{
-		ID:        generateMessageID(),
-		Role:      "user",
-		Content:   content,
-		Source:    source,
-		Audio:     audio,
-		Timestamp: time.Now(),
+		ID:            generateMessageID(),
+		Role:          "user",
+		Content:       content,
+		ContentBlocks: blocks,
+		Source:        source,
+		Timestamp:     time.Now(),
 	})
 	s.UpdatedAt = time.Now()
 }

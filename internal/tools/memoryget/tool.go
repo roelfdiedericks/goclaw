@@ -7,6 +7,7 @@ import (
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
 // Tool reads memory file content
@@ -60,14 +61,14 @@ type memoryGetOutput struct {
 	Error string `json:"error,omitempty"`
 }
 
-func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params memoryGetInput
 	if err := json.Unmarshal(input, &params); err != nil {
-		return "", fmt.Errorf("invalid input: %w", err)
+		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
 	if params.Path == "" {
-		return "", fmt.Errorf("path is required")
+		return nil, fmt.Errorf("path is required")
 	}
 
 	L_debug("memory_get: executing", "path", params.Path, "from", params.From, "lines", params.Lines)
@@ -101,10 +102,10 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	return marshalOutput(output)
 }
 
-func marshalOutput(v any) (string, error) {
+func marshalOutput(v any) (*types.ToolResult, error) {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return string(b), nil
+	return types.TextResult(string(b)), nil
 }
