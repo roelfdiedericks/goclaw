@@ -1,0 +1,102 @@
+package write
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox"
+	"github.com/roelfdiedericks/goclaw/internal/types"
+)
+
+// Tool writes content to files
+type Tool struct {
+	workingDir    string
+	workspaceRoot string
+}
+
+// NewTool creates a new write tool
+// workingDir is used for both relative path resolution and as the sandbox boundary
+func NewTool(workingDir string) *Tool {
+	return &Tool{
+		workingDir:    workingDir,
+		workspaceRoot: workingDir,
+	}
+}
+
+func (t *Tool) Name() string {
+	return "write"
+}
+
+func (t *Tool) Description() string {
+	return "Write content to a file. Creates the file if it doesn't exist, or overwrites if it does. Creates parent directories as needed."
+}
+
+func (t *Tool) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path": map[string]any{
+				"type":        "string",
+				"description": "The path to the file to write. Can be absolute or relative to working directory.",
+			},
+			"content": map[string]any{
+				"type":        "string",
+				"description": "The content to write to the file.",
+			},
+		},
+		"required": []string{"path", "content"},
+	}
+}
+
+type writeInput struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+	var params writeInput
+	if err := json.Unmarshal(input, &params); err != nil {
+		return "", fmt.Errorf("invalid input: %w", err)
+	}
+
+	if params.Path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+
+	// Check if user has sandbox disabled
+	sandboxed := true
+	if sessCtx := types.GetSessionContext(ctx); sessCtx != nil && sessCtx.User != nil {
+		sandboxed = sessCtx.User.Sandbox
+	}
+
+	L_debug("write tool: writing file", "path", params.Path, "bytes", len(params.Content), "sandboxed", sandboxed)
+
+	var err error
+	if sandboxed {
+		// Validate path and write atomically (sandbox validation + atomic write)
+		err = sandbox.WriteFileValidated(params.Path, t.workingDir, t.workspaceRoot, []byte(params.Content), 0600)
+	} else {
+		// No sandbox: resolve relative paths from workingDir, allow any absolute path
+		resolved := params.Path
+		if !filepath.IsAbs(resolved) {
+			resolved = filepath.Join(t.workingDir, resolved)
+		}
+		// Create parent directories if needed
+		if err := os.MkdirAll(filepath.Dir(resolved), 0750); err != nil {
+			L_error("write tool: failed to create parent dirs", "path", params.Path, "error", err)
+			return "", err
+		}
+		err = os.WriteFile(resolved, []byte(params.Content), 0600)
+	}
+	if err != nil {
+		L_error("write tool failed", "path", params.Path, "error", err)
+		return "", err
+	}
+
+	L_info("write tool: file written", "path", params.Path, "bytes", len(params.Content))
+	return fmt.Sprintf("Successfully wrote %d bytes to %s", len(params.Content), params.Path), nil
+}

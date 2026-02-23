@@ -7,6 +7,18 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
+	toolcron "github.com/roelfdiedericks/goclaw/internal/tools/cron"
+	"github.com/roelfdiedericks/goclaw/internal/tools/edit"
+	"github.com/roelfdiedericks/goclaw/internal/tools/exec"
+	"github.com/roelfdiedericks/goclaw/internal/tools/jq"
+	"github.com/roelfdiedericks/goclaw/internal/tools/memoryget"
+	"github.com/roelfdiedericks/goclaw/internal/tools/memorysearch"
+	"github.com/roelfdiedericks/goclaw/internal/tools/read"
+	toolskills "github.com/roelfdiedericks/goclaw/internal/tools/skills"
+	tooltranscript "github.com/roelfdiedericks/goclaw/internal/tools/transcript"
+	"github.com/roelfdiedericks/goclaw/internal/tools/webfetch"
+	"github.com/roelfdiedericks/goclaw/internal/tools/websearch"
+	"github.com/roelfdiedericks/goclaw/internal/tools/write"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
 )
 
@@ -23,34 +35,24 @@ type ToolsConfig struct {
 	TranscriptManager *transcript.Manager
 
 	// Exec tool configuration
-	ExecTimeout    int               // Timeout in seconds (default: 1800 = 30 min)
-	ExecBubblewrap ExecBubblewrapCfg // Bubblewrap sandbox settings
-	BubblewrapPath string            // Global path to bwrap binary
-}
-
-// ExecBubblewrapCfg holds bubblewrap configuration for exec tool
-type ExecBubblewrapCfg struct {
-	Enabled      bool
-	ExtraRoBind  []string
-	ExtraBind    []string
-	ExtraEnv     map[string]string
-	AllowNetwork bool
-	ClearEnv     bool
+	ExecTimeout    int                   // Timeout in seconds (default: 1800 = 30 min)
+	ExecBubblewrap exec.BubblewrapConfig // Bubblewrap sandbox settings
+	BubblewrapPath string                // Global path to bwrap binary
 }
 
 // RegisterDefaults registers the default set of tools
 func RegisterDefaults(reg *Registry, cfg ToolsConfig) {
 	// File tools
-	reg.Register(NewReadTool(cfg.WorkingDir))
-	reg.Register(NewWriteTool(cfg.WorkingDir))
-	reg.Register(NewEditTool(cfg.WorkingDir))
+	reg.Register(read.NewTool(cfg.WorkingDir))
+	reg.Register(write.NewTool(cfg.WorkingDir))
+	reg.Register(edit.NewTool(cfg.WorkingDir))
 
-	// Create shared ExecRunner for exec and jq tools
+	// Create shared exec runner for exec and jq tools
 	timeout := 30 * time.Minute // default: 30 minutes
 	if cfg.ExecTimeout > 0 {
 		timeout = time.Duration(cfg.ExecTimeout) * time.Second
 	}
-	execRunner := NewExecRunner(ExecRunnerConfig{
+	execRunner := exec.NewRunner(exec.RunnerConfig{
 		WorkingDir:     cfg.WorkingDir,
 		Timeout:        timeout,
 		BubblewrapPath: cfg.BubblewrapPath,
@@ -58,23 +60,23 @@ func RegisterDefaults(reg *Registry, cfg ToolsConfig) {
 	})
 
 	// Exec tool
-	reg.Register(NewExecToolWithRunner(execRunner))
+	reg.Register(exec.NewToolWithRunner(execRunner))
 	L_debug("tools: exec registered")
 
 	// JQ tool (shares exec runner for sandbox support)
-	reg.Register(NewJQTool(cfg.WorkingDir, execRunner))
+	reg.Register(jq.NewTool(cfg.WorkingDir, execRunner))
 	L_debug("tools: jq registered")
 
 	// Web tools
 	if cfg.BraveAPIKey != "" {
-		reg.Register(NewWebSearchTool(cfg.BraveAPIKey))
+		reg.Register(websearch.NewTool(cfg.BraveAPIKey))
 		L_debug("tools: web_search registered")
 	} else {
 		L_debug("tools: web_search skipped (no Brave API key)")
 	}
 
 	// web_fetch with optional browser fallback
-	reg.Register(NewWebFetchToolWithConfig(WebFetchConfig{
+	reg.Register(webfetch.NewToolWithConfig(webfetch.ToolConfig{
 		UseBrowser: cfg.UseBrowser,
 		Profile:    cfg.WebProfile,
 		Headless:   cfg.WebHeadless,
@@ -85,8 +87,8 @@ func RegisterDefaults(reg *Registry, cfg ToolsConfig) {
 
 	// Memory search tools
 	if cfg.MemoryManager != nil {
-		reg.Register(NewMemorySearchTool(cfg.MemoryManager))
-		reg.Register(NewMemoryGetTool(cfg.MemoryManager))
+		reg.Register(memorysearch.NewTool(cfg.MemoryManager))
+		reg.Register(memoryget.NewTool(cfg.MemoryManager))
 		L_debug("tools: memory_search and memory_get registered")
 	} else {
 		L_debug("tools: memory tools skipped (no manager)")
@@ -94,19 +96,19 @@ func RegisterDefaults(reg *Registry, cfg ToolsConfig) {
 
 	// Skills tool
 	if cfg.SkillsManager != nil {
-		reg.Register(NewSkillsTool(cfg.SkillsManager))
+		reg.Register(toolskills.NewTool(cfg.SkillsManager))
 		L_debug("tools: skills registered")
 	} else {
 		L_debug("tools: skills skipped (no manager)")
 	}
 
 	// Cron tool (always register - it handles nil service gracefully via singleton)
-	reg.Register(NewCronTool())
+	reg.Register(toolcron.NewTool())
 	L_debug("tools: cron registered")
 
 	// Transcript search tool
 	if cfg.TranscriptManager != nil {
-		reg.Register(NewTranscriptTool(cfg.TranscriptManager))
+		reg.Register(tooltranscript.NewTool(cfg.TranscriptManager))
 		L_debug("tools: transcript registered")
 	} else {
 		L_debug("tools: transcript skipped (no manager)")
