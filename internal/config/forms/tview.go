@@ -78,10 +78,7 @@ func BuildFormContent(def FormDef, value any, component string, onResult func(Tv
 			if fieldName == "" {
 				fieldName = section.Title
 			}
-			nestedField := findFieldByName(rv, fieldName)
-			if !nestedField.IsValid() {
-				nestedField = findFieldByJSONTag(rv, fieldName)
-			}
+			nestedField := findFieldByPath(rv, fieldName)
 			if nestedField.IsValid() {
 				addFieldsToForm(form, section.Nested.Sections, nestedField)
 			}
@@ -90,6 +87,11 @@ func BuildFormContent(def FormDef, value any, component string, onResult func(Tv
 
 		// Add fields
 		addFieldsToForm(form, []Section{section}, rv)
+	}
+
+	// Check if form has any input fields (not just headers)
+	if form.GetFormItemCount() == 0 {
+		return nil, fmt.Errorf("form has no fields - check that field names match struct (form: %s)", def.Title)
 	}
 
 	// Fields form - borderless
@@ -361,10 +363,7 @@ func RenderTview(def FormDef, value any, component string) (TviewResult, error) 
 			if fieldName == "" {
 				fieldName = section.Title
 			}
-			nestedField := findFieldByName(rv, fieldName)
-			if !nestedField.IsValid() {
-				nestedField = findFieldByJSONTag(rv, fieldName)
-			}
+			nestedField := findFieldByPath(rv, fieldName)
 			if nestedField.IsValid() {
 				addFieldsToForm(form, section.Nested.Sections, nestedField)
 			}
@@ -373,6 +372,11 @@ func RenderTview(def FormDef, value any, component string) (TviewResult, error) 
 
 		// Add fields
 		addFieldsToForm(form, []Section{section}, rv)
+	}
+
+	// Check if form has any input fields (not just headers)
+	if form.GetFormItemCount() == 0 {
+		return TviewResult(0), fmt.Errorf("form has no fields - check that field names match struct (form: %s)", def.Title)
 	}
 
 	// Fields form - borderless
@@ -570,11 +574,11 @@ func RenderTview(def FormDef, value any, component string) (TviewResult, error) 
 func addFieldsToForm(form *tview.Form, sections []Section, rv reflect.Value) {
 	for _, section := range sections {
 		for _, field := range section.Fields {
-			fv := findFieldByJSONTag(rv, field.Name)
+			// findFieldByPath handles dotted paths like "Gateway.LogFile"
+			// and is case-insensitive for robustness
+			fv := findFieldByPath(rv, field.Name)
 			if !fv.IsValid() {
-				fv = findFieldByName(rv, field.Name)
-			}
-			if !fv.IsValid() {
+				logging.L_warn("forms: field not found", "field", field.Name)
 				continue
 			}
 
@@ -747,13 +751,84 @@ func setNumericValue(fv reflect.Value, text string) {
 	}
 }
 
-// Note: findFieldByJSONTag is defined in render.go
-// findFieldByName finds a struct field by name
-func findFieldByName(rv reflect.Value, name string) reflect.Value {
+// findFieldByPath finds a struct field by dotted path (e.g., "Gateway.LogFile").
+// Uses case-insensitive matching for robustness.
+// Falls back to JSON tag matching if field name doesn't match.
+func findFieldByPath(rv reflect.Value, path string) reflect.Value {
 	if rv.Kind() == reflect.Ptr {
 		rv = rv.Elem()
 	}
-	return rv.FieldByName(name)
+
+	// Split dotted path and navigate
+	parts := strings.Split(path, ".")
+	current := rv
+
+	for _, part := range parts {
+		if current.Kind() == reflect.Ptr {
+			if current.IsNil() {
+				return reflect.Value{}
+			}
+			current = current.Elem()
+		}
+		if current.Kind() != reflect.Struct {
+			return reflect.Value{}
+		}
+
+		// Try case-insensitive field name match first
+		field := findFieldCaseInsensitive(current, part)
+		if !field.IsValid() {
+			// Fall back to JSON tag match
+			field = findFieldByJSONTagCaseInsensitive(current, part)
+		}
+		if !field.IsValid() {
+			return reflect.Value{}
+		}
+		current = field
+	}
+
+	return current
+}
+
+// findFieldCaseInsensitive finds a struct field by name, case-insensitive
+func findFieldCaseInsensitive(rv reflect.Value, name string) reflect.Value {
+	if rv.Kind() != reflect.Struct {
+		return reflect.Value{}
+	}
+	rt := rv.Type()
+	nameLower := strings.ToLower(name)
+
+	for i := 0; i < rt.NumField(); i++ {
+		if strings.ToLower(rt.Field(i).Name) == nameLower {
+			return rv.Field(i)
+		}
+	}
+	return reflect.Value{}
+}
+
+// findFieldByJSONTagCaseInsensitive finds a struct field by JSON tag, case-insensitive
+func findFieldByJSONTagCaseInsensitive(rv reflect.Value, jsonName string) reflect.Value {
+	if rv.Kind() != reflect.Struct {
+		return reflect.Value{}
+	}
+	rt := rv.Type()
+	nameLower := strings.ToLower(jsonName)
+
+	for i := 0; i < rt.NumField(); i++ {
+		tag := rt.Field(i).Tag.Get("json")
+		// Handle "name,omitempty" format
+		if idx := strings.Index(tag, ","); idx != -1 {
+			tag = tag[:idx]
+		}
+		if strings.ToLower(tag) == nameLower {
+			return rv.Field(i)
+		}
+	}
+	return reflect.Value{}
+}
+
+// findFieldByName is kept for backwards compatibility, now delegates to findFieldByPath
+func findFieldByName(rv reflect.Value, name string) reflect.Value {
+	return findFieldByPath(rv, name)
 }
 
 // truncate truncates a string to max length
@@ -765,7 +840,7 @@ func truncate(s string, max int) string {
 }
 
 // evaluateShowWhen checks if a ShowWhen condition is satisfied
-// Format: "fieldName=value" (e.g., "type=xai")
+// Format: "fieldName=value" (e.g., "type=xai" or "Gateway.Enabled=true")
 func evaluateShowWhen(condition string, rv reflect.Value) bool {
 	parts := strings.SplitN(condition, "=", 2)
 	if len(parts) != 2 {
@@ -775,11 +850,8 @@ func evaluateShowWhen(condition string, rv reflect.Value) bool {
 	fieldName := strings.TrimSpace(parts[0])
 	expectedValue := strings.TrimSpace(parts[1])
 
-	// Find the field
-	fv := findFieldByJSONTag(rv, fieldName)
-	if !fv.IsValid() {
-		fv = findFieldByName(rv, fieldName)
-	}
+	// Find the field (supports dotted paths, case-insensitive)
+	fv := findFieldByPath(rv, fieldName)
 	if !fv.IsValid() {
 		return true // Field not found, show by default
 	}

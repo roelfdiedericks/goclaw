@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
@@ -22,11 +23,15 @@ type MessageChannel interface {
 // Tool allows the agent to send, edit, delete, and react to messages.
 type Tool struct {
 	channels  map[string]MessageChannel // channel name -> implementation
+	mu        sync.RWMutex              // protects channels map
 	mediaRoot string                    // base directory for media files
 }
 
 // NewTool creates a new message tool with the given channels.
 func NewTool(channels map[string]MessageChannel) *Tool {
+	if channels == nil {
+		channels = make(map[string]MessageChannel)
+	}
 	return &Tool{
 		channels: channels,
 	}
@@ -35,6 +40,24 @@ func NewTool(channels map[string]MessageChannel) *Tool {
 // SetMediaRoot sets the media root directory for resolving content paths.
 func (t *Tool) SetMediaRoot(root string) {
 	t.mediaRoot = root
+}
+
+// SetChannel adds or updates a channel adapter (thread-safe).
+// Used for hot-reload when channels restart.
+func (t *Tool) SetChannel(name string, ch MessageChannel) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.channels[name] = ch
+	L_debug("message: channel updated", "channel", name)
+}
+
+// RemoveChannel removes a channel adapter (thread-safe).
+// Used when channels are stopped.
+func (t *Tool) RemoveChannel(name string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.channels, name)
+	L_debug("message: channel removed", "channel", name)
 }
 
 // ContentItem represents a single item in the content array.
@@ -149,17 +172,25 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 		channel = sessionCtx.Channel
 	}
 
+	// Get a snapshot of channels for thread-safe access
+	t.mu.RLock()
+	channelsCopy := make(map[string]MessageChannel, len(t.channels))
+	for k, v := range t.channels {
+		channelsCopy[k] = v
+	}
+	t.mu.RUnlock()
+
 	// For send action: broadcast if no channel specified OR channel doesn't have a MessageChannel
 	if params.Action == "send" {
 		// Check if channel exists in our message channels
-		_, hasChannel := t.channels[channel]
+		_, hasChannel := channelsCopy[channel]
 		if channel == "" || !hasChannel {
 			L_debug("message: broadcasting (channel not available)", "requestedChannel", channel)
 			// Content array takes priority
 			if len(params.Content) > 0 {
-				return t.broadcastContent(sessionCtx, params.Content)
+				return t.broadcastContentWith(sessionCtx, params.Content, channelsCopy)
 			}
-			return t.broadcastSend(sessionCtx, params.Message, params.FilePath, params.Caption)
+			return t.broadcastSendWith(sessionCtx, params.Message, params.FilePath, params.Caption, channelsCopy)
 		}
 	}
 
@@ -181,8 +212,8 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 		return "", fmt.Errorf("to (chat ID) is required (not in active session)")
 	}
 
-	// Get channel implementation
-	ch, ok := t.channels[channel]
+	// Get channel implementation from snapshot
+	ch, ok := channelsCopy[channel]
 	if !ok {
 		return "", fmt.Errorf("unknown channel: %s", channel)
 	}
@@ -213,16 +244,16 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (string, erro
 	}
 }
 
-// broadcastSend sends to all available channels (used when no channel specified).
-func (t *Tool) broadcastSend(sessionCtx *types.SessionContext, message, filePath, caption string) (string, error) {
-	if len(t.channels) == 0 {
+// broadcastSendWith broadcasts using a provided channels map.
+func (t *Tool) broadcastSendWith(sessionCtx *types.SessionContext, message, filePath, caption string, channels map[string]MessageChannel) (string, error) {
+	if len(channels) == 0 {
 		return "", fmt.Errorf("no channels available")
 	}
 
 	var results []string
 	var lastErr error
 
-	for name, ch := range t.channels {
+	for name, ch := range channels {
 		// Determine chatID for this channel
 		chatID := ""
 		if name == "telegram" && sessionCtx.OwnerChatID != "" {
@@ -248,16 +279,16 @@ func (t *Tool) broadcastSend(sessionCtx *types.SessionContext, message, filePath
 	return fmt.Sprintf("Broadcast sent to %d channels: %v", len(results), results), nil
 }
 
-// broadcastContent broadcasts content array to all available channels.
-func (t *Tool) broadcastContent(sessionCtx *types.SessionContext, content []ContentItem) (string, error) {
-	if len(t.channels) == 0 {
+// broadcastContentWith broadcasts content using a provided channels map.
+func (t *Tool) broadcastContentWith(sessionCtx *types.SessionContext, content []ContentItem, channels map[string]MessageChannel) (string, error) {
+	if len(channels) == 0 {
 		return "", fmt.Errorf("no channels available")
 	}
 
 	var results []string
 	var lastErr error
 
-	for name, ch := range t.channels {
+	for name, ch := range channels {
 		// Determine chatID for this channel
 		chatID := ""
 		if name == "telegram" && sessionCtx.OwnerChatID != "" {

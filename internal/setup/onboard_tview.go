@@ -68,16 +68,16 @@ func (d *WizardData) LoadFromExisting(cfg *config.Config, path string) {
 
 	// Extract values from existing config
 	d.WorkspacePath = cfg.Gateway.WorkingDir
-	d.TelegramEnabled = cfg.Telegram.Enabled
-	d.TelegramToken = cfg.Telegram.BotToken
+	d.TelegramEnabled = cfg.Channels.Telegram.Enabled
+	d.TelegramToken = cfg.Channels.Telegram.BotToken
 
 	// HTTP.Enabled is a pointer (nil = default true)
-	if cfg.HTTP.Enabled != nil {
-		d.HTTPEnabled = *cfg.HTTP.Enabled
+	if cfg.Channels.HTTP.Enabled != nil {
+		d.HTTPEnabled = *cfg.Channels.HTTP.Enabled
 	} else {
 		d.HTTPEnabled = true // default
 	}
-	d.HTTPListen = cfg.HTTP.Listen
+	d.HTTPListen = cfg.Channels.HTTP.Listen
 
 	// Sandboxing
 	d.ExecBubblewrap = cfg.Tools.Exec.Bubblewrap.Enabled

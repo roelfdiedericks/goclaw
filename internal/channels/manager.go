@@ -8,9 +8,13 @@ import (
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/channels/http"
+	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
 	"github.com/roelfdiedericks/goclaw/internal/channels/telegram"
+	telegramconfig "github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
 	"github.com/roelfdiedericks/goclaw/internal/channels/tui"
+	tuiconfig "github.com/roelfdiedericks/goclaw/internal/channels/tui/config"
 	"github.com/roelfdiedericks/goclaw/internal/channels/types"
+	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/user"
@@ -22,6 +26,11 @@ type ManagedChannel = types.ManagedChannel
 // ChannelStatus is re-exported from types for convenience
 type ChannelStatus = types.ChannelStatus
 
+// RuntimeOptions contains runtime parameters that aren't persisted in config
+type RuntimeOptions struct {
+	DevMode bool // Enable development mode for HTTP server
+}
+
 // Manager owns the lifecycle of all communication channels
 type Manager struct {
 	gw    *gateway.Gateway
@@ -29,6 +38,9 @@ type Manager struct {
 
 	channels map[string]ManagedChannel
 	mu       sync.RWMutex
+
+	// Runtime options (not persisted)
+	opts RuntimeOptions
 
 	// Telegram-specific: bot instance and retry state
 	telegramBot      *telegram.Bot
@@ -55,8 +67,9 @@ func NewManager(gw *gateway.Gateway, users *user.Registry) *Manager {
 }
 
 // StartAll starts all enabled channels from config (except TUI - use RunTUI for that)
-func (m *Manager) StartAll(ctx context.Context, cfg Config) error {
+func (m *Manager) StartAll(ctx context.Context, cfg config.ChannelsConfig, opts RuntimeOptions) error {
 	m.ctx = ctx
+	m.opts = opts
 
 	// Start Telegram if enabled
 	if cfg.Telegram.Enabled && cfg.Telegram.BotToken != "" {
@@ -86,7 +99,7 @@ func (m *Manager) StartAll(ctx context.Context, cfg Config) error {
 }
 
 // startTelegram creates and starts the Telegram bot
-func (m *Manager) startTelegram(ctx context.Context, cfg *telegram.Config) error {
+func (m *Manager) startTelegram(ctx context.Context, cfg *telegramconfig.Config) error {
 	bot, err := telegram.New(cfg, m.gw, m.users)
 	if err != nil {
 		return err
@@ -104,12 +117,15 @@ func (m *Manager) startTelegram(ctx context.Context, cfg *telegram.Config) error
 	m.channels["telegram"] = bot
 	m.mu.Unlock()
 
+	// Publish event for message tool hot-reload
+	bus.PublishEvent("channels.telegram.started", nil)
+
 	logging.L_info("telegram: bot ready and listening")
 	return nil
 }
 
 // startTelegramRetry starts background retry for telegram connection
-func (m *Manager) startTelegramRetry(ctx context.Context, cfg *telegram.Config) {
+func (m *Manager) startTelegramRetry(ctx context.Context, cfg *telegramconfig.Config) {
 	m.mu.Lock()
 	if m.telegramRetrying {
 		m.mu.Unlock()
@@ -156,7 +172,7 @@ func (m *Manager) startTelegramRetry(ctx context.Context, cfg *telegram.Config) 
 }
 
 // startHTTP creates and starts the HTTP server
-func (m *Manager) startHTTP(ctx context.Context, cfg *http.Config) error {
+func (m *Manager) startHTTP(ctx context.Context, cfg *httpconfig.Config) error {
 	listen := cfg.Listen
 	if listen == "" {
 		listen = ":1337"
@@ -164,8 +180,8 @@ func (m *Manager) startHTTP(ctx context.Context, cfg *http.Config) error {
 
 	serverCfg := &http.ServerConfig{
 		Listen:    listen,
-		DevMode:   false, // Can be made configurable
-		MediaRoot: "",    // Will be set from gateway if available
+		DevMode:   m.opts.DevMode,
+		MediaRoot: "",
 	}
 
 	if m.gw.MediaStore() != nil {
@@ -191,7 +207,14 @@ func (m *Manager) startHTTP(ctx context.Context, cfg *http.Config) error {
 	m.channels["http"] = srv
 	m.mu.Unlock()
 
-	logging.L_info("http: server started", "listen", listen)
+	// Publish event for message tool hot-reload
+	bus.PublishEvent("channels.http.started", nil)
+
+	if m.opts.DevMode {
+		logging.L_info("http: server started (dev mode)", "listen", listen)
+	} else {
+		logging.L_info("http: server started", "listen", listen)
+	}
 	return nil
 }
 
@@ -199,7 +222,7 @@ func (m *Manager) startHTTP(ctx context.Context, cfg *http.Config) error {
 func (m *Manager) subscribeConfigEvents() {
 	// Telegram config reload
 	bus.SubscribeEvent("channels.telegram.config.applied", func(event bus.Event) {
-		cfg, ok := event.Data.(*telegram.Config)
+		cfg, ok := event.Data.(*telegramconfig.Config)
 		if !ok {
 			logging.L_error("telegram: invalid config event data")
 			return
@@ -209,7 +232,7 @@ func (m *Manager) subscribeConfigEvents() {
 
 	// HTTP config reload
 	bus.SubscribeEvent("channels.http.config.applied", func(event bus.Event) {
-		cfg, ok := event.Data.(*http.Config)
+		cfg, ok := event.Data.(*httpconfig.Config)
 		if !ok {
 			logging.L_error("http: invalid config event data")
 			return
@@ -219,7 +242,7 @@ func (m *Manager) subscribeConfigEvents() {
 }
 
 // reloadTelegram handles telegram config changes
-func (m *Manager) reloadTelegram(cfg *telegram.Config) {
+func (m *Manager) reloadTelegram(cfg *telegramconfig.Config) {
 	m.mu.Lock()
 	bot := m.telegramBot
 	m.mu.Unlock()
@@ -238,6 +261,9 @@ func (m *Manager) reloadTelegram(cfg *telegram.Config) {
 		m.telegramBot = nil
 		delete(m.channels, "telegram")
 		m.mu.Unlock()
+
+		// Publish stopped event for message tool
+		bus.PublishEvent("channels.telegram.stopped", nil)
 	}
 
 	// If disabled, just stop
@@ -246,7 +272,7 @@ func (m *Manager) reloadTelegram(cfg *telegram.Config) {
 		return
 	}
 
-	// Start with new config
+	// Start with new config (startTelegram publishes started event)
 	if err := m.startTelegram(m.ctx, cfg); err != nil {
 		logging.L_error("telegram: failed to start with new config", "error", err)
 		m.startTelegramRetry(m.ctx, cfg)
@@ -256,7 +282,7 @@ func (m *Manager) reloadTelegram(cfg *telegram.Config) {
 }
 
 // reloadHTTP handles HTTP config changes
-func (m *Manager) reloadHTTP(cfg *http.Config) {
+func (m *Manager) reloadHTTP(cfg *httpconfig.Config) {
 	m.mu.Lock()
 	srv := m.httpServer
 	m.mu.Unlock()
@@ -282,6 +308,9 @@ func (m *Manager) StopAll() {
 			logging.L_error("channels: stop failed", "channel", name, "error", err)
 		}
 		m.gw.UnregisterChannel(name)
+
+		// Publish stopped event for message tool
+		bus.PublishEvent("channels."+name+".stopped", nil)
 	}
 	m.channels = make(map[string]ManagedChannel)
 	m.telegramBot = nil
@@ -289,7 +318,7 @@ func (m *Manager) StopAll() {
 }
 
 // RunTUI starts the TUI channel and blocks until it exits
-func (m *Manager) RunTUI(ctx context.Context, cfg *tui.Config) error {
+func (m *Manager) RunTUI(ctx context.Context, cfg *tuiconfig.Config) error {
 	t := tui.NewTUI(m.gw, m.users, cfg)
 
 	m.mu.Lock()
@@ -355,14 +384,14 @@ func (m *Manager) Status() map[string]ChannelStatus {
 
 // RegisterCommands registers bus commands for all channel types
 func (m *Manager) RegisterCommands() {
-	telegram.RegisterCommands()
-	http.RegisterCommands()
-	tui.RegisterCommands()
+	telegramconfig.RegisterCommands()
+	httpconfig.RegisterCommands()
+	tuiconfig.RegisterCommands()
 }
 
 // UnregisterCommands unregisters all bus commands
 func (m *Manager) UnregisterCommands() {
-	telegram.UnregisterCommands()
-	http.UnregisterCommands()
-	tui.UnregisterCommands()
+	telegramconfig.UnregisterCommands()
+	httpconfig.UnregisterCommands()
+	tuiconfig.UnregisterCommands()
 }

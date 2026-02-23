@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/roelfdiedericks/goclaw/internal/gateway/events"
+	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/session"
@@ -28,7 +28,7 @@ type HTTPChannel struct {
 
 // GatewayRunner is the interface for running agent requests
 type GatewayRunner interface {
-	RunAgent(ctx context.Context, req events.AgentRequest, evts chan<- events.AgentEvent) error
+	RunAgent(ctx context.Context, req gateway.AgentRequest, events chan<- gateway.AgentEvent) error
 	AgentIdentity() *gwtypes.AgentIdentityConfig
 	SupervisionConfig() *gwtypes.SupervisionConfig
 }
@@ -187,7 +187,7 @@ func (c *HTTPChannel) getSessionsForUser(u *user.User) []*SSESession {
 
 // StreamEvent streams a single agent event to the user's SSE sessions.
 // Returns true if the event was delivered (HTTP supports streaming).
-func (c *HTTPChannel) StreamEvent(u *user.User, event events.AgentEvent) bool {
+func (c *HTTPChannel) StreamEvent(u *user.User, event gateway.AgentEvent) bool {
 	if u == nil {
 		return false
 	}
@@ -233,7 +233,7 @@ func (c *HTTPChannel) DeliverGhostwrite(ctx context.Context, u *user.User, messa
 	// Send start event (typing indicator)
 	startEvent := SSEEvent{
 		Event: "start",
-		Data: events.EventAgentStart{
+		Data: gateway.EventAgentStart{
 			RunID:  runID,
 			Source: "http",
 		},
@@ -248,7 +248,7 @@ func (c *HTTPChannel) DeliverGhostwrite(ctx context.Context, u *user.User, messa
 	// Send done event with message
 	doneEvent := SSEEvent{
 		Event: "done",
-		Data: events.EventAgentEnd{
+		Data: gateway.EventAgentEnd{
 			RunID:     runID,
 			FinalText: message,
 		},
@@ -454,7 +454,7 @@ func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *
 	}
 
 	// Create agent request - use session preferences for thinking
-	req := events.AgentRequest{
+	req := gateway.AgentRequest{
 		User:           u,
 		Source:         "http",
 		UserMsg:        message,
@@ -464,7 +464,7 @@ func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *
 	}
 
 	// Create events channel
-	evtCh := make(chan events.AgentEvent, 100)
+	events := make(chan gateway.AgentEvent, 100)
 
 	// Use background context - the POST request context will be canceled when it returns,
 	// but we want the agent to keep running until done
@@ -473,7 +473,7 @@ func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *
 	// Run agent in background
 	go func() {
 		defer agentCancel()
-		err := c.gateway.RunAgent(agentCtx, req, evtCh)
+		err := c.gateway.RunAgent(agentCtx, req, events)
 		if err != nil {
 			logging.L_error("http: agent run failed", "user", u.ID, "error", err)
 		}
@@ -481,7 +481,7 @@ func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *
 
 	// Stream events to session (buffers for replay on reconnect)
 	go func() {
-		for event := range evtCh {
+		for event := range events {
 			sseEvent := c.convertEvent(event)
 			if sseEvent != nil {
 				sess.SendEvent(*sseEvent)
@@ -494,18 +494,18 @@ func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *
 }
 
 // convertEvent converts a gateway event to an SSE event
-func (c *HTTPChannel) convertEvent(event events.AgentEvent) *SSEEvent {
+func (c *HTTPChannel) convertEvent(event gateway.AgentEvent) *SSEEvent {
 	switch e := event.(type) {
-	case events.EventAgentStart:
+	case gateway.EventAgentStart:
 		return &SSEEvent{Event: "start", Data: e}
 
-	case events.EventTextDelta:
+	case gateway.EventTextDelta:
 		return &SSEEvent{Event: "message", Data: map[string]string{
 			"runId":   e.RunID,
 			"content": e.Delta,
 		}}
 
-	case events.EventToolStart:
+	case gateway.EventToolStart:
 		// Truncate input for display (1024 chars max)
 		inputStr := string(e.Input)
 		if len(inputStr) > 1024 {
@@ -518,7 +518,7 @@ func (c *HTTPChannel) convertEvent(event events.AgentEvent) *SSEEvent {
 			"input":    inputStr,
 		}}
 
-	case events.EventToolEnd:
+	case gateway.EventToolEnd:
 		// Truncate result for display (1024 chars max)
 		result := e.Result
 		if len(result) > 1024 {
@@ -533,25 +533,25 @@ func (c *HTTPChannel) convertEvent(event events.AgentEvent) *SSEEvent {
 			"durationMs": e.DurationMs,
 		}}
 
-	case events.EventAgentEnd:
+	case gateway.EventAgentEnd:
 		return &SSEEvent{Event: "done", Data: map[string]string{
 			"runId":     e.RunID,
 			"finalText": e.FinalText,
 		}}
 
-	case events.EventAgentError:
+	case gateway.EventAgentError:
 		return &SSEEvent{Event: "agent_error", Data: map[string]string{
 			"runId": e.RunID,
 			"error": e.Error,
 		}}
 
-	case events.EventThinking:
+	case gateway.EventThinking:
 		return &SSEEvent{Event: "thinking", Data: map[string]string{
 			"runId":   e.RunID,
 			"content": e.Content,
 		}}
 
-	case events.EventThinkingDelta:
+	case gateway.EventThinkingDelta:
 		return &SSEEvent{Event: "thinking_delta", Data: map[string]string{
 			"runId":   e.RunID,
 			"content": e.Delta,

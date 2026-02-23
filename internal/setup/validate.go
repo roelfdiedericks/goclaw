@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/roelfdiedericks/goclaw/internal/channels/telegram"
+	telegramconfig "github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -159,7 +159,7 @@ func ListOllamaModels(ctx context.Context, baseURL string) ([]string, error) {
 
 // TestTelegramToken validates a Telegram bot token by calling getMe
 func TestTelegramToken(token string) (string, error) {
-	return telegram.TestToken(token)
+	return telegramconfig.TestToken(token)
 }
 
 // TestConnection tests basic connectivity to a URL

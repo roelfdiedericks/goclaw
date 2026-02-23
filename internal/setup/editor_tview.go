@@ -6,19 +6,19 @@ import (
 	"fmt"
 
 	"github.com/roelfdiedericks/goclaw/internal/auth"
+	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
+	telegramconfig "github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
+	tuiconfig "github.com/roelfdiedericks/goclaw/internal/channels/tui/config"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
-	goclawhttp "github.com/roelfdiedericks/goclaw/internal/channels/http"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
-	"github.com/roelfdiedericks/goclaw/internal/channels/telegram"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
-	"github.com/roelfdiedericks/goclaw/internal/channels/tui"
 )
 
 // EditorTview is the tview-based configuration editor
@@ -44,11 +44,11 @@ func (e *EditorTview) Run() error {
 	}
 
 	// Register command handlers for all components
-	telegram.RegisterCommands()
+	telegramconfig.RegisterCommands()
 	llm.RegisterCommands()
 	media.RegisterCommands()
-	tui.RegisterCommands()
-	goclawhttp.RegisterCommands()
+	tuiconfig.RegisterCommands()
+	httpconfig.RegisterCommands()
 	session.RegisterCommands()
 	skills.RegisterCommands()
 	cron.RegisterCommands()
@@ -184,15 +184,15 @@ func (e *EditorTview) editTelegram() {
 	L_info("editor: opening telegram config")
 
 	// Get the telegram config from main config
-	telegramCfg := e.cfg.Telegram
+	telegramCfg := e.cfg.Channels.Telegram
 
 	// Get form definition
-	formDef := telegram.ConfigFormDef()
+	formDef := telegramconfig.ConfigFormDef()
 
 	// Build inline form content
 	content, err := forms.BuildFormContent(formDef, &telegramCfg, "channels.telegram", func(result forms.TviewResult) {
 		if result == forms.ResultSaved {
-			e.cfg.Telegram = telegramCfg
+			e.cfg.Channels.Telegram = telegramCfg
 			e.dirty = true
 			L_info("editor: telegram config updated")
 		} else {
@@ -213,12 +213,12 @@ func (e *EditorTview) editTelegram() {
 func (e *EditorTview) editHTTP() {
 	L_info("editor: opening HTTP config")
 
-	httpCfg := e.cfg.HTTP
-	formDef := goclawhttp.ConfigFormDef()
+	httpCfg := e.cfg.Channels.HTTP
+	formDef := httpconfig.ConfigFormDef()
 
 	content, err := forms.BuildFormContent(formDef, &httpCfg, "channels.http", func(result forms.TviewResult) {
 		if result == forms.ResultSaved {
-			e.cfg.HTTP = httpCfg
+			e.cfg.Channels.HTTP = httpCfg
 			e.dirty = true
 			L_info("editor: HTTP config updated")
 		} else {
@@ -265,12 +265,12 @@ func (e *EditorTview) editMedia() {
 func (e *EditorTview) editTUI() {
 	L_info("editor: opening TUI config")
 
-	tuiCfg := e.cfg.TUI
-	formDef := tui.ConfigFormDef()
+	tuiCfg := e.cfg.Channels.TUI
+	formDef := tuiconfig.ConfigFormDef()
 
 	content, err := forms.BuildFormContent(formDef, &tuiCfg, "channels.tui", func(result forms.TviewResult) {
 		if result == forms.ResultSaved {
-			e.cfg.TUI = tuiCfg
+			e.cfg.Channels.TUI = tuiCfg
 			e.dirty = true
 			L_info("editor: TUI config updated")
 		} else {

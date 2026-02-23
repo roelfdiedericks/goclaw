@@ -1,8 +1,13 @@
 package session
 
-// Config configures session management
+import (
+	"os"
+	"path/filepath"
+)
+
+// SessionConfig configures session management
 // Note: This was previously config.SessionConfig, moved here to avoid import cycles
-type Config struct {
+type SessionConfig struct {
 	// Storage backend: "sqlite" (default) or "jsonl"
 	Store     string `json:"store"`
 	StorePath string `json:"storePath"` // SQLite DB path (when store="sqlite")
@@ -15,6 +20,24 @@ type Config struct {
 	// Features
 	Summarization SummarizationConfig `json:"summarization"`
 	MemoryFlush   MemoryFlushConfig   `json:"memoryFlush"`
+}
+
+// GetStoreType returns the effective store type ("jsonl" or "sqlite")
+func (s *SessionConfig) GetStoreType() string {
+	if s.Store != "" {
+		return s.Store
+	}
+	return "sqlite" // default
+}
+
+// GetStorePath returns the path for the storage backend
+func (s *SessionConfig) GetStorePath() string {
+	if s.StorePath != "" {
+		return s.StorePath
+	}
+	// Default SQLite path
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".goclaw", "sessions.db")
 }
 
 // SummarizationConfig configures LLM-based summarization for checkpoints and compaction
@@ -50,21 +73,6 @@ type CompactionSubConfig struct {
 	PreferCheckpoint bool `json:"preferCheckpoint"` // Use existing checkpoint for summary if available
 	KeepPercent      int  `json:"keepPercent"`      // Percent of messages to keep after compaction (default: 50)
 	MinMessages      int  `json:"minMessages"`      // Minimum messages to always keep (default: 20)
-}
-
-// MemoryFlushConfig configures memory flush prompting
-type MemoryFlushConfig struct {
-	Enabled            bool                   `json:"enabled"`
-	ShowInSystemPrompt bool                   `json:"showInSystemPrompt"`
-	Thresholds         []FlushThresholdConfig `json:"thresholds"`
-}
-
-// FlushThresholdConfig defines a memory flush threshold
-type FlushThresholdConfig struct {
-	Percent      int    `json:"percent"`
-	Prompt       string `json:"prompt"`
-	InjectAs     string `json:"injectAs"` // "system" or "user"
-	OncePerCycle bool   `json:"oncePerCycle"`
 }
 
 // OllamaLLMConfig configures an Ollama model for LLM tasks (compaction, checkpoints)

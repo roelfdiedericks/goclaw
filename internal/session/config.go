@@ -68,10 +68,10 @@ func UnregisterCommands() {
 
 // handleApply publishes the config.applied event for listeners to react
 func handleApply(cmd bus.Command) bus.CommandResult {
-	cfg, ok := cmd.Payload.(*Config)
+	cfg, ok := cmd.Payload.(*SessionConfig)
 	if !ok {
 		return bus.CommandResult{
-			Error:   fmt.Errorf("expected *session.Config, got %T", cmd.Payload),
+			Error:   fmt.Errorf("expected *SessionConfig, got %T", cmd.Payload),
 			Message: "invalid payload type",
 		}
 	}

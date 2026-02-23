@@ -14,6 +14,7 @@ import (
 	tele "gopkg.in/telebot.v4"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
+	"github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
 	"github.com/roelfdiedericks/goclaw/internal/channels/types"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
@@ -35,7 +36,7 @@ type Bot struct {
 	bot     *tele.Bot
 	gateway *gateway.Gateway
 	users   *user.Registry
-	config  *Config
+	config  *config.Config
 
 	// Per-chat preferences
 	chatPrefs sync.Map // chatID (int64) -> *ChatPreferences
@@ -72,7 +73,7 @@ func (b *Bot) getChatPrefs(chatID int64, u *user.User) *ChatPreferences {
 }
 
 // New creates a new Telegram bot
-func New(cfg *Config, gw *gateway.Gateway, users *user.Registry) (*Bot, error) {
+func New(cfg *config.Config, gw *gateway.Gateway, users *user.Registry) (*Bot, error) {
 	if cfg.BotToken == "" {
 		return nil, fmt.Errorf("telegram bot token not configured")
 	}
@@ -753,7 +754,7 @@ func (b *Bot) Stop() error {
 
 // Reload applies new configuration (implements ManagedChannel)
 func (b *Bot) Reload(cfg any) error {
-	newCfg, ok := cfg.(*Config)
+	newCfg, ok := cfg.(*config.Config)
 	if !ok {
 		return fmt.Errorf("expected *telegram.Config, got %T", cfg)
 	}

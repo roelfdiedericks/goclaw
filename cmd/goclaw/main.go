@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -25,19 +24,24 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/browser"
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/bwrap"
+	"github.com/roelfdiedericks/goclaw/internal/channels"
+	goclawhttp "github.com/roelfdiedericks/goclaw/internal/channels/http"
+	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
+	"github.com/roelfdiedericks/goclaw/internal/channels/telegram"
+	telegramconfig "github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
+	"github.com/roelfdiedericks/goclaw/internal/channels/tui"
+	tuiconfig "github.com/roelfdiedericks/goclaw/internal/channels/tui/config"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/embeddings"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/hass"
-	goclawhttp "github.com/roelfdiedericks/goclaw/internal/channels/http"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/setup"
-	"github.com/roelfdiedericks/goclaw/internal/channels/telegram"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/supervisor"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
@@ -52,7 +56,6 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/tools/userauth"
 	"github.com/roelfdiedericks/goclaw/internal/tools/xaiimagine"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
-	"github.com/roelfdiedericks/goclaw/internal/channels/tui"
 	"github.com/roelfdiedericks/goclaw/internal/update"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -1968,9 +1971,9 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	// Register component config commands
 	// These allow config forms to trigger test/apply actions via the bus
 	media.RegisterCommands()
-	goclawhttp.RegisterCommands()
-	tui.RegisterCommands()
-	telegram.RegisterCommands()
+	httpconfig.RegisterCommands()
+	tuiconfig.RegisterCommands()
+	telegramconfig.RegisterCommands()
 	session.RegisterCommands()
 	skills.RegisterCommands()
 	cron.RegisterCommands()
@@ -2011,183 +2014,42 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		gw.Shutdown()
 	}()
 
-	// Start Telegram bot if configured (with persistent retry on connection failures)
-	var telegramBot *telegram.Bot
-	var telegramBotMu sync.Mutex
-	messageChannels := make(map[string]toolmessage.MessageChannel)
+	// Create channel manager
+	chanMgr := channels.NewManager(gw, users)
 
-	if cfg.Telegram.Enabled && cfg.Telegram.BotToken != "" {
-		// Try initial connection
-		// Convert config.TelegramConfig to telegram.Config (transitional until Phase 6)
-		telegramCfg := &telegram.Config{
-			Enabled:  cfg.Telegram.Enabled,
-			BotToken: cfg.Telegram.BotToken,
-		}
-		var err error
-		telegramBot, err = telegram.New(telegramCfg, gw, users)
-		if err == nil {
-			_ = telegramBot.Start(runCtx)
-			telegramBot.RegisterOperationalCommands()
-			gw.RegisterChannel(telegramBot)
-			L_info("telegram: bot ready and listening")
+	// Create message tool early (channels will be added dynamically via bus events)
+	messageTool := toolmessage.NewTool(nil)
+	if mediaStore := gw.MediaStore(); mediaStore != nil {
+		messageTool.SetMediaRoot(mediaStore.BaseDir())
+	}
+	toolsReg.Register(messageTool)
 
-			// Create Telegram message channel adapter for message tool
+	// Subscribe to channel events to update message tool adapters
+	bus.SubscribeEvent("channels.telegram.started", func(event bus.Event) {
+		if bot := chanMgr.GetTelegram(); bot != nil {
 			if mediaStore := gw.MediaStore(); mediaStore != nil {
-				adapter := telegram.NewMessageChannelAdapter(telegramBot, mediaStore.BaseDir())
-				messageChannels["telegram"] = adapter
+				adapter := telegram.NewMessageChannelAdapter(bot, mediaStore.BaseDir())
+				messageTool.SetChannel("telegram", adapter)
 			}
-		} else {
-			// Initial connection failed - start background retry goroutine
-			L_warn("telegram initial connection failed, will retry in background", "error", err)
-
-			go func() {
-				backoff := 5 * time.Second
-				maxBackoff := 5 * time.Minute
-				attempt := 1
-
-				for {
-					select {
-					case <-runCtx.Done():
-						L_info("telegram: shutdown requested, stopping retry")
-						return
-					case <-time.After(backoff):
-					}
-
-					L_info("telegram: retrying connection", "attempt", attempt, "backoff", backoff)
-					// Convert config.TelegramConfig to telegram.Config (transitional)
-					retryCfg := &telegram.Config{
-						Enabled:  cfg.Telegram.Enabled,
-						BotToken: cfg.Telegram.BotToken,
-					}
-					bot, err := telegram.New(retryCfg, gw, users)
-					if err != nil {
-						L_warn("telegram: connection failed", "error", err, "nextRetry", backoff)
-						attempt++
-						// Exponential backoff with cap
-						backoff *= 2
-						if backoff > maxBackoff {
-							backoff = maxBackoff
-						}
-						continue
-					}
-
-					// Success!
-					_ = bot.Start(runCtx)
-					bot.RegisterOperationalCommands()
-					gw.RegisterChannel(bot)
-					L_info("telegram: bot ready after retry", "attempts", attempt)
-
-					telegramBotMu.Lock()
-					telegramBot = bot
-					// Note: message channel adapter not set up here since messageChannels
-					// was already passed to tools. Would need refactoring for hot-add.
-					telegramBotMu.Unlock()
-					return
-				}
-			}()
 		}
-	} else {
-		L_info("telegram: disabled by configuration")
-	}
-
-	// Subscribe to telegram config.applied event to restart bot when config changes
-	bus.SubscribeEvent("channels.telegram.config.applied", func(event bus.Event) {
-		newCfg, ok := event.Data.(*telegram.Config)
-		if !ok {
-			L_error("telegram: invalid event data type", "type", fmt.Sprintf("%T", event.Data))
-			return
-		}
-
-		telegramBotMu.Lock()
-		defer telegramBotMu.Unlock()
-
-		// Stop existing bot if running
-		if telegramBot != nil {
-			L_info("telegram: stopping for config reload")
-			telegramBot.Stop()
-			gw.UnregisterChannel("telegram")
-			telegramBot = nil
-		}
-
-		// If disabled, just stop
-		if !newCfg.Enabled || newCfg.BotToken == "" {
-			L_info("telegram: disabled by new config")
-			return
-		}
-
-		// Create new bot with new config
-		bot, err := telegram.New(newCfg, gw, users)
-		if err != nil {
-			L_error("telegram: failed to create bot with new config", "error", err)
-			return
-		}
-
-		_ = bot.Start(runCtx)
-		bot.RegisterOperationalCommands()
-		gw.RegisterChannel(bot)
-		telegramBot = bot
-		L_info("telegram: reloaded with new config")
 	})
+	bus.SubscribeEvent("channels.telegram.stopped", func(event bus.Event) {
+		messageTool.RemoveChannel("telegram")
+	})
+	bus.SubscribeEvent("channels.http.started", func(event bus.Event) {
+		if srv := chanMgr.GetHTTP(); srv != nil {
+			adapter := goclawhttp.NewMessageChannelAdapter(srv.Channel(), "/api/media")
+			messageTool.SetChannel("http", adapter)
+		}
+	})
+	bus.SubscribeEvent("channels.http.stopped", func(event bus.Event) {
+		messageTool.RemoveChannel("http")
+	})
+	L_debug("message tool registered (channels will be added dynamically)")
 
-	// Start HTTP server if configured (enabled by default if users have HTTP credentials)
-	var httpServer *goclawhttp.Server
-	httpEnabled := cfg.HTTP.Enabled == nil || *cfg.HTTP.Enabled // default true
-	if httpEnabled {
-		listen := cfg.HTTP.Listen
-		if listen == "" {
-			listen = ":1337"
-		}
-		// Get media root from gateway's media store
-		var mediaRoot string
-		if mediaStore := gw.MediaStore(); mediaStore != nil {
-			mediaRoot = mediaStore.BaseDir()
-			L_debug("http: media root configured", "mediaRoot", mediaRoot)
-		} else {
-			L_warn("http: no media store available")
-		}
-		httpCfg := &goclawhttp.ServerConfig{
-			Listen:    listen,
-			DevMode:   devMode,
-			MediaRoot: mediaRoot,
-		}
-		L_debug("http: creating server", "listen", listen, "devMode", devMode, "mediaRoot", mediaRoot)
-		var err error
-		httpServer, err = goclawhttp.NewServer(httpCfg, users)
-		if err != nil {
-			// Log the actual error so we can debug
-			L_error("http: server creation failed", "error", err, "listen", listen, "devMode", devMode, "users", users.Count())
-			L_warn("http: not starting - check error above for details")
-		} else {
-			httpServer.SetGateway(gw)
-			gw.RegisterChannel(httpServer.Channel())
-			if err := httpServer.Start(runCtx); err != nil {
-				L_error("http: server start failed", "error", err)
-				httpServer = nil
-			} else {
-				if devMode {
-					L_info("http: server started (dev mode)", "listen", listen)
-				} else {
-					L_info("http: server started", "listen", listen)
-				}
-				httpServer.RegisterOperationalCommands()
-				// Register HTTP message channel adapter for message tool
-				httpAdapter := goclawhttp.NewMessageChannelAdapter(httpServer.Channel(), "/api/media")
-				messageChannels["http"] = httpAdapter
-			}
-		}
-	} else {
-		L_info("http: disabled in config")
-	}
-
-	// Register message tool with available channels (after all channels are set up)
-	if len(messageChannels) > 0 {
-		messageTool := toolmessage.NewTool(messageChannels)
-		// Set media root for content array path resolution
-		if mediaStore := gw.MediaStore(); mediaStore != nil {
-			messageTool.SetMediaRoot(mediaStore.BaseDir())
-		}
-		toolsReg.Register(messageTool)
-		L_debug("message tool registered", "channels", len(messageChannels))
+	// Start all enabled channels via manager
+	if err := chanMgr.StartAll(runCtx, cfg.Channels, channels.RuntimeOptions{DevMode: devMode}); err != nil {
+		L_error("channels: failed to start", "error", err)
 	}
 
 	// Start cron service AFTER channels are registered
@@ -2204,7 +2066,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	if useTUI {
 		// Run TUI mode
 		L_info("starting TUI mode")
-		return runTUI(runCtx, gw, users, cfg.TUI.ShowLogs, sandboxDisabledReason)
+		return runTUI(runCtx, gw, users, cfg.Channels.TUI.ShowLogs, sandboxDisabledReason)
 	}
 
 	// Non-TUI mode: just wait for signals
@@ -2218,19 +2080,8 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	<-runCtx.Done()
 	L_info("gateway shutting down")
 
-	// Stop telegram bot if running
-	telegramBotMu.Lock()
-	if telegramBot != nil {
-		telegramBot.Stop()
-	}
-	telegramBotMu.Unlock()
-
-	// Stop HTTP server if running
-	if httpServer != nil {
-		if err := httpServer.Stop(); err != nil {
-			L_error("http: shutdown error", "error", err)
-		}
-	}
+	// Stop all channels via manager
+	chanMgr.StopAll()
 
 	return nil
 }

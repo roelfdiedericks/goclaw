@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
+	"github.com/roelfdiedericks/goclaw/internal/channels/http/config"
 	"github.com/roelfdiedericks/goclaw/internal/channels/types"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
@@ -44,7 +45,7 @@ type Server struct {
 	templatesDir string
 
 	// Config for reload
-	config *Config
+	config *config.Config
 	listen string
 
 	// State tracking for ManagedChannel interface
@@ -219,7 +220,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	// Track current listen address for config test
-	SetCurrentListenAddr(s.server.Addr)
+	config.SetCurrentListenAddr(s.server.Addr)
 
 	s.wg.Add(1)
 	go func() {
@@ -273,7 +274,7 @@ func (s *Server) Stop() error {
 // Reload applies new configuration (implements ManagedChannel)
 // Note: HTTP server reload is complex - for now we just update config and log
 func (s *Server) Reload(cfg any) error {
-	newCfg, ok := cfg.(*Config)
+	newCfg, ok := cfg.(*config.Config)
 	if !ok {
 		return fmt.Errorf("expected *http.Config, got %T", cfg)
 	}

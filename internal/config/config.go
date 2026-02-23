@@ -7,8 +7,9 @@ import (
 	"path/filepath"
 
 	"dario.cat/mergo"
-	"github.com/roelfdiedericks/goclaw/internal/channels"
-	"github.com/roelfdiedericks/goclaw/internal/channels/tui"
+	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
+	telegramconfig "github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
+	tuiconfig "github.com/roelfdiedericks/goclaw/internal/channels/tui/config"
 	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
@@ -122,24 +123,32 @@ func splitLines(data []byte) []string {
 	return lines
 }
 
+// ChannelsConfig aggregates all channel configurations.
+// This lives in config package to avoid import cycles (channel packages import gateway).
+type ChannelsConfig struct {
+	Telegram telegramconfig.Config `json:"telegram"`
+	HTTP     httpconfig.Config     `json:"http"`
+	TUI      tuiconfig.Config      `json:"tui"`
+}
+
 // Config represents the merged goclaw configuration
 type Config struct {
-	Gateway       GatewayConfig                `json:"gateway"`
-	Agent         gwtypes.AgentIdentityConfig  `json:"agent"`
-	LLM           llm.LLMConfig                `json:"llm"`
-	HomeAssistant HomeAssistantConfig          `json:"homeassistant"` // Top-level Home Assistant config
-	Tools         ToolsConfig                  `json:"tools"`
-	Channels      channels.Config              `json:"channels"` // All channel configs (telegram, http, tui)
-	Session       session.Config               `json:"session"`
-	MemorySearch  MemorySearchConfig           `json:"memorySearch"`
-	Transcript    TranscriptConfig             `json:"transcript"`
-	PromptCache   PromptCacheConfig            `json:"promptCache"`
-	Media         MediaConfig                  `json:"media"`
-	Skills        SkillsConfig                 `json:"skills"`
-	Cron          CronConfig                   `json:"cron"`
-	Supervision   gwtypes.SupervisionConfig    `json:"supervision"`
-	Roles         user.RolesConfig             `json:"roles"` // Role-based access control
-	Auth          AuthConfig                   `json:"auth"`  // Role elevation authentication
+	Gateway       GatewayConfig               `json:"gateway"`
+	Agent         gwtypes.AgentIdentityConfig `json:"agent"`
+	LLM           llm.LLMConfig               `json:"llm"`
+	HomeAssistant HomeAssistantConfig         `json:"homeassistant"` // Top-level Home Assistant config
+	Tools         ToolsConfig                 `json:"tools"`
+	Channels      ChannelsConfig              `json:"channels"` // All channel configs (telegram, http, tui)
+	Session       session.SessionConfig       `json:"session"`
+	MemorySearch  MemorySearchConfig          `json:"memorySearch"`
+	Transcript    TranscriptConfig            `json:"transcript"`
+	PromptCache   PromptCacheConfig           `json:"promptCache"`
+	Media         MediaConfig                 `json:"media"`
+	Skills        SkillsConfig                `json:"skills"`
+	Cron          CronConfig                  `json:"cron"`
+	Supervision   gwtypes.SupervisionConfig   `json:"supervision"`
+	Roles         user.RolesConfig            `json:"roles"` // Role-based access control
+	Auth          AuthConfig                  `json:"auth"`  // Role elevation authentication
 }
 
 // CredentialHint describes a credential the auth script accepts
@@ -472,7 +481,7 @@ func Load() (*LoadResult, error) {
 				Path: "", // Empty = search PATH
 			},
 		},
-		Session: session.Config{
+		Session: session.SessionConfig{
 			Store:       "sqlite", // Default to SQLite
 			StorePath:   filepath.Join(goclawDir, "sessions.db"),
 			InheritPath: filepath.Join(home, ".openclaw", "agents", "main", "sessions"), // OpenClaw sessions (for inherit)
@@ -506,23 +515,23 @@ func Load() (*LoadResult, error) {
 			MemoryFlush: session.MemoryFlushConfig{
 				Enabled:            true,
 				ShowInSystemPrompt: true,
-				Thresholds: []session.FlushThresholdConfig{
+				Thresholds: []session.FlushThreshold{
 					{
 						Percent:      50,
 						Prompt:       "Context at 50%. Consider noting key decisions to memory.",
-						InjectAs:     "system",
+						InjectAs:     session.FlushInjectSystem,
 						OncePerCycle: true,
 					},
 					{
 						Percent:      75,
 						Prompt:       "Context at 75%. Write important context to memory/YYYY-MM-DD.md now.",
-						InjectAs:     "system",
+						InjectAs:     session.FlushInjectSystem,
 						OncePerCycle: true,
 					},
 					{
 						Percent:      90,
 						Prompt:       "[Context pressure: 90%] Compaction imminent.\nBefore responding, save important session context to memory/YYYY-MM-DD.md (create memory/ if needed).\nSave: key decisions, user-shared context, current work state.\nSkip: secrets, trivial details, info already in files.\nAfter saving (or if nothing to save), respond to the user's message normally.",
-						InjectAs:     "system",
+						InjectAs:     session.FlushInjectSystem,
 						OncePerCycle: true,
 					},
 				},
@@ -561,8 +570,8 @@ func Load() (*LoadResult, error) {
 			TTL:     600,             // 10 minutes (more generous than OpenClaw's 2 min)
 			MaxSize: 5 * 1024 * 1024, // 5MB
 		},
-		Channels: channels.Config{
-			TUI: tui.Config{
+		Channels: ChannelsConfig{
+			TUI: tuiconfig.Config{
 				ShowLogs: true, // Show logs panel by default
 			},
 			// Telegram and HTTP are disabled by default (zero values)
@@ -607,7 +616,7 @@ func Load() (*LoadResult, error) {
 	logging.L_debug("config: loaded",
 		"agentModel", agentModel,
 		"providers", len(cfg.LLM.Providers),
-		"telegramEnabled", cfg.Telegram.Enabled,
+		"telegramEnabled", cfg.Channels.Telegram.Enabled,
 		"workingDir", cfg.Gateway.WorkingDir,
 	)
 
@@ -688,24 +697,6 @@ func DefaultConfig() *DefaultConfigTemplate {
 	}
 }
 
-// GetStoreType returns the effective store type ("jsonl" or "sqlite")
-func (s *SessionConfig) GetStoreType() string {
-	if s.Store != "" {
-		return s.Store
-	}
-	return "sqlite" // default
-}
-
-// GetStorePath returns the path for the storage backend
-func (s *SessionConfig) GetStorePath() string {
-	if s.StorePath != "" {
-		return s.StorePath
-	}
-	// Default SQLite path
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".goclaw", "sessions.db")
-}
-
 // mustGetwd returns the current working directory or "unknown" on error
 func mustGetwd() string {
 	if cwd, err := os.Getwd(); err == nil {
@@ -772,14 +763,22 @@ func mergeConfigSelective(dst, src *Config, rawMap map[string]interface{}) error
 			return err
 		}
 	}
-	if _, ok := rawMap["telegram"]; ok {
-		if err := mergo.Merge(&dst.Telegram, src.Telegram, mergo.WithOverride); err != nil {
-			return err
+	// Handle channels - either nested under "channels" key or as legacy top-level keys
+	if channelsMap, ok := rawMap["channels"].(map[string]interface{}); ok {
+		if _, ok := channelsMap["telegram"]; ok {
+			if err := mergo.Merge(&dst.Channels.Telegram, src.Channels.Telegram, mergo.WithOverride); err != nil {
+				return err
+			}
 		}
-	}
-	if _, ok := rawMap["http"]; ok {
-		if err := mergo.Merge(&dst.HTTP, src.HTTP, mergo.WithOverride); err != nil {
-			return err
+		if _, ok := channelsMap["http"]; ok {
+			if err := mergo.Merge(&dst.Channels.HTTP, src.Channels.HTTP, mergo.WithOverride); err != nil {
+				return err
+			}
+		}
+		if _, ok := channelsMap["tui"]; ok {
+			if err := mergo.Merge(&dst.Channels.TUI, src.Channels.TUI, mergo.WithOverride); err != nil {
+				return err
+			}
 		}
 	}
 	if sessionMap, ok := rawMap["session"].(map[string]interface{}); ok {
@@ -811,11 +810,6 @@ func mergeConfigSelective(dst, src *Config, rawMap map[string]interface{}) error
 			return err
 		}
 	}
-	if _, ok := rawMap["tui"]; ok {
-		if err := mergo.Merge(&dst.TUI, src.TUI, mergo.WithOverride); err != nil {
-			return err
-		}
-	}
 	if _, ok := rawMap["cron"]; ok {
 		if err := mergo.Merge(&dst.Cron, src.Cron, mergo.WithOverride); err != nil {
 			return err
@@ -841,7 +835,7 @@ func mergeConfigSelective(dst, src *Config, rawMap map[string]interface{}) error
 
 // mergeSessionSelective handles the session config which has multiple sub-structs
 // that need individual presence checking
-func mergeSessionSelective(dst, src *SessionConfig, rawMap map[string]interface{}) {
+func mergeSessionSelective(dst, src *session.SessionConfig, rawMap map[string]interface{}) {
 	// Simple fields - always merge if session was specified
 	if src.Store != "" {
 		dst.Store = src.Store

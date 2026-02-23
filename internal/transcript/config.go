@@ -4,17 +4,40 @@ import (
 	"fmt"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
-// TConfig is an alias for config.TranscriptConfig for convenience
-// (Cannot use "Config" due to dot-import conflict with logging.Config)
-type TConfig = config.TranscriptConfig
+// TranscriptConfig configures transcript indexing and search
+type TranscriptConfig struct {
+	Enabled bool `json:"enabled"` // Enable transcript indexing (default: true)
 
-// TQueryConfig is an alias for config.TranscriptQueryConfig
-type TQueryConfig = config.TranscriptQueryConfig
+	// Indexing settings
+	IndexIntervalSeconds   int `json:"indexIntervalSeconds"`   // How often to check for new messages (default: 30)
+	BatchSize              int `json:"batchSize"`              // Max messages to process per batch (default: 100)
+	BackfillBatchSize      int `json:"backfillBatchSize"`      // Max chunks to backfill per interval (default: 10)
+	MaxGroupGapSeconds     int `json:"maxGroupGapSeconds"`     // Max time gap between messages in a chunk (default: 300 = 5 min)
+	MaxMessagesPerChunk    int `json:"maxMessagesPerChunk"`    // Max messages per conversation chunk (default: 8)
+	MaxEmbeddingContentLen int `json:"maxEmbeddingContentLen"` // Max chars to embed per chunk (default: 16000)
+
+	// Search settings (similar to memory search)
+	Query TranscriptQueryConfig `json:"query"`
+}
+
+// TranscriptQueryConfig configures transcript search behavior
+type TranscriptQueryConfig struct {
+	MaxResults    int     `json:"maxResults"`    // Maximum results to return (default: 10)
+	MinScore      float64 `json:"minScore"`      // Minimum score threshold (default: 0.3)
+	VectorWeight  float64 `json:"vectorWeight"`  // Weight for vector search (default: 0.7)
+	KeywordWeight float64 `json:"keywordWeight"` // Weight for keyword search (default: 0.3)
+}
+
+// TConfig is an alias for TranscriptConfig for convenience
+// (Cannot use "Config" due to dot-import conflict with logging.Config)
+type TConfig = TranscriptConfig
+
+// TQueryConfig is an alias for TranscriptQueryConfig
+type TQueryConfig = TranscriptQueryConfig
 
 // ConfigFormDef returns the form definition for editing TranscriptConfig
 func ConfigFormDef(cfg TConfig) forms.FormDef {
@@ -260,9 +283,9 @@ func UnregisterCommands() {
 
 // handleApply validates config and publishes event for manager to apply.
 func handleApply(cmd bus.Command) bus.CommandResult {
-	cfg, ok := cmd.Payload.(config.TranscriptConfig)
+	cfg, ok := cmd.Payload.(TranscriptConfig)
 	if !ok {
-		cfgPtr, okPtr := cmd.Payload.(*config.TranscriptConfig)
+		cfgPtr, okPtr := cmd.Payload.(*TranscriptConfig)
 		if okPtr {
 			cfg = *cfgPtr
 			ok = true

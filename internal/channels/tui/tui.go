@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/roelfdiedericks/goclaw/internal/channels/tui/config"
 	"github.com/roelfdiedericks/goclaw/internal/channels/types"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
@@ -832,7 +833,7 @@ func Run(ctx context.Context, gw *gateway.Gateway, u *user.User, showLogs bool) 
 type TUI struct {
 	gw     *gateway.Gateway
 	users  *user.Registry
-	config *Config
+	config *config.Config
 
 	// The channel that implements gateway.Channel (created on RunBlocking)
 	channel *TUIChannel
@@ -843,7 +844,7 @@ type TUI struct {
 }
 
 // NewTUI creates a new TUI wrapper
-func NewTUI(gw *gateway.Gateway, users *user.Registry, cfg *Config) *TUI {
+func NewTUI(gw *gateway.Gateway, users *user.Registry, cfg *config.Config) *TUI {
 	return &TUI{
 		gw:     gw,
 		users:  users,
@@ -867,7 +868,7 @@ func (t *TUI) Stop() error {
 
 // Reload updates config (implements ManagedChannel)
 func (t *TUI) Reload(cfg any) error {
-	newCfg, ok := cfg.(*Config)
+	newCfg, ok := cfg.(*config.Config)
 	if !ok {
 		return fmt.Errorf("expected *tui.Config, got %T", cfg)
 	}
