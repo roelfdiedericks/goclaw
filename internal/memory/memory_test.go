@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/roelfdiedericks/goclaw/internal/config"
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 )
 
 func TestChunkMarkdown(t *testing.T) {
@@ -144,7 +144,7 @@ func TestKeywordSearch(t *testing.T) {
 	}
 
 	// Test search
-	results, err := Search(context.Background(), db, &NoopProvider{}, "authentication", DefaultSearchOptions())
+	results, err := Search(context.Background(), db, &llm.NoopProvider{}, "authentication", DefaultSearchOptions())
 	if err != nil {
 		t.Fatalf("search failed: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestKeywordSearch(t *testing.T) {
 	}
 
 	// Test another search
-	results, err = Search(context.Background(), db, &NoopProvider{}, "database PostgreSQL", DefaultSearchOptions())
+	results, err = Search(context.Background(), db, &llm.NoopProvider{}, "database PostgreSQL", DefaultSearchOptions())
 	if err != nil {
 		t.Fatalf("search failed: %v", err)
 	}
@@ -218,14 +218,10 @@ func TestManagerIntegration(t *testing.T) {
 		t.Fatalf("failed to write MEMORY.md: %v", err)
 	}
 
-	// Create manager with disabled Ollama (keyword-only mode)
-	cfg := config.MemorySearchConfig{
+	// Create manager (keyword-only mode until LLM registry is set up)
+	cfg := MemorySearchConfig{
 		Enabled: true,
-		Ollama: config.OllamaConfig{
-			URL:   "", // Empty = keyword only
-			Model: "nomic-embed-text",
-		},
-		Query: config.MemorySearchQueryConfig{
+		Query: MemorySearchQueryConfig{
 			MaxResults:    6,
 			MinScore:      0.1, // Lower threshold for testing
 			VectorWeight:  0.7,

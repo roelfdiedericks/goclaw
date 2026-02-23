@@ -11,7 +11,6 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/roelfdiedericks/goclaw/internal/bus"
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
@@ -20,9 +19,9 @@ import (
 type Manager struct {
 	db           *sql.DB
 	indexer      *Indexer
-	provider     EmbeddingProvider
+	provider     llm.EmbeddingProvider
 	workspaceDir string
-	config       config.MemorySearchConfig
+	config       MemorySearchConfig
 
 	mu          sync.RWMutex
 	closed      bool
@@ -31,7 +30,7 @@ type Manager struct {
 
 // NewManager creates a new memory manager.
 // Uses llm.GetRegistry() for lazy embedding provider resolution.
-func NewManager(cfg config.MemorySearchConfig, workspaceDir string) (*Manager, error) {
+func NewManager(cfg MemorySearchConfig, workspaceDir string) (*Manager, error) {
 	if !cfg.Enabled {
 		L_info("memory: disabled by configuration")
 		return nil, nil
@@ -71,7 +70,7 @@ func NewManager(cfg config.MemorySearchConfig, workspaceDir string) (*Manager, e
 
 	// Start with NoopProvider - real provider will be resolved lazily
 	// when Provider() is called (via refreshProvider)
-	provider := &NoopProvider{}
+	provider := &llm.NoopProvider{}
 
 	// Create indexer with initial provider
 	indexer := NewIndexer(db, provider, workspaceDir, cfg.Paths)
@@ -100,7 +99,7 @@ func (m *Manager) onLLMConfigApplied(e bus.Event) {
 
 // Provider returns the embedding provider (for sharing with transcript indexer)
 // This also checks if a better provider has become available since startup.
-func (m *Manager) Provider() EmbeddingProvider {
+func (m *Manager) Provider() llm.EmbeddingProvider {
 	m.refreshProvider()
 	return m.provider
 }
@@ -127,13 +126,13 @@ func (m *Manager) refreshProvider() {
 
 	L_debug("memory: refreshProvider got provider", "type", fmt.Sprintf("%T", provider), "name", provider.Name())
 
-	// Adapt llm.Provider to EmbeddingProvider interface
-	embedder, ok := provider.(LLMEmbedder)
+	// Adapt llm.Provider to llm.EmbeddingProvider interface
+	embedder, ok := provider.(llm.LLMEmbedder)
 	if !ok {
 		L_warn("memory: refreshProvider type assertion failed", "type", fmt.Sprintf("%T", provider))
 		return
 	}
-	newProvider := NewLLMProviderAdapter(embedder)
+	newProvider := llm.NewLLMProviderAdapter(embedder)
 
 	// Check if provider changed (from noop to real, or model changed)
 	currentID := m.provider.ID()

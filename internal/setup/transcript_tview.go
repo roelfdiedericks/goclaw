@@ -43,11 +43,11 @@ func RunTranscriptSetupTview() error {
 }
 
 // loadTranscriptConfigTV loads the transcript section from goclaw.json
-func loadTranscriptConfigTV() (config.TranscriptConfig, string, error) {
+func loadTranscriptConfigTV() (transcript.TranscriptConfig, string, error) {
 	result, err := config.Load()
 	if err != nil {
 		// Return defaults if no config
-		return config.TranscriptConfig{
+		return transcript.TranscriptConfig{
 			Enabled:                true,
 			IndexIntervalSeconds:   30,
 			BatchSize:              100,
@@ -55,7 +55,7 @@ func loadTranscriptConfigTV() (config.TranscriptConfig, string, error) {
 			MaxGroupGapSeconds:     300,
 			MaxMessagesPerChunk:    8,
 			MaxEmbeddingContentLen: 16000,
-			Query: config.TranscriptQueryConfig{
+			Query: transcript.TranscriptQueryConfig{
 				MaxResults:    10,
 				MinScore:      0.3,
 				VectorWeight:  0.7,
@@ -68,7 +68,7 @@ func loadTranscriptConfigTV() (config.TranscriptConfig, string, error) {
 }
 
 // saveTranscriptConfigTV saves the transcript config back to goclaw.json
-func saveTranscriptConfigTV(cfg config.TranscriptConfig, configPath string) error {
+func saveTranscriptConfigTV(cfg transcript.TranscriptConfig, configPath string) error {
 	if configPath == "" {
 		return fmt.Errorf("no config file path")
 	}

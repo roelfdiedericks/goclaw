@@ -5,13 +5,27 @@ import (
 	"os"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
-// SkConfig is an alias for config.SkillsConfig to avoid name collisions
-type SkConfig = config.SkillsConfig
+// SkillsConfig configures the skills system
+type SkillsConfig struct {
+	Enabled       bool                        `json:"enabled"`
+	BundledDir    string                      `json:"bundledDir"`      // Override bundled skills path
+	ManagedDir    string                      `json:"managedDir"`      // Override managed skills path
+	WorkspaceDir  string                      `json:"workspaceDir"`    // Override workspace skills path
+	ExtraDirs     []string                    `json:"extraDirs"`       // Additional skill directories
+	Watch         bool                        `json:"watch"`           // Watch for file changes
+	WatchDebounce int                         `json:"watchDebounceMs"` // Debounce interval in ms
+	Entries       map[string]SkillEntryConfig `json:"entries"`         // Per-skill configuration
+}
+
+// Note: SkillEntryConfig is defined in types.go
+
+// SkConfig is an alias for SkillsConfig for convenience
+// (Cannot use "Config" due to dot-import conflict with logging.Config)
+type SkConfig = SkillsConfig
 
 const configPath = "skills"
 
@@ -60,10 +74,17 @@ func UnregisterCommands() {
 
 // handleTest validates skills configuration (checks directories exist)
 func handleTest(cmd bus.Command) bus.CommandResult {
-	cfg, ok := cmd.Payload.(*config.SkillsConfig)
+	cfg, ok := cmd.Payload.(SkillsConfig)
+	if !ok {
+		cfgPtr, okPtr := cmd.Payload.(*SkillsConfig)
+		if okPtr {
+			cfg = *cfgPtr
+			ok = true
+		}
+	}
 	if !ok {
 		return bus.CommandResult{
-			Error:   fmt.Errorf("expected *SkillsConfig, got %T", cmd.Payload),
+			Error:   fmt.Errorf("expected SkillsConfig, got %T", cmd.Payload),
 			Message: "invalid payload type",
 		}
 	}
@@ -107,10 +128,17 @@ func handleTest(cmd bus.Command) bus.CommandResult {
 
 // handleApply publishes the config.applied event for listeners to react
 func handleApply(cmd bus.Command) bus.CommandResult {
-	cfg, ok := cmd.Payload.(*config.SkillsConfig)
+	cfg, ok := cmd.Payload.(SkillsConfig)
+	if !ok {
+		cfgPtr, okPtr := cmd.Payload.(*SkillsConfig)
+		if okPtr {
+			cfg = *cfgPtr
+			ok = true
+		}
+	}
 	if !ok {
 		return bus.CommandResult{
-			Error:   fmt.Errorf("expected *SkillsConfig, got %T", cmd.Payload),
+			Error:   fmt.Errorf("expected SkillsConfig, got %T", cmd.Payload),
 			Message: "invalid payload type",
 		}
 	}

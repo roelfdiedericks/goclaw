@@ -1,10 +1,11 @@
-package memory
+package llm
 
 import (
 	"context"
 )
 
-// EmbeddingProvider generates embeddings for text
+// EmbeddingProvider generates embeddings for text.
+// This abstraction allows different embedding backends (LLM providers, dedicated services, etc.)
 type EmbeddingProvider interface {
 	// ID returns the provider identifier (e.g., "ollama", "openai", "none")
 	ID() string
@@ -27,7 +28,7 @@ type EmbeddingProvider interface {
 }
 
 // LLMEmbedder is an interface for LLM providers that support embeddings.
-// This matches llm.OllamaProvider's embedding methods without importing llm package.
+// This matches the embedding-related methods on llm.Provider.
 type LLMEmbedder interface {
 	Name() string
 	Model() string
@@ -42,7 +43,7 @@ type LLMProviderAdapter struct {
 	provider LLMEmbedder
 }
 
-// NewLLMProviderAdapter creates an adapter for an LLMEmbedder (e.g., llm.OllamaProvider)
+// NewLLMProviderAdapter creates an adapter for an LLMEmbedder (e.g., llm.Provider)
 func NewLLMProviderAdapter(provider LLMEmbedder) *LLMProviderAdapter {
 	return &LLMProviderAdapter{provider: provider}
 }

@@ -4,13 +4,27 @@ import (
 	"fmt"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
-// CConfig is an alias for config.CronConfig to avoid name collisions
-type CConfig = config.CronConfig
+// CronConfig configures the cron scheduler
+type CronConfig struct {
+	Enabled           bool            `json:"enabled"`           // Enable cron scheduler (default: true)
+	JobTimeoutMinutes int             `json:"jobTimeoutMinutes"` // Timeout for job execution in minutes (default: 30, 0 = no timeout)
+	Heartbeat         HeartbeatConfig `json:"heartbeat"`         // Heartbeat configuration
+}
+
+// HeartbeatConfig configures the periodic heartbeat system
+type HeartbeatConfig struct {
+	Enabled         bool   `json:"enabled"`         // Enable heartbeat (default: true)
+	IntervalMinutes int    `json:"intervalMinutes"` // Interval in minutes (default: 30)
+	Prompt          string `json:"prompt"`          // Custom heartbeat prompt (optional)
+}
+
+// CConfig is an alias for CronConfig for convenience
+// (Cannot use "Config" due to dot-import conflict with logging.Config)
+type CConfig = CronConfig
 
 const configPath = "cron"
 
@@ -55,10 +69,17 @@ func UnregisterCommands() {
 
 // handleApply publishes the config.applied event for listeners to react
 func handleApply(cmd bus.Command) bus.CommandResult {
-	cfg, ok := cmd.Payload.(*config.CronConfig)
+	cfg, ok := cmd.Payload.(CronConfig)
+	if !ok {
+		cfgPtr, okPtr := cmd.Payload.(*CronConfig)
+		if okPtr {
+			cfg = *cfgPtr
+			ok = true
+		}
+	}
 	if !ok {
 		return bus.CommandResult{
-			Error:   fmt.Errorf("expected *CronConfig, got %T", cmd.Payload),
+			Error:   fmt.Errorf("expected CronConfig, got %T", cmd.Payload),
 			Message: "invalid payload type",
 		}
 	}

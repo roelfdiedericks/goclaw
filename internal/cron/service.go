@@ -11,7 +11,6 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/roelfdiedericks/goclaw/internal/bus"
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -21,8 +20,9 @@ const BackupTickInterval = 5 * time.Minute
 // DefaultHeartbeatPrompt is the default prompt sent to the agent during heartbeat.
 const DefaultHeartbeatPrompt = `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 
-// HeartbeatConfig configures the heartbeat system.
-type HeartbeatConfig struct {
+// HeartbeatState holds runtime state for the heartbeat system.
+// Separate from HeartbeatConfig (JSON config) as it includes runtime fields like WorkspaceDir.
+type HeartbeatState struct {
 	Enabled         bool
 	IntervalMinutes int
 	Prompt          string
@@ -110,7 +110,7 @@ type Service struct {
 	jobTimeoutMinutes int // Timeout for job execution (0 = no timeout)
 
 	// Heartbeat
-	heartbeatConfig *HeartbeatConfig
+	heartbeatConfig *HeartbeatState
 	heartbeatTimer  *time.Timer
 	lastHeartbeat   time.Time
 
@@ -135,7 +135,7 @@ func (s *Service) SetChannelProvider(cp ChannelProvider) {
 }
 
 // SetHeartbeatConfig configures the heartbeat system.
-func (s *Service) SetHeartbeatConfig(cfg *HeartbeatConfig) {
+func (s *Service) SetHeartbeatConfig(cfg *HeartbeatState) {
 	s.heartbeatConfig = cfg
 }
 
@@ -300,7 +300,14 @@ func (s *Service) UnregisterOperationalCommands() {
 
 // onConfigApplied handles cron config changes
 func (s *Service) onConfigApplied(e bus.Event) {
-	cfg, ok := e.Data.(*config.CronConfig)
+	cfg, ok := e.Data.(CronConfig)
+	if !ok {
+		cfgPtr, okPtr := e.Data.(*CronConfig)
+		if okPtr {
+			cfg = *cfgPtr
+			ok = true
+		}
+	}
 	if !ok {
 		L_error("cron: invalid config event data type", "type", fmt.Sprintf("%T", e.Data))
 		return

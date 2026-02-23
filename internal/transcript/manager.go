@@ -8,17 +8,15 @@ import (
 	"time"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/roelfdiedericks/goclaw/internal/memory"
 )
 
 // Manager coordinates transcript indexing and search
 type Manager struct {
 	db       *sql.DB
-	provider memory.EmbeddingProvider
-	config   config.TranscriptConfig
+	provider llm.EmbeddingProvider
+	config   TranscriptConfig
 	indexer  *Indexer
 	searcher *Searcher
 
@@ -27,7 +25,7 @@ type Manager struct {
 }
 
 // NewManager creates a new transcript manager
-func NewManager(db *sql.DB, provider memory.EmbeddingProvider, cfg config.TranscriptConfig) (*Manager, error) {
+func NewManager(db *sql.DB, provider llm.EmbeddingProvider, cfg TranscriptConfig) (*Manager, error) {
 	// Initialize schema
 	if err := initSchema(db); err != nil {
 		return nil, fmt.Errorf("init schema: %w", err)
@@ -63,7 +61,7 @@ func (m *Manager) Stop() {
 }
 
 // SetProvider updates the embedding provider (called when LLM config changes)
-func (m *Manager) SetProvider(provider memory.EmbeddingProvider) {
+func (m *Manager) SetProvider(provider llm.EmbeddingProvider) {
 	oldID := "none"
 	if m.provider != nil {
 		oldID = m.provider.ID()
@@ -489,7 +487,7 @@ func (m *Manager) UnregisterOperationalCommands() {
 
 // onConfigApplied handles the transcript.config.applied event by applying new config
 func (m *Manager) onConfigApplied(e bus.Event) {
-	cfg, ok := e.Data.(config.TranscriptConfig)
+	cfg, ok := e.Data.(TranscriptConfig)
 	if !ok {
 		L_error("transcript: invalid config event data type", "type", fmt.Sprintf("%T", e.Data))
 		return
@@ -524,14 +522,14 @@ func (m *Manager) refreshProvider() {
 		return
 	}
 
-	// Adapt llm.Provider to memory.EmbeddingProvider interface
-	embedder, ok := provider.(memory.LLMEmbedder)
+	// Adapt llm.Provider to llm.EmbeddingProvider interface
+	embedder, ok := provider.(llm.LLMEmbedder)
 	if !ok {
 		L_warn("transcript: refreshProvider - provider does not implement LLMEmbedder", "type", fmt.Sprintf("%T", provider))
 		return
 	}
 
-	newProvider := memory.NewLLMProviderAdapter(embedder)
+	newProvider := llm.NewLLMProviderAdapter(embedder)
 	m.SetProvider(newProvider)
 }
 

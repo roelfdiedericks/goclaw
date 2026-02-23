@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/roelfdiedericks/goclaw/internal/memory"
 )
 
 // SearchOptions configures search behavior
@@ -50,11 +50,11 @@ type SearchResult struct {
 // Searcher handles transcript search operations
 type Searcher struct {
 	db       *sql.DB
-	provider memory.EmbeddingProvider
+	provider llm.EmbeddingProvider
 }
 
 // NewSearcher creates a new transcript searcher
-func NewSearcher(db *sql.DB, provider memory.EmbeddingProvider) *Searcher {
+func NewSearcher(db *sql.DB, provider llm.EmbeddingProvider) *Searcher {
 	return &Searcher{
 		db:       db,
 		provider: provider,
@@ -62,7 +62,7 @@ func NewSearcher(db *sql.DB, provider memory.EmbeddingProvider) *Searcher {
 }
 
 // SetProvider updates the embedding provider
-func (s *Searcher) SetProvider(provider memory.EmbeddingProvider) {
+func (s *Searcher) SetProvider(provider llm.EmbeddingProvider) {
 	s.provider = provider
 }
 

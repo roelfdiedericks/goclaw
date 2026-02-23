@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -30,7 +31,7 @@ const (
 // Indexer manages the background indexing of memory files
 type Indexer struct {
 	db           *sql.DB
-	provider     EmbeddingProvider
+	provider     llm.EmbeddingProvider
 	workspaceDir string
 	extraPaths   []string
 
@@ -50,7 +51,7 @@ type Indexer struct {
 }
 
 // NewIndexer creates a new memory indexer
-func NewIndexer(db *sql.DB, provider EmbeddingProvider, workspaceDir string, extraPaths []string) *Indexer {
+func NewIndexer(db *sql.DB, provider llm.EmbeddingProvider, workspaceDir string, extraPaths []string) *Indexer {
 	return &Indexer{
 		db:           db,
 		provider:     provider,
@@ -62,7 +63,7 @@ func NewIndexer(db *sql.DB, provider EmbeddingProvider, workspaceDir string, ext
 }
 
 // SetProvider updates the embedding provider (e.g., when a better one becomes available)
-func (idx *Indexer) SetProvider(provider EmbeddingProvider) {
+func (idx *Indexer) SetProvider(provider llm.EmbeddingProvider) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	idx.provider = provider

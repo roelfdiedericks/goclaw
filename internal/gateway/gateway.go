@@ -300,10 +300,10 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 
 	// Initialize memory manager if enabled
 	// Memory manager now calls llm.GetRegistry() directly (cycle broken by types.ToolDefinition)
-	if cfg.MemorySearch.Enabled {
+	if cfg.Memory.Enabled {
 		L_info("memory: initializing manager", "workspace", cfg.Gateway.WorkingDir)
 
-		memMgr, err := memory.NewManager(cfg.MemorySearch, cfg.Gateway.WorkingDir)
+		memMgr, err := memory.NewManager(cfg.Memory, cfg.Gateway.WorkingDir)
 		if err != nil {
 			L_warn("failed to create memory manager", "error", err)
 		} else {
@@ -859,7 +859,7 @@ func (g *Gateway) StartCron(ctx context.Context) error {
 
 	// Set up heartbeat config if enabled
 	if g.config.Cron.Heartbeat.Enabled {
-		heartbeatCfg := &cron.HeartbeatConfig{
+		heartbeatCfg := &cron.HeartbeatState{
 			Enabled:         g.config.Cron.Heartbeat.Enabled,
 			IntervalMinutes: g.config.Cron.Heartbeat.IntervalMinutes,
 			Prompt:          g.config.Cron.Heartbeat.Prompt,

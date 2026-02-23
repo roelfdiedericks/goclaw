@@ -12,16 +12,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/roelfdiedericks/goclaw/internal/config"
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/roelfdiedericks/goclaw/internal/memory"
 )
 
 // Indexer manages background indexing of session messages
 type Indexer struct {
 	db       *sql.DB
-	provider memory.EmbeddingProvider
-	config   config.TranscriptConfig
+	provider llm.EmbeddingProvider
+	config   TranscriptConfig
 
 	syncing  atomic.Bool
 	stopChan chan struct{}
@@ -38,7 +37,7 @@ type Indexer struct {
 }
 
 // NewIndexer creates a new transcript indexer
-func NewIndexer(db *sql.DB, provider memory.EmbeddingProvider, cfg config.TranscriptConfig) *Indexer {
+func NewIndexer(db *sql.DB, provider llm.EmbeddingProvider, cfg TranscriptConfig) *Indexer {
 	// Apply defaults for zero values
 	if cfg.IndexIntervalSeconds <= 0 {
 		cfg.IndexIntervalSeconds = 30
@@ -70,7 +69,7 @@ func NewIndexer(db *sql.DB, provider memory.EmbeddingProvider, cfg config.Transc
 }
 
 // SetProvider updates the embedding provider
-func (idx *Indexer) SetProvider(provider memory.EmbeddingProvider) {
+func (idx *Indexer) SetProvider(provider llm.EmbeddingProvider) {
 	idx.provider = provider
 }
 
@@ -80,7 +79,7 @@ func (idx *Indexer) SetAgentName(name string) {
 }
 
 // UpdateConfig updates the indexer configuration
-func (idx *Indexer) UpdateConfig(cfg config.TranscriptConfig) {
+func (idx *Indexer) UpdateConfig(cfg TranscriptConfig) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 

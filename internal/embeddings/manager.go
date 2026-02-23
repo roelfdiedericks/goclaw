@@ -11,7 +11,6 @@ import (
 
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/roelfdiedericks/goclaw/internal/memory"
 )
 
 // Manager handles embedding status and rebuild operations
@@ -262,12 +261,12 @@ func (m *Manager) Rebuild(ctx context.Context, force bool, onProgress ProgressFu
 	}
 
 	// Get embedder interface
-	embedder, ok := provider.(memory.LLMEmbedder)
+	embedder, ok := provider.(llm.LLMEmbedder)
 	if !ok {
 		return fmt.Errorf("provider does not support embeddings: %T", provider)
 	}
 
-	embeddingProvider := memory.NewLLMProviderAdapter(embedder)
+	embeddingProvider := llm.NewLLMProviderAdapter(embedder)
 
 	// Count total chunks to process
 	totalTranscript := 0
@@ -468,7 +467,7 @@ func getTableStatus(db *sql.DB, tableName, primaryModel string) (*tableStatus, e
 	return s, nil
 }
 
-func rebuildTable(ctx context.Context, db *sql.DB, tableName, textColumn, primaryModel string, provider memory.EmbeddingProvider, batchSize, processedSoFar, total int, onProgress ProgressFunc) (int, error) {
+func rebuildTable(ctx context.Context, db *sql.DB, tableName, textColumn, primaryModel string, provider llm.EmbeddingProvider, batchSize, processedSoFar, total int, onProgress ProgressFunc) (int, error) {
 	processed := 0
 	progressInterval := 50
 

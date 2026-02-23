@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -162,7 +161,14 @@ func (m *Manager) UnregisterOperationalCommands() {
 
 // onConfigApplied handles skills config changes
 func (m *Manager) onConfigApplied(e bus.Event) {
-	cfg, ok := e.Data.(*config.SkillsConfig)
+	cfg, ok := e.Data.(SkillsConfig)
+	if !ok {
+		cfgPtr, okPtr := e.Data.(*SkillsConfig)
+		if okPtr {
+			cfg = *cfgPtr
+			ok = true
+		}
+	}
 	if !ok {
 		L_error("skills: invalid config event data type", "type", fmt.Sprintf("%T", e.Data))
 		return

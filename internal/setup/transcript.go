@@ -10,11 +10,12 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/transcript"
 )
 
 // TranscriptEditor manages transcript configuration editing
 type TranscriptEditor struct {
-	cfg        config.TranscriptConfig
+	cfg        transcript.TranscriptConfig
 	configPath string
 	modified   bool
 }
@@ -363,11 +364,11 @@ func parseFloat(s string) (float64, error) {
 }
 
 // loadTranscriptConfig loads the transcript section from goclaw.json
-func loadTranscriptConfig() (config.TranscriptConfig, string, error) {
+func loadTranscriptConfig() (transcript.TranscriptConfig, string, error) {
 	result, err := config.Load()
 	if err != nil {
 		// Return defaults if no config
-		return config.TranscriptConfig{
+		return transcript.TranscriptConfig{
 			Enabled:                true,
 			IndexIntervalSeconds:   30,
 			BatchSize:              100,
@@ -375,7 +376,7 @@ func loadTranscriptConfig() (config.TranscriptConfig, string, error) {
 			MaxGroupGapSeconds:     300,
 			MaxMessagesPerChunk:    8,
 			MaxEmbeddingContentLen: 16000,
-			Query: config.TranscriptQueryConfig{
+			Query: transcript.TranscriptQueryConfig{
 				MaxResults:    10,
 				MinScore:      0.3,
 				VectorWeight:  0.7,
@@ -388,7 +389,7 @@ func loadTranscriptConfig() (config.TranscriptConfig, string, error) {
 }
 
 // saveTranscriptConfig saves the transcript config back to goclaw.json
-func saveTranscriptConfig(cfg config.TranscriptConfig, configPath string) error {
+func saveTranscriptConfig(cfg transcript.TranscriptConfig, configPath string) error {
 	if configPath == "" {
 		return fmt.Errorf("no config file path")
 	}

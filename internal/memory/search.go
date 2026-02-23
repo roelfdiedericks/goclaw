@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -52,7 +53,7 @@ type searchResult struct {
 }
 
 // Search performs hybrid search over the memory index
-func Search(ctx context.Context, db *sql.DB, provider EmbeddingProvider, query string, opts SearchOptions) ([]SearchResult, error) {
+func Search(ctx context.Context, db *sql.DB, provider llm.EmbeddingProvider, query string, opts SearchOptions) ([]SearchResult, error) {
 	if query == "" {
 		return nil, nil
 	}
@@ -185,7 +186,7 @@ func buildFTSQuery(query string) string {
 }
 
 // searchVector performs vector similarity search
-func searchVector(ctx context.Context, db *sql.DB, provider EmbeddingProvider, query string, limit int) (map[string]float64, error) {
+func searchVector(ctx context.Context, db *sql.DB, provider llm.EmbeddingProvider, query string, limit int) (map[string]float64, error) {
 	// Generate query embedding
 	queryEmbedding, err := provider.EmbedQuery(ctx, query)
 	if err != nil {

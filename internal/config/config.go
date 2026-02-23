@@ -10,10 +10,14 @@ import (
 	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
 	telegramconfig "github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
 	tuiconfig "github.com/roelfdiedericks/goclaw/internal/channels/tui/config"
+	"github.com/roelfdiedericks/goclaw/internal/cron"
 	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/memory"
 	"github.com/roelfdiedericks/goclaw/internal/session"
+	"github.com/roelfdiedericks/goclaw/internal/skills"
+	"github.com/roelfdiedericks/goclaw/internal/transcript"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
@@ -133,22 +137,22 @@ type ChannelsConfig struct {
 
 // Config represents the merged goclaw configuration
 type Config struct {
-	Gateway       GatewayConfig               `json:"gateway"`
-	Agent         gwtypes.AgentIdentityConfig `json:"agent"`
-	LLM           llm.LLMConfig               `json:"llm"`
-	HomeAssistant HomeAssistantConfig         `json:"homeassistant"` // Top-level Home Assistant config
-	Tools         ToolsConfig                 `json:"tools"`
-	Channels      ChannelsConfig              `json:"channels"` // All channel configs (telegram, http, tui)
-	Session       session.SessionConfig       `json:"session"`
-	MemorySearch  MemorySearchConfig          `json:"memorySearch"`
-	Transcript    TranscriptConfig            `json:"transcript"`
-	PromptCache   PromptCacheConfig           `json:"promptCache"`
-	Media         MediaConfig                 `json:"media"`
-	Skills        SkillsConfig                `json:"skills"`
-	Cron          CronConfig                  `json:"cron"`
-	Supervision   gwtypes.SupervisionConfig   `json:"supervision"`
-	Roles         user.RolesConfig            `json:"roles"` // Role-based access control
-	Auth          AuthConfig                  `json:"auth"`  // Role elevation authentication
+	Gateway       GatewayConfig                  `json:"gateway"`
+	Agent         gwtypes.AgentIdentityConfig    `json:"agent"`
+	LLM           llm.LLMConfig                  `json:"llm"`
+	HomeAssistant HomeAssistantConfig            `json:"homeassistant"` // Top-level Home Assistant config
+	Tools         ToolsConfig                    `json:"tools"`
+	Channels      ChannelsConfig                 `json:"channels"` // All channel configs (telegram, http, tui)
+	Session       session.SessionConfig          `json:"session"`
+	Memory        memory.MemorySearchConfig      `json:"memory"`
+	Transcript    transcript.TranscriptConfig    `json:"transcript"`
+	PromptCache   PromptCacheConfig              `json:"promptCache"`
+	Media         MediaConfig                    `json:"media"`
+	Skills        skills.SkillsConfig            `json:"skills"`
+	Cron          cron.CronConfig                `json:"cron"`
+	Supervision   gwtypes.SupervisionConfig      `json:"supervision"`
+	Roles         user.RolesConfig               `json:"roles"` // Role-based access control
+	Auth          AuthConfig                     `json:"auth"`  // Role elevation authentication
 }
 
 // CredentialHint describes a credential the auth script accepts
@@ -166,40 +170,6 @@ type AuthConfig struct {
 	CredentialHints []CredentialHint `json:"credentialHints"` // Credentials the script accepts (shown to agent)
 	RateLimit       int              `json:"rateLimit"`       // Max attempts per minute (default: 3)
 	Timeout         int              `json:"timeout"`         // Script timeout in seconds (default: 10)
-}
-
-// CronConfig configures the cron scheduler
-type CronConfig struct {
-	Enabled           bool            `json:"enabled"`           // Enable cron scheduler (default: true)
-	JobTimeoutMinutes int             `json:"jobTimeoutMinutes"` // Timeout for job execution in minutes (default: 30, 0 = no timeout)
-	Heartbeat         HeartbeatConfig `json:"heartbeat"`         // Heartbeat configuration
-}
-
-// HeartbeatConfig configures the periodic heartbeat system
-type HeartbeatConfig struct {
-	Enabled         bool   `json:"enabled"`         // Enable heartbeat (default: true)
-	IntervalMinutes int    `json:"intervalMinutes"` // Interval in minutes (default: 30)
-	Prompt          string `json:"prompt"`          // Custom heartbeat prompt (optional)
-}
-
-// SkillsConfig configures the skills system
-type SkillsConfig struct {
-	Enabled       bool                        `json:"enabled"`
-	BundledDir    string                      `json:"bundledDir"`      // Override bundled skills path
-	ManagedDir    string                      `json:"managedDir"`      // Override managed skills path
-	WorkspaceDir  string                      `json:"workspaceDir"`    // Override workspace skills path
-	ExtraDirs     []string                    `json:"extraDirs"`       // Additional skill directories
-	Watch         bool                        `json:"watch"`           // Watch for file changes
-	WatchDebounce int                         `json:"watchDebounceMs"` // Debounce interval in ms
-	Entries       map[string]SkillEntryConfig `json:"entries"`         // Per-skill configuration
-}
-
-// SkillEntryConfig holds per-skill configuration
-type SkillEntryConfig struct {
-	Enabled bool              `json:"enabled"`
-	APIKey  string            `json:"apiKey,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-	Config  map[string]any    `json:"config,omitempty"`
 }
 
 // MediaConfig configures media file storage
@@ -226,45 +196,6 @@ type PromptCacheConfig struct {
 	PollInterval int `json:"pollInterval"` // Hash poll interval in seconds (default: 60, 0 = disabled)
 }
 
-// MemorySearchConfig configures the memory search tool
-type MemorySearchConfig struct {
-	Enabled bool                    `json:"enabled"` // Enable memory search tools
-	DbPath  string                  `json:"dbPath"`  // Database path (default: ~/.goclaw/memory.db)
-	Query   MemorySearchQueryConfig `json:"query"`   // Search query settings
-	Paths   []string                `json:"paths"`   // Additional paths to index (besides memory/ and MEMORY.md)
-}
-
-// MemorySearchQueryConfig configures search query behavior
-type MemorySearchQueryConfig struct {
-	MaxResults    int     `json:"maxResults"`    // Maximum number of results to return (default: 6)
-	MinScore      float64 `json:"minScore"`      // Minimum score threshold (default: 0.35)
-	VectorWeight  float64 `json:"vectorWeight"`  // Weight for vector/semantic search (default: 0.7)
-	KeywordWeight float64 `json:"keywordWeight"` // Weight for keyword/FTS search (default: 0.3)
-}
-
-// TranscriptConfig configures transcript indexing and search
-type TranscriptConfig struct {
-	Enabled bool `json:"enabled"` // Enable transcript indexing (default: true)
-
-	// Indexing settings
-	IndexIntervalSeconds   int `json:"indexIntervalSeconds"`   // How often to check for new messages (default: 30)
-	BatchSize              int `json:"batchSize"`              // Max messages to process per batch (default: 100)
-	BackfillBatchSize      int `json:"backfillBatchSize"`      // Max chunks to backfill per interval (default: 10)
-	MaxGroupGapSeconds     int `json:"maxGroupGapSeconds"`     // Max time gap between messages in a chunk (default: 300 = 5 min)
-	MaxMessagesPerChunk    int `json:"maxMessagesPerChunk"`    // Max messages per conversation chunk (default: 8)
-	MaxEmbeddingContentLen int `json:"maxEmbeddingContentLen"` // Max chars to embed per chunk (default: 16000)
-
-	// Search settings (similar to memory search)
-	Query TranscriptQueryConfig `json:"query"`
-}
-
-// TranscriptQueryConfig configures transcript search behavior
-type TranscriptQueryConfig struct {
-	MaxResults    int     `json:"maxResults"`    // Maximum results to return (default: 10)
-	MinScore      float64 `json:"minScore"`      // Minimum score threshold (default: 0.3)
-	VectorWeight  float64 `json:"vectorWeight"`  // Weight for vector search (default: 0.7)
-	KeywordWeight float64 `json:"keywordWeight"` // Weight for keyword search (default: 0.3)
-}
 
 // GatewayConfig contains gateway server settings
 type GatewayConfig struct {
@@ -537,9 +468,9 @@ func Load() (*LoadResult, error) {
 				},
 			},
 		},
-		MemorySearch: MemorySearchConfig{
+		Memory: memory.MemorySearchConfig{
 			Enabled: true, // Memory search enabled by default
-			Query: MemorySearchQueryConfig{
+			Query: memory.MemorySearchQueryConfig{
 				MaxResults:    6,
 				MinScore:      0.35,
 				VectorWeight:  0.7,
@@ -547,7 +478,7 @@ func Load() (*LoadResult, error) {
 			},
 			Paths: []string{}, // Only memory/ and MEMORY.md by default
 		},
-		Transcript: TranscriptConfig{
+		Transcript: transcript.TranscriptConfig{
 			Enabled:                true,
 			IndexIntervalSeconds:   30,
 			BatchSize:              100,
@@ -555,7 +486,7 @@ func Load() (*LoadResult, error) {
 			MaxGroupGapSeconds:     300,
 			MaxMessagesPerChunk:    8,
 			MaxEmbeddingContentLen: 16000,
-			Query: TranscriptQueryConfig{
+			Query: transcript.TranscriptQueryConfig{
 				MaxResults:    10,
 				MinScore:      0.3,
 				VectorWeight:  0.7,
@@ -576,16 +507,16 @@ func Load() (*LoadResult, error) {
 			},
 			// Telegram and HTTP are disabled by default (zero values)
 		},
-		Skills: SkillsConfig{
+		Skills: skills.SkillsConfig{
 			Enabled:       true,
 			Watch:         true,
 			WatchDebounce: 500,
-			Entries:       make(map[string]SkillEntryConfig),
+			Entries:       make(map[string]skills.SkillEntryConfig),
 		},
-		Cron: CronConfig{
+		Cron: cron.CronConfig{
 			Enabled:           true, // Cron enabled by default
 			JobTimeoutMinutes: 5,    // Default 5 minute timeout for jobs
-			Heartbeat: HeartbeatConfig{
+			Heartbeat: cron.HeartbeatConfig{
 				Enabled:         true,
 				IntervalMinutes: 30,
 			},
@@ -785,8 +716,8 @@ func mergeConfigSelective(dst, src *Config, rawMap map[string]interface{}) error
 		// Session needs nested selective merge
 		mergeSessionSelective(&dst.Session, &src.Session, sessionMap)
 	}
-	if _, ok := rawMap["memorySearch"]; ok {
-		if err := mergo.Merge(&dst.MemorySearch, src.MemorySearch, mergo.WithOverride); err != nil {
+	if _, ok := rawMap["memory"]; ok {
+		if err := mergo.Merge(&dst.Memory, src.Memory, mergo.WithOverride); err != nil {
 			return err
 		}
 	}
