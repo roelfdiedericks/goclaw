@@ -251,16 +251,17 @@ func (s *Session) AddToolUse(toolUseID, toolName string, input json.RawMessage, 
 }
 
 // AddToolResult adds a tool result message to the session
-func (s *Session) AddToolResult(toolUseID, result string) {
+func (s *Session) AddToolResult(toolUseID, result string, contentBlocks []ContentBlock) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.Messages = append(s.Messages, Message{
-		ID:        generateMessageID(),
-		Role:      "tool_result",
-		ToolUseID: toolUseID,
-		Content:   result,
-		Timestamp: time.Now(),
+		ID:            generateMessageID(),
+		Role:          "tool_result",
+		ToolUseID:     toolUseID,
+		Content:       result,
+		ContentBlocks: contentBlocks,
+		Timestamp:     time.Now(),
 	})
 	s.UpdatedAt = time.Now()
 }

@@ -3,8 +3,10 @@ package gateway
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -425,6 +427,67 @@ func (g *Gateway) Channels() map[string]Channel {
 // MediaStore returns the media store
 func (g *Gateway) MediaStore() *media.MediaStore {
 	return g.mediaStore
+}
+
+// resolveMediaContent resolves FilePath references to base64 Data in message ContentBlocks.
+// Returns a new slice with resolved media; original messages are not modified.
+// This is called before sending messages to the LLM so media can be injected ephemerally.
+func (g *Gateway) resolveMediaContent(messages []types.Message, provider llm.Provider) []types.Message {
+	resolved := make([]types.Message, len(messages))
+	copy(resolved, messages)
+
+	supportsVision := llm.SupportsVision(provider)
+	supportsToolImages := llm.SupportsToolResultImages(provider)
+
+	for i := range resolved {
+		msg := &resolved[i]
+
+		// Skip messages without content blocks
+		if len(msg.ContentBlocks) == 0 {
+			continue
+		}
+
+		// Check if this message type supports images
+		canHaveImages := false
+		switch msg.Role {
+		case "user":
+			canHaveImages = supportsVision
+		case "tool_result":
+			canHaveImages = supportsToolImages
+		}
+
+		// Resolve content blocks
+		resolvedBlocks := make([]types.ContentBlock, 0, len(msg.ContentBlocks))
+		for _, block := range msg.ContentBlocks {
+			// Skip image blocks if provider doesn't support them
+			if block.Type == "image" && !canHaveImages {
+				L_debug("gateway: skipping image block (provider doesn't support)", "role", msg.Role)
+				continue
+			}
+
+			// Resolve FilePath to Data for image/audio blocks
+			if (block.Type == "image" || block.Type == "audio") && block.FilePath != "" && block.Data == "" {
+				data, err := os.ReadFile(block.FilePath)
+				if err != nil {
+					L_warn("gateway: failed to read media file", "path", block.FilePath, "error", err)
+					continue
+				}
+				block.Data = base64.StdEncoding.EncodeToString(data)
+
+				// Detect MIME type if not set
+				if block.MimeType == "" {
+					block.MimeType = media.DetectMIME(data)
+				}
+
+				L_debug("gateway: resolved media", "type", block.Type, "path", block.FilePath, "size", len(data))
+			}
+
+			resolvedBlocks = append(resolvedBlocks, block)
+		}
+		msg.ContentBlocks = resolvedBlocks
+	}
+
+	return resolved
 }
 
 // MemoryManager returns the memory manager
@@ -1593,6 +1656,9 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			}
 		}
 
+		// Resolve media content (FilePath -> base64 Data) before sending to LLM
+		resolvedMessages := g.resolveMediaContent(messages, g.llm)
+
 		var response *llm.Response
 		var failoverResult *llm.FailoverResult
 		var llmErr error
@@ -1601,7 +1667,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				agentCtx,
 				"agent",
 				stateAccessor,
-				messages,
+				resolvedMessages,
 				toolDefs,
 				systemPrompt,
 				func(delta string) {
@@ -1633,6 +1699,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 					// Refresh messages after compaction
 					messages = sess.GetMessages()
+					resolvedMessages = g.resolveMediaContent(messages, g.llm)
 					L_info("recovery compaction completed, retrying API call",
 						"newTokens", sess.GetTotalTokens(),
 						"newMessages", len(messages))
@@ -1709,7 +1776,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					Error:    "permission_denied",
 				})
 				sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
-				sess.AddToolResult(response.ToolUseID, result)
+				sess.AddToolResult(response.ToolUseID, result, nil)
 				// Persist denied tool use/result (skip for heartbeat - ephemeral)
 				if !req.IsHeartbeat {
 					g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
@@ -1778,7 +1845,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 		// Add to session and continue loop
 		sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
-		sess.AddToolResult(response.ToolUseID, resultText)
+		sess.AddToolResult(response.ToolUseID, resultText, toolResult.Content)
 		// Persist tool use and result to SQLite (skip for heartbeat - ephemeral)
 		if !req.IsHeartbeat {
 			g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")

@@ -703,14 +703,47 @@ func convertMessages(messages []types.Message) []anthropic.MessageParam {
 				))
 				continue
 			}
-			// Tool results must have content
+
+			// Build tool result content blocks
+			var toolResultContent []anthropic.ToolResultBlockParamContentUnion
+
+			// Add text content
 			content := msg.Content
 			if content == "" {
 				content = "[empty result]"
 			}
-			result = append(result, anthropic.NewUserMessage(
-				anthropic.NewToolResultBlock(msg.ToolUseID, content, false),
-			))
+			toolResultContent = append(toolResultContent, anthropic.ToolResultBlockParamContentUnion{
+				OfText: &anthropic.TextBlockParam{Text: content},
+			})
+
+			// Add image blocks from ContentBlocks (resolved by gateway)
+			for _, block := range msg.ContentBlocks {
+				if block.Type == "image" && block.Data != "" {
+					toolResultContent = append(toolResultContent, anthropic.ToolResultBlockParamContentUnion{
+						OfImage: &anthropic.ImageBlockParam{
+							Source: anthropic.ImageBlockParamSourceUnion{
+								OfBase64: &anthropic.Base64ImageSourceParam{
+									MediaType: anthropic.Base64ImageSourceMediaType(block.MimeType),
+									Data:      block.Data,
+								},
+							},
+						},
+					})
+					L_trace("added image to tool result", "toolID", msg.ToolUseID, "mimeType", block.MimeType)
+				}
+			}
+
+			result = append(result, anthropic.MessageParam{
+				Role: anthropic.MessageParamRoleUser,
+				Content: []anthropic.ContentBlockParamUnion{
+					{
+						OfToolResult: &anthropic.ToolResultBlockParam{
+							ToolUseID: msg.ToolUseID,
+							Content:   toolResultContent,
+						},
+					},
+				},
+			})
 		}
 	}
 

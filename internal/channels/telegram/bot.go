@@ -509,12 +509,33 @@ func (b *Bot) handleVoice(c tele.Context) error {
 
 	logging.L_debug("telegram: voice downloaded", "size", len(voiceData))
 
-	// Create audio content block
-	// Note: For now, we store the raw data. The gateway will handle conversion.
+	// Save voice file to disk for ephemeral resolution
+	// Determine extension from MIME type
+	ext := ".ogg"
+	mimeType := voice.MIME
+	if mimeType == "" {
+		mimeType = "audio/ogg"
+	}
+
+	// Save to media store
+	var absPath string
+	if b.gateway != nil && b.gateway.MediaStore() != nil {
+		var err error
+		absPath, _, err = b.gateway.MediaStore().Save(voiceData, "voice", ext)
+		if err != nil {
+			logging.L_error("telegram: failed to save voice file", "error", err)
+			return c.Send("Sorry, I couldn't save that voice message.")
+		}
+		logging.L_debug("telegram: voice saved", "path", absPath)
+	} else {
+		logging.L_warn("telegram: no media store, voice will be stored inline")
+	}
+
+	// Create audio content block with file reference
 	audioBlock := types.ContentBlock{
 		Type:     "audio",
-		Data:     string(voiceData), // Raw bytes as string for now - will be base64 encoded by gateway
-		MimeType: voice.MIME,
+		FilePath: absPath,
+		MimeType: mimeType,
 		Duration: voice.Duration,
 		Source:   "telegram",
 	}
