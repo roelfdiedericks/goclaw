@@ -1846,6 +1846,20 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		// Add to session and continue loop
 		sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
 		sess.AddToolResult(response.ToolUseID, resultText, toolResult.Content)
+
+		// Debug: log ContentBlocks being stored
+		if len(toolResult.Content) > 0 {
+			for i, block := range toolResult.Content {
+				L_debug("tool result content block",
+					"tool", response.ToolName,
+					"blockIndex", i,
+					"type", block.Type,
+					"hasFilePath", block.FilePath != "",
+					"hasData", block.Data != "",
+					"mimeType", block.MimeType,
+				)
+			}
+		}
 		// Persist tool use and result to SQLite (skip for heartbeat - ephemeral)
 		if !req.IsHeartbeat {
 			g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
