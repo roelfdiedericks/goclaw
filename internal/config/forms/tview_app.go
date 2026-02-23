@@ -40,8 +40,8 @@ type TviewApp struct {
 	appRunning  bool
 
 	// Callbacks
-	onEscape         func()                                   // called when Escape is pressed
-	formInputCapture func(*tcell.EventKey) *tcell.EventKey // form-specific input handler
+	onEscape         func()
+	formInputCapture func(*tcell.EventKey) *tcell.EventKey
 }
 
 // NewTviewApp creates a new application shell

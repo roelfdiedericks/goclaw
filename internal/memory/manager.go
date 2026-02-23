@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -23,8 +24,9 @@ type Manager struct {
 	workspaceDir string
 	config       config.MemorySearchConfig
 
-	mu     sync.RWMutex
-	closed bool
+	mu          sync.RWMutex
+	closed      bool
+	llmEventSub bus.SubscriptionID // subscription to llm.config.applied event
 }
 
 // NewManager creates a new memory manager.
@@ -82,9 +84,18 @@ func NewManager(cfg config.MemorySearchConfig, workspaceDir string) (*Manager, e
 		config:       cfg,
 	}
 
+	// Subscribe to LLM config changes to refresh embedding provider
+	m.llmEventSub = bus.SubscribeEvent("llm.config.applied", m.onLLMConfigApplied)
+
 	L_info("memory: manager created", "dbPath", dbPath, "provider", provider.ID())
 
 	return m, nil
+}
+
+// onLLMConfigApplied handles the llm.config.applied event by refreshing the embedding provider
+func (m *Manager) onLLMConfigApplied(e bus.Event) {
+	L_debug("memory: received llm.config.applied event")
+	m.refreshProvider()
 }
 
 // Provider returns the embedding provider (for sharing with transcript indexer)
@@ -161,6 +172,12 @@ func (m *Manager) Close() error {
 	m.closed = true
 
 	L_info("memory: closing manager")
+
+	// Unsubscribe from LLM config events
+	if m.llmEventSub != 0 {
+		bus.UnsubscribeEvent(m.llmEventSub)
+		m.llmEventSub = 0
+	}
 
 	// Stop indexer
 	m.indexer.Stop()

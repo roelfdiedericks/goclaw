@@ -69,6 +69,11 @@ func NewIndexer(db *sql.DB, provider memory.EmbeddingProvider, cfg config.Transc
 	}
 }
 
+// SetProvider updates the embedding provider
+func (idx *Indexer) SetProvider(provider memory.EmbeddingProvider) {
+	idx.provider = provider
+}
+
 // SetAgentName sets the agent's display name for transcript labels
 func (idx *Indexer) SetAgentName(name string) {
 	idx.agentName = name

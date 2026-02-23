@@ -31,12 +31,12 @@ const (
 
 // FormContent represents a rendered form that can be embedded in any app
 type FormContent struct {
-	Frame        tview.Primitive                        // The visual content (titled frame with form + buttonbar)
-	Focusable    tview.Primitive                        // The form, to receive initial focus
-	InputCapture func(*tcell.EventKey) *tcell.EventKey // Navigation handler for Tab/Backtab
-	OnResult     func(TviewResult)                      // Callback when Save/Cancel pressed
-	form         *tview.Form                            // internal reference for navigation
-	buttonBar    *tview.Form                            // internal reference for navigation
+	Frame        tview.Primitive
+	Focusable    tview.Primitive
+	InputCapture func(*tcell.EventKey) *tcell.EventKey
+	OnResult     func(TviewResult)
+	form         *tview.Form
+	buttonBar    *tview.Form
 }
 
 // BuildFormContent creates embeddable form content for use within an existing app

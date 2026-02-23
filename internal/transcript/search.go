@@ -61,6 +61,11 @@ func NewSearcher(db *sql.DB, provider memory.EmbeddingProvider) *Searcher {
 	}
 }
 
+// SetProvider updates the embedding provider
+func (s *Searcher) SetProvider(provider memory.EmbeddingProvider) {
+	s.provider = provider
+}
+
 // Search performs hybrid search with user scoping
 func (s *Searcher) Search(ctx context.Context, query string, userID string, isOwner bool, opts SearchOptions) ([]SearchResult, error) {
 	if opts.MaxResults <= 0 {

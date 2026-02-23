@@ -43,12 +43,12 @@ func (m *MenuListResult) Focusable() tview.Primitive {
 
 // menuState tracks selection for > prefix updates
 type menuState struct {
-	list       *tview.List
-	items      []MenuItem
-	itemCount  int // number of actual items (before back)
-	lastIndex  int
-	hasBack    bool
-	backIndex  int
+	list      *tview.List
+	items     []MenuItem
+	itemCount int // number of actual items (before back)
+	lastIndex int
+	hasBack   bool
+	backIndex int
 }
 
 // NewMenuList creates a consistently styled, centered menu list

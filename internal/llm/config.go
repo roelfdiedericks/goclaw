@@ -284,12 +284,14 @@ func ProviderConfigFormDef() forms.FormDef {
 func RegisterCommands() {
 	bus.RegisterCommand("llm", "test", handleTestConnection)
 	bus.RegisterCommand("llm", "listModels", handleListModels)
+	bus.RegisterCommand("llm", "apply", handleApply)
 }
 
 // UnregisterCommands removes LLM config command handlers
 func UnregisterCommands() {
 	bus.UnregisterCommand("llm", "test")
 	bus.UnregisterCommand("llm", "listModels")
+	bus.UnregisterCommand("llm", "apply")
 }
 
 // handleTestConnection tests connectivity to the configured provider
@@ -408,6 +410,47 @@ func handleListModels(cmd bus.Command) bus.CommandResult {
 		Success: true,
 		Message: sb.String(),
 		Data:    models,
+	}
+}
+
+// handleApply rebuilds the LLM registry with new configuration and notifies subscribers
+func handleApply(cmd bus.Command) bus.CommandResult {
+	cfg, ok := cmd.Payload.(*LLMConfig)
+	if !ok {
+		return bus.CommandResult{
+			Error:   fmt.Errorf("invalid payload type: expected *LLMConfig, got %T", cmd.Payload),
+			Message: "Internal error: invalid config type",
+		}
+	}
+
+	// Convert LLMConfig to RegistryConfig (subset of fields)
+	regCfg := RegistryConfig{
+		Providers:     cfg.Providers,
+		Agent:         cfg.Agent,
+		Summarization: cfg.Summarization,
+		Embeddings:    cfg.Embeddings,
+	}
+
+	// Create new registry
+	newRegistry, err := NewRegistry(regCfg)
+	if err != nil {
+		L_error("llm: apply failed to create registry", "error", err)
+		return bus.CommandResult{
+			Error:   err,
+			Message: fmt.Sprintf("Failed to create registry: %s", err),
+		}
+	}
+
+	// Replace global registry
+	SetGlobalRegistry(newRegistry)
+
+	// Publish event for subscribers (transcript, memory, etc.)
+	bus.PublishEvent("llm.config.applied", cfg)
+
+	L_info("llm: config applied", "providers", len(cfg.Providers))
+	return bus.CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("LLM configuration applied (%d providers)", len(cfg.Providers)),
 	}
 }
 

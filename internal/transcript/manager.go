@@ -9,6 +9,7 @@ import (
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/config"
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
 )
@@ -20,6 +21,8 @@ type Manager struct {
 	config   config.TranscriptConfig
 	indexer  *Indexer
 	searcher *Searcher
+
+	llmEventSub bus.SubscriptionID // subscription to llm.config.applied event
 }
 
 // NewManager creates a new transcript manager
@@ -56,6 +59,24 @@ func (m *Manager) Start() {
 func (m *Manager) Stop() {
 	L_info("transcript: stopping manager")
 	m.indexer.Stop()
+}
+
+// SetProvider updates the embedding provider (called when LLM config changes)
+func (m *Manager) SetProvider(provider memory.EmbeddingProvider) {
+	oldID := "none"
+	if m.provider != nil {
+		oldID = m.provider.ID()
+	}
+	newID := "none"
+	if provider != nil {
+		newID = provider.ID()
+	}
+
+	m.provider = provider
+	m.indexer.SetProvider(provider)
+	m.searcher.SetProvider(provider)
+
+	L_info("transcript: provider updated", "from", oldID, "to", newID)
 }
 
 // Search performs semantic and keyword search over transcripts
@@ -440,12 +461,50 @@ func (m *Manager) RegisterCommands() {
 	bus.RegisterCommand("transcript", "apply", m.handleApply)
 	bus.RegisterCommand("transcript", "stats", m.handleStats)
 	bus.RegisterCommand("transcript", "reindex", m.handleReindex)
-	L_info("transcript: commands registered")
+
+	// Subscribe to LLM config changes to refresh embedding provider
+	m.llmEventSub = bus.SubscribeEvent("llm.config.applied", m.onLLMConfigApplied)
+
+	L_info("transcript: commands registered, subscribed to llm.config.applied")
 }
 
-// UnregisterCommands removes transcript command handlers
+// UnregisterCommands removes transcript command handlers and event subscriptions
 func (m *Manager) UnregisterCommands() {
 	bus.UnregisterComponent("transcript")
+	if m.llmEventSub != 0 {
+		bus.UnsubscribeEvent(m.llmEventSub)
+		m.llmEventSub = 0
+	}
+}
+
+// onLLMConfigApplied handles the llm.config.applied event by refreshing the embedding provider
+func (m *Manager) onLLMConfigApplied(e bus.Event) {
+	m.refreshProvider()
+}
+
+// refreshProvider gets the current embedding provider from the LLM registry
+func (m *Manager) refreshProvider() {
+	reg := llm.GetRegistry()
+	if reg == nil {
+		L_debug("transcript: refreshProvider - registry is nil")
+		return
+	}
+
+	provider, err := reg.GetProvider("embeddings")
+	if err != nil {
+		L_debug("transcript: refreshProvider - GetProvider failed", "error", err)
+		return
+	}
+
+	// Adapt llm.Provider to memory.EmbeddingProvider interface
+	embedder, ok := provider.(memory.LLMEmbedder)
+	if !ok {
+		L_warn("transcript: refreshProvider - provider does not implement LLMEmbedder", "type", fmt.Sprintf("%T", provider))
+		return
+	}
+
+	newProvider := memory.NewLLMProviderAdapter(embedder)
+	m.SetProvider(newProvider)
 }
 
 // handleTest verifies database and embedding provider connectivity
