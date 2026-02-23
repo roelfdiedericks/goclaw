@@ -439,6 +439,12 @@ func (g *Gateway) resolveMediaContent(messages []types.Message, provider llm.Pro
 	supportsVision := llm.SupportsVision(provider)
 	supportsToolImages := llm.SupportsToolResultImages(provider)
 
+	L_debug("resolveMediaContent: starting",
+		"messageCount", len(messages),
+		"supportsVision", supportsVision,
+		"supportsToolImages", supportsToolImages,
+	)
+
 	for i := range resolved {
 		msg := &resolved[i]
 
@@ -446,6 +452,11 @@ func (g *Gateway) resolveMediaContent(messages []types.Message, provider llm.Pro
 		if len(msg.ContentBlocks) == 0 {
 			continue
 		}
+
+		L_debug("resolveMediaContent: message has content blocks",
+			"role", msg.Role,
+			"blockCount", len(msg.ContentBlocks),
+		)
 
 		// Check if this message type supports images
 		canHaveImages := false
@@ -483,6 +494,14 @@ func (g *Gateway) resolveMediaContent(messages []types.Message, provider llm.Pro
 			}
 
 			resolvedBlocks = append(resolvedBlocks, block)
+		}
+
+		if len(resolvedBlocks) != len(msg.ContentBlocks) {
+			L_debug("resolveMediaContent: blocks filtered",
+				"role", msg.Role,
+				"original", len(msg.ContentBlocks),
+				"resolved", len(resolvedBlocks),
+			)
 		}
 		msg.ContentBlocks = resolvedBlocks
 	}

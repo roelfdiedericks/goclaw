@@ -34,7 +34,7 @@ func (t *Tool) Name() string {
 }
 
 func (t *Tool) Description() string {
-	return "Read the contents of a file. Returns the file contents as text."
+	return "Read the contents of a file. Returns the file contents as text. For images (jpeg, png, gif, webp), the image is returned in tool result - describe what you see and show it to the user with {{media:path}}."
 }
 
 func (t *Tool) Schema() map[string]any {

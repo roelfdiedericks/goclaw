@@ -65,7 +65,7 @@ func (t *Tool) Name() string {
 }
 
 func (t *Tool) Description() string {
-	return "Generate images using xAI's Grok image generation. Returns URLs to generated images. Use for creating illustrations, diagrams, artwork, etc."
+	return "Generate images using xAI's Grok image generation. Image is returned in tool result - you can see it, describe it, and deliver to user with {{media:path}}. Use for creating illustrations, diagrams, artwork, etc."
 }
 
 func (t *Tool) Schema() map[string]any {

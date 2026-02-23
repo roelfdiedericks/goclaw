@@ -91,7 +91,7 @@ REST Actions:
 - state: Get single entity state (requires entity)
 - states: List all entity states (optional filter glob, optional class for exact device_class match)
 - call: Call a service (requires service like "light.turn_on", optional entity and data)
-- camera: Get camera snapshot (requires entity, optional filename/timestamp)
+- camera: Get camera snapshot (requires entity, optional filename/timestamp). Image is returned in tool result - describe what you see and show it to the user with {{media:path}}
 - services: List available services (optional domain filter)
 - history: Get state history (requires entity, optional hours/start/end/minimal)
 
