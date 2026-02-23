@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"io"
 	"regexp"
 	"strconv"
 	"strings"
@@ -123,6 +124,9 @@ func (b *Bot) setupHandlers() {
 
 	// Handle photo messages
 	b.bot.Handle(tele.OnPhoto, b.handlePhoto)
+
+	// Handle voice messages
+	b.bot.Handle(tele.OnVoice, b.handleVoice)
 
 	// Handle /start command (Telegram-specific, not in global registry)
 	b.bot.Handle("/start", func(c tele.Context) error {
@@ -424,6 +428,112 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		Images:         []session.ImageAttachment{imageAttachment},
 		EnableThinking: prefs.ShowThinking,  // Extended thinking based on chat preference
 		ThinkingLevel:  prefs.ThinkingLevel, // Thinking intensity level
+		OnMediaToSend: func(path, caption string) error {
+			return b.SendPhoto(chatID, path, caption)
+		},
+	}
+
+	// Run agent with streaming
+	events := make(chan gateway.AgentEvent, 100)
+
+	go func() {
+		if err := b.gateway.RunAgent(b.ctx, req, events); err != nil {
+			logging.L_error("telegram agent error", "error", err)
+		}
+	}()
+
+	return b.streamResponse(c, events)
+}
+
+// handleVoice handles incoming voice messages
+func (b *Bot) handleVoice(c tele.Context) error {
+	sender := c.Sender()
+	userID := fmt.Sprintf("%d", sender.ID)
+	chatID := c.Chat().ID
+	isGroup := c.Chat().Type != tele.ChatPrivate
+
+	logging.L_debug("telegram voice received",
+		"userID", userID,
+		"chatID", chatID,
+		"isGroup", isGroup,
+	)
+
+	// Skip group messages for MVP
+	if isGroup {
+		logging.L_debug("ignoring group voice")
+		return nil
+	}
+
+	// Look up user
+	u := b.users.FromIdentity("telegram", userID)
+	if u == nil {
+		logging.L_warn("telegram: unknown user ignored (voice)", "userID", userID)
+		return nil
+	}
+
+	logging.L_info("telegram: authenticated voice", "user", u.Name, "role", u.Role)
+
+	// Show typing indicator
+	_ = c.Notify(tele.Typing)
+
+	// Get the voice message
+	voice := c.Message().Voice
+	if voice == nil {
+		logging.L_warn("telegram: voice message but no voice found")
+		return nil
+	}
+
+	logging.L_debug("telegram: downloading voice",
+		"fileID", voice.FileID,
+		"duration", voice.Duration,
+		"mimeType", voice.MIME,
+		"fileSize", voice.FileSize,
+	)
+
+	// Download voice file
+	reader, err := b.bot.File(&voice.File)
+	if err != nil {
+		logging.L_error("telegram: failed to get voice file", "error", err)
+		return c.Send("Sorry, I couldn't download that voice message.")
+	}
+	defer reader.Close()
+
+	// Read all voice data
+	voiceData, err := io.ReadAll(reader)
+	if err != nil {
+		logging.L_error("telegram: failed to read voice data", "error", err)
+		return c.Send("Sorry, I couldn't process that voice message.")
+	}
+
+	logging.L_debug("telegram: voice downloaded", "size", len(voiceData))
+
+	// Create audio attachment
+	audioAttachment := session.AudioAttachment{
+		Data:     voiceData,
+		MimeType: voice.MIME,
+		Duration: voice.Duration,
+		Source:   "telegram",
+	}
+
+	// Get caption (if any) as additional context
+	caption := c.Message().Caption
+	if caption == "" {
+		caption = "<media:voice>" // Placeholder
+	}
+
+	// Get chat preferences for thinking level
+	prefs := b.getChatPrefs(chatID, u)
+
+	// Create agent request with audio attachment
+	req := gateway.AgentRequest{
+		User:           u,
+		Source:         "telegram",
+		ChatID:         fmt.Sprintf("%d", chatID),
+		IsGroup:        isGroup,
+		UserMsg:        caption,
+		Audio:          []session.AudioAttachment{audioAttachment},
+		EnableThinking: prefs.ShowThinking,
+		ThinkingLevel:  prefs.ThinkingLevel,
 		OnMediaToSend: func(path, caption string) error {
 			return b.SendPhoto(chatID, path, caption)
 		},

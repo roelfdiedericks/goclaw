@@ -16,6 +16,7 @@ var _ = json.RawMessage{}
 // Type aliases for shared types - allows session code to use session.Message
 // while the actual definition lives in types package (avoiding import cycles)
 type (
+	AudioAttachment = types.AudioAttachment
 	ImageAttachment = types.ImageAttachment
 	Message         = types.Message
 )
@@ -166,6 +167,22 @@ func (s *Session) AddUserMessageWithImages(content, source string, images []Imag
 		Content:   content,
 		Source:    source,
 		Images:    images,
+		Timestamp: time.Now(),
+	})
+	s.UpdatedAt = time.Now()
+}
+
+// AddUserMessageWithAudio adds a user message with audio attachments to the session
+func (s *Session) AddUserMessageWithAudio(content, source string, audio []AudioAttachment) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.Messages = append(s.Messages, Message{
+		ID:        generateMessageID(),
+		Role:      "user",
+		Content:   content,
+		Source:    source,
+		Audio:     audio,
 		Timestamp: time.Now(),
 	})
 	s.UpdatedAt = time.Now()

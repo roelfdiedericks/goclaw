@@ -14,6 +14,14 @@ type ImageAttachment struct {
 	Source   string `json:"source,omitempty"` // Source (e.g., "telegram", "browser")
 }
 
+// AudioAttachment represents an audio file attached to a message (e.g., voice note)
+type AudioAttachment struct {
+	Data     []byte `json:"data"`             // Raw audio data
+	MimeType string `json:"mimeType"`         // MIME type (e.g., "audio/ogg")
+	Duration int    `json:"duration"`         // Duration in seconds
+	Source   string `json:"source,omitempty"` // Source (e.g., "telegram")
+}
+
 // Message represents a single message in a conversation.
 // Used by both session management and LLM providers.
 type Message struct {
@@ -26,6 +34,7 @@ type Message struct {
 	ToolName  string            `json:"toolName,omitempty"`  // for tool_use
 	ToolInput json.RawMessage   `json:"toolInput,omitempty"` // for tool_use
 	Images    []ImageAttachment `json:"images,omitempty"`    // Image attachments (for multimodal)
+	Audio     []AudioAttachment `json:"audio,omitempty"`     // Audio attachments (voice notes)
 	Thinking  string            `json:"thinking,omitempty"`  // Reasoning/thinking content (Kimi, Deepseek, etc.)
 
 	// Supervision metadata (for guidance/ghostwriting interventions)
@@ -36,4 +45,9 @@ type Message struct {
 // HasImages returns true if the message contains any images
 func (m *Message) HasImages() bool {
 	return len(m.Images) > 0
+}
+
+// HasAudio returns true if the message contains any audio attachments
+func (m *Message) HasAudio() bool {
+	return len(m.Audio) > 0
 }

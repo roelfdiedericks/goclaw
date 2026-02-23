@@ -16,6 +16,7 @@ type AgentRequest struct {
 	IsGroup       bool                      // true if group chat (MVP: always false)
 	UserMsg       string                    // the user's message
 	Images        []session.ImageAttachment // image attachments (for multimodal)
+	Audio         []session.AudioAttachment // audio attachments (voice notes)
 	OnMediaToSend MediaCallback             // optional callback for sending media to channel
 
 	// Cron-specific fields

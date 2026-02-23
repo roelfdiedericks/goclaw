@@ -1369,11 +1369,13 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		messageCountBefore = sess.MessageCount()
 	}
 
-	// Add user message with images if any (skip if already added by supervision)
+	// Add user message with images/audio if any (skip if already added by supervision)
 	if !req.SkipAddMessage {
 		L_debug("RunAgent: adding user message", "session", sessionKey, "source", req.Source, "msgLen", len(req.UserMsg))
 		if len(req.Images) > 0 {
 			sess.AddUserMessageWithImages(req.UserMsg, req.Source, req.Images)
+		} else if len(req.Audio) > 0 {
+			sess.AddUserMessageWithAudio(req.UserMsg, req.Source, req.Audio)
 		} else {
 			sess.AddUserMessage(req.UserMsg, req.Source)
 		}
