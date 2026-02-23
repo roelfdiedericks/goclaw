@@ -10,7 +10,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
-	goclawhttp "github.com/roelfdiedericks/goclaw/internal/http"
+	goclawhttp "github.com/roelfdiedericks/goclaw/internal/channels/http"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
@@ -18,7 +18,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
-	"github.com/roelfdiedericks/goclaw/internal/tui"
+	"github.com/roelfdiedericks/goclaw/internal/channels/tui"
 )
 
 // EditorTview is the tview-based configuration editor
@@ -190,7 +190,7 @@ func (e *EditorTview) editTelegram() {
 	formDef := telegram.ConfigFormDef()
 
 	// Build inline form content
-	content, err := forms.BuildFormContent(formDef, &telegramCfg, "telegram", func(result forms.TviewResult) {
+	content, err := forms.BuildFormContent(formDef, &telegramCfg, "channels.telegram", func(result forms.TviewResult) {
 		if result == forms.ResultSaved {
 			e.cfg.Telegram = telegramCfg
 			e.dirty = true
@@ -216,7 +216,7 @@ func (e *EditorTview) editHTTP() {
 	httpCfg := e.cfg.HTTP
 	formDef := goclawhttp.ConfigFormDef()
 
-	content, err := forms.BuildFormContent(formDef, &httpCfg, "http", func(result forms.TviewResult) {
+	content, err := forms.BuildFormContent(formDef, &httpCfg, "channels.http", func(result forms.TviewResult) {
 		if result == forms.ResultSaved {
 			e.cfg.HTTP = httpCfg
 			e.dirty = true
@@ -268,7 +268,7 @@ func (e *EditorTview) editTUI() {
 	tuiCfg := e.cfg.TUI
 	formDef := tui.ConfigFormDef()
 
-	content, err := forms.BuildFormContent(formDef, &tuiCfg, "tui", func(result forms.TviewResult) {
+	content, err := forms.BuildFormContent(formDef, &tuiCfg, "channels.tui", func(result forms.TviewResult) {
 		if result == forms.ResultSaved {
 			e.cfg.TUI = tuiCfg
 			e.dirty = true
