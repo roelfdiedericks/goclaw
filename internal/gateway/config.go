@@ -76,10 +76,10 @@ func ConfigFormDef() forms.FormDef {
 
 // GatewayConfigBundle holds all gateway-owned config sections
 type GatewayConfigBundle struct {
-	Gateway     GatewayConfig     `json:"gateway"`
-	Agent       AgentIdentityConfig      `json:"agent"`
-	PromptCache PromptCacheConfig `json:"promptCache"`
-	Supervision SupervisionConfig        `json:"supervision"`
+	Gateway     GatewayConfig       `json:"gateway"`
+	Agent       AgentIdentityConfig `json:"agent"`
+	PromptCache PromptCacheConfig   `json:"promptCache"`
+	Supervision SupervisionConfig   `json:"supervision"`
 }
 
 // RegisterCommands registers config commands for gateway.

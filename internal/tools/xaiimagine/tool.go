@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
+	toolsconfig "github.com/roelfdiedericks/goclaw/internal/tools/config"
 	"github.com/roelfdiedericks/xai-go"
 )
 
@@ -29,12 +29,12 @@ func safeInt32(n int) int32 {
 // Tool generates images using xAI's image generation API.
 type Tool struct {
 	client     *xai.Client
-	config     config.XAIImagineConfig
+	config     toolsconfig.XAIImagineConfig
 	mediaStore *media.MediaStore
 }
 
 // NewTool creates a new xAI image generation tool.
-func NewTool(cfg config.XAIImagineConfig, mediaStore *media.MediaStore) (*Tool, error) {
+func NewTool(cfg toolsconfig.XAIImagineConfig, mediaStore *media.MediaStore) (*Tool, error) {
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("xai_imagine: API key required")
 	}

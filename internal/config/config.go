@@ -16,9 +16,11 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/hass"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
+	toolsconfig "github.com/roelfdiedericks/goclaw/internal/tools/config"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -139,122 +141,22 @@ type ChannelsConfig struct {
 
 // Config represents the merged goclaw configuration
 type Config struct {
-	Gateway       gwtypes.GatewayConfig          `json:"gateway"`
-	Agent         gwtypes.AgentIdentityConfig    `json:"agent"`
-	LLM           llm.LLMConfig                  `json:"llm"`
-	HomeAssistant hass.HomeAssistantConfig        `json:"homeassistant"` // Top-level Home Assistant config
-	Tools         ToolsConfig                    `json:"tools"`
-	Channels      ChannelsConfig                 `json:"channels"` // All channel configs (telegram, http, tui)
-	Session       session.SessionConfig          `json:"session"`
-	Memory        memory.MemorySearchConfig      `json:"memory"`
-	Transcript    transcript.TranscriptConfig    `json:"transcript"`
-	PromptCache   gwtypes.PromptCacheConfig      `json:"promptCache"`
-	Media         MediaConfig                    `json:"media"`
-	Skills        skills.SkillsConfig            `json:"skills"`
-	Cron          cron.CronConfig                `json:"cron"`
-	Supervision   gwtypes.SupervisionConfig      `json:"supervision"`
-	Roles         user.RolesConfig               `json:"roles"` // Role-based access control
-	Auth          auth.AuthConfig                `json:"auth"`  // Role elevation authentication
-}
-
-// MediaConfig configures media file storage
-type MediaConfig struct {
-	Dir     string `json:"dir"`     // Base directory (empty = <workspace>/media/)
-	TTL     int    `json:"ttl"`     // TTL in seconds (default: 600 = 10 min)
-	MaxSize int    `json:"maxSize"` // Max file size in bytes (default: 5MB)
-}
-
-// UserConfig represents a user who can interact with the agent
-type UserConfig struct {
-	Name        string             `json:"name"`
-	Role        string             `json:"role"` // "owner" or "user"
-	Identities  []IdentityConfig   `json:"identities"`
-	Credentials []CredentialConfig `json:"credentials,omitempty"`
-	Permissions []string           `json:"permissions,omitempty"` // tool whitelist for non-owners
-}
-
-// IdentityConfig maps external identities to users
-type IdentityConfig struct {
-	Provider string `json:"provider"` // "telegram", "local", "apikey"
-	ID       string `json:"id"`       // telegram user ID, "owner" for local, etc.
-}
-
-// CredentialConfig stores hashed credentials for challenge auth
-type CredentialConfig struct {
-	Type  string `json:"type"`  // "apikey", "password"
-	Hash  string `json:"hash"`  // argon2/bcrypt hash
-	Label string `json:"label"` // "laptop-key", etc.
-}
-
-// ToolsConfig contains tool-specific settings
-type ToolsConfig struct {
-	Web        WebToolsConfig         `json:"web"`
-	Browser    BrowserToolsConfig     `json:"browser"`
-	Exec       ExecToolsConfig        `json:"exec"`
-	Bubblewrap BubblewrapGlobalConfig `json:"bubblewrap"`
-	XAIImagine XAIImagineConfig       `json:"xaiImagine"`
-}
-
-// XAIImagineConfig contains xAI image generation tool settings
-type XAIImagineConfig struct {
-	Enabled     bool   `json:"enabled"`               // Enable the tool (default: false)
-	APIKey      string `json:"apiKey,omitempty"`      // xAI API key (falls back to provider config)
-	Model       string `json:"model,omitempty"`       // Model to use (default: grok-2-image)
-	Resolution  string `json:"resolution,omitempty"`  // Default resolution: "1K" (~1024px) or "2K" (~2048px)
-	SaveToMedia bool   `json:"saveToMedia,omitempty"` // Save generated images to media store (default: true)
-}
-
-// BubblewrapGlobalConfig contains global bubblewrap settings
-type BubblewrapGlobalConfig struct {
-	Path string `json:"path"` // Custom path to bwrap binary (empty = search PATH)
-}
-
-// ExecToolsConfig contains exec tool settings
-type ExecToolsConfig struct {
-	Timeout    int                  `json:"timeout"`    // Timeout in seconds (default: 1800 = 30 min, 0 = no timeout)
-	Bubblewrap ExecBubblewrapConfig `json:"bubblewrap"` // Sandbox settings
-}
-
-// ExecBubblewrapConfig contains bubblewrap settings for exec tool
-type ExecBubblewrapConfig struct {
-	Enabled      bool              `json:"enabled"`      // Enable sandboxing (default: false)
-	ExtraRoBind  []string          `json:"extraRoBind"`  // Additional read-only bind mounts
-	ExtraBind    []string          `json:"extraBind"`    // Additional read-write bind mounts
-	ExtraEnv     map[string]string `json:"extraEnv"`     // Additional environment variables
-	AllowNetwork bool              `json:"allowNetwork"` // Allow network access (default: true)
-	ClearEnv     bool              `json:"clearEnv"`     // Clear environment before setting defaults (default: true)
-}
-
-// WebToolsConfig contains web tool settings
-type WebToolsConfig struct {
-	BraveAPIKey string `json:"braveApiKey"`
-	UseBrowser  string `json:"useBrowser"` // Browser fallback: "auto" (on 403/bot), "always", "never" (default: "auto")
-	Profile     string `json:"profile"`    // Browser profile for web_fetch (default: "default")
-	Headless    *bool  `json:"headless"`   // Run browser headless (default: true, set false for debugging)
-}
-
-// BrowserToolsConfig contains browser tool settings
-type BrowserToolsConfig struct {
-	Enabled        bool                    `json:"enabled"`        // Enable headless browser tool (requires Chrome/Chromium)
-	Dir            string                  `json:"dir"`            // Browser data directory (empty = ~/.goclaw/browser)
-	AutoDownload   bool                    `json:"autoDownload"`   // Download Chromium if missing (default: true)
-	Revision       string                  `json:"revision"`       // Chromium revision (empty = latest)
-	Headless       bool                    `json:"headless"`       // Run browser in headless mode (default: true)
-	NoSandbox      bool                    `json:"noSandbox"`      // Disable Chrome sandbox (needed for Docker/root)
-	DefaultProfile string                  `json:"defaultProfile"` // Default profile name (default: "default")
-	Timeout        string                  `json:"timeout"`        // Default action timeout (default: "30s")
-	Stealth        bool                    `json:"stealth"`        // Enable stealth mode (default: true)
-	Device         string                  `json:"device"`         // Device emulation: "clear", "laptop", "iphone-x", etc. (default: "clear")
-	ProfileDomains map[string]string       `json:"profileDomains"` // Domain → profile mapping for auto-selection
-	Bubblewrap     BrowserBubblewrapConfig `json:"bubblewrap"`     // Sandbox settings
-}
-
-// BrowserBubblewrapConfig contains bubblewrap settings for browser tool
-type BrowserBubblewrapConfig struct {
-	Enabled     bool     `json:"enabled"`     // Enable sandboxing (default: false)
-	ExtraRoBind []string `json:"extraRoBind"` // Additional read-only bind mounts
-	ExtraBind   []string `json:"extraBind"`   // Additional read-write bind mounts
-	GPU         bool     `json:"gpu"`         // Enable GPU acceleration (default: true)
+	Gateway       gwtypes.GatewayConfig       `json:"gateway"`
+	Agent         gwtypes.AgentIdentityConfig `json:"agent"`
+	LLM           llm.LLMConfig               `json:"llm"`
+	HomeAssistant hass.HomeAssistantConfig    `json:"homeassistant"` // Top-level Home Assistant config
+	Tools         toolsconfig.ToolsConfig     `json:"tools"`
+	Channels      ChannelsConfig              `json:"channels"` // All channel configs (telegram, http, tui)
+	Session       session.SessionConfig       `json:"session"`
+	Memory        memory.MemorySearchConfig   `json:"memory"`
+	Transcript    transcript.TranscriptConfig `json:"transcript"`
+	PromptCache   gwtypes.PromptCacheConfig   `json:"promptCache"`
+	Media         media.MediaConfig           `json:"media"`
+	Skills        skills.SkillsConfig         `json:"skills"`
+	Cron          cron.CronConfig             `json:"cron"`
+	Supervision   gwtypes.SupervisionConfig   `json:"supervision"`
+	Roles         user.RolesConfig            `json:"roles"` // Role-based access control
+	Auth          auth.AuthConfig             `json:"auth"`  // Role elevation authentication
 }
 
 // Load reads configuration from goclaw.json.
@@ -337,8 +239,8 @@ func Load() (*LoadResult, error) {
 			SubscriptionFile: "hass-subscriptions.json",
 			ReconnectDelay:   "5s",
 		},
-		Tools: ToolsConfig{
-			Browser: BrowserToolsConfig{
+		Tools: toolsconfig.ToolsConfig{
+			Browser: toolsconfig.BrowserToolsConfig{
 				Enabled:        true,
 				Dir:            "", // Default: ~/.goclaw/browser
 				AutoDownload:   true,
@@ -350,16 +252,16 @@ func Load() (*LoadResult, error) {
 				Stealth:        true,
 				Device:         "clear", // No viewport emulation, fills window
 				ProfileDomains: map[string]string{},
-				Bubblewrap: BrowserBubblewrapConfig{
+				Bubblewrap: toolsconfig.BrowserBubblewrapConfig{
 					Enabled:     false, // Disabled by default
 					ExtraRoBind: []string{},
 					ExtraBind:   []string{},
 					GPU:         true, // GPU enabled by default when sandbox is used
 				},
 			},
-			Exec: ExecToolsConfig{
+			Exec: toolsconfig.ExecToolsConfig{
 				Timeout: 1800, // 30 minutes (matches OpenClaw)
-				Bubblewrap: ExecBubblewrapConfig{
+				Bubblewrap: toolsconfig.ExecBubblewrapConfig{
 					Enabled:      false, // Disabled by default
 					ExtraRoBind:  []string{},
 					ExtraBind:    []string{},
@@ -368,7 +270,7 @@ func Load() (*LoadResult, error) {
 					ClearEnv:     true, // Clear env by default for security
 				},
 			},
-			Bubblewrap: BubblewrapGlobalConfig{
+			Bubblewrap: toolsconfig.BubblewrapGlobalConfig{
 				Path: "", // Empty = search PATH
 			},
 		},
@@ -456,7 +358,7 @@ func Load() (*LoadResult, error) {
 		PromptCache: gwtypes.PromptCacheConfig{
 			PollInterval: 60, // Check file hashes every 60 seconds as fallback
 		},
-		Media: MediaConfig{
+		Media: media.MediaConfig{
 			Dir:     "media",         // Relative to workspace (resolved in gateway)
 			TTL:     600,             // 10 minutes (more generous than OpenClaw's 2 min)
 			MaxSize: 5 * 1024 * 1024, // 5MB

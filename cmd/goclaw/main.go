@@ -39,7 +39,6 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
-	"github.com/roelfdiedericks/goclaw/internal/memory"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/setup"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
@@ -1437,7 +1436,7 @@ func runEmbeddingsStatus() error {
 
 	// Open memory DB if enabled
 	var memoryDB *sql.DB
-	if cfg.MemorySearch.Enabled {
+	if cfg.Memory.Enabled {
 		memoryDB, err = openMemoryDB(cfg)
 		if err != nil {
 			L_warn("embeddings: failed to open memory DB", "error", err)
@@ -1551,7 +1550,7 @@ func runEmbeddingsRebuild(batchSize int) error {
 
 	// Open memory DB if enabled
 	var memoryDB *sql.DB
-	if cfg.MemorySearch.Enabled {
+	if cfg.Memory.Enabled {
 		memoryDB, err = openMemoryDB(cfg)
 		if err != nil {
 			L_warn("embeddings: failed to open memory DB", "error", err)
@@ -1595,7 +1594,7 @@ func openSessionsDB(cfg *config.Config) (*sql.DB, error) {
 
 // openMemoryDB opens the memory database
 func openMemoryDB(cfg *config.Config) (*sql.DB, error) {
-	dbPath := cfg.MemorySearch.DbPath
+	dbPath := cfg.Memory.DbPath
 	if dbPath == "" {
 		home, _ := os.UserHomeDir()
 		dbPath = filepath.Join(home, ".goclaw", "memory.db")
@@ -1940,7 +1939,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	if cfg.Transcript.Enabled {
 		if db := gw.SessionDB(); db != nil {
 			// Get embedding provider from memory manager if available
-			var embeddingProvider memory.EmbeddingProvider
+			var embeddingProvider llm.EmbeddingProvider
 			if memMgr := gw.MemoryManager(); memMgr != nil {
 				embeddingProvider = memMgr.Provider()
 			}
