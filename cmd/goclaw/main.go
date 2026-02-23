@@ -30,7 +30,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/embeddings"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/hass"
-	goclawhttp "github.com/roelfdiedericks/goclaw/internal/http"
+	goclawhttp "github.com/roelfdiedericks/goclaw/internal/channels/http"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
@@ -52,7 +52,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/tools/userauth"
 	"github.com/roelfdiedericks/goclaw/internal/tools/xaiimagine"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
-	"github.com/roelfdiedericks/goclaw/internal/tui"
+	"github.com/roelfdiedericks/goclaw/internal/channels/tui"
 	"github.com/roelfdiedericks/goclaw/internal/update"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -2018,10 +2018,15 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 
 	if cfg.Telegram.Enabled && cfg.Telegram.BotToken != "" {
 		// Try initial connection
+		// Convert config.TelegramConfig to telegram.Config (transitional until Phase 6)
+		telegramCfg := &telegram.Config{
+			Enabled:  cfg.Telegram.Enabled,
+			BotToken: cfg.Telegram.BotToken,
+		}
 		var err error
-		telegramBot, err = telegram.New(&cfg.Telegram, gw, users)
+		telegramBot, err = telegram.New(telegramCfg, gw, users)
 		if err == nil {
-			telegramBot.Start()
+			_ = telegramBot.Start(runCtx)
 			telegramBot.RegisterOperationalCommands()
 			gw.RegisterChannel(telegramBot)
 			L_info("telegram: bot ready and listening")
@@ -2049,7 +2054,12 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 					}
 
 					L_info("telegram: retrying connection", "attempt", attempt, "backoff", backoff)
-					bot, err := telegram.New(&cfg.Telegram, gw, users)
+					// Convert config.TelegramConfig to telegram.Config (transitional)
+					retryCfg := &telegram.Config{
+						Enabled:  cfg.Telegram.Enabled,
+						BotToken: cfg.Telegram.BotToken,
+					}
+					bot, err := telegram.New(retryCfg, gw, users)
 					if err != nil {
 						L_warn("telegram: connection failed", "error", err, "nextRetry", backoff)
 						attempt++
@@ -2062,7 +2072,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 					}
 
 					// Success!
-					bot.Start()
+					_ = bot.Start(runCtx)
 					bot.RegisterOperationalCommands()
 					gw.RegisterChannel(bot)
 					L_info("telegram: bot ready after retry", "attempts", attempt)
@@ -2081,8 +2091,8 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	}
 
 	// Subscribe to telegram config.applied event to restart bot when config changes
-	bus.SubscribeEvent("telegram.config.applied", func(event bus.Event) {
-		newCfg, ok := event.Data.(*config.TelegramConfig)
+	bus.SubscribeEvent("channels.telegram.config.applied", func(event bus.Event) {
+		newCfg, ok := event.Data.(*telegram.Config)
 		if !ok {
 			L_error("telegram: invalid event data type", "type", fmt.Sprintf("%T", event.Data))
 			return
@@ -2112,7 +2122,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 			return
 		}
 
-		bot.Start()
+		_ = bot.Start(runCtx)
 		bot.RegisterOperationalCommands()
 		gw.RegisterChannel(bot)
 		telegramBot = bot
@@ -2150,7 +2160,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		} else {
 			httpServer.SetGateway(gw)
 			gw.RegisterChannel(httpServer.Channel())
-			if err := httpServer.Start(); err != nil {
+			if err := httpServer.Start(runCtx); err != nil {
 				L_error("http: server start failed", "error", err)
 				httpServer = nil
 			} else {
