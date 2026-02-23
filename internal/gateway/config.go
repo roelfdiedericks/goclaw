@@ -6,7 +6,16 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
-	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
+	"github.com/roelfdiedericks/goclaw/internal/logging"
+)
+
+// Re-export types from gateway/types for convenience
+type (
+	AgentIdentityConfig = gwtypes.AgentIdentityConfig
+	SupervisionConfig   = gwtypes.SupervisionConfig
+	GuidanceConfig      = gwtypes.GuidanceConfig
+	GhostwritingConfig  = gwtypes.GhostwritingConfig
 )
 
 const configPath = "gateway"
@@ -66,10 +75,10 @@ func ConfigFormDef() forms.FormDef {
 
 // GatewayConfigBundle holds all gateway-owned config sections
 type GatewayConfigBundle struct {
-	Gateway     config.GatewayConfig       `json:"gateway"`
-	Agent       config.AgentIdentityConfig `json:"agent"`
-	PromptCache config.PromptCacheConfig   `json:"promptCache"`
-	Supervision config.SupervisionConfig   `json:"supervision"`
+	Gateway     config.GatewayConfig     `json:"gateway"`
+	Agent       AgentIdentityConfig      `json:"agent"`
+	PromptCache config.PromptCacheConfig `json:"promptCache"`
+	Supervision SupervisionConfig        `json:"supervision"`
 }
 
 // RegisterCommands registers config commands for gateway.
@@ -82,7 +91,11 @@ func UnregisterCommands() {
 	bus.UnregisterCommand(configPath, "apply")
 }
 
-// handleApply publishes the config.applied event for listeners to react
+// handleApply publishes config.applied events for listeners to react
+// Publishes:
+//   - gateway.config.applied (full bundle)
+//   - gateway.agent.config.applied (agent identity only)
+//   - gateway.supervision.config.applied (supervision only)
 func handleApply(cmd bus.Command) bus.CommandResult {
 	cfg, ok := cmd.Payload.(*GatewayConfigBundle)
 	if !ok {
@@ -92,8 +105,14 @@ func handleApply(cmd bus.Command) bus.CommandResult {
 		}
 	}
 
-	L_info("gateway: config applied", "agentName", cfg.Agent.Name, "promptCachePoll", cfg.PromptCache.PollInterval)
+	logging.L_info("gateway: config applied", "agentName", cfg.Agent.Name, "promptCachePoll", cfg.PromptCache.PollInterval)
+
+	// Publish full bundle for gateway itself
 	bus.PublishEvent(configPath+".config.applied", cfg)
+
+	// Publish specific events for channels to react to identity/supervision changes
+	bus.PublishEvent(configPath+".agent.config.applied", &cfg.Agent)
+	bus.PublishEvent(configPath+".supervision.config.applied", &cfg.Supervision)
 
 	return bus.CommandResult{
 		Success: true,

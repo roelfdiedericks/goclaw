@@ -6,8 +6,6 @@ package types
 import (
 	"context"
 	"time"
-
-	"github.com/roelfdiedericks/goclaw/internal/gateway"
 )
 
 // ChannelStatus represents the current state of a managed channel
@@ -19,10 +17,12 @@ type ChannelStatus struct {
 	Info      string    // Human-readable status info (e.g., "@botname", ":1337")
 }
 
-// ManagedChannel extends gateway.Channel with lifecycle management.
+// ManagedChannel defines lifecycle management for channels.
 // All channel implementations (telegram, http, tui) must implement this.
+// Note: Implementations also need to implement gateway.Channel separately.
 type ManagedChannel interface {
-	gateway.Channel
+	// Name returns the channel's identifier
+	Name() string
 
 	// Start initializes and starts the channel
 	Start(ctx context.Context) error

@@ -473,12 +473,12 @@ func (g *Gateway) StartHassManager(ctx context.Context) error {
 }
 
 // AgentIdentity returns the agent identity configuration
-func (g *Gateway) AgentIdentity() *config.AgentIdentityConfig {
+func (g *Gateway) AgentIdentity() *AgentIdentityConfig {
 	return &g.config.Agent
 }
 
 // SupervisionConfig returns the supervision configuration
-func (g *Gateway) SupervisionConfig() *config.SupervisionConfig {
+func (g *Gateway) SupervisionConfig() *SupervisionConfig {
 	return &g.config.Supervision
 }
 

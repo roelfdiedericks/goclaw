@@ -4,13 +4,9 @@ import (
 	"fmt"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
-
-// SConfig is an alias for config.SessionConfig to avoid name collisions
-type SConfig = config.SessionConfig
 
 const configPath = "session"
 
@@ -72,10 +68,10 @@ func UnregisterCommands() {
 
 // handleApply publishes the config.applied event for listeners to react
 func handleApply(cmd bus.Command) bus.CommandResult {
-	cfg, ok := cmd.Payload.(*config.SessionConfig)
+	cfg, ok := cmd.Payload.(*Config)
 	if !ok {
 		return bus.CommandResult{
-			Error:   fmt.Errorf("expected *SessionConfig, got %T", cmd.Payload),
+			Error:   fmt.Errorf("expected *session.Config, got %T", cmd.Payload),
 			Message: "invalid payload type",
 		}
 	}

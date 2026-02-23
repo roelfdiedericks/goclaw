@@ -7,8 +7,12 @@ import (
 	"path/filepath"
 
 	"dario.cat/mergo"
+	"github.com/roelfdiedericks/goclaw/internal/channels"
+	"github.com/roelfdiedericks/goclaw/internal/channels/tui"
+	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
@@ -120,24 +124,22 @@ func splitLines(data []byte) []string {
 
 // Config represents the merged goclaw configuration
 type Config struct {
-	Gateway       GatewayConfig       `json:"gateway"`
-	Agent         AgentIdentityConfig `json:"agent"`
-	LLM           llm.LLMConfig       `json:"llm"`
-	HomeAssistant HomeAssistantConfig `json:"homeassistant"` // Top-level Home Assistant config
-	Tools         ToolsConfig         `json:"tools"`
-	Telegram      TelegramConfig      `json:"telegram"`
-	HTTP          HTTPConfig          `json:"http"`
-	Session       SessionConfig       `json:"session"`
-	MemorySearch  MemorySearchConfig  `json:"memorySearch"`
-	Transcript    TranscriptConfig    `json:"transcript"`
-	PromptCache   PromptCacheConfig   `json:"promptCache"`
-	Media         MediaConfig         `json:"media"`
-	TUI           TUIConfig           `json:"tui"`
-	Skills        SkillsConfig        `json:"skills"`
-	Cron          CronConfig          `json:"cron"`
-	Supervision   SupervisionConfig   `json:"supervision"`
-	Roles         user.RolesConfig    `json:"roles"` // Role-based access control
-	Auth          AuthConfig          `json:"auth"`  // Role elevation authentication
+	Gateway       GatewayConfig                `json:"gateway"`
+	Agent         gwtypes.AgentIdentityConfig  `json:"agent"`
+	LLM           llm.LLMConfig                `json:"llm"`
+	HomeAssistant HomeAssistantConfig          `json:"homeassistant"` // Top-level Home Assistant config
+	Tools         ToolsConfig                  `json:"tools"`
+	Channels      channels.Config              `json:"channels"` // All channel configs (telegram, http, tui)
+	Session       session.Config               `json:"session"`
+	MemorySearch  MemorySearchConfig           `json:"memorySearch"`
+	Transcript    TranscriptConfig             `json:"transcript"`
+	PromptCache   PromptCacheConfig            `json:"promptCache"`
+	Media         MediaConfig                  `json:"media"`
+	Skills        SkillsConfig                 `json:"skills"`
+	Cron          CronConfig                   `json:"cron"`
+	Supervision   gwtypes.SupervisionConfig    `json:"supervision"`
+	Roles         user.RolesConfig             `json:"roles"` // Role-based access control
+	Auth          AuthConfig                   `json:"auth"`  // Role elevation authentication
 }
 
 // CredentialHint describes a credential the auth script accepts
@@ -157,36 +159,6 @@ type AuthConfig struct {
 	Timeout         int              `json:"timeout"`         // Script timeout in seconds (default: 10)
 }
 
-// AgentIdentityConfig configures the agent's display identity
-type AgentIdentityConfig struct {
-	Name   string `json:"name"`   // Agent's display name (default: "GoClaw")
-	Emoji  string `json:"emoji"`  // Optional emoji prefix (default: "")
-	Typing string `json:"typing"` // Custom typing indicator text (default: derived from Name)
-}
-
-// DisplayName returns the agent name with emoji prefix if configured
-func (c *AgentIdentityConfig) DisplayName() string {
-	if c.Emoji != "" {
-		return c.Emoji + " " + c.Name
-	}
-	return c.Name
-}
-
-// TypingText returns the typing indicator text
-func (c *AgentIdentityConfig) TypingText() string {
-	if c.Typing != "" {
-		return c.Typing
-	}
-	return c.Name + " is typing..."
-}
-
-// HTTPConfig configures the HTTP server
-// HTTP is enabled by default if any user has HTTP credentials configured
-type HTTPConfig struct {
-	Enabled *bool  `json:"enabled,omitempty"` // Enable HTTP server (default: true if users have passwords)
-	Listen  string `json:"listen"`            // Address to listen on (e.g., ":1337", "127.0.0.1:1337")
-}
-
 // CronConfig configures the cron scheduler
 type CronConfig struct {
 	Enabled           bool            `json:"enabled"`           // Enable cron scheduler (default: true)
@@ -199,30 +171,6 @@ type HeartbeatConfig struct {
 	Enabled         bool   `json:"enabled"`         // Enable heartbeat (default: true)
 	IntervalMinutes int    `json:"intervalMinutes"` // Interval in minutes (default: 30)
 	Prompt          string `json:"prompt"`          // Custom heartbeat prompt (optional)
-}
-
-// SupervisionConfig configures session supervision features
-type SupervisionConfig struct {
-	Guidance     GuidanceConfig     `json:"guidance"`
-	Ghostwriting GhostwritingConfig `json:"ghostwriting"`
-}
-
-// GuidanceConfig configures supervisor guidance injection
-type GuidanceConfig struct {
-	// Prefix prepended to guidance messages (default: "[Supervisor]: ")
-	// The LLM sees this prefix and knows the message is from the supervisor
-	Prefix string `json:"prefix"`
-
-	// SystemNote is an optional system message injected with guidance (future use)
-	// Could contain instructions like "Respond to this guidance naturally"
-	SystemNote string `json:"systemNote,omitempty"`
-}
-
-// GhostwritingConfig configures supervisor ghostwriting
-type GhostwritingConfig struct {
-	// TypingDelayMs is the delay before delivering the message (default: 500)
-	// Simulates natural typing so message doesn't appear instantly
-	TypingDelayMs int `json:"typingDelayMs"`
 }
 
 // SkillsConfig configures the skills system
@@ -264,88 +212,9 @@ type HomeAssistantConfig struct {
 	ReconnectDelay   string `json:"reconnectDelay,omitempty"`   // WebSocket reconnect delay (default: "5s")
 }
 
-// SessionConfig contains session persistence and context management settings
-type SessionConfig struct {
-	// Storage backend: "sqlite" (default) or "jsonl"
-	Store     string `json:"store"`
-	StorePath string `json:"storePath"` // SQLite DB path (when store="sqlite")
-
-	// OpenClaw session inheritance
-	InheritPath string `json:"inheritPath"` // Path to OpenClaw sessions directory
-	Inherit     bool   `json:"inherit"`     // Inherit from OpenClaw session
-	InheritFrom string `json:"inheritFrom"` // Session key to inherit from
-
-	// Features
-	Summarization SummarizationConfig `json:"summarization"`
-	MemoryFlush   MemoryFlushConfig   `json:"memoryFlush"`
-}
-
-// SummarizationConfig configures LLM-based summarization for checkpoints and compaction
-type SummarizationConfig struct {
-	// LLM Configuration
-	Ollama        OllamaLLMConfig `json:"ollama"`        // Primary: local Ollama model
-	FallbackModel string          `json:"fallbackModel"` // Fallback: Anthropic model (e.g., "claude-3-haiku-20240307")
-
-	// Failover settings
-	FailureThreshold int `json:"failureThreshold"` // Fall back after N consecutive Ollama failures (default: 3)
-	ResetMinutes     int `json:"resetMinutes"`     // Reset failure count after N minutes (default: 30)
-
-	// Retry settings
-	RetryIntervalSeconds int `json:"retryIntervalSeconds"` // Background retry interval for pending summaries (default: 60)
-
-	// Sub-features
-	Checkpoint CheckpointSubConfig `json:"checkpoint"`
-	Compaction CompactionSubConfig `json:"compaction"`
-}
-
-// CheckpointSubConfig configures rolling checkpoint generation
-type CheckpointSubConfig struct {
-	Enabled         bool  `json:"enabled"`
-	Thresholds      []int `json:"thresholds"`      // Token usage percents to trigger checkpoint (e.g., [25, 50, 75])
-	TurnThreshold   int   `json:"turnThreshold"`   // Generate every N user messages
-	MinTokensForGen int   `json:"minTokensForGen"` // Don't checkpoint if < N tokens
-}
-
-// CompactionSubConfig configures context compaction
-type CompactionSubConfig struct {
-	ReserveTokens    int  `json:"reserveTokens"`    // Tokens to reserve before compaction (default: 4000)
-	MaxMessages      int  `json:"maxMessages"`      // Trigger compaction if messages exceed this (default: 500, 0 = disabled)
-	PreferCheckpoint bool `json:"preferCheckpoint"` // Use existing checkpoint for summary if available
-	KeepPercent      int  `json:"keepPercent"`      // Percent of messages to keep after compaction (default: 50)
-	MinMessages      int  `json:"minMessages"`      // Minimum messages to always keep (default: 20)
-}
-
-// MemoryFlushConfig configures memory flush prompting
-type MemoryFlushConfig struct {
-	Enabled            bool                   `json:"enabled"`
-	ShowInSystemPrompt bool                   `json:"showInSystemPrompt"`
-	Thresholds         []FlushThresholdConfig `json:"thresholds"`
-}
-
-// FlushThresholdConfig defines a memory flush threshold
-type FlushThresholdConfig struct {
-	Percent      int    `json:"percent"`
-	Prompt       string `json:"prompt"`
-	InjectAs     string `json:"injectAs"` // "system" or "user"
-	OncePerCycle bool   `json:"oncePerCycle"`
-}
-
-// OllamaLLMConfig configures an Ollama model for LLM tasks (compaction, checkpoints)
-type OllamaLLMConfig struct {
-	URL            string `json:"url"`            // Ollama API URL (e.g., "http://localhost:11434")
-	Model          string `json:"model"`          // LLM model for chat completion (e.g., "qwen2.5:14b" for 128k context)
-	TimeoutSeconds int    `json:"timeoutSeconds"` // Request timeout in seconds (default: 300 = 5 min)
-	ContextTokens  int    `json:"contextTokens"`  // Override context window (0 = auto-detect from model)
-}
-
 // PromptCacheConfig configures system prompt caching
 type PromptCacheConfig struct {
 	PollInterval int `json:"pollInterval"` // Hash poll interval in seconds (default: 60, 0 = disabled)
-}
-
-// TUIConfig configures the terminal user interface
-type TUIConfig struct {
-	ShowLogs bool `json:"showLogs"` // Show logs panel by default (default: true)
 }
 
 // MemorySearchConfig configures the memory search tool
@@ -393,12 +262,6 @@ type GatewayConfig struct {
 	LogFile    string `json:"logFile"`
 	PIDFile    string `json:"pidFile"`
 	WorkingDir string `json:"workingDir"`
-}
-
-// TelegramConfig contains Telegram channel settings
-type TelegramConfig struct {
-	Enabled  bool   `json:"enabled"`
-	BotToken string `json:"botToken"`
 }
 
 // UserConfig represents a user who can interact with the agent
@@ -542,7 +405,7 @@ func Load() (*LoadResult, error) {
 			PIDFile:    filepath.Join(goclawDir, "goclaw.pid"),
 			WorkingDir: filepath.Join(goclawDir, "workspace"),
 		},
-		Agent: AgentIdentityConfig{
+		Agent: gwtypes.AgentIdentityConfig{
 			Name:  "GoClaw",
 			Emoji: "",
 		},
@@ -609,14 +472,14 @@ func Load() (*LoadResult, error) {
 				Path: "", // Empty = search PATH
 			},
 		},
-		Session: SessionConfig{
+		Session: session.Config{
 			Store:       "sqlite", // Default to SQLite
 			StorePath:   filepath.Join(goclawDir, "sessions.db"),
 			InheritPath: filepath.Join(home, ".openclaw", "agents", "main", "sessions"), // OpenClaw sessions (for inherit)
 			Inherit:     true,
 			InheritFrom: "agent:main:main",
-			Summarization: SummarizationConfig{
-				Ollama: OllamaLLMConfig{
+			Summarization: session.SummarizationConfig{
+				Ollama: session.OllamaLLMConfig{
 					URL:            "", // Empty = use fallback model only
 					Model:          "",
 					TimeoutSeconds: 120,
@@ -626,13 +489,13 @@ func Load() (*LoadResult, error) {
 				FailureThreshold:     3,
 				ResetMinutes:         30,
 				RetryIntervalSeconds: 60,
-				Checkpoint: CheckpointSubConfig{
+				Checkpoint: session.CheckpointSubConfig{
 					Enabled:         true,
 					Thresholds:      []int{25, 50, 75},
 					TurnThreshold:   15,
 					MinTokensForGen: 10000,
 				},
-				Compaction: CompactionSubConfig{
+				Compaction: session.CompactionSubConfig{
 					ReserveTokens:    4000,
 					MaxMessages:      500, // Trigger compaction if > 500 messages
 					PreferCheckpoint: true,
@@ -640,10 +503,10 @@ func Load() (*LoadResult, error) {
 					MinMessages:      20, // Never drop below 20 messages
 				},
 			},
-			MemoryFlush: MemoryFlushConfig{
+			MemoryFlush: session.MemoryFlushConfig{
 				Enabled:            true,
 				ShowInSystemPrompt: true,
-				Thresholds: []FlushThresholdConfig{
+				Thresholds: []session.FlushThresholdConfig{
 					{
 						Percent:      50,
 						Prompt:       "Context at 50%. Consider noting key decisions to memory.",
@@ -698,8 +561,11 @@ func Load() (*LoadResult, error) {
 			TTL:     600,             // 10 minutes (more generous than OpenClaw's 2 min)
 			MaxSize: 5 * 1024 * 1024, // 5MB
 		},
-		TUI: TUIConfig{
-			ShowLogs: true, // Show logs panel by default
+		Channels: channels.Config{
+			TUI: tui.Config{
+				ShowLogs: true, // Show logs panel by default
+			},
+			// Telegram and HTTP are disabled by default (zero values)
 		},
 		Skills: SkillsConfig{
 			Enabled:       true,
@@ -715,12 +581,12 @@ func Load() (*LoadResult, error) {
 				IntervalMinutes: 30,
 			},
 		},
-		Supervision: SupervisionConfig{
-			Guidance: GuidanceConfig{
+		Supervision: gwtypes.SupervisionConfig{
+			Guidance: gwtypes.GuidanceConfig{
 				Prefix:     "[Supervisor]: ",
 				SystemNote: "",
 			},
-			Ghostwriting: GhostwritingConfig{
+			Ghostwriting: gwtypes.GhostwritingConfig{
 				TypingDelayMs: 500,
 			},
 		},
@@ -755,10 +621,10 @@ func Load() (*LoadResult, error) {
 // Only includes fields that users typically need to customize.
 // The full defaults are applied by Load() when merging.
 type DefaultConfigTemplate struct {
-	LLM     DefaultLLMTemplate     `json:"llm"`
-	Gateway DefaultGatewayTemplate `json:"gateway,omitempty"`
-	HTTP    DefaultHTTPTemplate    `json:"http,omitempty"`
-	Roles   user.RolesConfig       `json:"roles,omitempty"`
+	LLM      DefaultLLMTemplate      `json:"llm"`
+	Gateway  DefaultGatewayTemplate  `json:"gateway,omitempty"`
+	Channels DefaultChannelsTemplate `json:"channels,omitempty"`
+	Roles    user.RolesConfig        `json:"roles,omitempty"`
 }
 
 type DefaultLLMTemplate struct {
@@ -768,6 +634,10 @@ type DefaultLLMTemplate struct {
 
 type DefaultGatewayTemplate struct {
 	WorkingDir string `json:"workingDir,omitempty"`
+}
+
+type DefaultChannelsTemplate struct {
+	HTTP DefaultHTTPTemplate `json:"http,omitempty"`
 }
 
 type DefaultHTTPTemplate struct {
@@ -794,8 +664,10 @@ func DefaultConfig() *DefaultConfigTemplate {
 		Gateway: DefaultGatewayTemplate{
 			WorkingDir: "~/.goclaw/workspace",
 		},
-		HTTP: DefaultHTTPTemplate{
-			Listen: ":1337",
+		Channels: DefaultChannelsTemplate{
+			HTTP: DefaultHTTPTemplate{
+				Listen: ":1337",
+			},
 		},
 		Roles: user.RolesConfig{
 			"owner": user.RoleConfig{
