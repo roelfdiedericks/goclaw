@@ -2,6 +2,18 @@
 // These types are defined here to avoid import cycles between config and gateway packages.
 package types
 
+// GatewayConfig contains gateway server settings
+type GatewayConfig struct {
+	LogFile    string `json:"logFile"`
+	PIDFile    string `json:"pidFile"`
+	WorkingDir string `json:"workingDir"`
+}
+
+// PromptCacheConfig configures system prompt caching
+type PromptCacheConfig struct {
+	PollInterval int `json:"pollInterval"` // Hash poll interval in seconds (default: 60, 0 = disabled)
+}
+
 // AgentIdentityConfig configures the agent's display identity
 type AgentIdentityConfig struct {
 	Name   string `json:"name"`   // Agent's display name (default: "GoClaw")

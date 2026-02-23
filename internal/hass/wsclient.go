@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -19,11 +18,11 @@ import (
 // waits for the response, and closes. This avoids interference with
 // the persistent subscription WebSocket.
 type WSClient struct {
-	cfg config.HomeAssistantConfig
+	cfg HomeAssistantConfig
 }
 
 // NewWSClient creates a new WebSocket client for sync registry queries.
-func NewWSClient(cfg config.HomeAssistantConfig) *WSClient {
+func NewWSClient(cfg HomeAssistantConfig) *WSClient {
 	return &WSClient{cfg: cfg}
 }
 

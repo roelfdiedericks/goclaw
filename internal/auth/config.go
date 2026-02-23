@@ -4,13 +4,30 @@ import (
 	"fmt"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
-// AConfig is an alias for config.AuthConfig to avoid name collisions
-type AConfig = config.AuthConfig
+// CredentialHint describes a credential the auth script accepts
+type CredentialHint struct {
+	Key      string `json:"key"`                // JSON field name to pass to script
+	Label    string `json:"label,omitempty"`    // Friendly name to ask user for (defaults to Key)
+	Required bool   `json:"required,omitempty"` // Whether this credential is required
+}
+
+// AuthConfig configures role elevation via external authentication
+type AuthConfig struct {
+	Enabled         bool             `json:"enabled"`         // Enable user_auth tool
+	Script          string           `json:"script"`          // Path to auth script
+	AllowedRoles    []string         `json:"allowedRoles"`    // Roles script can return (empty = disabled)
+	CredentialHints []CredentialHint `json:"credentialHints"` // Credentials the script accepts (shown to agent)
+	RateLimit       int              `json:"rateLimit"`       // Max attempts per minute (default: 3)
+	Timeout         int              `json:"timeout"`         // Script timeout in seconds (default: 10)
+}
+
+// AConfig is an alias for AuthConfig for convenience
+// (Cannot use "Config" due to dot-import conflict with logging.Config)
+type AConfig = AuthConfig
 
 const configPath = "auth"
 
@@ -54,10 +71,17 @@ func UnregisterCommands() {
 
 // handleApply publishes the config.applied event for listeners to react
 func handleApply(cmd bus.Command) bus.CommandResult {
-	cfg, ok := cmd.Payload.(*config.AuthConfig)
+	cfg, ok := cmd.Payload.(AuthConfig)
+	if !ok {
+		cfgPtr, okPtr := cmd.Payload.(*AuthConfig)
+		if okPtr {
+			cfg = *cfgPtr
+			ok = true
+		}
+	}
 	if !ok {
 		return bus.CommandResult{
-			Error:   fmt.Errorf("expected *AuthConfig, got %T", cmd.Payload),
+			Error:   fmt.Errorf("expected AuthConfig, got %T", cmd.Payload),
 			Message: "invalid payload type",
 		}
 	}

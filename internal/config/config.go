@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 
 	"dario.cat/mergo"
+	"github.com/roelfdiedericks/goclaw/internal/auth"
 	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
 	telegramconfig "github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
 	tuiconfig "github.com/roelfdiedericks/goclaw/internal/channels/tui/config"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
+	"github.com/roelfdiedericks/goclaw/internal/hass"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
@@ -137,39 +139,22 @@ type ChannelsConfig struct {
 
 // Config represents the merged goclaw configuration
 type Config struct {
-	Gateway       GatewayConfig                  `json:"gateway"`
+	Gateway       gwtypes.GatewayConfig          `json:"gateway"`
 	Agent         gwtypes.AgentIdentityConfig    `json:"agent"`
 	LLM           llm.LLMConfig                  `json:"llm"`
-	HomeAssistant HomeAssistantConfig            `json:"homeassistant"` // Top-level Home Assistant config
+	HomeAssistant hass.HomeAssistantConfig        `json:"homeassistant"` // Top-level Home Assistant config
 	Tools         ToolsConfig                    `json:"tools"`
 	Channels      ChannelsConfig                 `json:"channels"` // All channel configs (telegram, http, tui)
 	Session       session.SessionConfig          `json:"session"`
 	Memory        memory.MemorySearchConfig      `json:"memory"`
 	Transcript    transcript.TranscriptConfig    `json:"transcript"`
-	PromptCache   PromptCacheConfig              `json:"promptCache"`
+	PromptCache   gwtypes.PromptCacheConfig      `json:"promptCache"`
 	Media         MediaConfig                    `json:"media"`
 	Skills        skills.SkillsConfig            `json:"skills"`
 	Cron          cron.CronConfig                `json:"cron"`
 	Supervision   gwtypes.SupervisionConfig      `json:"supervision"`
 	Roles         user.RolesConfig               `json:"roles"` // Role-based access control
-	Auth          AuthConfig                     `json:"auth"`  // Role elevation authentication
-}
-
-// CredentialHint describes a credential the auth script accepts
-type CredentialHint struct {
-	Key      string `json:"key"`                // JSON field name to pass to script
-	Label    string `json:"label,omitempty"`    // Friendly name to ask user for (defaults to Key)
-	Required bool   `json:"required,omitempty"` // Whether this credential is required
-}
-
-// AuthConfig configures role elevation via external authentication
-type AuthConfig struct {
-	Enabled         bool             `json:"enabled"`         // Enable user_auth tool
-	Script          string           `json:"script"`          // Path to auth script
-	AllowedRoles    []string         `json:"allowedRoles"`    // Roles script can return (empty = disabled)
-	CredentialHints []CredentialHint `json:"credentialHints"` // Credentials the script accepts (shown to agent)
-	RateLimit       int              `json:"rateLimit"`       // Max attempts per minute (default: 3)
-	Timeout         int              `json:"timeout"`         // Script timeout in seconds (default: 10)
+	Auth          auth.AuthConfig                `json:"auth"`  // Role elevation authentication
 }
 
 // MediaConfig configures media file storage
@@ -177,31 +162,6 @@ type MediaConfig struct {
 	Dir     string `json:"dir"`     // Base directory (empty = <workspace>/media/)
 	TTL     int    `json:"ttl"`     // TTL in seconds (default: 600 = 10 min)
 	MaxSize int    `json:"maxSize"` // Max file size in bytes (default: 5MB)
-}
-
-// HomeAssistantConfig configures Home Assistant integration (REST + WebSocket)
-type HomeAssistantConfig struct {
-	Enabled          bool   `json:"enabled"`                    // Enable Home Assistant integration
-	URL              string `json:"url"`                        // HA base URL (e.g., "https://home.example.com:8123")
-	Token            string `json:"token"`                      // Long-lived access token
-	Insecure         bool   `json:"insecure,omitempty"`         // Skip TLS verification for self-signed certs
-	Timeout          string `json:"timeout,omitempty"`          // Request timeout (default: "10s")
-	EventPrefix      string `json:"eventPrefix,omitempty"`      // Prefix for injected events (default: "[HomeAssistant Event]")
-	SubscriptionFile string `json:"subscriptionFile,omitempty"` // Subscription persistence file (default: "hass-subscriptions.json")
-	ReconnectDelay   string `json:"reconnectDelay,omitempty"`   // WebSocket reconnect delay (default: "5s")
-}
-
-// PromptCacheConfig configures system prompt caching
-type PromptCacheConfig struct {
-	PollInterval int `json:"pollInterval"` // Hash poll interval in seconds (default: 60, 0 = disabled)
-}
-
-
-// GatewayConfig contains gateway server settings
-type GatewayConfig struct {
-	LogFile    string `json:"logFile"`
-	PIDFile    string `json:"pidFile"`
-	WorkingDir string `json:"workingDir"`
 }
 
 // UserConfig represents a user who can interact with the agent
@@ -340,7 +300,7 @@ func Load() (*LoadResult, error) {
 
 	// Build defaults
 	cfg := &Config{
-		Gateway: GatewayConfig{
+		Gateway: gwtypes.GatewayConfig{
 			LogFile:    filepath.Join(goclawDir, "goclaw.log"),
 			PIDFile:    filepath.Join(goclawDir, "goclaw.pid"),
 			WorkingDir: filepath.Join(goclawDir, "workspace"),
@@ -370,7 +330,7 @@ func Load() (*LoadResult, error) {
 				BudgetTokens: 10000, // Default budget for extended thinking
 			},
 		},
-		HomeAssistant: HomeAssistantConfig{
+		HomeAssistant: hass.HomeAssistantConfig{
 			Enabled:          false, // Disabled by default - requires manual configuration
 			Timeout:          "10s",
 			EventPrefix:      "[HomeAssistant Event]",
@@ -493,7 +453,7 @@ func Load() (*LoadResult, error) {
 				KeywordWeight: 0.3,
 			},
 		},
-		PromptCache: PromptCacheConfig{
+		PromptCache: gwtypes.PromptCacheConfig{
 			PollInterval: 60, // Check file hashes every 60 seconds as fallback
 		},
 		Media: MediaConfig{

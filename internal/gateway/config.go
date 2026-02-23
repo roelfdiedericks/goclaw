@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
@@ -12,6 +11,8 @@ import (
 
 // Re-export types from gateway/types for convenience
 type (
+	GatewayConfig       = gwtypes.GatewayConfig
+	PromptCacheConfig   = gwtypes.PromptCacheConfig
 	AgentIdentityConfig = gwtypes.AgentIdentityConfig
 	SupervisionConfig   = gwtypes.SupervisionConfig
 	GuidanceConfig      = gwtypes.GuidanceConfig
@@ -75,9 +76,9 @@ func ConfigFormDef() forms.FormDef {
 
 // GatewayConfigBundle holds all gateway-owned config sections
 type GatewayConfigBundle struct {
-	Gateway     config.GatewayConfig     `json:"gateway"`
+	Gateway     GatewayConfig     `json:"gateway"`
 	Agent       AgentIdentityConfig      `json:"agent"`
-	PromptCache config.PromptCacheConfig `json:"promptCache"`
+	PromptCache PromptCacheConfig `json:"promptCache"`
 	Supervision SupervisionConfig        `json:"supervision"`
 }
 

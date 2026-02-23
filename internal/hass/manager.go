@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
@@ -21,7 +20,7 @@ import (
 // It manages the connection lifecycle, event filtering, debouncing, and
 // event injection into the agent's session.
 type Manager struct {
-	cfg            config.HomeAssistantConfig
+	cfg            HomeAssistantConfig
 	injector       types.EventInjector
 	dataDir        string
 	subscriptions  map[string]*Subscription
@@ -48,7 +47,7 @@ type Manager struct {
 }
 
 // NewManager creates a new HASS event subscription manager.
-func NewManager(cfg config.HomeAssistantConfig, injector types.EventInjector, dataDir string) *Manager {
+func NewManager(cfg HomeAssistantConfig, injector types.EventInjector, dataDir string) *Manager {
 	return &Manager{
 		cfg:           cfg,
 		injector:      injector,

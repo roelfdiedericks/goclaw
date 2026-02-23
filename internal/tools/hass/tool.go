@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/roelfdiedericks/goclaw/internal/config"
 	hasspkg "github.com/roelfdiedericks/goclaw/internal/hass"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
@@ -63,7 +62,7 @@ type hassInput struct {
 // NewTool creates a new Home Assistant tool.
 // The wsClient and manager parameters are optional - if nil, WebSocket features
 // (devices, areas, entities, subscriptions) will return errors.
-func NewTool(cfg config.HomeAssistantConfig, mediaStore *media.MediaStore, wsClient *hasspkg.WSClient, manager *hasspkg.Manager) (*Tool, error) {
+func NewTool(cfg hasspkg.HomeAssistantConfig, mediaStore *media.MediaStore, wsClient *hasspkg.WSClient, manager *hasspkg.Manager) (*Tool, error) {
 	client, err := NewClient(cfg)
 	if err != nil {
 		return nil, err

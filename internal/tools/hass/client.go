@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/roelfdiedericks/goclaw/internal/config"
+	hasspkg "github.com/roelfdiedericks/goclaw/internal/hass"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -23,7 +23,7 @@ type Client struct {
 }
 
 // NewClient creates a new Home Assistant API client.
-func NewClient(cfg config.HomeAssistantConfig) (*Client, error) {
+func NewClient(cfg hasspkg.HomeAssistantConfig) (*Client, error) {
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("home assistant URL not configured")
 	}
