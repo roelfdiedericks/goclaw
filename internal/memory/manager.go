@@ -13,6 +13,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 )
 
 // Manager coordinates memory indexing and search
@@ -41,12 +42,18 @@ func NewManager(cfg MemorySearchConfig, workspaceDir string) (*Manager, error) {
 	// Determine database path
 	dbPath := cfg.DbPath
 	if dbPath == "" {
-		home, _ := os.UserHomeDir()
-		dbPath = filepath.Join(home, ".goclaw", "memory.db")
+		var err error
+		dbPath, err = paths.DataPath("memory.db")
+		if err != nil {
+			return nil, fmt.Errorf("get memory db path: %w", err)
+		}
 	} else if strings.HasPrefix(dbPath, "~") {
 		// Expand ~ to home directory
-		home, _ := os.UserHomeDir()
-		dbPath = filepath.Join(home, dbPath[1:])
+		expanded, err := paths.ExpandTilde(dbPath)
+		if err != nil {
+			return nil, fmt.Errorf("expand db path: %w", err)
+		}
+		dbPath = expanded
 	}
 
 	// Ensure directory exists

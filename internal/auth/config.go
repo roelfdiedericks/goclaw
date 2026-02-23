@@ -26,7 +26,7 @@ type AuthConfig struct {
 }
 
 // AConfig is an alias for AuthConfig for convenience
-// (Cannot use "Config" due to dot-import conflict with logging.Config)
+// (Named AuthConfig rather than Config for clarity when embedded in main Config struct)
 type AConfig = AuthConfig
 
 const configPath = "auth"

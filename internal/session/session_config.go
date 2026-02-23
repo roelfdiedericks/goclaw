@@ -1,8 +1,7 @@
 package session
 
 import (
-	"os"
-	"path/filepath"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 )
 
 // SessionConfig configures session management
@@ -36,8 +35,8 @@ func (s *SessionConfig) GetStorePath() string {
 		return s.StorePath
 	}
 	// Default SQLite path
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".goclaw", "sessions.db")
+	p, _ := paths.DataPath("sessions.db")
+	return p
 }
 
 // SummarizationConfig configures LLM-based summarization for checkpoints and compaction

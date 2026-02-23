@@ -12,6 +12,7 @@ import (
 	"regexp"
 
 	"github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 )
 
 // --- Role Configuration ---
@@ -120,18 +121,17 @@ func ValidateUsername(username string) error {
 // 1. ./users.json (current directory - for development)
 // 2. ~/.goclaw/users.json (primary location)
 func LoadUsers() (UsersConfig, error) {
-	home, _ := os.UserHomeDir()
-	goclawDir := filepath.Join(home, ".goclaw")
+	goclawUsersPath, _ := paths.DataPath("users.json")
 
-	paths := []string{
-		"users.json",                           // current directory
-		filepath.Join(goclawDir, "users.json"), // ~/.goclaw/
+	searchPaths := []string{
+		"users.json",    // current directory
+		goclawUsersPath, // ~/.goclaw/
 	}
 
 	var users UsersConfig
 	var loadedFrom string
 
-	for _, path := range paths {
+	for _, path := range searchPaths {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -208,16 +208,15 @@ func SaveUsers(users UsersConfig, path string) error {
 
 // GetUsersFilePath returns the path where users.json should be saved
 func GetUsersFilePath() string {
-	home, _ := os.UserHomeDir()
-	goclawDir := filepath.Join(home, ".goclaw")
+	goclawUsersPath, _ := paths.DataPath("users.json")
 
 	// Check existing files
-	paths := []string{
-		"users.json",                           // current directory
-		filepath.Join(goclawDir, "users.json"), // ~/.goclaw/
+	searchPaths := []string{
+		"users.json",    // current directory
+		goclawUsersPath, // ~/.goclaw/
 	}
 
-	for _, path := range paths {
+	for _, path := range searchPaths {
 		if _, err := os.Stat(path); err == nil {
 			absPath, _ := filepath.Abs(path)
 			return absPath
@@ -225,7 +224,7 @@ func GetUsersFilePath() string {
 	}
 
 	// Default: ~/.goclaw/
-	return filepath.Join(goclawDir, "users.json")
+	return goclawUsersPath
 }
 
 // GetUsersFilePathForConfig returns the users.json path alongside a given config path

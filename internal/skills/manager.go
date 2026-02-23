@@ -10,6 +10,7 @@ import (
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
@@ -66,9 +67,9 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 
 	managedDir := cfg.ManagedDir
 	if managedDir == "" {
-		home, err := os.UserHomeDir()
+		p, err := paths.DataPath("skills")
 		if err == nil {
-			managedDir = filepath.Join(home, ".goclaw", "skills")
+			managedDir = p
 		}
 	}
 

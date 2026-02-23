@@ -18,6 +18,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	toolsconfig "github.com/roelfdiedericks/goclaw/internal/tools/config"
@@ -163,9 +164,8 @@ type Config struct {
 // If no config file exists, returns an error directing user to run 'goclaw setup'.
 func Load() (*LoadResult, error) {
 	home, _ := os.UserHomeDir()
-	goclawDir := filepath.Join(home, ".goclaw")
-
-	goclawGlobalPath := filepath.Join(goclawDir, "goclaw.json")
+	goclawDir, _ := paths.BaseDir()
+	goclawGlobalPath, _ := paths.DefaultConfigPath()
 	goclawLocalPath := "goclaw.json" // current working directory
 
 	logging.L_debug("config: checking files", "goclawDir", goclawDir, "cwd", mustGetwd())

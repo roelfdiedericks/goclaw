@@ -25,7 +25,7 @@ type MemorySearchQueryConfig struct {
 }
 
 // MConfig is an alias for MemorySearchConfig for convenience
-// (Cannot use "Config" due to dot-import conflict with logging.Config)
+// (Named MemorySearchConfig rather than Config for clarity when embedded in main Config struct)
 type MConfig = MemorySearchConfig
 
 // MQueryConfig is an alias for MemorySearchQueryConfig

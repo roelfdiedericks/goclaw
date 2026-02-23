@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 )
 
 // CreateWorkspace initializes a new workspace at the given path
@@ -81,14 +82,14 @@ func ExpandPath(path string) string {
 
 // DefaultWorkspacePath returns the default workspace path
 func DefaultWorkspacePath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".goclaw", "workspace")
+	p, _ := paths.DefaultWorkspace()
+	return p
 }
 
 // DefaultGoclawRoot returns the default GoClaw root directory
 func DefaultGoclawRoot() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".goclaw")
+	p, _ := paths.BaseDir()
+	return p
 }
 
 // OpenClawGoclawRoot returns the path for side-by-side with OpenClaw

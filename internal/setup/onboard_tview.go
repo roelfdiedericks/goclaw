@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/rivo/tview"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
@@ -718,23 +718,35 @@ func formWithHeader(headerText string, headerLines int, form *tview.Form) tview.
 	return layout
 }
 
-// printWizardConfig prints the wizard config as JSON (for testing)
+// printWizardConfig saves the wizard config and users to their respective files
 func printWizardConfig(data *WizardData) {
-	fmt.Println("\n=== Configuration (would be saved) ===")
-
-	// Build config structure
-	cfg := buildConfigFromWizardData(data)
-
-	jsonData, err := json.MarshalIndent(cfg, "", "  ")
+	// Get save paths
+	configPath, err := paths.DefaultConfigPath()
 	if err != nil {
-		fmt.Printf("Error marshaling config: %v\n", err)
+		fmt.Printf("Error getting config path: %v\n", err)
+		return
+	}
+	usersPath, err := paths.UsersPath(configPath)
+	if err != nil {
+		fmt.Printf("Error getting users path: %v\n", err)
 		return
 	}
 
-	fmt.Println(string(jsonData))
+	// Ensure parent directory exists
+	if err := paths.EnsureParentDir(configPath); err != nil {
+		fmt.Printf("Error creating config directory: %v\n", err)
+		return
+	}
 
-	// Print users.json
-	fmt.Println("\n=== Users (would be saved) ===")
+	// Build and save config
+	cfg := buildConfigFromWizardData(data)
+	if err := config.BackupAndWriteJSON(configPath, cfg, config.DefaultBackupCount); err != nil {
+		fmt.Printf("Error saving config: %v\n", err)
+		return
+	}
+	fmt.Printf("Configuration saved to: %s\n", configPath)
+
+	// Build and save users
 	userEntry := map[string]interface{}{
 		"name": data.UserDisplayName,
 		"role": data.UserRole,
@@ -746,13 +758,14 @@ func printWizardConfig(data *WizardData) {
 		data.UserName: userEntry,
 	}
 
-	usersJSON, _ := json.MarshalIndent(users, "", "  ")
-	fmt.Println(string(usersJSON))
-
-	fmt.Println("\n(Note: Not actually saved during testing)")
+	if err := config.BackupAndWriteJSON(usersPath, users, config.DefaultBackupCount); err != nil {
+		fmt.Printf("Error saving users: %v\n", err)
+		return
+	}
+	fmt.Printf("Users saved to: %s\n", usersPath)
 
 	// Print next steps
-	fmt.Println("\nNext steps:")
+	fmt.Println("\nSetup complete! Next steps:")
 	fmt.Println("  1. Run 'goclaw setup edit' to configure LLM providers")
 	fmt.Println("  2. Run 'goclaw tui' to start GoClaw")
 	if data.BrowserSetup {
@@ -762,8 +775,6 @@ func printWizardConfig(data *WizardData) {
 
 // buildConfigFromWizardData creates a config structure from wizard data
 func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
-	home, _ := os.UserHomeDir()
-
 	cfg := map[string]interface{}{
 		"gateway": map[string]interface{}{
 			"workingDir": data.WorkspacePath,
@@ -777,7 +788,7 @@ func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
 			"listen":  data.HTTPListen,
 		},
 		"session": map[string]interface{}{
-			"storePath": filepath.Join(home, ".goclaw", "sessions.db"),
+			"storePath": func() string { p, _ := paths.DataPath("sessions.db"); return p }(),
 		},
 		"tools": map[string]interface{}{
 			"exec": map[string]interface{}{

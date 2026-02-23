@@ -9,6 +9,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 )
 
 func TestChunkMarkdown(t *testing.T) {
@@ -230,8 +231,7 @@ func TestManagerIntegration(t *testing.T) {
 	}
 
 	// Override default db path for testing
-	home, _ := os.UserHomeDir()
-	testDbDir := filepath.Join(home, ".goclaw", "test")
+	testDbDir, _ := paths.DataPath("test")
 	os.MkdirAll(testDbDir, 0755)
 	defer os.RemoveAll(testDbDir)
 

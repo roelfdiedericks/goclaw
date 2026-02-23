@@ -15,6 +15,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
@@ -108,7 +109,10 @@ func restoreLogs(level int) {
 
 // RunAuto detects mode based on existing config
 func RunAuto() error {
-	configPath := findExistingConfig()
+	configPath, err := paths.ConfigPath()
+	if err != nil {
+		return fmt.Errorf("failed to check config path: %w", err)
+	}
 	if configPath != "" {
 		L_debug("setup: existing config found, running edit mode", "path", configPath)
 		return RunEdit()
@@ -117,26 +121,30 @@ func RunAuto() error {
 	return RunWizard()
 }
 
-// RunWizard runs the full setup wizard
+// RunWizard runs the full setup wizard (tview-based)
 func RunWizard() error {
-	w := NewWizard()
-	return w.Run()
+	return RunOnboardWizardTview()
 }
 
-// RunEdit runs the edit menu (requires existing config)
+// RunEdit runs the edit menu (requires existing config, tview-based)
 func RunEdit() error {
-	configPath := findExistingConfig()
+	configPath, err := paths.ConfigPath()
+	if err != nil {
+		return fmt.Errorf("failed to check config path: %w", err)
+	}
 	if configPath == "" {
 		return fmt.Errorf("no existing config found - run 'goclaw setup' to create one")
 	}
 
-	e := NewEditor(configPath)
-	return e.Run()
+	return RunEditorTview()
 }
 
 // ShowConfig displays the current configuration
 func ShowConfig() error {
-	configPath := findExistingConfig()
+	configPath, err := paths.ConfigPath()
+	if err != nil {
+		return fmt.Errorf("failed to check config path: %w", err)
+	}
 	if configPath == "" {
 		fmt.Println("No GoClaw configuration found.")
 		fmt.Println()
@@ -170,7 +178,10 @@ func ShowConfig() error {
 
 // ShowConfigPath displays the path to the configuration file
 func ShowConfigPath() error {
-	configPath := findExistingConfig()
+	configPath, err := paths.ConfigPath()
+	if err != nil {
+		return fmt.Errorf("failed to check config path: %w", err)
+	}
 	if configPath == "" {
 		fmt.Println("No GoClaw configuration found.")
 		fmt.Println()
@@ -265,33 +276,13 @@ func generateRandomPassword(length int) (string, error) {
 	return string(b), nil
 }
 
-// findExistingConfig searches for an existing goclaw.json
-func findExistingConfig() string {
-	home, _ := os.UserHomeDir()
-
-	// Search locations
-	paths := []string{
-		"goclaw.json", // current directory
-		filepath.Join(home, ".goclaw", "goclaw.json"), // ~/.goclaw/
-	}
-
-	for _, path := range paths {
-		if _, err := os.Stat(path); err == nil {
-			absPath, _ := filepath.Abs(path)
-			return absPath
-		}
-	}
-
-	return ""
-}
-
 // GetConfigPath returns the path where config should be saved
 // GoClaw always uses its own directory, regardless of OpenClaw presence
 func GetConfigPath(openclawImport bool) string {
-	home, _ := os.UserHomeDir()
 	// Always use ~/.goclaw/ for GoClaw's own config
 	// OpenClaw integration is via config options (inherit), not directory nesting
-	return filepath.Join(home, ".goclaw", "goclaw.json")
+	p, _ := paths.DefaultConfigPath()
+	return p
 }
 
 // GetUsersPath returns the path where users.json should be saved

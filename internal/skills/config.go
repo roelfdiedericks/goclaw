@@ -24,7 +24,7 @@ type SkillsConfig struct {
 // Note: SkillEntryConfig is defined in types.go
 
 // SkConfig is an alias for SkillsConfig for convenience
-// (Cannot use "Config" due to dot-import conflict with logging.Config)
+// (Named SkillsConfig rather than Config for clarity when embedded in main Config struct)
 type SkConfig = SkillsConfig
 
 const configPath = "skills"

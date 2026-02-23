@@ -33,7 +33,7 @@ type TranscriptQueryConfig struct {
 }
 
 // TConfig is an alias for TranscriptConfig for convenience
-// (Cannot use "Config" due to dot-import conflict with logging.Config)
+// (Named TranscriptConfig rather than Config for clarity when embedded in main Config struct)
 type TConfig = TranscriptConfig
 
 // TQueryConfig is an alias for TranscriptQueryConfig

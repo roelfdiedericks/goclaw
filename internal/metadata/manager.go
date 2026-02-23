@@ -5,10 +5,10 @@ import (
 	_ "embed"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"sync"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 )
 
 //go:embed providers.json
@@ -93,9 +93,8 @@ func (m *Manager) bootstrap(localPath string) {
 		return // Already exists
 	}
 
-	dir := filepath.Dir(localPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		L_warn("metadata: failed to create directory", "path", dir, "error", err)
+	if err := paths.EnsureParentDir(localPath); err != nil {
+		L_warn("metadata: failed to create directory", "path", localPath, "error", err)
 		return
 	}
 
@@ -109,8 +108,8 @@ func (m *Manager) bootstrap(localPath string) {
 
 // localPath returns the path to the local metadata file.
 func (m *Manager) localPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".goclaw", "metadata", "providers.json")
+	p, _ := paths.DataPath("metadata/providers.json")
+	return p
 }
 
 // GetProvider returns metadata for a provider type.

@@ -23,7 +23,7 @@ type HeartbeatConfig struct {
 }
 
 // CConfig is an alias for CronConfig for convenience
-// (Cannot use "Config" due to dot-import conflict with logging.Config)
+// (Named CronConfig rather than Config for clarity when embedded in main Config struct)
 type CConfig = CronConfig
 
 const configPath = "cron"

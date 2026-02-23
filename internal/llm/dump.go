@@ -17,6 +17,7 @@ import (
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 )
 
 const (
@@ -324,11 +325,10 @@ func injectReasoningParam(body []byte, effort string) []byte {
 
 // dumpDir returns the dump directory path, creating it if needed
 func dumpDir() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := paths.DataPath(dumpDirName)
 	if err != nil {
-		return "", fmt.Errorf("get home dir: %w", err)
+		return "", fmt.Errorf("get dump dir path: %w", err)
 	}
-	dir := filepath.Join(home, ".goclaw", dumpDirName)
 	if err := os.MkdirAll(dir, 0750); err != nil {
 		return "", fmt.Errorf("create dump dir: %w", err)
 	}

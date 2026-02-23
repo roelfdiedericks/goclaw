@@ -16,6 +16,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
@@ -120,6 +121,7 @@ func (e *EditorTview) createMenu() *forms.MenuListResult {
 		{Label: "Browser", OnSelect: func() {
 			L_info("editor: browser - not implemented yet")
 		}},
+		{Label: "Backups", OnSelect: e.showBackups},
 		{IsSeparator: true},
 		{Label: "Save Changes", OnSelect: e.saveConfig},
 		{Label: "Exit", OnSelect: e.confirmExit},
@@ -426,17 +428,115 @@ func (e *EditorTview) editGateway() {
 	e.app.SetFormContent(content)
 }
 
-// saveConfig saves the configuration (placeholder - just logs for now)
+// saveConfig saves the configuration with backup
 func (e *EditorTview) saveConfig() {
 	if !e.dirty {
 		L_info("editor: no changes to save")
+		e.app.SetStatusText("No changes to save")
 		return
 	}
 
-	// TODO: Implement actual save with backup
-	// For now, just mark as saved
-	L_info("editor: save requested (not implemented - will print on exit)")
-	L_info("editor: would save to", "path", e.configPath)
+	// Determine save path
+	savePath := e.configPath
+	if savePath == "" {
+		var err error
+		savePath, err = paths.DefaultConfigPath()
+		if err != nil {
+			L_error("editor: failed to get config path", "error", err)
+			e.app.SetStatusText("Error: failed to get config path")
+			return
+		}
+	}
+
+	// Ensure parent directory exists
+	if err := paths.EnsureParentDir(savePath); err != nil {
+		L_error("editor: failed to create config directory", "error", err)
+		e.app.SetStatusText("Error: failed to create directory")
+		return
+	}
+
+	// Save with backup
+	if err := config.BackupAndWriteJSON(savePath, e.cfg, config.DefaultBackupCount); err != nil {
+		L_error("editor: failed to save config", "path", savePath, "error", err)
+		e.app.SetStatusText("Error: failed to save config")
+		return
+	}
+
+	e.dirty = false
+	e.configPath = savePath
+	L_info("editor: config saved", "path", savePath)
+	e.app.SetStatusText("Saved to " + savePath)
+}
+
+// showBackups displays available config backups and allows restoration
+func (e *EditorTview) showBackups() {
+	// Determine config path
+	configPath := e.configPath
+	if configPath == "" {
+		var err error
+		configPath, err = paths.DefaultConfigPath()
+		if err != nil {
+			L_error("editor: failed to get config path", "error", err)
+			e.app.SetStatusText("Error: failed to get config path")
+			return
+		}
+	}
+
+	// List available backups
+	backups := config.ListBackups(configPath)
+	if len(backups) == 0 {
+		e.app.SetStatusText("No backups available")
+		return
+	}
+
+	// Build menu items from backups
+	items := make([]forms.MenuItem, 0, len(backups)+1)
+	for _, backup := range backups {
+		b := backup // capture for closure
+		name := ".bak"
+		if b.Index > 0 {
+			name = fmt.Sprintf(".bak.%d", b.Index)
+		}
+		label := fmt.Sprintf("%s (%s)", name, b.ModTime.Format("2006-01-02 15:04:05"))
+		items = append(items, forms.MenuItem{
+			Label: label,
+			OnSelect: func() {
+				e.restoreBackup(configPath, b.Index)
+			},
+		})
+	}
+	items = append(items, forms.MenuItem{IsSeparator: true})
+	items = append(items, forms.MenuItem{Label: "Back", OnSelect: e.showMainMenu})
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Backups"})
+	e.app.SetStatusText("Select a backup to restore")
+	e.app.SetMenuContent(forms.NewMenuList(forms.MenuListConfig{
+		Items:  items,
+		OnBack: e.showMainMenu,
+	}))
+}
+
+// restoreBackup restores configuration from a backup file
+func (e *EditorTview) restoreBackup(configPath string, backupIndex int) {
+	if err := config.RestoreBackup(configPath, backupIndex); err != nil {
+		L_error("editor: failed to restore backup", "index", backupIndex, "error", err)
+		e.app.SetStatusText("Error: failed to restore backup")
+		return
+	}
+
+	L_info("editor: backup restored", "index", backupIndex)
+	e.app.SetStatusText("Backup restored - reload to see changes")
+
+	// Reload config
+	if err := e.loadConfig(); err != nil {
+		L_error("editor: failed to reload config", "error", err)
+		e.app.SetStatusText("Restored but failed to reload - restart editor")
+		return
+	}
+
+	e.dirty = false
+	e.app.SetStatusText("Backup restored successfully")
+	e.showMainMenu()
 }
 
 // confirmExit handles exit with unsaved changes check
@@ -468,7 +568,7 @@ func (e *EditorTview) printConfig() {
 
 // RunEditorTview is the entry point for the tview editor
 func RunEditorTview() error {
-	configPath := findExistingConfig()
+	configPath, _ := paths.ConfigPath()
 	editor := NewEditorTview(configPath)
 	return editor.Run()
 }

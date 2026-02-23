@@ -8,6 +8,7 @@ import (
 
 	"github.com/roelfdiedericks/goclaw/internal/bwrap"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 )
 
 // BrowserBubblewrapConfig holds bubblewrap settings for browser sandboxing
@@ -74,7 +75,10 @@ func CreateSandboxedLauncher(browserBin, workspace, profileDir string, cfg Brows
 
 	// Create a wrapper script that runs bwrap with the browser
 	// The wrapper passes through all arguments to the browser
-	wrapperDir := filepath.Join(home, ".goclaw", "browser-sandbox")
+	wrapperDir, err := paths.DataPath("browser-sandbox")
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(wrapperDir, 0750); err != nil {
 		return "", err
 	}
@@ -114,13 +118,15 @@ func CreateSandboxedLauncher(browserBin, workspace, profileDir string, cfg Brows
 // environment matching what bubblewrap would provide, but without the actual sandboxing.
 // This ensures consistent behavior regardless of whether bubblewrap is enabled.
 func CreatePassthroughLauncher(browserBin string) (string, error) {
-	home, _ := os.UserHomeDir()
-
-	wrapperDir := filepath.Join(home, ".goclaw", "browser-sandbox")
+	wrapperDir, err := paths.DataPath("browser-sandbox")
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(wrapperDir, 0750); err != nil {
 		return "", err
 	}
 
+	home, _ := os.UserHomeDir()
 	wrapperPath := filepath.Join(wrapperDir, "chromium-wrapper.sh")
 
 	// Build environment variables matching bwrap's DefaultEnv + Display + Wayland
@@ -213,8 +219,10 @@ func shellQuote(s string) string {
 
 // CleanupSandboxWrapper removes the sandbox wrapper script
 func CleanupSandboxWrapper() {
-	home, _ := os.UserHomeDir()
-	wrapperPath := filepath.Join(home, ".goclaw", "browser-sandbox", "chromium-wrapper.sh")
+	wrapperPath, err := paths.DataPath("browser-sandbox/chromium-wrapper.sh")
+	if err != nil {
+		return
+	}
 	_ = os.Remove(wrapperPath)
 }
 

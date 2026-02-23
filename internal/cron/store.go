@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 )
 
 // DefaultJobsPath returns the fallback path for jobs.json.
@@ -17,15 +17,23 @@ import (
 //   - Side-by-side with OpenClaw: ~/.openclaw/cron/jobs.json
 //   - Standalone: ~/.goclaw/cron/jobs.json
 func DefaultJobsPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".goclaw", "cron", "jobs.json")
+	p, err := paths.DataPath("cron/jobs.json")
+	if err != nil {
+		L_warn("cron: failed to get jobs path", "error", err)
+		return ""
+	}
+	return p
 }
 
 // DefaultRunsDir returns the fallback directory for run logs.
 // Note: The gateway resolves cron paths based on workspace location.
 func DefaultRunsDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".goclaw", "cron", "runs")
+	p, err := paths.DataPath("cron/runs")
+	if err != nil {
+		L_warn("cron: failed to get runs dir", "error", err)
+		return ""
+	}
+	return p
 }
 
 // Store manages cron job persistence.
@@ -94,8 +102,7 @@ func (s *Store) Save() error {
 
 func (s *Store) saveLocked() error {
 	// Ensure directory exists
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0750); err != nil {
+	if err := paths.EnsureParentDir(s.path); err != nil {
 		return fmt.Errorf("failed to create cron directory: %w", err)
 	}
 

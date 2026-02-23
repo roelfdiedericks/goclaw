@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -22,6 +21,7 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
@@ -29,21 +29,11 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
-// isOpenClawWorkspace returns true if the workspace path is under ~/.openclaw/
-// This is used to detect side-by-side operation with OpenClaw and determine
-// which paths to use for shared resources (skills, media, cron).
+// isOpenClawWorkspace is a convenience wrapper for paths.IsOpenClawWorkspace.
+// Returns true if the workspace path is under ~/.openclaw/, used to detect
+// side-by-side operation with OpenClaw.
 func isOpenClawWorkspace(workspacePath string) bool {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return false
-	}
-	openclawRoot := filepath.Join(home, ".openclaw")
-	// Normalize both paths for comparison
-	absWorkspace, err := filepath.Abs(workspacePath)
-	if err != nil {
-		return false
-	}
-	return strings.HasPrefix(absWorkspace, openclawRoot)
+	return paths.IsOpenClawWorkspace(workspacePath)
 }
 
 // Context keys for session info
@@ -394,12 +384,7 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 		// If running side-by-side with OpenClaw, use ~/.openclaw/skills
 		// Otherwise use ~/.goclaw/skills
 		if skillMgrCfg.ManagedDir == "" {
-			home, _ := os.UserHomeDir()
-			if isOpenClawWorkspace(cfg.Gateway.WorkingDir) {
-				skillMgrCfg.ManagedDir = filepath.Join(home, ".openclaw", "skills")
-			} else {
-				skillMgrCfg.ManagedDir = filepath.Join(home, ".goclaw", "skills")
-			}
+			skillMgrCfg.ManagedDir, _ = paths.ContextualDataPath("skills", cfg.Gateway.WorkingDir)
 		}
 
 		skillMgr, err := skills.NewManager(skillMgrCfg)
@@ -833,15 +818,8 @@ func (g *Gateway) StartCron(ctx context.Context) error {
 	// Determine cron paths based on workspace location
 	// If running side-by-side with OpenClaw, use ~/.openclaw/cron/
 	// Otherwise use ~/.goclaw/cron/
-	var cronJobsPath, cronRunsDir string
-	home, _ := os.UserHomeDir()
-	if isOpenClawWorkspace(g.config.Gateway.WorkingDir) {
-		cronJobsPath = filepath.Join(home, ".openclaw", "cron", "jobs.json")
-		cronRunsDir = filepath.Join(home, ".openclaw", "cron", "runs")
-	} else {
-		cronJobsPath = filepath.Join(home, ".goclaw", "cron", "jobs.json")
-		cronRunsDir = filepath.Join(home, ".goclaw", "cron", "runs")
-	}
+	cronJobsPath, _ := paths.ContextualDataPath("cron/jobs.json", g.config.Gateway.WorkingDir)
+	cronRunsDir, _ := paths.ContextualDataPath("cron/runs", g.config.Gateway.WorkingDir)
 
 	// Create store with resolved paths
 	store := cron.NewStore(cronJobsPath, cronRunsDir)

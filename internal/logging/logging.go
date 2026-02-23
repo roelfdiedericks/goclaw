@@ -41,16 +41,16 @@ var (
 	hookIsExclusive int32 // When set, don't write to stderr
 )
 
-// Config holds logging configuration
-type Config struct {
+// LogConfig holds logging configuration
+type LogConfig struct {
 	Level      int
 	TimeFormat string
 	ShowCaller bool
 }
 
-// DefaultConfig returns sensible defaults
-func DefaultConfig() *Config {
-	return &Config{
+// DefaultLogConfig returns sensible defaults
+func DefaultLogConfig() *LogConfig {
+	return &LogConfig{
 		Level:      LevelInfo,
 		TimeFormat: "15:04:05",
 		ShowCaller: true,
@@ -58,10 +58,10 @@ func DefaultConfig() *Config {
 }
 
 // Init initializes the global logger. Safe to call multiple times.
-func Init(cfg *Config) {
+func Init(cfg *LogConfig) {
 	once.Do(func() {
 		if cfg == nil {
-			cfg = DefaultConfig()
+			cfg = DefaultLogConfig()
 		}
 
 		logger = log.NewWithOptions(os.Stderr, log.Options{

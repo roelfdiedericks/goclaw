@@ -21,7 +21,7 @@ type HomeAssistantConfig struct {
 }
 
 // HConfig is an alias for HomeAssistantConfig for convenience
-// (Cannot use "Config" due to dot-import conflict with logging.Config)
+// (Named HomeAssistantConfig rather than Config for clarity when embedded in main Config struct)
 type HConfig = HomeAssistantConfig
 
 const configPath = "homeassistant"
