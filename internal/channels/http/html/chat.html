@@ -1,0 +1,916 @@
+{{template "header" .}}
+
+{{if .IsSupervising}}
+<div class="alert alert-info d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <i class="bi bi-eye"></i> <strong>Supervising:</strong> <code>{{.SuperviseSession}}</code>
+        <span id="llm-status" class="badge bg-success ms-2">LLM: Enabled</span>
+    </div>
+    <div>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="debug-toggle">Show Debug</button>
+        <button type="button" class="btn btn-sm btn-warning ms-2" id="llm-toggle">Disable LLM</button>
+    </div>
+</div>
+{{end}}
+
+<div class="row">
+    <div class="col-12">
+        <div class="card{{if .IsSupervising}} supervise-mode{{end}}">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-chat"></i> {{if .IsSupervising}}Supervision{{else}}Chat{{end}}</span>
+                <div>
+                    {{if not .IsSupervising}}
+                    <button type="button" class="btn btn-sm btn-outline-secondary me-2" id="clear-history" title="Clear chat history">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                    {{end}}
+                    <span id="connection-status" class="badge bg-secondary">Connecting...</span>
+                </div>
+            </div>
+            <div class="card-body chat-container" id="chat-messages">
+                <!-- Messages will be inserted here -->
+            </div>
+            <div class="card-footer">
+                {{if .IsSupervising}}
+                <div class="btn-group mb-2" role="group">
+                    <input type="radio" class="btn-check" name="send-mode" id="mode-guidance" value="guidance" checked>
+                    <label class="btn btn-outline-primary" for="mode-guidance">Guidance</label>
+                    <input type="radio" class="btn-check" name="send-mode" id="mode-ghostwrite" value="ghostwrite">
+                    <label class="btn btn-outline-secondary" for="mode-ghostwrite">Ghostwrite</label>
+                </div>
+                {{else}}
+                <div id="image-preview" class="image-preview-container" style="display: none;">
+                    <div class="image-preview-item">
+                        <img id="preview-img" src="" alt="Preview">
+                        <button type="button" class="btn-close-preview" id="remove-image" title="Remove image">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </div>
+                </div>
+                {{end}}
+                <form id="chat-form" class="d-flex gap-2 align-items-end">
+                    <textarea id="message-input" class="form-control" placeholder="{{if .IsSupervising}}Send guidance or ghostwrite...{{else}}Type a message... (Shift+Enter for newline){{end}}" autocomplete="off" rows="1" style="resize: none; max-height: 150px; overflow-y: auto;"></textarea>
+                    <button type="submit" class="btn btn-primary" id="send-btn">
+                        <i class="bi bi-send"></i>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+/* Supervision mode: hide debug content by default */
+.supervise-mode .debug-content { display: none; }
+.supervise-mode.show-debug .debug-content { display: block; }
+
+/* Supervision message styles */
+.message.guidance .bubble {
+    background-color: #e3f2fd;
+    border-left: 3px solid #2196f3;
+    color: #1565c0;
+}
+.message.ghostwrite .bubble {
+    background-color: #fff3e0;
+    border-left: 3px solid #ff9800;
+    color: #e65100;
+}
+</style>
+
+<script>
+$(document).ready(function() {
+    var eventSource = null;
+    var reconnectTimer = null;
+    var currentRunId = null;
+    var $currentBubble = null;
+    var currentRawText = ''; // Accumulate raw text for markdown rendering
+    var $messages = $('#chat-messages');
+    var $input = $('#message-input');
+    var $sendBtn = $('#send-btn');
+    var $status = $('#connection-status');
+    
+    // Supervision mode variables (must be before STORAGE_KEY)
+    var isSupervising = {{if .IsSupervising}}true{{else}}false{{end}};
+    var superviseSession = "{{.SuperviseSession}}";
+    var llmEnabled = true; // LLM enabled state for supervised session
+    var showDebug = false; // Whether to show debug content in supervision mode
+    
+    // Use different storage key for supervision sessions vs owner's own chat
+    var STORAGE_KEY = isSupervising ? 'goclaw_supervise_' + superviseSession : 'goclaw_chat_history';
+    var MAX_MESSAGES = 100; // Keep last 100 messages
+    var pendingImage = null; // { data: base64, mimeType: string, dataUrl: string }
+    var typingTimeout = null; // For hiding typing indicator after inactivity
+    var TYPING_TIMEOUT_MS = 5000; // Hide typing after 5s of no stream data
+    var showThinking = false; // Whether to show tool calls and thinking output
+    var activeToolCalls = {}; // Track active tool calls by ID
+    
+    // Configure marked.js with highlight.js
+    marked.setOptions({
+        highlight: function(code, lang) {
+            if (lang && hljs.getLanguage(lang)) {
+                try {
+                    return hljs.highlight(code, { language: lang }).value;
+                } catch (e) {}
+            }
+            return code; // Use plain text if language not found
+        },
+        breaks: true, // Convert \n to <br>
+        gfm: true // GitHub Flavored Markdown
+    });
+    
+    // Render markdown safely
+    function renderMarkdown(text) {
+        if (!text) return '';
+        var html = marked.parse(text);
+        html = DOMPurify.sanitize(html);
+        html = renderMediaRefs(html);
+        return html;
+    }
+    
+    // Render media references: {{"{{media:mime:'path'}}"}} -> HTML elements
+    function renderMediaRefs(html) {
+        // Pattern: {{"{{media:mimetype:'escaped-path'}}"}}
+        // Also handles error mimes: {{"{{media:error/not-found:'path'}}"}}
+        var pattern = /\{\{media:([a-z]+\/[a-z0-9.+-]+):'((?:[^'\\]|\\.)*)'\}\}/gi;
+        
+        return html.replace(pattern, function(match, mime, escapedPath) {
+            var path = unescapeMediaPath(escapedPath);
+            var url = '/api/media?path=' + encodeURIComponent(path);
+            var filename = path.split('/').pop();
+            
+            // Handle error states
+            if (mime.startsWith('error/')) {
+                var errorType = mime.split('/')[1];
+                return '<div class="chat-media-error"><i class="bi bi-exclamation-triangle"></i> ' +
+                    (errorType === 'not-found' ? 'File not found: ' : 'Invalid path: ') +
+                    '<code>' + escapeHtml(filename) + '</code></div>';
+            }
+            
+            // Render based on mimetype
+            if (mime.startsWith('image/')) {
+                return '<img src="' + url + '" class="chat-media chat-media-image" alt="' + escapeHtml(filename) + '" loading="lazy">';
+            } else if (mime.startsWith('video/')) {
+                return '<video src="' + url + '" controls class="chat-media chat-media-video"></video>';
+            } else if (mime.startsWith('audio/')) {
+                return '<audio src="' + url + '" controls class="chat-media-audio"></audio>';
+            } else {
+                // Document or unknown - show download link
+                return '<a href="' + url + '" download class="chat-media-link"><i class="bi bi-file-earmark-arrow-down"></i> ' +
+                    escapeHtml(filename) + '</a>';
+            }
+        });
+    }
+    
+    // Unescape media path (reverse of Go's EscapePath)
+    function unescapeMediaPath(s) {
+        return s.replace(/\\'/g, "'").replace(/\\\\/g, "\\");
+    }
+    
+    // Escape HTML for safe display
+    function escapeHtml(text) {
+        return $('<div>').text(text).html();
+    }
+
+    // Load chat history from localStorage
+    function loadHistory() {
+        try {
+            var history = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+            history.forEach(function(msg) {
+                // Pass supervision metadata if present
+                renderMessage(msg.role, msg.content, false, null, {
+                    supervisor: msg.supervisor,
+                    interventionType: msg.interventionType,
+                    source: msg.source
+                });
+            });
+            $messages.scrollTop($messages[0].scrollHeight);
+        } catch (e) {
+            console.error('Failed to load chat history:', e);
+        }
+    }
+
+    // Save chat history to localStorage
+    function saveHistory() {
+        try {
+            var messages = [];
+            $messages.find('.message').each(function() {
+                var $msg = $(this);
+                var role = 'assistant';
+                if ($msg.hasClass('user')) role = 'user';
+                else if ($msg.hasClass('error')) role = 'error';
+                else if ($msg.hasClass('mirror-user')) role = 'mirror-user';
+                else if ($msg.hasClass('mirror-assistant')) role = 'mirror-assistant';
+                else if ($msg.hasClass('guidance')) role = 'guidance';
+                else if ($msg.hasClass('ghostwrite')) role = 'ghostwrite';
+                // Get raw text content (strip HTML for storage)
+                var content = $msg.find('.bubble').text();
+                // Also store raw content in data attribute for markdown messages
+                var rawContent = $msg.data('raw-content');
+                
+                var msgData = {
+                    role: role,
+                    content: rawContent || content
+                };
+                
+                // Store supervision metadata if present
+                var supervisor = $msg.data('supervisor');
+                var interventionType = $msg.data('intervention-type');
+                var source = $msg.data('source');
+                if (supervisor) msgData.supervisor = supervisor;
+                if (interventionType) msgData.interventionType = interventionType;
+                if (source) msgData.source = source;
+                
+                messages.push(msgData);
+            });
+            // Keep only last MAX_MESSAGES
+            if (messages.length > MAX_MESSAGES) {
+                messages = messages.slice(-MAX_MESSAGES);
+            }
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+        } catch (e) {
+            console.error('Failed to save chat history:', e);
+        }
+    }
+
+    // Clear chat history
+    function clearHistory() {
+        localStorage.removeItem(STORAGE_KEY);
+        $messages.empty();
+    }
+
+    // Render a message (without saving - used for loading history)
+    // metadata: { supervisor, interventionType, source } - optional supervision metadata
+    function renderMessage(role, content, save, imageUrl, metadata) {
+        metadata = metadata || {};
+        
+        var roleClass = 'assistant';
+        if (role === 'user') roleClass = 'user';
+        else if (role === 'error') roleClass = 'error';
+        else if (role === 'guidance') roleClass = 'supervision guidance';
+        else if (role === 'ghostwrite') roleClass = 'supervision ghostwrite';
+        else if (role.startsWith('mirror-')) roleClass = 'mirror ' + role;
+        
+        var $msg = $('<div class="message ' + roleClass + '">' +
+            '<div class="bubble"></div>' +
+            '</div>');
+        
+        // Store raw content for history saving
+        $msg.data('raw-content', content);
+        
+        // Store supervision metadata for history saving
+        if (metadata.supervisor) $msg.data('supervisor', metadata.supervisor);
+        if (metadata.interventionType) $msg.data('intervention-type', metadata.interventionType);
+        if (metadata.source) $msg.data('source', metadata.source);
+        
+        var $bubble = $msg.find('.bubble');
+        
+        // Add inline image if provided
+        if (imageUrl) {
+            $bubble.append('<img src="' + imageUrl + '" class="inline-image" style="max-width: 300px; max-height: 200px; border-radius: 0.5rem; display: block; margin-bottom: 0.5rem;">');
+        }
+        
+        // Render content with supervision label if applicable
+        if (content) {
+            var displayContent = content;
+            
+            // For supervision messages, prepend the label if not already present
+            if ((role === 'guidance' || role === 'ghostwrite') && metadata.supervisor) {
+                var label = role === 'guidance' ? 'Guidance' : 'Ghostwrite';
+                var prefix = '[' + label + ':' + metadata.supervisor + '] ';
+                // Only add prefix if content doesn't already start with it
+                if (!content.startsWith('[' + label + ':')) {
+                    displayContent = prefix + content;
+                }
+            }
+            
+            if (role === 'error') {
+                $bubble.append($('<span>').text(displayContent));
+            } else {
+                $bubble.append(renderMarkdown(displayContent));
+            }
+        }
+        $messages.append($msg);
+        
+        if (save !== false) {
+            saveHistory();
+        }
+        return $msg;
+    }
+
+    // Connect to SSE
+    function connect() {
+        // Close existing connection if any
+        if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+        }
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+        
+        $status.text('Connecting...').removeClass('bg-success bg-danger').addClass('bg-secondary');
+        
+        // Use supervision SSE endpoint if supervising
+        var eventsUrl = isSupervising 
+            ? '/api/sessions/' + encodeURIComponent(superviseSession) + '/events'
+            : '/api/events';
+        eventSource = new EventSource(eventsUrl);
+        
+        eventSource.addEventListener('connected', function(e) {
+            $status.text('Connected').removeClass('bg-secondary bg-danger').addClass('bg-success');
+            
+            // In supervision mode, update LLM status from server
+            if (isSupervising) {
+                var data = JSON.parse(e.data);
+                if (typeof data.llmEnabled !== 'undefined') {
+                    llmEnabled = data.llmEnabled;
+                    updateLLMStatusUI();
+                }
+            }
+        });
+        
+        // Handle history messages in supervision mode
+        eventSource.addEventListener('history', function(e) {
+            if (!isSupervising) return;
+            var data = JSON.parse(e.data);
+            
+            // Build metadata for supervision tracking
+            var metadata = {
+                supervisor: data.supervisor,
+                interventionType: data.interventionType,
+                source: data.source
+            };
+            
+            // Detect supervision messages by interventionType or source
+            var isGuidance = data.interventionType === 'guidance' || data.source === 'guidance';
+            var isGhostwrite = data.interventionType === 'ghostwrite' || data.source === 'ghostwrite';
+            
+            // Render based on role and supervision status
+            if (isGuidance) {
+                renderMessage('guidance', data.content, false, null, metadata);
+            } else if (isGhostwrite) {
+                renderMessage('ghostwrite', data.content, false, null, metadata);
+            } else if (data.role === 'user') {
+                renderMessage('user', data.content, false, null, metadata);
+            } else if (data.role === 'assistant') {
+                renderMessage('assistant', data.content, false, null, metadata);
+            } else if (data.role === 'tool_use' || data.role === 'tool_result') {
+                // Tool messages are debug content
+                var $tool = $('<div class="tool-call debug-content">' +
+                    '<div class="tool-call-header">' +
+                    '<span class="tool-call-icon"><i class="bi bi-gear"></i></span>' +
+                    '<span class="tool-call-name">' + escapeHtml(data.toolName || data.role) + '</span>' +
+                    '</div>' +
+                    '<div class="tool-call-input">' + escapeHtml(data.content || '') + '</div>' +
+                    '</div>');
+                $messages.append($tool);
+            }
+            $messages.scrollTop($messages[0].scrollHeight);
+        });
+        
+        eventSource.addEventListener('start', function(e) {
+            var data = JSON.parse(e.data);
+            currentRunId = data.RunID;
+            currentRawText = ''; // Reset raw text accumulator
+            
+            if (showThinking) {
+                // BUFFER MODE: Don't create bubble yet - tools will appear first
+                // Bubble will be created in 'done' handler after tools
+                $currentBubble = null;
+                showTypingIndicator();
+            } else {
+                // NORMAL MODE: Create bubble for streaming
+                var $msg = $('<div class="message assistant"><div class="bubble"></div></div>');
+                $currentBubble = $msg.find('.bubble');
+                $messages.append($msg);
+                showTypingIndicator();
+            }
+        });
+        
+        eventSource.addEventListener('message', function(e) {
+            var data = JSON.parse(e.data);
+            // Show typing indicator and reset timeout on each stream chunk
+            showTypingIndicator();
+            resetTypingTimeout();
+            
+            // Always accumulate raw text
+            currentRawText += data.content;
+            
+            if (showThinking) {
+                // BUFFER MODE: Just accumulate, don't display yet
+                // Response will appear after tools in 'done' handler
+            } else {
+                // NORMAL MODE: Stream to bubble
+                if ($currentBubble) {
+                    $currentBubble.text(currentRawText);
+                    $messages.scrollTop($messages[0].scrollHeight);
+                }
+            }
+        });
+        
+        eventSource.addEventListener('done', function(e) {
+            clearTypingTimeout();
+            hideTypingIndicator();
+            var data = JSON.parse(e.data);
+            // Use finalText from server (has media refs enriched) instead of accumulated deltas
+            var finalText = data.finalText || currentRawText;
+            
+            if (showThinking && !$currentBubble && finalText) {
+                // BUFFER MODE: Create bubble NOW (after tools have been shown)
+                var $msg = $('<div class="message assistant"><div class="bubble"></div></div>');
+                $currentBubble = $msg.find('.bubble');
+                $messages.append($msg);
+            }
+            
+            if ($currentBubble && finalText) {
+                $currentBubble.html(renderMarkdown(finalText));
+                $currentBubble.closest('.message').data('raw-content', finalText);
+            }
+            currentRunId = null;
+            currentRawText = '';
+            $currentBubble = null;
+            saveHistory(); // Save after response complete
+        });
+        
+        eventSource.addEventListener('mirror', function(e) {
+            var data = JSON.parse(e.data);
+            // Show mirrored conversation
+            appendMessage('mirror-user', '[' + data.source + '] ' + data.userMsg);
+            appendMessage('mirror-assistant', data.response);
+        });
+        
+        eventSource.addEventListener('agent_error', function(e) {
+            clearTypingTimeout();
+            hideTypingIndicator();
+            var data = JSON.parse(e.data);
+            appendMessage('error', 'Error: ' + data.error);
+            currentRunId = null;
+            $currentBubble = null;
+        });
+        
+        eventSource.addEventListener('agent_message', function(e) {
+            var data = JSON.parse(e.data);
+            if (data.type === 'text') {
+                appendMessage('assistant', data.text);
+            } else if (data.type === 'media') {
+                // Show media with optional caption
+                var $msg = $('<div class="message assistant"><div class="bubble media-bubble"></div></div>');
+                var $bubble = $msg.find('.bubble');
+                var $img = $('<img>').attr('src', data.url).attr('alt', data.filename || 'Media');
+                $img.on('load', function() {
+                    $messages.scrollTop($messages[0].scrollHeight);
+                });
+                $img.on('error', function() {
+                    $img.replaceWith($('<span class="text-muted">Failed to load image</span>'));
+                });
+                $bubble.append($img);
+                if (data.caption) {
+                    $bubble.append($('<div class="media-caption">').text(data.caption));
+                }
+                $messages.append($msg);
+                $messages.scrollTop($messages[0].scrollHeight);
+                saveHistory();
+            }
+        });
+        
+        // Handle preference updates
+        eventSource.addEventListener('preference', function(e) {
+            var data = JSON.parse(e.data);
+            if (data.key === 'thinking') {
+                showThinking = data.value;
+                updateThinkingButton(showThinking);
+            }
+        });
+        
+        // Handle system messages
+        eventSource.addEventListener('system', function(e) {
+            var data = JSON.parse(e.data);
+            appendMessage('system', data.message);
+        });
+        
+        // Handle user_message (real-time user messages in supervision mode)
+        eventSource.addEventListener('user_message', function(e) {
+            if (!isSupervising) return;
+            var data = JSON.parse(e.data);
+            if (data.content) {
+                // Build metadata for supervision tracking
+                var metadata = {
+                    supervisor: data.supervisor,
+                    interventionType: data.source, // source field contains intervention type for supervision events
+                    source: data.source
+                };
+                
+                // Check if this is a supervision intervention (guidance or ghostwrite)
+                if (data.source === 'guidance' || data.source === 'ghostwrite') {
+                    var roleClass = data.source; // 'guidance' or 'ghostwrite'
+                    // Content will get the label prefix in renderMessage based on metadata
+                    appendMessage(roleClass, data.content, null, metadata);
+                } else {
+                    // Regular user message with source indicator
+                    var displayContent = data.source ? '[' + data.source + '] ' + data.content : data.content;
+                    appendMessage('user', displayContent, null, metadata);
+                }
+                // saveHistory is called by appendMessage -> renderMessage
+            }
+        });
+        
+        // Handle tool start (supervision: always render with debug-content class; normal: only if showThinking)
+        eventSource.addEventListener('tool_start', function(e) {
+            var data = JSON.parse(e.data);
+            var toolId = data.toolId;
+            var inputStr = typeof data.input === 'string' ? data.input : JSON.stringify(data.input, null, 2);
+            
+            // In normal mode, skip if thinking disabled
+            if (!isSupervising && !showThinking) return;
+            
+            var debugClass = isSupervising ? ' debug-content' : '';
+            var $toolCall = $('<div class="tool-call' + debugClass + '" data-tool-id="' + toolId + '">' +
+                '<div class="tool-call-header">' +
+                    '<span class="tool-call-icon"><i class="bi bi-gear-fill"></i></span>' +
+                    '<span class="tool-call-name">' + escapeHtml(data.toolName) + '</span>' +
+                    '<span class="tool-call-status running"><i class="bi bi-arrow-repeat spin"></i> Running</span>' +
+                '</div>' +
+                '<div class="tool-call-input">' + escapeHtml(inputStr) + '</div>' +
+            '</div>');
+            
+            $messages.append($toolCall);
+            $messages.scrollTop($messages[0].scrollHeight);
+            activeToolCalls[toolId] = $toolCall;
+        });
+        
+        // Handle tool end (supervision: always render with debug-content class; normal: only if showThinking)
+        eventSource.addEventListener('tool_end', function(e) {
+            var data = JSON.parse(e.data);
+            var toolId = data.toolId;
+            var $toolCall = activeToolCalls[toolId];
+            
+            // In normal mode, skip if thinking disabled (and we didn't create the element)
+            if (!isSupervising && !showThinking && !$toolCall) return;
+            
+            if ($toolCall) {
+                var statusClass = data.error ? 'error' : 'completed';
+                var statusIcon = data.error ? 'x-circle' : 'check-circle';
+                var statusText = data.error ? 'Error' : 'Completed';
+                var duration = data.durationMs ? ' (' + data.durationMs + 'ms)' : '';
+                
+                $toolCall.find('.tool-call-status')
+                    .removeClass('running')
+                    .addClass(statusClass)
+                    .html('<i class="bi bi-' + statusIcon + '"></i> ' + statusText + duration);
+                
+                // Add result/error
+                if (data.result || data.error) {
+                    var output = data.error || data.result;
+                    $toolCall.append('<div class="tool-call-output">' + escapeHtml(output) + '</div>');
+                }
+                
+                delete activeToolCalls[toolId];
+                $messages.scrollTop($messages[0].scrollHeight);
+            }
+        });
+        
+        // Handle thinking content (supervision: always render with debug-content class; normal: only if showThinking)
+        eventSource.addEventListener('thinking', function(e) {
+            // In normal mode, skip if thinking disabled
+            if (!isSupervising && !showThinking) return;
+            
+            var data = JSON.parse(e.data);
+            var content = data.content || '';
+            var debugClass = isSupervising ? ' debug-content' : '';
+            
+            // Show reasoning content in collapsible element
+            var $thinking = $('<div class="thinking-content' + debugClass + '">' +
+                '<details>' +
+                    '<summary><i class="bi bi-lightbulb"></i> Reasoning</summary>' +
+                    '<div class="thinking-text">' + escapeHtml(content) + '</div>' +
+                '</details>' +
+            '</div>');
+            $messages.append($thinking);
+            $messages.scrollTop($messages[0].scrollHeight);
+        });
+        
+        eventSource.onerror = function(e) {
+            // EventSource has built-in reconnection - don't fight it
+            // readyState: 0=CONNECTING, 1=OPEN, 2=CLOSED
+            if (eventSource.readyState === EventSource.CONNECTING) {
+                // Auto-reconnecting - just show status
+                $status.text('Reconnecting...').removeClass('bg-success').addClass('bg-warning');
+            } else if (eventSource.readyState === EventSource.CLOSED) {
+                // Fully closed - need manual reconnect
+                $status.text('Disconnected').removeClass('bg-success bg-warning').addClass('bg-danger');
+                eventSource = null;
+                reconnectTimer = setTimeout(connect, 3000);
+            }
+        };
+    }
+    
+    function appendMessage(role, content, imageUrl, metadata) {
+        renderMessage(role, content, true, imageUrl, metadata);
+        $messages.scrollTop($messages[0].scrollHeight);
+    }
+    
+    function showTypingIndicator() {
+        if ($('#typing-indicator').length === 0) {
+            $messages.append('<div id="typing-indicator" class="typing-indicator">' +
+                '<span class="dots"><span></span><span></span><span></span></span> {{.TypingText}}</div>');
+            $messages.scrollTop($messages[0].scrollHeight);
+        }
+    }
+    
+    function hideTypingIndicator() {
+        $('#typing-indicator').remove();
+    }
+    
+    function resetTypingTimeout() {
+        clearTypingTimeout();
+        typingTimeout = setTimeout(function() {
+            hideTypingIndicator();
+        }, TYPING_TIMEOUT_MS);
+    }
+    
+    function clearTypingTimeout() {
+        if (typingTimeout) {
+            clearTimeout(typingTimeout);
+            typingTimeout = null;
+        }
+    }
+    
+    // Keyboard handling for textarea
+    $input.on('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            // Enter without Shift = submit
+            e.preventDefault();
+            $('#chat-form').submit();
+        }
+        // Shift+Enter = default behavior (newline)
+    });
+    
+    // Auto-resize textarea
+    $input.on('input', function() {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+    });
+    
+    // Send message
+    $('#chat-form').on('submit', function(e) {
+        e.preventDefault();
+        var message = $input.val().trim();
+        
+        // Need either message or image
+        if (!message && !pendingImage) return;
+        
+        // In supervision mode, handle guidance/ghostwrite differently
+        if (isSupervising) {
+            var sendMode = $('input[name="send-mode"]:checked').val() || 'guidance';
+            var endpoint = sendMode === 'ghostwrite' 
+                ? '/api/sessions/' + encodeURIComponent(superviseSession) + '/message'
+                : '/api/sessions/' + encodeURIComponent(superviseSession) + '/guidance';
+            
+            // Clear input
+            $input.val('');
+            $input.css('height', 'auto');
+            $sendBtn.prop('disabled', true);
+            
+            // Show what we're sending (differently styled for supervision)
+            appendMessage(sendMode === 'ghostwrite' ? 'ghostwrite' : 'guidance', message);
+            
+            $.ajax({
+                url: endpoint,
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({ content: message }),
+                success: function(data) {
+                    console.log('Supervision action sent:', data);
+                },
+                error: function(xhr) {
+                    appendMessage('error', 'Failed to send: ' + xhr.responseText);
+                },
+                complete: function() {
+                    $sendBtn.prop('disabled', false);
+                }
+            });
+            return;
+        }
+        
+        // Normal mode - show user message immediately with inline image if present
+        var imageUrl = pendingImage ? pendingImage.dataUrl : null;
+        appendMessage('user', message, imageUrl);
+        
+        // Build request payload
+        var payload = { message: message || '' };
+        if (pendingImage) {
+            payload.images = [{
+                data: pendingImage.data,
+                mimeType: pendingImage.mimeType
+            }];
+        }
+        
+        // Clear input and image, reset height
+        $input.val('');
+        $input.css('height', 'auto');
+        pendingImage = null;
+        $('#image-preview').hide();
+        $sendBtn.prop('disabled', true);
+        
+        // Send to API
+        $.ajax({
+            url: '/api/send',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(payload),
+            success: function(data) {
+                console.log('Message sent:', data);
+            },
+            error: function(xhr) {
+                appendMessage('error', 'Failed to send message: ' + xhr.responseText);
+            },
+            complete: function() {
+                $sendBtn.prop('disabled', false);
+                $input.focus();
+            }
+        });
+    });
+    
+    // Clear history button
+    $('#clear-history').on('click', function() {
+        if (confirm('Clear chat history?')) {
+            clearHistory();
+        }
+    });
+    
+    // Paste handler for images
+    $(document).on('paste', function(e) {
+        var clipboardData = e.originalEvent.clipboardData;
+        if (!clipboardData || !clipboardData.items) return;
+        
+        for (var i = 0; i < clipboardData.items.length; i++) {
+            var item = clipboardData.items[i];
+            if (item.type.indexOf('image') !== -1) {
+                e.preventDefault();
+                var file = item.getAsFile();
+                if (file) {
+                    handleImageFile(file);
+                }
+                return;
+            }
+        }
+    });
+    
+    // Handle dropped/pasted image file
+    function handleImageFile(file) {
+        var reader = new FileReader();
+        reader.onload = function(e) {
+            var dataUrl = e.target.result;
+            // Extract base64 and mime type
+            var matches = dataUrl.match(/^data:(.+);base64,(.+)$/);
+            if (matches) {
+                pendingImage = {
+                    data: matches[2],
+                    mimeType: matches[1],
+                    dataUrl: dataUrl
+                };
+                // Show preview
+                $('#preview-img').attr('src', dataUrl);
+                $('#image-preview').show();
+                $input.focus();
+            }
+        };
+        reader.readAsDataURL(file);
+    }
+    
+    // Remove pending image
+    $('#remove-image').on('click', function() {
+        pendingImage = null;
+        $('#image-preview').hide();
+        $('#preview-img').attr('src', '');
+        $input.focus();
+    });
+
+    // Media modal for enlarged view
+    var $modal = $('#media-modal');
+    var $modalContent = $('#media-modal-content');
+    
+    // Click on image or video to enlarge
+    $(document).on('click', '.chat-media-image, .chat-media-video', function(e) {
+        e.preventDefault();
+        var $el = $(this);
+        var src = $el.attr('src');
+        
+        if ($el.hasClass('chat-media-image')) {
+            $modalContent.html('<img src="' + src + '" alt="Enlarged view">');
+        } else if ($el.hasClass('chat-media-video')) {
+            $modalContent.html('<video src="' + src + '" controls autoplay></video>');
+        }
+        
+        $modal.addClass('active');
+    });
+    
+    // Close modal on click anywhere
+    $modal.on('click', function() {
+        $modal.removeClass('active');
+        // Stop video if playing
+        $modalContent.find('video').each(function() {
+            this.pause();
+        });
+        $modalContent.empty();
+    });
+    
+    // Prevent closing when clicking on the media itself
+    $modalContent.on('click', function(e) {
+        e.stopPropagation();
+    });
+    
+    // Close modal on Escape key
+    $(document).on('keydown', function(e) {
+        if (e.key === 'Escape' && $modal.hasClass('active')) {
+            $modal.removeClass('active');
+            $modalContent.find('video').each(function() {
+                this.pause();
+            });
+            $modalContent.empty();
+        }
+    });
+
+    // Update thinking button state
+    function updateThinkingButton(enabled) {
+        var $btn = $('#thinking-toggle');
+        $btn.toggleClass('active', enabled);
+        $btn.attr('title', 'Thinking ' + (enabled ? 'ON' : 'OFF') + ' (click to toggle)');
+    }
+    
+    // Thinking toggle button click - send /thinking command
+    $('#thinking-toggle').on('click', function() {
+        // Send /thinking toggle command
+        $.ajax({
+            url: '/api/send',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ message: '/thinking toggle' })
+        });
+    });
+    
+    // Show thinking toggle button on chat page (not in supervision mode)
+    if (!isSupervising) {
+        $('#thinking-toggle').removeClass('d-none');
+    }
+    
+    // --- Supervision mode controls ---
+    
+    // Update LLM status UI
+    function updateLLMStatusUI() {
+        var $status = $('#llm-status');
+        var $btn = $('#llm-toggle');
+        if (llmEnabled) {
+            $status.text('LLM: Enabled').removeClass('bg-warning').addClass('bg-success');
+            $btn.text('Disable LLM').removeClass('btn-success').addClass('btn-warning');
+        } else {
+            $status.text('LLM: Disabled').removeClass('bg-success').addClass('bg-warning');
+            $btn.text('Enable LLM').removeClass('btn-warning').addClass('btn-success');
+        }
+    }
+    
+    // Debug toggle button - toggles visibility of debug-content elements
+    $('#debug-toggle').on('click', function() {
+        showDebug = !showDebug;
+        var $card = $('.supervise-mode');
+        if (showDebug) {
+            $card.addClass('show-debug');
+            $(this).text('Hide Debug');
+        } else {
+            $card.removeClass('show-debug');
+            $(this).text('Show Debug');
+        }
+    });
+    
+    // LLM toggle button - enables/disables agent responses
+    $('#llm-toggle').on('click', function() {
+        var newState = !llmEnabled;
+        $.ajax({
+            url: '/api/sessions/' + encodeURIComponent(superviseSession) + '/llm',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ enabled: newState }),
+            success: function(data) {
+                llmEnabled = data.llmEnabled;
+                updateLLMStatusUI();
+            },
+            error: function(xhr) {
+                alert('Failed to toggle LLM: ' + xhr.responseText);
+            }
+        });
+    });
+    
+    // Make tool input/output collapsible
+    $(document).on('click', '.tool-call-input, .tool-call-output', function() {
+        $(this).toggleClass('expanded');
+    });
+
+    // Load history and start connection
+    loadHistory();
+    connect();
+    $input.focus();
+});
+</script>
+
+{{template "footer" .}}

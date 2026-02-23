@@ -14,10 +14,11 @@ import (
 	tele "gopkg.in/telebot.v4"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
+	"github.com/roelfdiedericks/goclaw/internal/channels/types"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
-	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/user"
@@ -41,6 +42,12 @@ type Bot struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// State tracking for ManagedChannel interface
+	mu        sync.RWMutex
+	running   bool
+	startedAt time.Time
+	lastError error
 }
 
 // getChatPrefs returns preferences for a chat, creating if needed.
@@ -75,7 +82,7 @@ func New(cfg *Config, gw *gateway.Gateway, users *user.Registry) (*Bot, error) {
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
 	}
 
-	L_debug("telegram: creating bot", "tokenLength", len(cfg.BotToken))
+	logging.L_debug("telegram: creating bot", "tokenLength", len(cfg.BotToken))
 
 	bot, err := tele.NewBot(pref)
 	if err != nil {
@@ -83,7 +90,7 @@ func New(cfg *Config, gw *gateway.Gateway, users *user.Registry) (*Bot, error) {
 	}
 
 	// Log bot info - confirm connection worked and show identity
-	L_info("telegram: connected",
+	logging.L_info("telegram: connected",
 		"bot", "@"+bot.Me.Username,
 		"name", bot.Me.FirstName,
 		"id", bot.Me.ID,
@@ -103,7 +110,7 @@ func New(cfg *Config, gw *gateway.Gateway, users *user.Registry) (*Bot, error) {
 
 	// Register handlers
 	b.setupHandlers()
-	L_debug("telegram: handlers registered")
+	logging.L_debug("telegram: handlers registered")
 
 	return b, nil
 }
@@ -129,7 +136,7 @@ func (b *Bot) setupHandlers() {
 
 		// Check command permission
 		if !b.canUserUseCommands(u) {
-			L_debug("telegram: commands disabled for user", "user", u.Name, "command", "/thinking")
+			logging.L_debug("telegram: commands disabled for user", "user", u.Name, "command", "/thinking")
 			return nil // Silently ignore - treat as if they sent a message
 		}
 
@@ -212,7 +219,7 @@ func (b *Bot) canUserUseCommands(u *user.User) bool {
 	}
 	resolvedRole, err := b.users.ResolveUserRole(u)
 	if err != nil {
-		L_warn("telegram: failed to resolve role for command permission check", "user", u.Name, "error", err)
+		logging.L_warn("telegram: failed to resolve role for command permission check", "user", u.Name, "error", err)
 		return false
 	}
 	return resolvedRole.CanUseCommands()
@@ -224,7 +231,7 @@ func (b *Bot) handleCommand(c tele.Context, u *user.User) error {
 
 	// Check command permission
 	if !b.canUserUseCommands(u) {
-		L_debug("telegram: commands disabled for user", "user", u.Name, "command", text)
+		logging.L_debug("telegram: commands disabled for user", "user", u.Name, "command", text)
 		return nil // Silently ignore
 	}
 
@@ -276,7 +283,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	chatID := c.Chat().ID
 	isGroup := c.Chat().Type != tele.ChatPrivate
 
-	L_debug("telegram message received",
+	logging.L_debug("telegram message received",
 		"userID", userID,
 		"chatID", chatID,
 		"isGroup", isGroup,
@@ -285,20 +292,20 @@ func (b *Bot) handleMessage(c tele.Context) error {
 
 	// Skip group messages for MVP
 	if isGroup {
-		L_debug("ignoring group message")
+		logging.L_debug("ignoring group message")
 		return nil
 	}
 
 	// Look up user by Telegram identity
-	L_debug("telegram: looking up user", "provider", "telegram", "userID", userID)
+	logging.L_debug("telegram: looking up user", "provider", "telegram", "userID", userID)
 	u := b.users.FromIdentity("telegram", userID)
 	if u == nil {
-		L_warn("telegram: unknown user ignored", "userID", userID, "senderName", sender.FirstName+" "+sender.LastName)
+		logging.L_warn("telegram: unknown user ignored", "userID", userID, "senderName", sender.FirstName+" "+sender.LastName)
 		// Silently ignore unauthorized users
 		return nil
 	}
 
-	L_info("telegram: authenticated message", "user", u.Name, "role", u.Role, "userID", userID)
+	logging.L_info("telegram: authenticated message", "user", u.Name, "role", u.Role, "userID", userID)
 
 	// Check if this is a command - route to global command manager
 	if commands.IsCommand(c.Text()) {
@@ -330,7 +337,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 
 	go func() {
 		if err := b.gateway.RunAgent(b.ctx, req, events); err != nil {
-			L_error("telegram agent error", "error", err)
+			logging.L_error("telegram agent error", "error", err)
 		}
 	}()
 
@@ -345,7 +352,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 	chatID := c.Chat().ID
 	isGroup := c.Chat().Type != tele.ChatPrivate
 
-	L_debug("telegram photo received",
+	logging.L_debug("telegram photo received",
 		"userID", userID,
 		"chatID", chatID,
 		"isGroup", isGroup,
@@ -353,18 +360,18 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 
 	// Skip group messages for MVP
 	if isGroup {
-		L_debug("ignoring group photo")
+		logging.L_debug("ignoring group photo")
 		return nil
 	}
 
 	// Look up user
 	u := b.users.FromIdentity("telegram", userID)
 	if u == nil {
-		L_warn("telegram: unknown user ignored (photo)", "userID", userID)
+		logging.L_warn("telegram: unknown user ignored (photo)", "userID", userID)
 		return nil
 	}
 
-	L_info("telegram: authenticated photo", "user", u.Name, "role", u.Role)
+	logging.L_info("telegram: authenticated photo", "user", u.Name, "role", u.Role)
 
 	// Show typing indicator
 	_ = c.Notify(tele.Typing)
@@ -372,19 +379,19 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 	// Get the photo (telebot gives us the largest size)
 	photo := c.Message().Photo
 	if photo == nil {
-		L_warn("telegram: photo message but no photo found")
+		logging.L_warn("telegram: photo message but no photo found")
 		return nil
 	}
 
 	// Download and optimize the image
-	L_debug("telegram: downloading photo", "fileID", photo.FileID, "width", photo.Width, "height", photo.Height)
+	logging.L_debug("telegram: downloading photo", "fileID", photo.FileID, "width", photo.Width, "height", photo.Height)
 	imageData, err := media.DownloadAndOptimize(b.ctx, b.bot, photo)
 	if err != nil {
-		L_error("telegram: failed to download/optimize photo", "error", err)
+		logging.L_error("telegram: failed to download/optimize photo", "error", err)
 		return c.Send("Sorry, I couldn't process that image.")
 	}
 
-	L_debug("telegram: photo optimized",
+	logging.L_debug("telegram: photo optimized",
 		"originalSize", photo.FileSize,
 		"optimizedSize", len(imageData.Data),
 		"dimensions", fmt.Sprintf("%dx%d", imageData.Width, imageData.Height),
@@ -426,7 +433,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 
 	go func() {
 		if err := b.gateway.RunAgent(b.ctx, req, events); err != nil {
-			L_error("telegram agent error", "error", err)
+			logging.L_error("telegram agent error", "error", err)
 		}
 	}()
 
@@ -453,7 +460,7 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 	prefs := b.getChatPrefs(c.Chat().ID, u)
 	bufferMode := prefs.ShowThinking // When thinking is ON, buffer response until end
 
-	L_debug("telegram: starting response stream", "chatID", c.Chat().ID, "bufferMode", bufferMode)
+	logging.L_debug("telegram: starting response stream", "chatID", c.Chat().ID, "bufferMode", bufferMode)
 
 	for event := range events {
 		switch e := event.(type) {
@@ -474,17 +481,17 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 					// Send initial message (plain text during streaming)
 					msg, err := b.bot.Send(c.Chat(), response.String())
 					if err != nil {
-						L_error("telegram: failed to send initial message", "error", err)
+						logging.L_error("telegram: failed to send initial message", "error", err)
 						continue
 					}
 					currentMsg = msg
-					L_debug("telegram: sent initial message", "msgID", msg.ID, "length", response.Len())
+					logging.L_debug("telegram: sent initial message", "msgID", msg.ID, "length", response.Len())
 				} else {
 					// Edit existing message (plain text during streaming)
 					_, err := b.bot.Edit(currentMsg, response.String())
 					if err != nil {
 						// Edit can fail if content unchanged or rate limited
-						L_trace("telegram: edit failed", "error", err)
+						logging.L_trace("telegram: edit failed", "error", err)
 					} else {
 						editCount++
 					}
@@ -496,7 +503,7 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 			}
 
 		case gateway.EventToolStart:
-			L_debug("telegram: tool started", "tool", e.ToolName)
+			logging.L_debug("telegram: tool started", "tool", e.ToolName)
 			_ = c.Notify(tele.Typing)
 
 			// Flush thinking buffer before showing tool (ensures thinking is complete)
@@ -504,7 +511,7 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 				thinkingText := fmt.Sprintf("💭 <i>%s</i>", html.EscapeString(thinkingBuf.String()))
 				_, err := b.bot.Edit(thinkingMsg, thinkingText, &tele.SendOptions{ParseMode: tele.ModeHTML})
 				if err != nil {
-					L_trace("telegram: thinking flush on tool start failed", "error", err)
+					logging.L_trace("telegram: thinking flush on tool start failed", "error", err)
 				}
 			}
 
@@ -520,7 +527,7 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 			}
 
 		case gateway.EventToolEnd:
-			L_debug("telegram: tool ended", "tool", e.ToolName, "hasError", e.Error != "")
+			logging.L_debug("telegram: tool ended", "tool", e.ToolName, "hasError", e.Error != "")
 
 			// Show tool result if thinking mode is on
 			if prefs.ShowThinking {
@@ -559,14 +566,14 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 					if thinkingMsg == nil {
 						msg, err := b.bot.Send(c.Chat(), thinkingText, &tele.SendOptions{ParseMode: tele.ModeHTML})
 						if err != nil {
-							L_error("telegram: failed to send thinking message", "error", err)
+							logging.L_error("telegram: failed to send thinking message", "error", err)
 						} else {
 							thinkingMsg = msg
 						}
 					} else {
 						_, err := b.bot.Edit(thinkingMsg, thinkingText, &tele.SendOptions{ParseMode: tele.ModeHTML})
 						if err != nil {
-							L_trace("telegram: thinking edit failed", "error", err)
+							logging.L_trace("telegram: thinking edit failed", "error", err)
 						}
 					}
 					lastThinkingUpdate = time.Now()
@@ -574,7 +581,7 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 			}
 
 		case gateway.EventThinking:
-			L_debug("telegram: thinking", "contentLen", len(e.Content))
+			logging.L_debug("telegram: thinking", "contentLen", len(e.Content))
 
 			// Final thinking content - always update/send with complete content
 			if prefs.ShowThinking && e.Content != "" {
@@ -583,13 +590,13 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 					// Update existing message with complete content
 					_, err := b.bot.Edit(thinkingMsg, thinkingText, &tele.SendOptions{ParseMode: tele.ModeHTML})
 					if err != nil {
-						L_trace("telegram: thinking final edit failed", "error", err)
+						logging.L_trace("telegram: thinking final edit failed", "error", err)
 					}
 				} else {
 					// No streaming message exists, send new one
 					msg, err := b.bot.Send(c.Chat(), thinkingText, &tele.SendOptions{ParseMode: tele.ModeHTML})
 					if err != nil {
-						L_trace("telegram: thinking final send failed", "error", err)
+						logging.L_trace("telegram: thinking final send failed", "error", err)
 					} else {
 						thinkingMsg = msg
 					}
@@ -608,7 +615,7 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 			}
 
 			elapsed := time.Since(startTime)
-			L_debug("telegram: agent completed",
+			logging.L_debug("telegram: agent completed",
 				"responseLength", len(finalText),
 				"editCount", editCount,
 				"elapsed", elapsed.Round(time.Millisecond),
@@ -616,21 +623,21 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 
 			// Check for inline media references
 			if containsMediaRefs(finalText) {
-				L_debug("telegram: response contains media refs, sending with media")
+				logging.L_debug("telegram: response contains media refs, sending with media")
 				// Delete the streaming message if we have one (we'll send fresh)
 				if currentMsg != nil {
 					_ = b.bot.Delete(currentMsg)
 				}
 				// Send text/media segments
 				if err := b.sendWithMediaRefs(c.Chat(), finalText); err != nil {
-					L_error("telegram: failed to send with media", "error", err)
+					logging.L_error("telegram: failed to send with media", "error", err)
 				}
 			} else {
 				// No media refs - send as regular text
 				// Convert markdown to Telegram HTML
 				formattedText := FormatMessage(finalText)
 
-				L_trace("telegram: formatting message",
+				logging.L_trace("telegram: formatting message",
 					"rawMarkdown", finalText,
 					"formattedHTML", formattedText)
 
@@ -643,10 +650,10 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 						formatted := FormatMessage(chunk)
 						_, err := b.bot.Send(c.Chat(), formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
 						if err != nil {
-							L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
+							logging.L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
 							_, err = b.bot.Send(c.Chat(), chunk)
 							if err != nil {
-								L_error("telegram: failed to send message chunk", "error", err, "chunk", i+1)
+								logging.L_error("telegram: failed to send message chunk", "error", err, "chunk", i+1)
 							}
 						}
 					}
@@ -655,10 +662,10 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 					formatted := FormatMessage(chunks[0])
 					_, err := b.bot.Edit(currentMsg, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
 					if err != nil {
-						L_debug("telegram: HTML edit failed, falling back to plain text", "error", err)
+						logging.L_debug("telegram: HTML edit failed, falling back to plain text", "error", err)
 						_, err = b.bot.Edit(currentMsg, chunks[0])
 						if err != nil {
-							L_debug("telegram: failed to edit final message", "error", err)
+							logging.L_debug("telegram: failed to edit final message", "error", err)
 						}
 					}
 					// Send remaining chunks as new messages
@@ -666,10 +673,10 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 						formatted := FormatMessage(chunks[i])
 						_, err := b.bot.Send(c.Chat(), formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
 						if err != nil {
-							L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
+							logging.L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
 							_, err = b.bot.Send(c.Chat(), chunks[i])
 							if err != nil {
-								L_error("telegram: failed to send message chunk", "error", err, "chunk", i+1)
+								logging.L_error("telegram: failed to send message chunk", "error", err, "chunk", i+1)
 							}
 						}
 					}
@@ -677,7 +684,7 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 			}
 
 		case gateway.EventAgentError:
-			L_error("telegram: agent error", "error", e.Error)
+			logging.L_error("telegram: agent error", "error", e.Error)
 			errMsg := fmt.Sprintf("Error: %s", e.Error)
 			if currentMsg == nil {
 				_, _ = b.bot.Send(c.Chat(), errMsg)
@@ -690,10 +697,22 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 	return nil
 }
 
-// Start starts the bot polling
-func (b *Bot) Start() {
-	L_info("telegram: starting polling", "bot", "@"+b.bot.Me.Username)
+// Start starts the bot polling (implements ManagedChannel)
+func (b *Bot) Start(ctx context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.running {
+		return nil // Already running
+	}
+
+	logging.L_info("telegram: starting polling", "bot", "@"+b.bot.Me.Username)
 	go b.bot.Start()
+
+	b.running = true
+	b.startedAt = time.Now()
+	b.lastError = nil
+	return nil
 }
 
 // RegisterOperationalCommands registers runtime commands for this bot instance.
@@ -715,11 +734,84 @@ func (b *Bot) handleStatusCommand(cmd bus.Command) bus.CommandResult {
 	}
 }
 
-// Stop stops the bot
-func (b *Bot) Stop() {
-	L_info("stopping telegram bot")
+// Stop stops the bot (implements ManagedChannel)
+func (b *Bot) Stop() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if !b.running {
+		return nil // Already stopped
+	}
+
+	logging.L_info("telegram: stopping bot")
 	b.cancel()
 	b.bot.Stop()
+
+	b.running = false
+	return nil
+}
+
+// Reload applies new configuration (implements ManagedChannel)
+func (b *Bot) Reload(cfg any) error {
+	newCfg, ok := cfg.(*Config)
+	if !ok {
+		return fmt.Errorf("expected *telegram.Config, got %T", cfg)
+	}
+
+	b.mu.Lock()
+	wasRunning := b.running
+	b.mu.Unlock()
+
+	// Stop if running
+	if wasRunning {
+		if err := b.Stop(); err != nil {
+			return fmt.Errorf("failed to stop for reload: %w", err)
+		}
+	}
+
+	// Update config
+	b.config = newCfg
+
+	// Restart if was running and still enabled
+	if wasRunning && newCfg.Enabled && newCfg.BotToken != "" {
+		// Need to recreate the underlying bot with new token
+		pref := tele.Settings{
+			Token:  newCfg.BotToken,
+			Poller: &tele.LongPoller{Timeout: 10 * time.Second},
+		}
+		newBot, err := tele.NewBot(pref)
+		if err != nil {
+			b.mu.Lock()
+			b.lastError = err
+			b.mu.Unlock()
+			return fmt.Errorf("failed to create bot with new config: %w", err)
+		}
+		b.bot = newBot
+		b.ctx, b.cancel = context.WithCancel(context.Background())
+		b.setupHandlers()
+		return b.Start(b.ctx)
+	}
+
+	return nil
+}
+
+// Status returns current channel status (implements ManagedChannel)
+func (b *Bot) Status() types.ChannelStatus {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	info := ""
+	if b.bot != nil && b.bot.Me != nil {
+		info = "@" + b.bot.Me.Username
+	}
+
+	return types.ChannelStatus{
+		Running:   b.running,
+		Connected: b.running, // If running, we're connected (bot.Start succeeded)
+		Error:     b.lastError,
+		StartedAt: b.startedAt,
+		Info:      info,
+	}
 }
 
 // Name returns the channel name (implements gateway.Channel)
@@ -736,7 +828,7 @@ func (b *Bot) Send(ctx context.Context, msg string) error {
 	}
 	var chatID int64
 	if _, err := fmt.Sscanf(owner.TelegramID, "%d", &chatID); err != nil {
-		L_warn("telegram: invalid owner telegram ID", "telegramID", owner.TelegramID, "error", err)
+		logging.L_warn("telegram: invalid owner telegram ID", "telegramID", owner.TelegramID, "error", err)
 		return nil
 	}
 	_, err := b.SendText(chatID, msg)
@@ -748,7 +840,7 @@ func (b *Bot) sendWithHTMLFallback(chat *tele.Chat, text string) (*tele.Message,
 	formatted := FormatMessage(text)
 	msg, err := b.bot.Send(chat, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
 	if err != nil {
-		L_debug("telegram: HTML send failed, falling back to plain text", "error", err)
+		logging.L_debug("telegram: HTML send failed, falling back to plain text", "error", err)
 		return b.bot.Send(chat, text)
 	}
 	return msg, nil
@@ -885,7 +977,7 @@ func (b *Bot) sendWithMediaRefs(chat *tele.Chat, text string) error {
 		// Single media without caption
 		absPath, err := media.ResolveMediaPath(mediaRoot, seg.Path)
 		if err != nil {
-			L_warn("telegram: failed to resolve media path", "path", seg.Path, "error", err)
+			logging.L_warn("telegram: failed to resolve media path", "path", seg.Path, "error", err)
 			i++
 			continue
 		}
@@ -932,7 +1024,7 @@ func (b *Bot) sendAlbum(chat *tele.Chat, mediaRoot string, segments []mediaSegme
 	for i, seg := range segments {
 		absPath, err := media.ResolveMediaPath(mediaRoot, seg.Path)
 		if err != nil {
-			L_warn("telegram: failed to resolve album item path", "path", seg.Path, "error", err)
+			logging.L_warn("telegram: failed to resolve album item path", "path", seg.Path, "error", err)
 			continue
 		}
 
@@ -950,7 +1042,7 @@ func (b *Bot) sendAlbum(chat *tele.Chat, mediaRoot string, segments []mediaSegme
 
 	_, err := b.bot.SendAlbum(chat, album, &tele.SendOptions{ParseMode: tele.ModeHTML})
 	if err != nil {
-		L_warn("telegram: failed to send album", "count", len(album), "error", err)
+		logging.L_warn("telegram: failed to send album", "count", len(album), "error", err)
 		// Fallback: send individually
 		for i, seg := range segments {
 			absPath, _ := media.ResolveMediaPath(mediaRoot, seg.Path)
@@ -961,7 +1053,7 @@ func (b *Bot) sendAlbum(chat *tele.Chat, mediaRoot string, segments []mediaSegme
 			b.sendMediaByMime(chat.ID, absPath, seg.Mime, cap)
 		}
 	} else {
-		L_debug("telegram: sent album", "count", len(album), "hasCaption", caption != "")
+		logging.L_debug("telegram: sent album", "count", len(album), "hasCaption", caption != "")
 	}
 }
 
@@ -970,19 +1062,19 @@ func (b *Bot) sendMediaByMime(chatID int64, absPath, mime, caption string) {
 	switch {
 	case strings.HasPrefix(mime, "image/"):
 		if err := b.SendPhoto(chatID, absPath, caption); err != nil {
-			L_warn("telegram: failed to send photo", "path", absPath, "error", err)
+			logging.L_warn("telegram: failed to send photo", "path", absPath, "error", err)
 		}
 	case strings.HasPrefix(mime, "video/"):
 		if err := b.SendVideo(chatID, absPath, caption); err != nil {
-			L_warn("telegram: failed to send video", "path", absPath, "error", err)
+			logging.L_warn("telegram: failed to send video", "path", absPath, "error", err)
 		}
 	case strings.HasPrefix(mime, "audio/"):
 		if err := b.SendAudio(chatID, absPath, caption); err != nil {
-			L_warn("telegram: failed to send audio", "path", absPath, "error", err)
+			logging.L_warn("telegram: failed to send audio", "path", absPath, "error", err)
 		}
 	default:
 		if err := b.SendDocument(chatID, absPath, caption); err != nil {
-			L_warn("telegram: failed to send document", "path", absPath, "error", err)
+			logging.L_warn("telegram: failed to send document", "path", absPath, "error", err)
 		}
 	}
 }
@@ -1008,7 +1100,7 @@ func (b *Bot) SendPhoto(chatID int64, path string, caption string) error {
 		_, err := b.bot.Send(chat, photo, &tele.SendOptions{ParseMode: tele.ModeHTML})
 		if err != nil {
 			// Fallback: try without HTML formatting
-			L_debug("telegram: HTML caption failed, trying plain text", "error", err)
+			logging.L_debug("telegram: HTML caption failed, trying plain text", "error", err)
 			photo.Caption = caption
 			_, err = b.bot.Send(chat, photo)
 		}
@@ -1016,7 +1108,7 @@ func (b *Bot) SendPhoto(chatID int64, path string, caption string) error {
 	}
 
 	// Caption too long - send photo first, then follow-up message
-	L_debug("telegram: caption exceeds limit, sending photo then text",
+	logging.L_debug("telegram: caption exceeds limit, sending photo then text",
 		"captionLen", len(formattedCaption),
 		"limit", TelegramCaptionLimit,
 	)
@@ -1029,7 +1121,7 @@ func (b *Bot) SendPhoto(chatID int64, path string, caption string) error {
 	// Send follow-up text message with full caption
 	_, err = b.sendWithHTMLFallback(chat, caption)
 	if err != nil {
-		L_warn("telegram: failed to send follow-up caption", "error", err)
+		logging.L_warn("telegram: failed to send follow-up caption", "error", err)
 	}
 	return nil
 }
@@ -1082,7 +1174,7 @@ func (b *Bot) SendMirror(ctx context.Context, source, userMsg, response string) 
 	// Parse telegram ID to int64
 	var chatID int64
 	if _, err := fmt.Sscanf(telegramID, "%d", &chatID); err != nil {
-		L_warn("telegram: invalid telegram ID for mirror", "telegramID", telegramID, "error", err)
+		logging.L_warn("telegram: invalid telegram ID for mirror", "telegramID", telegramID, "error", err)
 		return nil
 	}
 	chat := &tele.Chat{ID: chatID}
@@ -1118,7 +1210,7 @@ func (b *Bot) SendMirror(ctx context.Context, source, userMsg, response string) 
 		if len(snippet) > 100 {
 			snippet = snippet[:100] + "..."
 		}
-		L_debug("telegram: HTML mirror failed, falling back to plain text",
+		logging.L_debug("telegram: HTML mirror failed, falling back to plain text",
 			"error", err,
 			"source", source,
 			"mirrorLen", len(mirror),
@@ -1128,7 +1220,7 @@ func (b *Bot) SendMirror(ctx context.Context, source, userMsg, response string) 
 		_, err = b.bot.Send(chat, plainMirror)
 	}
 	if err != nil {
-		L_error("failed to send telegram mirror", "error", err)
+		logging.L_error("failed to send telegram mirror", "error", err)
 	}
 	return err
 }
@@ -1157,7 +1249,7 @@ func (b *Bot) DeliverGhostwrite(ctx context.Context, u *user.User, message strin
 
 	chat := &tele.Chat{ID: chatID}
 
-	L_info("telegram: ghostwrite", "user", u.ID, "chatID", chatID, "messageLen", len(message))
+	logging.L_info("telegram: ghostwrite", "user", u.ID, "chatID", chatID, "messageLen", len(message))
 
 	// Send typing indicator
 	_ = b.bot.Notify(chat, tele.Typing)
@@ -1178,7 +1270,7 @@ func (b *Bot) DeliverGhostwrite(ctx context.Context, u *user.User, message strin
 	if err != nil {
 		return fmt.Errorf("failed to send ghostwrite: %w", err)
 	}
-	L_info("telegram: ghostwrite delivered", "user", u.ID, "messageLen", len(message))
+	logging.L_info("telegram: ghostwrite delivered", "user", u.ID, "messageLen", len(message))
 	return nil
 }
 
@@ -1196,14 +1288,14 @@ func (b *Bot) SendText(chatID int64, text string) (*tele.Message, error) {
 		msg, err := b.bot.Send(chat, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
 		if err != nil {
 			// Fallback to plain text
-			L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
+			logging.L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
 			msg, err = b.bot.Send(chat, chunk)
 		}
 		if err != nil {
 			return lastMsg, fmt.Errorf("failed to send text chunk %d: %w", i+1, err)
 		}
 		lastMsg = msg
-		L_debug("telegram: sent text message", "chatID", chatID, "msgID", msg.ID, "chunk", i+1, "length", len(chunk))
+		logging.L_debug("telegram: sent text message", "chatID", chatID, "msgID", msg.ID, "chunk", i+1, "length", len(chunk))
 	}
 
 	return lastMsg, nil
@@ -1220,7 +1312,7 @@ func (b *Bot) EditMessage(chatID int64, messageID int, text string) error {
 	_, err := b.bot.Edit(msg, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
 	if err != nil {
 		// Fallback to plain text
-		L_debug("telegram: HTML edit failed, falling back to plain text", "error", err)
+		logging.L_debug("telegram: HTML edit failed, falling back to plain text", "error", err)
 		_, err = b.bot.Edit(msg, text)
 	}
 
@@ -1228,7 +1320,7 @@ func (b *Bot) EditMessage(chatID int64, messageID int, text string) error {
 		return fmt.Errorf("failed to edit message: %w", err)
 	}
 
-	L_debug("telegram: edited message", "chatID", chatID, "msgID", messageID)
+	logging.L_debug("telegram: edited message", "chatID", chatID, "msgID", messageID)
 	return nil
 }
 
@@ -1243,7 +1335,7 @@ func (b *Bot) DeleteMessage(chatID int64, messageID int) error {
 		return fmt.Errorf("failed to delete message: %w", err)
 	}
 
-	L_debug("telegram: deleted message", "chatID", chatID, "msgID", messageID)
+	logging.L_debug("telegram: deleted message", "chatID", chatID, "msgID", messageID)
 	return nil
 }
 
@@ -1271,7 +1363,7 @@ func (b *Bot) React(chatID int64, messageID int, emoji string) error {
 		return fmt.Errorf("failed to add reaction: %w", err)
 	}
 
-	L_debug("telegram: added reaction", "chatID", chatID, "msgID", messageID, "emoji", emoji)
+	logging.L_debug("telegram: added reaction", "chatID", chatID, "msgID", messageID, "emoji", emoji)
 	return nil
 }
 

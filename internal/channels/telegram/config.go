@@ -9,7 +9,7 @@ import (
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
-	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
 // Config holds the Telegram bot configuration
@@ -81,7 +81,7 @@ func handleApply(cmd bus.Command) bus.CommandResult {
 		}
 	}
 
-	L_info("telegram: config applied", "enabled", cfg.Enabled, "hasToken", cfg.BotToken != "")
+	logging.L_info("telegram: config applied", "enabled", cfg.Enabled, "hasToken", cfg.BotToken != "")
 	bus.PublishEvent(configPath+".config.applied", cfg)
 
 	return bus.CommandResult{
@@ -109,14 +109,14 @@ func handleTest(cmd bus.Command) bus.CommandResult {
 
 	username, err := TestToken(cfg.BotToken)
 	if err != nil {
-		L_warn("telegram: test connection failed", "error", err)
+		logging.L_warn("telegram: test connection failed", "error", err)
 		return bus.CommandResult{
 			Error:   err,
 			Message: fmt.Sprintf("Connection failed: %s", err),
 		}
 	}
 
-	L_info("telegram: test connection successful", "bot", "@"+username)
+	logging.L_info("telegram: test connection successful", "bot", "@"+username)
 	return bus.CommandResult{
 		Success: true,
 		Message: fmt.Sprintf("Connected to @%s", username),
@@ -156,6 +156,6 @@ func TestToken(token string) (string, error) {
 		return "", fmt.Errorf("invalid token: %s", result.Description)
 	}
 
-	L_debug("telegram: validated token", "username", result.Result.Username)
+	logging.L_debug("telegram: validated token", "username", result.Result.Username)
 	return result.Result.Username, nil
 }

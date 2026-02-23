@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
 // MessageChannel defines the interface for sending messages to channels.
@@ -72,7 +72,7 @@ func (a *MessageChannelAdapter) SendMedia(chatID string, filePath string, captio
 
 	// Detect media type from extension
 	mediaType := detectMediaType(absPath)
-	L_debug("telegram: sending media", "chatID", chatID, "path", absPath, "type", mediaType)
+	logging.L_debug("telegram: sending media", "chatID", chatID, "path", absPath, "type", mediaType)
 
 	switch mediaType {
 	case "photo":
