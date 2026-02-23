@@ -29,13 +29,6 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
-// isOpenClawWorkspace is a convenience wrapper for paths.IsOpenClawWorkspace.
-// Returns true if the workspace path is under ~/.openclaw/, used to detect
-// side-by-side operation with OpenClaw.
-func isOpenClawWorkspace(workspacePath string) bool {
-	return paths.IsOpenClawWorkspace(workspacePath)
-}
-
 // Context keys for session info
 type contextKey string
 

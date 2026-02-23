@@ -264,8 +264,7 @@ func (e *UserEditorTview) deleteUser() {
 
 		form.AddButton("Delete", func() {
 			// Check if checkbox is checked
-			checkbox := form.GetFormItem(0).(*tview.Checkbox)
-			if checkbox.IsChecked() {
+			if checkbox, ok := form.GetFormItem(0).(*tview.Checkbox); ok && checkbox.IsChecked() {
 				delete(e.users, username)
 				e.modified = true
 				L_info("users: deleted user", "username", username)
@@ -454,8 +453,7 @@ func (e *UserEditorTview) confirmExit() {
 	form.AddCheckbox("Confirm exit without saving?", false, nil)
 
 	form.AddButton("Exit", func() {
-		checkbox := form.GetFormItem(0).(*tview.Checkbox)
-		if checkbox.IsChecked() {
+		if checkbox, ok := form.GetFormItem(0).(*tview.Checkbox); ok && checkbox.IsChecked() {
 			e.app.Stop()
 		} else {
 			e.showMainMenu()

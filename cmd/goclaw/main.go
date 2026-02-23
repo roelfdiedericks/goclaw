@@ -39,6 +39,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
+	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/setup"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
@@ -641,7 +642,7 @@ type UserCmd struct {
 type UserEditCmd struct{}
 
 func (u *UserEditCmd) Run(ctx *Context) error {
-	return setup.RunUserEditor()
+	return setup.RunUserEditorTview()
 }
 
 // UserAddCmd adds a new user
@@ -1596,24 +1597,28 @@ func openSessionsDB(cfg *config.Config) (*sql.DB, error) {
 func openMemoryDB(cfg *config.Config) (*sql.DB, error) {
 	dbPath := cfg.Memory.DbPath
 	if dbPath == "" {
-		home, _ := os.UserHomeDir()
-		dbPath = filepath.Join(home, ".goclaw", "memory.db")
+		var err error
+		dbPath, err = paths.DataPath("memory.db")
+		if err != nil {
+			return nil, fmt.Errorf("get memory db path: %w", err)
+		}
 	} else if strings.HasPrefix(dbPath, "~") {
-		home, _ := os.UserHomeDir()
-		dbPath = filepath.Join(home, dbPath[1:])
+		var err error
+		dbPath, err = paths.ExpandTilde(dbPath)
+		if err != nil {
+			return nil, fmt.Errorf("expand memory db path: %w", err)
+		}
 	}
 	return sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 }
 
 // SetupCmd is the interactive setup wizard
 type SetupCmd struct {
-	Auto       SetupAutoCmd       `cmd:"" default:"withargs" help:"Run setup (auto-detect mode)"`
-	Wizard     SetupWizardCmd     `cmd:"wizard" help:"Run full setup wizard (even if config exists)"`
-	Edit       SetupEditCmd       `cmd:"edit" help:"Edit existing configuration"`
-	Editor     SetupEditorCmd     `cmd:"editor" help:"Edit config (new tview UI)"`
-	Generate   SetupGenerateCmd   `cmd:"generate" help:"Output default config template to stdout"`
-	Transcript SetupTranscriptCmd `cmd:"transcript" help:"Configure transcript indexing"`
-	Telegram   SetupTelegramCmd   `cmd:"telegram" help:"Configure Telegram bot"`
+	Auto     SetupAutoCmd     `cmd:"" default:"withargs" help:"Run setup (auto-detect mode)"`
+	Wizard   SetupWizardCmd   `cmd:"wizard" help:"Run full setup wizard (even if config exists)"`
+	Edit     SetupEditCmd     `cmd:"edit" help:"Edit existing configuration"`
+	Editor   SetupEditorCmd   `cmd:"editor" help:"Edit config (new tview UI)"`
+	Generate SetupGenerateCmd `cmd:"generate" help:"Output default config template to stdout"`
 }
 
 // SetupAutoCmd auto-detects mode: wizard if no config, edit if exists
@@ -1655,25 +1660,6 @@ func (s *SetupGenerateCmd) Run(ctx *Context) error {
 		return setup.GenerateDefaultUsers(s.WithPassword)
 	}
 	return setup.GenerateDefault()
-}
-
-// SetupTranscriptCmd configures transcript indexing (tview version)
-type SetupTranscriptCmd struct {
-	Huh bool `help:"Use old huh-based form (for comparison)"`
-}
-
-func (s *SetupTranscriptCmd) Run(ctx *Context) error {
-	if s.Huh {
-		return setup.RunTranscriptSetup()
-	}
-	return setup.RunTranscriptSetupTview()
-}
-
-// SetupTelegramCmd configures Telegram bot
-type SetupTelegramCmd struct{}
-
-func (s *SetupTelegramCmd) Run(ctx *Context) error {
-	return setup.RunTelegramSetupTview()
 }
 
 // OnboardCmd runs the onboarding wizard
@@ -1896,8 +1882,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 			wsClient := hass.NewWSClient(cfg.HomeAssistant)
 
 			// Create event subscription manager
-			home, _ := os.UserHomeDir()
-			dataDir := filepath.Join(home, ".goclaw")
+			dataDir, _ := paths.BaseDir()
 			hassManager := hass.NewManager(cfg.HomeAssistant, gw, dataDir)
 			gw.SetHassManager(hassManager)
 
@@ -2153,7 +2138,7 @@ func main() {
 		level = LevelDebug
 	}
 
-	Init(&Config{
+	Init(&LogConfig{
 		Level:      level,
 		ShowCaller: true,
 	})

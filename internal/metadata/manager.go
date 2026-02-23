@@ -98,7 +98,7 @@ func (m *Manager) bootstrap(localPath string) {
 		return
 	}
 
-	if err := os.WriteFile(localPath, embeddedProviders, 0644); err != nil {
+	if err := os.WriteFile(localPath, embeddedProviders, 0600); err != nil {
 		L_warn("metadata: failed to write local file", "path", localPath, "error", err)
 		return
 	}

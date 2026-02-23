@@ -826,11 +826,6 @@ func findFieldByJSONTagCaseInsensitive(rv reflect.Value, jsonName string) reflec
 	return reflect.Value{}
 }
 
-// findFieldByName is kept for backwards compatibility, now delegates to findFieldByPath
-func findFieldByName(rv reflect.Value, name string) reflect.Value {
-	return findFieldByPath(rv, name)
-}
-
 // truncate truncates a string to max length
 func truncate(s string, max int) string {
 	if len(s) <= max {

@@ -496,7 +496,7 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		logging.L_error("telegram: failed to get voice file", "error", err)
 		return c.Send("Sorry, I couldn't download that voice message.")
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	// Read all voice data
 	voiceData, err := io.ReadAll(reader)
