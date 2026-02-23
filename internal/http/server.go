@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/bus"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -197,6 +198,9 @@ func (s *Server) reloadTemplatesIfDev() error {
 
 // Start starts the HTTP server
 func (s *Server) Start() error {
+	// Track current listen address for config test
+	SetCurrentListenAddr(s.server.Addr)
+
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -270,5 +274,28 @@ func (s *Server) stripHeaders(handler http.HandlerFunc) http.HandlerFunc {
 		w.Header().Del("X-Powered-By")
 
 		handler(w, r)
+	}
+}
+
+// RegisterOperationalCommands registers runtime commands for this server instance.
+// Call this after creating the server to enable status command.
+func (s *Server) RegisterOperationalCommands() {
+	bus.RegisterCommand("http", "status", s.handleStatusCommand)
+}
+
+// handleStatusCommand returns the current server status
+func (s *Server) handleStatusCommand(cmd bus.Command) bus.CommandResult {
+	addr := s.server.Addr
+	if addr == "" {
+		addr = ":1337"
+	}
+
+	return bus.CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("HTTP server listening on %s", addr),
+		Data: map[string]any{
+			"listening": true,
+			"address":   addr,
+		},
 	}
 }

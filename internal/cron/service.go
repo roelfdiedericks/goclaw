@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/roelfdiedericks/goclaw/internal/bus"
+	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -111,6 +113,9 @@ type Service struct {
 	heartbeatConfig *HeartbeatConfig
 	heartbeatTimer  *time.Timer
 	lastHeartbeat   time.Time
+
+	// Event subscriptions
+	configEventSub bus.SubscriptionID
 }
 
 // NewService creates a new cron service and sets it as the global singleton.
@@ -270,6 +275,100 @@ func (s *Service) IsRunning() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.running
+}
+
+// RegisterOperationalCommands registers runtime commands and event subscriptions.
+func (s *Service) RegisterOperationalCommands() {
+	bus.RegisterCommand("cron", "list", s.handleList)
+	bus.RegisterCommand("cron", "run", s.handleRun)
+
+	// Subscribe to config changes
+	s.configEventSub = bus.SubscribeEvent("cron.config.applied", s.onConfigApplied)
+
+	L_debug("cron: operational commands registered")
+}
+
+// UnregisterOperationalCommands removes commands and subscriptions.
+func (s *Service) UnregisterOperationalCommands() {
+	bus.UnregisterCommand("cron", "list")
+	bus.UnregisterCommand("cron", "run")
+	if s.configEventSub != 0 {
+		bus.UnsubscribeEvent(s.configEventSub)
+		s.configEventSub = 0
+	}
+}
+
+// onConfigApplied handles cron config changes
+func (s *Service) onConfigApplied(e bus.Event) {
+	cfg, ok := e.Data.(*config.CronConfig)
+	if !ok {
+		L_error("cron: invalid config event data type", "type", fmt.Sprintf("%T", e.Data))
+		return
+	}
+
+	L_info("cron: config changed", "enabled", cfg.Enabled, "heartbeat", cfg.Heartbeat.Enabled)
+
+	// Update job timeout
+	s.jobTimeoutMinutes = cfg.JobTimeoutMinutes
+
+	// Update heartbeat config
+	if s.heartbeatConfig != nil {
+		s.heartbeatConfig.Enabled = cfg.Heartbeat.Enabled
+		s.heartbeatConfig.IntervalMinutes = cfg.Heartbeat.IntervalMinutes
+		if cfg.Heartbeat.Prompt != "" {
+			s.heartbeatConfig.Prompt = cfg.Heartbeat.Prompt
+		}
+	}
+}
+
+// handleList returns a list of scheduled jobs
+func (s *Service) handleList(cmd bus.Command) bus.CommandResult {
+	jobs := s.store.GetAllJobs()
+	var names []string
+	for _, j := range jobs {
+		status := ""
+		if !j.Enabled {
+			status = " (disabled)"
+		}
+		sched := j.Schedule.Kind
+		if j.Schedule.Expr != "" {
+			sched = j.Schedule.Expr
+		}
+		names = append(names, fmt.Sprintf("%s: %s%s", j.Name, sched, status))
+	}
+
+	return bus.CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("%d scheduled jobs", len(jobs)),
+		Data:    names,
+	}
+}
+
+// handleRun forces execution of a named job
+func (s *Service) handleRun(cmd bus.Command) bus.CommandResult {
+	jobName, ok := cmd.Payload.(string)
+	if !ok {
+		return bus.CommandResult{
+			Error:   fmt.Errorf("expected job name string, got %T", cmd.Payload),
+			Message: "invalid payload type",
+		}
+	}
+
+	job := s.store.GetJob(jobName)
+	if job == nil {
+		return bus.CommandResult{
+			Success: false,
+			Message: fmt.Sprintf("Job not found: %s", jobName),
+		}
+	}
+
+	// Run the job asynchronously
+	go s.executeJob(context.Background(), job)
+
+	return bus.CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("Job '%s' started", jobName),
+	}
 }
 
 // clearOrphanedRunningState clears running state from jobs that were "running"

@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/roelfdiedericks/goclaw/internal/bus"
+	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -31,6 +33,9 @@ type Manager struct {
 	mu             sync.RWMutex
 	flaggedSkills  []*Skill // Skills disabled due to security warnings
 	startupWarning string   // Warning message to show on session start
+
+	// Event subscriptions
+	configEventSub bus.SubscriptionID
 }
 
 // ManagerConfig contains configuration for the skill manager.
@@ -132,6 +137,86 @@ func (m *Manager) Stop() error {
 		return m.watcher.Stop()
 	}
 	return nil
+}
+
+// RegisterOperationalCommands registers runtime commands and event subscriptions.
+func (m *Manager) RegisterOperationalCommands() {
+	bus.RegisterCommand("skills", "list", m.handleList)
+	bus.RegisterCommand("skills", "reload", m.handleReload)
+
+	// Subscribe to config changes
+	m.configEventSub = bus.SubscribeEvent("skills.config.applied", m.onConfigApplied)
+
+	L_debug("skills: operational commands registered")
+}
+
+// UnregisterOperationalCommands removes commands and subscriptions.
+func (m *Manager) UnregisterOperationalCommands() {
+	bus.UnregisterCommand("skills", "list")
+	bus.UnregisterCommand("skills", "reload")
+	if m.configEventSub != 0 {
+		bus.UnsubscribeEvent(m.configEventSub)
+		m.configEventSub = 0
+	}
+}
+
+// onConfigApplied handles skills config changes
+func (m *Manager) onConfigApplied(e bus.Event) {
+	cfg, ok := e.Data.(*config.SkillsConfig)
+	if !ok {
+		L_error("skills: invalid config event data type", "type", fmt.Sprintf("%T", e.Data))
+		return
+	}
+
+	L_info("skills: config changed, reloading", "enabled", cfg.Enabled)
+
+	// Update directories if they changed
+	if cfg.BundledDir != "" {
+		m.bundledDir = cfg.BundledDir
+	}
+	if cfg.ManagedDir != "" {
+		m.managedDir = cfg.ManagedDir
+	}
+	if cfg.WorkspaceDir != "" {
+		m.workspaceDir = cfg.WorkspaceDir
+	}
+	m.extraDirs = cfg.ExtraDirs
+
+	// Reload skills
+	if err := m.Reload(); err != nil {
+		L_error("skills: reload failed after config change", "error", err)
+	}
+}
+
+// handleList returns a list of loaded skills
+func (m *Manager) handleList(cmd bus.Command) bus.CommandResult {
+	skills := m.GetAllSkills()
+	var names []string
+	for _, s := range skills {
+		names = append(names, s.Name)
+	}
+
+	return bus.CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("Loaded %d skills", len(skills)),
+		Data:    names,
+	}
+}
+
+// handleReload forces a reload of all skills
+func (m *Manager) handleReload(cmd bus.Command) bus.CommandResult {
+	if err := m.Reload(); err != nil {
+		return bus.CommandResult{
+			Error:   err,
+			Message: fmt.Sprintf("Reload failed: %v", err),
+		}
+	}
+
+	skills := m.GetAllSkills()
+	return bus.CommandResult{
+		Success: true,
+		Message: fmt.Sprintf("Reloaded %d skills", len(skills)),
+	}
 }
 
 // Reload reloads all skills from disk.

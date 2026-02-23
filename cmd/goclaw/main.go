@@ -21,6 +21,7 @@ import (
 	"github.com/sevlyar/go-daemon"
 	"golang.org/x/term"
 
+	"github.com/roelfdiedericks/goclaw/internal/auth"
 	"github.com/roelfdiedericks/goclaw/internal/browser"
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/bwrap"
@@ -32,11 +33,24 @@ import (
 	goclawhttp "github.com/roelfdiedericks/goclaw/internal/http"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
+	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/setup"
+	"github.com/roelfdiedericks/goclaw/internal/channels/telegram"
+	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/supervisor"
-	"github.com/roelfdiedericks/goclaw/internal/telegram"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
+	"github.com/roelfdiedericks/goclaw/internal/tools/exec"
+	toolhass "github.com/roelfdiedericks/goclaw/internal/tools/hass"
+	"github.com/roelfdiedericks/goclaw/internal/tools/memoryget"
+	"github.com/roelfdiedericks/goclaw/internal/tools/memorysearch"
+	toolmessage "github.com/roelfdiedericks/goclaw/internal/tools/message"
+	toolskills "github.com/roelfdiedericks/goclaw/internal/tools/skills"
+	tooltranscript "github.com/roelfdiedericks/goclaw/internal/tools/transcript"
+	toolupdate "github.com/roelfdiedericks/goclaw/internal/tools/update"
+	"github.com/roelfdiedericks/goclaw/internal/tools/userauth"
+	"github.com/roelfdiedericks/goclaw/internal/tools/xaiimagine"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
 	"github.com/roelfdiedericks/goclaw/internal/tui"
 	"github.com/roelfdiedericks/goclaw/internal/update"
@@ -1816,7 +1830,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		// Exec tool config
 		ExecTimeout:    cfg.Tools.Exec.Timeout,
 		BubblewrapPath: cfg.Tools.Bubblewrap.Path,
-		ExecBubblewrap: tools.ExecBubblewrapCfg{
+		ExecBubblewrap: exec.BubblewrapConfig{
 			Enabled:      cfg.Tools.Exec.Bubblewrap.Enabled,
 			ExtraRoBind:  cfg.Tools.Exec.Bubblewrap.ExtraRoBind,
 			ExtraBind:    cfg.Tools.Exec.Bubblewrap.ExtraBind,
@@ -1851,25 +1865,26 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 
 	// Register memory tools (needs gateway's memory manager)
 	if memMgr := gw.MemoryManager(); memMgr != nil {
-		toolsReg.Register(tools.NewMemorySearchTool(memMgr))
-		toolsReg.Register(tools.NewMemoryGetTool(memMgr))
+		toolsReg.Register(memorysearch.NewTool(memMgr))
+		toolsReg.Register(memoryget.NewTool(memMgr))
 		L_debug("memory tools registered")
 	}
 
 	// Register skills tool (needs gateway's skills manager)
 	if skillsMgr := gw.SkillManager(); skillsMgr != nil {
-		toolsReg.Register(tools.NewSkillsTool(skillsMgr))
+		toolsReg.Register(toolskills.NewTool(skillsMgr))
+		skillsMgr.RegisterOperationalCommands()
 		L_debug("skills tool registered")
 	}
 
 	// Register user_auth tool (for role elevation)
 	if cfg.Auth.Enabled && cfg.Auth.Script != "" {
-		toolsReg.Register(tools.NewUserAuthTool(cfg.Auth, cfg.Roles))
+		toolsReg.Register(userauth.NewTool(cfg.Auth, cfg.Roles))
 		L_info("user_auth: tool registered", "allowedRoles", cfg.Auth.AllowedRoles)
 	}
 
 	// Register goclaw_update tool (allows agent to update GoClaw)
-	toolsReg.Register(tools.NewUpdateTool(version))
+	toolsReg.Register(toolupdate.NewTool(version))
 	L_debug("goclaw_update tool registered")
 
 	// Register Home Assistant tool
@@ -1890,7 +1905,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 			}
 
 			// Create and register the tool
-			hassTool, err := tools.NewHASSTool(cfg.HomeAssistant, mediaStore, wsClient, hassManager)
+			hassTool, err := toolhass.NewTool(cfg.HomeAssistant, mediaStore, wsClient, hassManager)
 			if err != nil {
 				L_warn("hass tool not registered", "error", err)
 			} else {
@@ -1905,7 +1920,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	// Register xAI Imagine tool
 	if cfg.Tools.XAIImagine.Enabled {
 		if mediaStore := gw.MediaStore(); mediaStore != nil {
-			xaiImagineTool, err := tools.NewXAIImagineTool(cfg.Tools.XAIImagine, mediaStore)
+			xaiImagineTool, err := xaiimagine.NewTool(cfg.Tools.XAIImagine, mediaStore)
 			if err != nil {
 				L_warn("xai_imagine tool not registered", "error", err)
 			} else {
@@ -1937,9 +1952,10 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 					transcriptMgr.SetAgentName(cfg.Agent.Name)
 				}
 				transcriptMgr.Start()
+				transcriptMgr.RegisterOperationalCommands()
 				// Note: transcriptMgr.Stop() is called in signal handler before gw.Shutdown()
 				// to ensure it stops before the SQLite database is closed
-				toolsReg.Register(tools.NewTranscriptTool(transcriptMgr))
+				toolsReg.Register(tooltranscript.NewTool(transcriptMgr))
 				L_info("transcript: manager started and tool registered")
 			}
 		} else {
@@ -1948,6 +1964,21 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	} else {
 		L_info("transcript: disabled by configuration")
 	}
+
+	// Register component config commands
+	// These allow config forms to trigger test/apply actions via the bus
+	media.RegisterCommands()
+	goclawhttp.RegisterCommands()
+	tui.RegisterCommands()
+	telegram.RegisterCommands()
+	session.RegisterCommands()
+	skills.RegisterCommands()
+	cron.RegisterCommands()
+	auth.RegisterCommands()
+	gateway.RegisterCommands()
+	transcript.RegisterCommands()
+	llm.RegisterCommands()
+	L_debug("config commands registered")
 
 	// Setup context with cancellation for graceful shutdown
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -1983,7 +2014,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	// Start Telegram bot if configured (with persistent retry on connection failures)
 	var telegramBot *telegram.Bot
 	var telegramBotMu sync.Mutex
-	messageChannels := make(map[string]tools.MessageChannel)
+	messageChannels := make(map[string]toolmessage.MessageChannel)
 
 	if cfg.Telegram.Enabled && cfg.Telegram.BotToken != "" {
 		// Try initial connection
@@ -1991,6 +2022,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		telegramBot, err = telegram.New(&cfg.Telegram, gw, users)
 		if err == nil {
 			telegramBot.Start()
+			telegramBot.RegisterOperationalCommands()
 			gw.RegisterChannel(telegramBot)
 			L_info("telegram: bot ready and listening")
 
@@ -2031,6 +2063,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 
 					// Success!
 					bot.Start()
+					bot.RegisterOperationalCommands()
 					gw.RegisterChannel(bot)
 					L_info("telegram: bot ready after retry", "attempts", attempt)
 
@@ -2047,16 +2080,12 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		L_info("telegram: disabled by configuration")
 	}
 
-	// Register telegram:apply command handler with closure access to bot instance
-	// TODO: Consider refactoring to a ChannelManager when we have more channels
-	// or need multiple instances of the same channel type
-	bus.RegisterCommand("telegram", "apply", func(cmd bus.Command) bus.CommandResult {
-		newCfg, ok := cmd.Payload.(*config.TelegramConfig)
+	// Subscribe to telegram config.applied event to restart bot when config changes
+	bus.SubscribeEvent("telegram.config.applied", func(event bus.Event) {
+		newCfg, ok := event.Data.(*config.TelegramConfig)
 		if !ok {
-			return bus.CommandResult{
-				Error:   fmt.Errorf("invalid payload type"),
-				Message: "Internal error: invalid config type",
-			}
+			L_error("telegram: invalid event data type", "type", fmt.Sprintf("%T", event.Data))
+			return
 		}
 
 		telegramBotMu.Lock()
@@ -2073,31 +2102,21 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		// If disabled, just stop
 		if !newCfg.Enabled || newCfg.BotToken == "" {
 			L_info("telegram: disabled by new config")
-			return bus.CommandResult{
-				Success: true,
-				Message: "Telegram bot stopped",
-			}
+			return
 		}
 
 		// Create new bot with new config
 		bot, err := telegram.New(newCfg, gw, users)
 		if err != nil {
 			L_error("telegram: failed to create bot with new config", "error", err)
-			return bus.CommandResult{
-				Error:   err,
-				Message: fmt.Sprintf("Failed to connect: %s", err),
-			}
+			return
 		}
 
 		bot.Start()
+		bot.RegisterOperationalCommands()
 		gw.RegisterChannel(bot)
 		telegramBot = bot
 		L_info("telegram: reloaded with new config")
-
-		return bus.CommandResult{
-			Success: true,
-			Message: "Telegram bot reloaded",
-		}
 	})
 
 	// Start HTTP server if configured (enabled by default if users have HTTP credentials)
@@ -2140,6 +2159,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 				} else {
 					L_info("http: server started", "listen", listen)
 				}
+				httpServer.RegisterOperationalCommands()
 				// Register HTTP message channel adapter for message tool
 				httpAdapter := goclawhttp.NewMessageChannelAdapter(httpServer.Channel(), "/api/media")
 				messageChannels["http"] = httpAdapter
@@ -2151,7 +2171,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 
 	// Register message tool with available channels (after all channels are set up)
 	if len(messageChannels) > 0 {
-		messageTool := tools.NewMessageTool(messageChannels)
+		messageTool := toolmessage.NewTool(messageChannels)
 		// Set media root for content array path resolution
 		if mediaStore := gw.MediaStore(); mediaStore != nil {
 			messageTool.SetMediaRoot(mediaStore.BaseDir())
@@ -2164,6 +2184,8 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	if cfg.Cron.Enabled {
 		if err := gw.StartCron(runCtx); err != nil {
 			L_error("cron: failed to start service", "error", err)
+		} else if cronSvc := gw.CronService(); cronSvc != nil {
+			cronSvc.RegisterOperationalCommands()
 		}
 	} else {
 		L_info("cron: disabled by configuration")

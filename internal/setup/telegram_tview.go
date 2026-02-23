@@ -6,9 +6,9 @@ import (
 	"os"
 
 	"github.com/roelfdiedericks/goclaw/internal/config"
+	"github.com/roelfdiedericks/goclaw/internal/channels/telegram"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/roelfdiedericks/goclaw/internal/telegram"
 )
 
 // RunTelegramSetupTview runs the tview-based telegram configuration UI
@@ -25,8 +25,8 @@ func RunTelegramSetupTview() error {
 	// Get form definition
 	formDef := telegram.ConfigFormDef()
 
-	// Render the form
-	result, err := forms.RenderTview(formDef, &cfg, "telegram")
+	// Render the form (component path matches bus command namespace)
+	result, err := forms.RenderTview(formDef, &cfg, "channels.telegram")
 	if err != nil {
 		return fmt.Errorf("form error: %w", err)
 	}

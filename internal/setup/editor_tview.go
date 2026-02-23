@@ -5,12 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/roelfdiedericks/goclaw/internal/auth"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
+	"github.com/roelfdiedericks/goclaw/internal/cron"
+	"github.com/roelfdiedericks/goclaw/internal/gateway"
+	goclawhttp "github.com/roelfdiedericks/goclaw/internal/http"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/roelfdiedericks/goclaw/internal/telegram"
+	"github.com/roelfdiedericks/goclaw/internal/media"
+	"github.com/roelfdiedericks/goclaw/internal/channels/telegram"
+	"github.com/roelfdiedericks/goclaw/internal/session"
+	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
+	"github.com/roelfdiedericks/goclaw/internal/tui"
 )
 
 // EditorTview is the tview-based configuration editor
@@ -35,10 +43,18 @@ func (e *EditorTview) Run() error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Register command handlers
+	// Register command handlers for all components
 	telegram.RegisterCommands()
 	llm.RegisterCommands()
-	// Note: transcript actions are registered elsewhere or not yet implemented
+	media.RegisterCommands()
+	tui.RegisterCommands()
+	goclawhttp.RegisterCommands()
+	session.RegisterCommands()
+	skills.RegisterCommands()
+	cron.RegisterCommands()
+	auth.RegisterCommands()
+	gateway.RegisterCommands()
+	transcript.RegisterCommands()
 
 	// Create UI
 	e.app = forms.NewTviewApp("GoClaw Configuration")
@@ -85,8 +101,19 @@ func (e *EditorTview) createMenu() *forms.MenuListResult {
 
 	items := []forms.MenuItem{
 		{Label: "LLM Configuration", OnSelect: e.editLLM},
-		{Label: "Transcript Indexing", OnSelect: e.editTranscript},
+		{Label: "Gateway Settings", OnSelect: e.editGateway},
+		{Label: "Session Management", OnSelect: e.editSession},
+		{IsSeparator: true, Label: "Channels"},
 		{Label: "Telegram Bot", OnSelect: e.editTelegram},
+		{Label: "HTTP Server", OnSelect: e.editHTTP},
+		{IsSeparator: true, Label: "Services"},
+		{Label: "Transcript Indexing", OnSelect: e.editTranscript},
+		{Label: "Skills", OnSelect: e.editSkills},
+		{Label: "Cron Jobs", OnSelect: e.editCron},
+		{IsSeparator: true, Label: "System"},
+		{Label: "Media Storage", OnSelect: e.editMedia},
+		{Label: "TUI Settings", OnSelect: e.editTUI},
+		{Label: "Auth Settings", OnSelect: e.editAuth},
 		{Label: "Users", OnSelect: func() {
 			L_info("editor: users - not implemented yet")
 		}},
@@ -179,6 +206,223 @@ func (e *EditorTview) editTelegram() {
 	}
 
 	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Telegram"})
+	e.app.SetFormContent(content)
+}
+
+// editHTTP opens the HTTP server configuration form
+func (e *EditorTview) editHTTP() {
+	L_info("editor: opening HTTP config")
+
+	httpCfg := e.cfg.HTTP
+	formDef := goclawhttp.ConfigFormDef()
+
+	content, err := forms.BuildFormContent(formDef, &httpCfg, "http", func(result forms.TviewResult) {
+		if result == forms.ResultSaved {
+			e.cfg.HTTP = httpCfg
+			e.dirty = true
+			L_info("editor: HTTP config updated")
+		} else {
+			L_info("editor: HTTP config cancelled")
+		}
+		e.showMainMenu()
+	}, e.app.App())
+	if err != nil {
+		L_error("editor: HTTP form error", "error", err)
+		return
+	}
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "HTTP Server"})
+	e.app.SetFormContent(content)
+}
+
+// editMedia opens the media storage configuration form
+func (e *EditorTview) editMedia() {
+	L_info("editor: opening media config")
+
+	mediaCfg := e.cfg.Media
+	formDef := media.ConfigFormDef()
+
+	content, err := forms.BuildFormContent(formDef, &mediaCfg, "media", func(result forms.TviewResult) {
+		if result == forms.ResultSaved {
+			e.cfg.Media = mediaCfg
+			e.dirty = true
+			L_info("editor: media config updated")
+		} else {
+			L_info("editor: media config cancelled")
+		}
+		e.showMainMenu()
+	}, e.app.App())
+	if err != nil {
+		L_error("editor: media form error", "error", err)
+		return
+	}
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Media Storage"})
+	e.app.SetFormContent(content)
+}
+
+// editTUI opens the TUI settings configuration form
+func (e *EditorTview) editTUI() {
+	L_info("editor: opening TUI config")
+
+	tuiCfg := e.cfg.TUI
+	formDef := tui.ConfigFormDef()
+
+	content, err := forms.BuildFormContent(formDef, &tuiCfg, "tui", func(result forms.TviewResult) {
+		if result == forms.ResultSaved {
+			e.cfg.TUI = tuiCfg
+			e.dirty = true
+			L_info("editor: TUI config updated")
+		} else {
+			L_info("editor: TUI config cancelled")
+		}
+		e.showMainMenu()
+	}, e.app.App())
+	if err != nil {
+		L_error("editor: TUI form error", "error", err)
+		return
+	}
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "TUI Settings"})
+	e.app.SetFormContent(content)
+}
+
+// editSession opens the session management configuration form
+func (e *EditorTview) editSession() {
+	L_info("editor: opening session config")
+
+	sessionCfg := e.cfg.Session
+	formDef := session.ConfigFormDef()
+
+	content, err := forms.BuildFormContent(formDef, &sessionCfg, "session", func(result forms.TviewResult) {
+		if result == forms.ResultSaved {
+			e.cfg.Session = sessionCfg
+			e.dirty = true
+			L_info("editor: session config updated")
+		} else {
+			L_info("editor: session config cancelled")
+		}
+		e.showMainMenu()
+	}, e.app.App())
+	if err != nil {
+		L_error("editor: session form error", "error", err)
+		return
+	}
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Session Management"})
+	e.app.SetFormContent(content)
+}
+
+// editSkills opens the skills configuration form
+func (e *EditorTview) editSkills() {
+	L_info("editor: opening skills config")
+
+	skillsCfg := e.cfg.Skills
+	formDef := skills.ConfigFormDef()
+
+	content, err := forms.BuildFormContent(formDef, &skillsCfg, "skills", func(result forms.TviewResult) {
+		if result == forms.ResultSaved {
+			e.cfg.Skills = skillsCfg
+			e.dirty = true
+			L_info("editor: skills config updated")
+		} else {
+			L_info("editor: skills config cancelled")
+		}
+		e.showMainMenu()
+	}, e.app.App())
+	if err != nil {
+		L_error("editor: skills form error", "error", err)
+		return
+	}
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Skills"})
+	e.app.SetFormContent(content)
+}
+
+// editCron opens the cron jobs configuration form
+func (e *EditorTview) editCron() {
+	L_info("editor: opening cron config")
+
+	cronCfg := e.cfg.Cron
+	formDef := cron.ConfigFormDef()
+
+	content, err := forms.BuildFormContent(formDef, &cronCfg, "cron", func(result forms.TviewResult) {
+		if result == forms.ResultSaved {
+			e.cfg.Cron = cronCfg
+			e.dirty = true
+			L_info("editor: cron config updated")
+		} else {
+			L_info("editor: cron config cancelled")
+		}
+		e.showMainMenu()
+	}, e.app.App())
+	if err != nil {
+		L_error("editor: cron form error", "error", err)
+		return
+	}
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Cron Jobs"})
+	e.app.SetFormContent(content)
+}
+
+// editAuth opens the auth settings configuration form
+func (e *EditorTview) editAuth() {
+	L_info("editor: opening auth config")
+
+	authCfg := e.cfg.Auth
+	formDef := auth.ConfigFormDef()
+
+	content, err := forms.BuildFormContent(formDef, &authCfg, "auth", func(result forms.TviewResult) {
+		if result == forms.ResultSaved {
+			e.cfg.Auth = authCfg
+			e.dirty = true
+			L_info("editor: auth config updated")
+		} else {
+			L_info("editor: auth config cancelled")
+		}
+		e.showMainMenu()
+	}, e.app.App())
+	if err != nil {
+		L_error("editor: auth form error", "error", err)
+		return
+	}
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Auth Settings"})
+	e.app.SetFormContent(content)
+}
+
+// editGateway opens the gateway settings configuration form
+func (e *EditorTview) editGateway() {
+	L_info("editor: opening gateway config")
+
+	// Gateway config is a bundle of multiple settings
+	gatewayCfg := gateway.GatewayConfigBundle{
+		Gateway:     e.cfg.Gateway,
+		Agent:       e.cfg.Agent,
+		PromptCache: e.cfg.PromptCache,
+		Supervision: e.cfg.Supervision,
+	}
+	formDef := gateway.ConfigFormDef()
+
+	content, err := forms.BuildFormContent(formDef, &gatewayCfg, "gateway", func(result forms.TviewResult) {
+		if result == forms.ResultSaved {
+			e.cfg.Gateway = gatewayCfg.Gateway
+			e.cfg.Agent = gatewayCfg.Agent
+			e.cfg.PromptCache = gatewayCfg.PromptCache
+			e.cfg.Supervision = gatewayCfg.Supervision
+			e.dirty = true
+			L_info("editor: gateway config updated")
+		} else {
+			L_info("editor: gateway config cancelled")
+		}
+		e.showMainMenu()
+	}, e.app.App())
+	if err != nil {
+		L_error("editor: gateway form error", "error", err)
+		return
+	}
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Gateway Settings"})
 	e.app.SetFormContent(content)
 }
 

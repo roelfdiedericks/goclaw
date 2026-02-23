@@ -3,8 +3,10 @@ package transcript
 import (
 	"fmt"
 
+	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
 // TConfig is an alias for config.TranscriptConfig for convenience
@@ -241,4 +243,51 @@ func DefaultTQueryConfig() TQueryConfig {
 // helper to create pointer to FormDef
 func ptrFormDef(f forms.FormDef) *forms.FormDef {
 	return &f
+}
+
+const configPath = "transcript"
+
+// RegisterCommands registers config commands for transcript.
+// Note: Operational commands (test, stats, reindex) are registered by Manager.
+func RegisterCommands() {
+	bus.RegisterCommand(configPath, "apply", handleApply)
+}
+
+// UnregisterCommands unregisters config commands.
+func UnregisterCommands() {
+	bus.UnregisterCommand(configPath, "apply")
+}
+
+// handleApply validates config and publishes event for manager to apply.
+func handleApply(cmd bus.Command) bus.CommandResult {
+	cfg, ok := cmd.Payload.(config.TranscriptConfig)
+	if !ok {
+		cfgPtr, okPtr := cmd.Payload.(*config.TranscriptConfig)
+		if okPtr {
+			cfg = *cfgPtr
+			ok = true
+		}
+	}
+	if !ok {
+		return bus.CommandResult{
+			Error:   fmt.Errorf("expected TranscriptConfig payload, got %T", cmd.Payload),
+			Message: "invalid payload type",
+		}
+	}
+
+	// Validate config before applying
+	if err := ValidateConfig(cfg); err != nil {
+		return bus.CommandResult{
+			Error:   err,
+			Message: fmt.Sprintf("config validation failed: %v", err),
+		}
+	}
+
+	L_info("transcript: config applied", "enabled", cfg.Enabled, "indexInterval", cfg.IndexIntervalSeconds)
+	bus.PublishEvent(configPath+".config.applied", cfg)
+
+	return bus.CommandResult{
+		Success: true,
+		Message: "Config applied - manager will reload",
+	}
 }

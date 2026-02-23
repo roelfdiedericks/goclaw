@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/channels/telegram"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/roelfdiedericks/goclaw/internal/telegram"
 )
 
 // Model represents a model from an API response

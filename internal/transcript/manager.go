@@ -22,7 +22,8 @@ type Manager struct {
 	indexer  *Indexer
 	searcher *Searcher
 
-	llmEventSub bus.SubscriptionID // subscription to llm.config.applied event
+	configEventSub bus.SubscriptionID // subscription to transcript.config.applied event
+	llmEventSub    bus.SubscriptionID // subscription to llm.config.applied event
 }
 
 // NewManager creates a new transcript manager
@@ -455,26 +456,53 @@ type QueryFilter struct {
 	Role string // Filter by role ("user" or "assistant")
 }
 
-// RegisterCommands registers transcript command handlers with the bus
-func (m *Manager) RegisterCommands() {
+// RegisterOperationalCommands registers operational commands and event subscriptions.
+// Config commands (apply) are in config.go.
+func (m *Manager) RegisterOperationalCommands() {
 	bus.RegisterCommand("transcript", "test", m.handleTest)
-	bus.RegisterCommand("transcript", "apply", m.handleApply)
 	bus.RegisterCommand("transcript", "stats", m.handleStats)
 	bus.RegisterCommand("transcript", "reindex", m.handleReindex)
+
+	// Subscribe to transcript config changes
+	m.configEventSub = bus.SubscribeEvent("transcript.config.applied", m.onConfigApplied)
 
 	// Subscribe to LLM config changes to refresh embedding provider
 	m.llmEventSub = bus.SubscribeEvent("llm.config.applied", m.onLLMConfigApplied)
 
-	L_info("transcript: commands registered, subscribed to llm.config.applied")
+	L_info("transcript: operational commands registered, subscribed to config events")
 }
 
-// UnregisterCommands removes transcript command handlers and event subscriptions
-func (m *Manager) UnregisterCommands() {
-	bus.UnregisterComponent("transcript")
+// UnregisterOperationalCommands removes operational command handlers and event subscriptions.
+func (m *Manager) UnregisterOperationalCommands() {
+	bus.UnregisterCommand("transcript", "test")
+	bus.UnregisterCommand("transcript", "stats")
+	bus.UnregisterCommand("transcript", "reindex")
+	if m.configEventSub != 0 {
+		bus.UnsubscribeEvent(m.configEventSub)
+		m.configEventSub = 0
+	}
 	if m.llmEventSub != 0 {
 		bus.UnsubscribeEvent(m.llmEventSub)
 		m.llmEventSub = 0
 	}
+}
+
+// onConfigApplied handles the transcript.config.applied event by applying new config
+func (m *Manager) onConfigApplied(e bus.Event) {
+	cfg, ok := e.Data.(config.TranscriptConfig)
+	if !ok {
+		L_error("transcript: invalid config event data type", "type", fmt.Sprintf("%T", e.Data))
+		return
+	}
+
+	// Apply config
+	m.config = cfg
+	m.indexer.UpdateConfig(cfg)
+
+	L_info("transcript: config reloaded from event",
+		"enabled", cfg.Enabled,
+		"indexInterval", cfg.IndexIntervalSeconds,
+	)
 }
 
 // onLLMConfigApplied handles the llm.config.applied event by refreshing the embedding provider
@@ -534,39 +562,6 @@ func (m *Manager) handleTest(cmd bus.Command) bus.CommandResult {
 	return bus.CommandResult{
 		Success: true,
 		Message: "Database and embedding provider OK",
-	}
-}
-
-// handleApply applies new config to the running manager
-func (m *Manager) handleApply(cmd bus.Command) bus.CommandResult {
-	cfg, ok := cmd.Payload.(config.TranscriptConfig)
-	if !ok {
-		return bus.CommandResult{
-			Error:   fmt.Errorf("expected config.TranscriptConfig payload, got %T", cmd.Payload),
-			Message: "invalid payload type",
-		}
-	}
-
-	// Validate
-	if err := ValidateConfig(cfg); err != nil {
-		return bus.CommandResult{
-			Error:   err,
-			Message: fmt.Sprintf("config validation failed: %v", err),
-		}
-	}
-
-	// Apply config
-	m.config = cfg
-	m.indexer.UpdateConfig(cfg)
-
-	L_info("transcript: config applied",
-		"enabled", cfg.Enabled,
-		"indexInterval", cfg.IndexIntervalSeconds,
-	)
-
-	return bus.CommandResult{
-		Success: true,
-		Message: "Config applied successfully",
 	}
 }
 
