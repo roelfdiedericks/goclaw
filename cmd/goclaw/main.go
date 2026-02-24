@@ -633,17 +633,9 @@ func formatCronSchedule(s *cron.Schedule) string {
 type UserCmd struct {
 	Add         UserAddCmd      `cmd:"" help:"Add a new user"`
 	List        UserListCmd     `cmd:"" help:"List all users"`
-	Edit        UserEditCmd     `cmd:"" help:"Interactive user management (TUI)"`
 	Delete      UserDeleteCmd   `cmd:"" help:"Delete a user"`
 	SetTelegram UserTelegramCmd `cmd:"set-telegram" help:"Set Telegram ID"`
 	SetPassword UserPasswordCmd `cmd:"set-password" help:"Set HTTP password"`
-}
-
-// UserEditCmd launches the TUI user editor
-type UserEditCmd struct{}
-
-func (u *UserEditCmd) Run(ctx *Context) error {
-	return setup.RunUserEditorTview()
 }
 
 // UserAddCmd adds a new user

@@ -24,10 +24,11 @@ import (
 
 // EditorTview is the tview-based configuration editor
 type EditorTview struct {
-	app        *forms.TviewApp
-	configPath string
-	cfg        *config.Config
-	dirty      bool // tracks if config has been modified
+	app             *forms.TviewApp
+	configPath      string
+	cfg             *config.Config
+	dirty           bool // tracks if config has been modified
+	chainUserEditor bool // when true, Run() launches user editor then re-enters
 }
 
 // NewEditorTview creates a new tview editor
@@ -58,19 +59,28 @@ func (e *EditorTview) Run() error {
 	transcript.RegisterCommands()
 	stt.RegisterCommands()
 
-	// Create UI
-	e.app = forms.NewTviewApp("GoClaw Configuration")
+	for {
+		// Create UI
+		e.app = forms.NewTviewApp("GoClaw Configuration")
+		e.showMainMenu()
+		e.app.SetOnEscape(func() {
+			e.confirmExit()
+		})
 
-	// Show main menu
-	e.showMainMenu()
+		if err := e.app.RunWithCleanup(); err != nil {
+			return err
+		}
 
-	e.app.SetOnEscape(func() {
-		e.confirmExit()
-	})
+		if !e.chainUserEditor {
+			break
+		}
 
-	// Run
-	if err := e.app.RunWithCleanup(); err != nil {
-		return err
+		// Chain to user editor, then loop back
+		e.chainUserEditor = false
+		userEditor := NewUserEditorTview()
+		if err := userEditor.Run(); err != nil {
+			L_error("editor: user editor failed", "error", err)
+		}
 	}
 
 	return nil
@@ -115,7 +125,8 @@ func (e *EditorTview) createMenu() *forms.MenuListResult {
 		{Label: "TUI Settings", OnSelect: e.editTUI},
 		{Label: "Auth Settings", OnSelect: e.editAuth},
 		{Label: "Users", OnSelect: func() {
-			L_info("editor: users - not implemented yet")
+			e.chainUserEditor = true
+			e.app.Stop()
 		}},
 		{Label: "Browser", OnSelect: func() {
 			L_info("editor: browser - not implemented yet")
