@@ -38,6 +38,7 @@ require (
 )
 
 require (
+	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/JohannesKaufmann/dom v0.2.0 // indirect
 	github.com/alphacep/vosk-api/go v0.3.50 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect

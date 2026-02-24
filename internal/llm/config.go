@@ -35,7 +35,7 @@ type ThinkingConfig struct {
 // LLMProviderConfig is the configuration for a single provider instance.
 // This is the canonical type used by both config loading and the LLM registry.
 type LLMProviderConfig struct {
-	Type           string `json:"type"`                     // "anthropic", "openai", "ollama", "xai"
+	Driver         string `json:"driver"`                    // "anthropic", "openai", "ollama", "xai"
 	Subtype        string `json:"subtype,omitempty"`        // Hint for UI: "openrouter", "lmstudio", etc.
 	APIKey         string `json:"apiKey,omitempty"`         // For cloud providers
 	BaseURL        string `json:"baseURL,omitempty"`        // For OpenAI-compatible endpoints
@@ -300,10 +300,10 @@ func handleTestConnection(cmd bus.Command) bus.CommandResult {
 		}
 	}
 
-	if cfg.Type == "" {
+	if cfg.Driver == "" {
 		return bus.CommandResult{
-			Error:   fmt.Errorf("provider type is required"),
-			Message: "Select a provider type first",
+			Error:   fmt.Errorf("provider driver is required"),
+			Message: "Select a provider driver first",
 		}
 	}
 
@@ -327,14 +327,14 @@ func handleTestConnection(cmd bus.Command) bus.CommandResult {
 	defer cancel()
 
 	if err := tester.TestConnection(ctx); err != nil {
-		L_warn("llm: test connection failed", "type", cfg.Type, "error", err)
+		L_warn("llm: test connection failed", "driver", cfg.Driver, "error", err)
 		return bus.CommandResult{
 			Error:   err,
 			Message: fmt.Sprintf("Connection failed: %s", err),
 		}
 	}
 
-	L_info("llm: test connection successful", "type", cfg.Type)
+	L_info("llm: test connection successful", "driver", cfg.Driver)
 	return bus.CommandResult{
 		Success: true,
 		Message: "Connection successful",

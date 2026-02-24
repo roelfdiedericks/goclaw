@@ -1,4 +1,4 @@
-.PHONY: build run debug trace clean install test lint audit install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release deps deps-check
+.PHONY: build run debug trace clean install test lint audit install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release deps deps-check metadata
 
 BINARY := goclaw
 
@@ -36,6 +36,9 @@ export LIBRARY_PATH := $(WHISPER_LIB)
 
 build:
 	go build -o $(BINARY) ./cmd/goclaw
+
+metadata:
+	go run ./cmd/metamerge --format
 
 test:
 	go test -v -vet=off ./...

@@ -34,3 +34,6 @@ ref/
 
 # Skills sparse checkout temp directory
 .skills-upstream/
+
+# Generated metadata fetch cache
+internal/metadata/.cache/
