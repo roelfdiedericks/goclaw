@@ -2,7 +2,6 @@
 package setup
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/roelfdiedericks/goclaw/internal/auth"
@@ -19,6 +18,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
+	"github.com/roelfdiedericks/goclaw/internal/stt"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
 )
 
@@ -56,6 +56,7 @@ func (e *EditorTview) Run() error {
 	auth.RegisterCommands()
 	gateway.RegisterCommands()
 	transcript.RegisterCommands()
+	stt.RegisterCommands()
 
 	// Create UI
 	e.app = forms.NewTviewApp("GoClaw Configuration")
@@ -71,9 +72,6 @@ func (e *EditorTview) Run() error {
 	if err := e.app.RunWithCleanup(); err != nil {
 		return err
 	}
-
-	// Print config on exit (for testing)
-	e.printConfig()
 
 	return nil
 }
@@ -109,6 +107,7 @@ func (e *EditorTview) createMenu() *forms.MenuListResult {
 		{Label: "HTTP Server", OnSelect: e.editHTTP},
 		{IsSeparator: true, Label: "Services"},
 		{Label: "Transcript Indexing", OnSelect: e.editTranscript},
+		{Label: "Speech-to-Text (STT)", OnSelect: e.editSTT},
 		{Label: "Skills", OnSelect: e.editSkills},
 		{Label: "Cron Jobs", OnSelect: e.editCron},
 		{IsSeparator: true, Label: "System"},
@@ -163,7 +162,7 @@ func (e *EditorTview) editTranscript() {
 
 	// Build inline form content
 	content, err := forms.BuildFormContent(formDef, &transcriptCfg, "transcript", func(result forms.TviewResult) {
-		if result == forms.ResultSaved {
+		if result == forms.ResultAccepted {
 			e.cfg.Transcript = transcriptCfg
 			e.dirty = true
 			L_info("editor: transcript config updated")
@@ -193,7 +192,7 @@ func (e *EditorTview) editTelegram() {
 
 	// Build inline form content
 	content, err := forms.BuildFormContent(formDef, &telegramCfg, "channels.telegram", func(result forms.TviewResult) {
-		if result == forms.ResultSaved {
+		if result == forms.ResultAccepted {
 			e.cfg.Channels.Telegram = telegramCfg
 			e.dirty = true
 			L_info("editor: telegram config updated")
@@ -219,7 +218,7 @@ func (e *EditorTview) editHTTP() {
 	formDef := httpconfig.ConfigFormDef()
 
 	content, err := forms.BuildFormContent(formDef, &httpCfg, "channels.http", func(result forms.TviewResult) {
-		if result == forms.ResultSaved {
+		if result == forms.ResultAccepted {
 			e.cfg.Channels.HTTP = httpCfg
 			e.dirty = true
 			L_info("editor: HTTP config updated")
@@ -245,7 +244,7 @@ func (e *EditorTview) editMedia() {
 	formDef := media.ConfigFormDef()
 
 	content, err := forms.BuildFormContent(formDef, &mediaCfg, "media", func(result forms.TviewResult) {
-		if result == forms.ResultSaved {
+		if result == forms.ResultAccepted {
 			e.cfg.Media = mediaCfg
 			e.dirty = true
 			L_info("editor: media config updated")
@@ -263,6 +262,33 @@ func (e *EditorTview) editMedia() {
 	e.app.SetFormContent(content)
 }
 
+// editSTT opens the STT configuration form
+func (e *EditorTview) editSTT() {
+	L_info("editor: opening STT config")
+
+	sttCfg := e.cfg.STT
+	// Pass current modelsDir to scan for available whisper models
+	formDef := stt.ConfigFormDef(sttCfg.WhisperCpp.ModelsDir)
+
+	content, err := forms.BuildFormContent(formDef, &sttCfg, "stt", func(result forms.TviewResult) {
+		if result == forms.ResultAccepted {
+			e.cfg.STT = sttCfg
+			e.dirty = true
+			L_info("editor: STT config updated")
+		} else {
+			L_info("editor: STT config cancelled")
+		}
+		e.showMainMenu()
+	}, e.app.App())
+	if err != nil {
+		L_error("editor: STT form error", "error", err)
+		return
+	}
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Speech-to-Text"})
+	e.app.SetFormContent(content)
+}
+
 // editTUI opens the TUI settings configuration form
 func (e *EditorTview) editTUI() {
 	L_info("editor: opening TUI config")
@@ -271,7 +297,7 @@ func (e *EditorTview) editTUI() {
 	formDef := tuiconfig.ConfigFormDef()
 
 	content, err := forms.BuildFormContent(formDef, &tuiCfg, "channels.tui", func(result forms.TviewResult) {
-		if result == forms.ResultSaved {
+		if result == forms.ResultAccepted {
 			e.cfg.Channels.TUI = tuiCfg
 			e.dirty = true
 			L_info("editor: TUI config updated")
@@ -297,7 +323,7 @@ func (e *EditorTview) editSession() {
 	formDef := session.ConfigFormDef()
 
 	content, err := forms.BuildFormContent(formDef, &sessionCfg, "session", func(result forms.TviewResult) {
-		if result == forms.ResultSaved {
+		if result == forms.ResultAccepted {
 			e.cfg.Session = sessionCfg
 			e.dirty = true
 			L_info("editor: session config updated")
@@ -323,7 +349,7 @@ func (e *EditorTview) editSkills() {
 	formDef := skills.ConfigFormDef()
 
 	content, err := forms.BuildFormContent(formDef, &skillsCfg, "skills", func(result forms.TviewResult) {
-		if result == forms.ResultSaved {
+		if result == forms.ResultAccepted {
 			e.cfg.Skills = skillsCfg
 			e.dirty = true
 			L_info("editor: skills config updated")
@@ -349,7 +375,7 @@ func (e *EditorTview) editCron() {
 	formDef := cron.ConfigFormDef()
 
 	content, err := forms.BuildFormContent(formDef, &cronCfg, "cron", func(result forms.TviewResult) {
-		if result == forms.ResultSaved {
+		if result == forms.ResultAccepted {
 			e.cfg.Cron = cronCfg
 			e.dirty = true
 			L_info("editor: cron config updated")
@@ -375,7 +401,7 @@ func (e *EditorTview) editAuth() {
 	formDef := auth.ConfigFormDef()
 
 	content, err := forms.BuildFormContent(formDef, &authCfg, "auth", func(result forms.TviewResult) {
-		if result == forms.ResultSaved {
+		if result == forms.ResultAccepted {
 			e.cfg.Auth = authCfg
 			e.dirty = true
 			L_info("editor: auth config updated")
@@ -407,7 +433,7 @@ func (e *EditorTview) editGateway() {
 	formDef := gateway.ConfigFormDef()
 
 	content, err := forms.BuildFormContent(formDef, &gatewayCfg, "gateway", func(result forms.TviewResult) {
-		if result == forms.ResultSaved {
+		if result == forms.ResultAccepted {
 			e.cfg.Gateway = gatewayCfg.Gateway
 			e.cfg.Agent = gatewayCfg.Agent
 			e.cfg.PromptCache = gatewayCfg.PromptCache
@@ -541,29 +567,28 @@ func (e *EditorTview) restoreBackup(configPath string, backupIndex int) {
 
 // confirmExit handles exit with unsaved changes check
 func (e *EditorTview) confirmExit() {
-	if e.dirty {
-		L_warn("editor: exiting with unsaved changes")
-	}
-	e.app.Stop()
-}
-
-// printConfig prints the current config as JSON (for testing)
-func (e *EditorTview) printConfig() {
 	if !e.dirty {
-		fmt.Println("\nNo changes made.")
+		e.app.Stop()
 		return
 	}
 
-	fmt.Println("\n=== Configuration (would be saved) ===")
-
-	data, err := json.MarshalIndent(e.cfg, "", "  ")
-	if err != nil {
-		fmt.Printf("Error marshaling config: %v\n", err)
-		return
-	}
-
-	fmt.Println(string(data))
-	fmt.Println("\n(Note: Not actually saved during testing)")
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Unsaved Changes"})
+	e.app.SetStatusText("You have unsaved changes")
+	e.app.SetMenuContent(forms.NewMenuList(forms.MenuListConfig{
+		Items: []forms.MenuItem{
+			{Label: "Save & Exit", OnSelect: func() {
+				e.saveConfig()
+				e.app.Stop()
+			}},
+			{Label: "Discard & Exit", OnSelect: func() {
+				L_warn("editor: discarding unsaved changes")
+				e.app.Stop()
+			}},
+			{IsSeparator: true},
+			{Label: "Back", OnSelect: e.showMainMenu},
+		},
+		OnBack: e.showMainMenu,
+	}))
 }
 
 // RunEditorTview is the entry point for the tview editor

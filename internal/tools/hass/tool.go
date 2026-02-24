@@ -91,7 +91,7 @@ REST Actions:
 - state: Get single entity state (requires entity)
 - states: List all entity states (optional filter glob, optional class for exact device_class match)
 - call: Call a service (requires service like "light.turn_on", optional entity and data)
-- camera: Get camera snapshot (requires entity, optional filename/timestamp). Image is returned in tool result - describe what you see and show it to the user with {{media:path}}
+- camera: Get camera snapshot (requires entity, optional filename/timestamp). Returns {"images": ["path"]} and you can see the image - describe what you see and show it to the user with {{media:path}}
 - services: List available services (optional domain filter)
 - history: Get state history (requires entity, optional hours/start/end/minimal)
 
@@ -246,7 +246,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	case "call":
 		result, err = t.callService(ctx, in)
 	case "camera":
-		absPath, mimeType, cameraErr := t.getCamera(ctx, in)
+		absPath, relPath, mimeType, cameraErr := t.getCamera(ctx, in)
 		if cameraErr != nil {
 			// Return error as tool result (not Go error) so agent sees it
 			if hassErr, ok := cameraErr.(*Error); ok {
@@ -256,7 +256,12 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 			}
 			return types.TextResult(strResult), nil
 		}
-		return types.ImageRefResult(absPath, mimeType, in.Entity), nil
+		// Return JSON with images array for consistency across image tools
+		jsonResult, _ := json.Marshal(map[string]any{
+			"images": []string{relPath},
+			"entity": in.Entity,
+		})
+		return types.ImageRefResult(absPath, mimeType, string(jsonResult)), nil
 	case "services":
 		result, err = t.getServices(ctx, in)
 	case "history":
@@ -450,21 +455,21 @@ func (t *Tool) callService(ctx context.Context, in hassInput) (json.RawMessage, 
 }
 
 // getCamera captures a camera snapshot and saves it to media storage.
-// Returns the absolute path and MIME type for image reference.
-func (t *Tool) getCamera(ctx context.Context, in hassInput) (absPath, mimeType string, err error) {
+// Returns absolute path (for ContentBlock), relative path (for {{media:...}}), and MIME type.
+func (t *Tool) getCamera(ctx context.Context, in hassInput) (absPath, relPath, mimeType string, err error) {
 	if in.Entity == "" {
-		return "", "", fmt.Errorf("entity is required for camera action")
+		return "", "", "", fmt.Errorf("entity is required for camera action")
 	}
 
 	if t.mediaStore == nil {
-		return "", "", fmt.Errorf("media store not configured")
+		return "", "", "", fmt.Errorf("media store not configured")
 	}
 
 	// Get camera image
 	path := fmt.Sprintf("/api/camera_proxy/%s", url.PathEscape(in.Entity))
 	imageData, contentType, err := t.client.GetBinary(ctx, path)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 
 	// Determine extension and MIME type from content type
@@ -496,18 +501,21 @@ func (t *Tool) getCamera(ctx context.Context, in hassInput) (absPath, mimeType s
 	// Ensure camera subdirectory exists
 	cameraDir := filepath.Join(t.mediaStore.BaseDir(), "camera")
 	if err := os.MkdirAll(cameraDir, 0700); err != nil {
-		return "", "", fmt.Errorf("failed to create camera directory: %v", err)
+		return "", "", "", fmt.Errorf("failed to create camera directory: %v", err)
 	}
 
 	// Save file
 	absPath = filepath.Join(cameraDir, filename)
 	if err := os.WriteFile(absPath, imageData, 0600); err != nil {
-		return "", "", fmt.Errorf("failed to save image: %v", err)
+		return "", "", "", fmt.Errorf("failed to save image: %v", err)
 	}
 
-	L_info("hass: camera snapshot saved", "entity", in.Entity, "path", absPath, "size", len(imageData))
+	// Return relative path for media reference (camera/filename.jpg)
+	relPath = "camera/" + filename
 
-	return absPath, mimeType, nil
+	L_info("hass: camera snapshot saved", "entity", in.Entity, "path", relPath, "size", len(imageData))
+
+	return absPath, relPath, mimeType, nil
 }
 
 // getServices retrieves available services.

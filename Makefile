@@ -1,4 +1,4 @@
-.PHONY: build run debug trace clean install test lint audit install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release
+.PHONY: build run debug trace clean install test lint audit install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release deps deps-check
 
 BINARY := goclaw
 
@@ -27,8 +27,12 @@ OPENCLAW_REPO := https://github.com/openclaw/openclaw.git
 SKILLS_TMP := .skills-upstream
 
 # CGO flags for SQLite FTS5 support (required for memory search)
-export CGO_CFLAGS := -DSQLITE_ENABLE_FTS5
-export CGO_LDFLAGS := -lm
+# and Whisper.cpp STT support (optional, run 'make deps' first)
+WHISPER_LIB := $(HOME)/.goclaw/lib/whisper
+export CGO_CFLAGS := -DSQLITE_ENABLE_FTS5 -I$(WHISPER_LIB)
+export CGO_LDFLAGS := -L$(WHISPER_LIB) $(WHISPER_LIB)/libwhisper.a $(WHISPER_LIB)/libggml.a $(WHISPER_LIB)/libggml-base.a $(WHISPER_LIB)/libggml-cpu.a -lm -lstdc++ -fopenmp -lpthread
+export C_INCLUDE_PATH := $(WHISPER_LIB)
+export LIBRARY_PATH := $(WHISPER_LIB)
 
 build:
 	go build -o $(BINARY) ./cmd/goclaw
@@ -54,6 +58,46 @@ clean:
 
 install: build
 	cp $(BINARY) ~/bin/$(BINARY)
+
+# =============================================================================
+# Dependencies (run once per machine)
+# =============================================================================
+
+WHISPER_VERSION := 1.8.3
+
+# Build whisper.cpp from source for STT support (static libraries)
+deps:
+	@echo "Building whisper.cpp $(WHISPER_VERSION) (static)..."
+	@mkdir -p $(WHISPER_LIB)
+	@if [ ! -f $(WHISPER_LIB)/libwhisper.a ]; then \
+		echo "Cloning whisper.cpp..."; \
+		rm -rf /tmp/whisper.cpp; \
+		git clone --depth 1 -b v$(WHISPER_VERSION) https://github.com/ggerganov/whisper.cpp /tmp/whisper.cpp; \
+		echo "Building static libraries (CPU-only)..."; \
+		cd /tmp/whisper.cpp && cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF && cmake --build build -j$$(nproc); \
+		echo "Installing to $(WHISPER_LIB)..."; \
+		cp /tmp/whisper.cpp/build/src/libwhisper.a $(WHISPER_LIB)/; \
+		cp /tmp/whisper.cpp/build/ggml/src/libggml*.a $(WHISPER_LIB)/; \
+		cp /tmp/whisper.cpp/include/whisper.h $(WHISPER_LIB)/; \
+		cp /tmp/whisper.cpp/ggml/include/*.h $(WHISPER_LIB)/; \
+		rm -rf /tmp/whisper.cpp; \
+		echo "whisper.cpp installed to $(WHISPER_LIB)"; \
+	else \
+		echo "whisper.cpp already installed"; \
+	fi
+	@echo ""
+	@echo "Next: Download a Whisper model to ~/.goclaw/stt/whisper/"
+	@echo "  Tiny English (39MB):  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
+	@echo "  Base English (142MB): https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
+	@echo "  Small English (466MB): https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin"
+
+deps-check:
+	@if [ -f $(WHISPER_LIB)/libwhisper.a ]; then \
+		echo "OK: whisper.cpp installed at $(WHISPER_LIB)"; \
+	else \
+		echo "FAIL: whisper.cpp not found. Run: make deps"; \
+		exit 1; \
+	fi
 
 # Daemon shortcuts
 start: build

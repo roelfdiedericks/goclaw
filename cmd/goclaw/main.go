@@ -43,6 +43,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/setup"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
+	"github.com/roelfdiedericks/goclaw/internal/stt"
 	"github.com/roelfdiedericks/goclaw/internal/supervisor"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
 	"github.com/roelfdiedericks/goclaw/internal/tools/exec"
@@ -1615,9 +1616,8 @@ func openMemoryDB(cfg *config.Config) (*sql.DB, error) {
 // SetupCmd is the interactive setup wizard
 type SetupCmd struct {
 	Auto     SetupAutoCmd     `cmd:"" default:"withargs" help:"Run setup (auto-detect mode)"`
-	Wizard   SetupWizardCmd   `cmd:"wizard" help:"Run full setup wizard (even if config exists)"`
-	Edit     SetupEditCmd     `cmd:"edit" help:"Edit existing configuration"`
-	Editor   SetupEditorCmd   `cmd:"editor" help:"Edit config (new tview UI)"`
+	Wizard SetupWizardCmd `cmd:"wizard" help:"Run full setup wizard (even if config exists)"`
+	Edit   SetupEditCmd   `cmd:"edit" help:"Edit existing configuration"`
 	Generate SetupGenerateCmd `cmd:"generate" help:"Output default config template to stdout"`
 }
 
@@ -1640,13 +1640,6 @@ type SetupEditCmd struct{}
 
 func (s *SetupEditCmd) Run(ctx *Context) error {
 	return setup.RunEdit()
-}
-
-// SetupEditorCmd runs the new tview-based editor
-type SetupEditorCmd struct{}
-
-func (s *SetupEditorCmd) Run(ctx *Context) error {
-	return setup.RunEditorTview()
 }
 
 // SetupGenerateCmd outputs default config template
@@ -1965,6 +1958,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	gateway.RegisterCommands()
 	transcript.RegisterCommands()
 	llm.RegisterCommands()
+	stt.RegisterCommands()
 	L_debug("config commands registered")
 
 	// Setup context with cancellation for graceful shutdown

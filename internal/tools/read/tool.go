@@ -34,7 +34,7 @@ func (t *Tool) Name() string {
 }
 
 func (t *Tool) Description() string {
-	return "Read the contents of a file. Returns the file contents as text. For images (jpeg, png, gif, webp), the image is returned in tool result - describe what you see and show it to the user with {{media:path}}."
+	return "Read the contents of a file. For text files, returns the file contents. For images (jpeg, png, gif, webp), returns {\"images\": [\"path\"]} and you can see the image in context - describe what you see and show it to the user with {{media:path}}."
 }
 
 func (t *Tool) Schema() map[string]any {
@@ -106,10 +106,14 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	// Detect MIME type from content (not extension)
 	mimeType := media.DetectMIME(content)
 
-	// If it's a supported image type, return as image reference
+	// If it's a supported image type, return as image reference with JSON
 	if media.IsSupported(mimeType) {
 		L_info("read tool: image detected", "path", params.Path, "mimeType", mimeType, "bytes", len(content))
-		return types.ImageRefResult(resolvedPath, mimeType, params.Path), nil
+		// Return JSON with images array for consistency with other image tools
+		jsonResult, _ := json.Marshal(map[string]any{
+			"images": []string{params.Path},
+		})
+		return types.ImageRefResult(resolvedPath, mimeType, string(jsonResult)), nil
 	}
 
 	// Otherwise treat as text

@@ -1289,31 +1289,42 @@ func convertToOpenAIMessages(messages []types.Message) ([]openai.ChatCompletionM
 				pendingReasoning = ""
 			}
 
-			// Handle images from ContentBlocks (already resolved by gateway)
-			var imageParts []openai.ChatMessagePart
+			// Handle ContentBlocks (text, images)
+			// Note: audio blocks are converted to text by gateway's resolveMediaContent
+			var multiParts []openai.ChatMessagePart
 			for _, block := range msg.ContentBlocks {
-				if block.Type == "image" && block.Data != "" {
-					dataURL := fmt.Sprintf("data:%s;base64,%s", block.MimeType, block.Data)
-					imageParts = append(imageParts, openai.ChatMessagePart{
-						Type: openai.ChatMessagePartTypeImageURL,
-						ImageURL: &openai.ChatMessageImageURL{
-							URL:    dataURL,
-							Detail: openai.ImageURLDetailAuto,
-						},
-					})
+				switch block.Type {
+				case "text":
+					if block.Text != "" {
+						multiParts = append(multiParts, openai.ChatMessagePart{
+							Type: openai.ChatMessagePartTypeText,
+							Text: block.Text,
+						})
+					}
+				case "image":
+					if block.Data != "" {
+						dataURL := fmt.Sprintf("data:%s;base64,%s", block.MimeType, block.Data)
+						multiParts = append(multiParts, openai.ChatMessagePart{
+							Type: openai.ChatMessagePartTypeImageURL,
+							ImageURL: &openai.ChatMessageImageURL{
+								URL:    dataURL,
+								Detail: openai.ImageURLDetailAuto,
+							},
+						})
+					}
 				}
 			}
-			if len(imageParts) > 0 {
-				// Add text if present
+			if len(multiParts) > 0 {
+				// Add main content text if present
 				if msg.Content != "" {
-					imageParts = append(imageParts, openai.ChatMessagePart{
+					multiParts = append(multiParts, openai.ChatMessagePart{
 						Type: openai.ChatMessagePartTypeText,
 						Text: msg.Content,
 					})
 				}
 				result = append(result, openai.ChatCompletionMessage{
 					Role:         openai.ChatMessageRoleUser,
-					MultiContent: imageParts,
+					MultiContent: multiParts,
 				})
 			} else if msg.Content != "" {
 				result = append(result, openai.ChatCompletionMessage{

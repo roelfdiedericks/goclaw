@@ -313,7 +313,7 @@ func (e *LLMEditor) editProvider(name string, cfg *llm.LLMProviderConfig) {
 	formDef := llm.ProviderConfigFormDef()
 
 	content, err := forms.BuildFormContent(formDef, cfg, "llm", func(result forms.TviewResult) {
-		if result == forms.ResultSaved {
+		if result == forms.ResultAccepted {
 			e.cfg.Providers[name] = *cfg
 			e.onSave()
 			L_info("llm editor: provider updated", "name", name)
@@ -477,7 +477,7 @@ func (e *LLMEditor) finishAddProvider(name string, cfg *llm.LLMProviderConfig) {
 	formDef := llm.ProviderConfigFormDef()
 
 	content, err := forms.BuildFormContent(formDef, cfg, "llm", func(result forms.TviewResult) {
-		if result == forms.ResultSaved {
+		if result == forms.ResultAccepted {
 			if e.cfg.Providers == nil {
 				e.cfg.Providers = make(map[string]llm.LLMProviderConfig)
 			}
@@ -514,7 +514,7 @@ func (e *LLMEditor) editPurpose(name string, cfg *llm.LLMPurposeConfig) {
 	}
 
 	content, err := forms.BuildFormContent(formDef, cfg, "llm", func(result forms.TviewResult) {
-		if result == forms.ResultSaved {
+		if result == forms.ResultAccepted {
 			e.onSave()
 			L_info("llm editor: purpose updated", "name", name)
 		}
@@ -542,7 +542,7 @@ func (e *LLMEditor) editSystemPrompt() {
 	formDef := llm.SystemPromptFormDef()
 
 	content, err := forms.BuildFormContent(formDef, wrapper, "llm", func(result forms.TviewResult) {
-		if result == forms.ResultSaved {
+		if result == forms.ResultAccepted {
 			e.cfg.SystemPrompt = wrapper.SystemPrompt
 			e.onSave()
 			L_info("llm editor: system prompt updated")
@@ -565,7 +565,7 @@ func (e *LLMEditor) editThinking() {
 	formDef := llm.ThinkingFormDef()
 
 	content, err := forms.BuildFormContent(formDef, &e.cfg.Thinking, "llm", func(result forms.TviewResult) {
-		if result == forms.ResultSaved {
+		if result == forms.ResultAccepted {
 			e.onSave()
 			L_info("llm editor: thinking config updated")
 		}

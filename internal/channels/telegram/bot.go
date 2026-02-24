@@ -518,20 +518,21 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	}
 
 	// Save to media store
-	var absPath string
+	var absPath, relPath string
 	if b.gateway != nil && b.gateway.MediaStore() != nil {
 		var err error
-		absPath, _, err = b.gateway.MediaStore().Save(voiceData, "voice", ext)
+		absPath, relPath, err = b.gateway.MediaStore().Save(voiceData, "voice", ext)
 		if err != nil {
 			logging.L_error("telegram: failed to save voice file", "error", err)
 			return c.Send("Sorry, I couldn't save that voice message.")
 		}
-		logging.L_debug("telegram: voice saved", "path", absPath)
+		logging.L_debug("telegram: voice saved", "path", absPath, "relPath", relPath)
 	} else {
 		logging.L_warn("telegram: no media store, voice will be stored inline")
 	}
 
 	// Create audio content block with file reference
+	// Gateway's resolveMediaContent will handle STT transcription
 	audioBlock := types.ContentBlock{
 		Type:     "audio",
 		FilePath: absPath,
@@ -543,13 +544,14 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	// Get caption (if any) as additional context
 	caption := c.Message().Caption
 	if caption == "" {
-		caption = "<media:voice>" // Placeholder
+		caption = "[Voice note received]"
 	}
 
 	// Get chat preferences for thinking level
 	prefs := b.getChatPrefs(chatID, u)
 
 	// Create agent request with audio content block
+	// STT transcription happens in gateway's resolveMediaContent
 	req := gateway.AgentRequest{
 		User:           u,
 		Source:         "telegram",

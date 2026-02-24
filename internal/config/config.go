@@ -21,6 +21,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
+	"github.com/roelfdiedericks/goclaw/internal/stt"
 	toolsconfig "github.com/roelfdiedericks/goclaw/internal/tools/config"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
 	"github.com/roelfdiedericks/goclaw/internal/user"
@@ -153,6 +154,7 @@ type Config struct {
 	Transcript    transcript.TranscriptConfig `json:"transcript"`
 	PromptCache   gwtypes.PromptCacheConfig   `json:"promptCache"`
 	Media         media.MediaConfig           `json:"media"`
+	STT           stt.Config                  `json:"stt"`
 	Skills        skills.SkillsConfig         `json:"skills"`
 	Cron          cron.CronConfig             `json:"cron"`
 	Supervision   gwtypes.SupervisionConfig   `json:"supervision"`
@@ -362,6 +364,14 @@ func Load() (*LoadResult, error) {
 			Dir:     "media",         // Relative to workspace (resolved in gateway)
 			TTL:     600,             // 10 minutes (more generous than OpenClaw's 2 min)
 			MaxSize: 5 * 1024 * 1024, // 5MB
+		},
+		STT: stt.Config{
+			Provider: "whispercpp", // Whisper.cpp enabled by default (requires model to work)
+			WhisperCpp: stt.WhisperCppConfig{
+				ModelsDir: "~/.goclaw/stt/whisper", // Default models directory
+				Model:     "",                      // Select via 'goclaw setup edit'
+				Language:  "en",
+			},
 		},
 		Channels: ChannelsConfig{
 			TUI: tuiconfig.Config{
@@ -600,6 +610,11 @@ func mergeConfigSelective(dst, src *Config, rawMap map[string]interface{}) error
 	}
 	if _, ok := rawMap["media"]; ok {
 		if err := mergo.Merge(&dst.Media, src.Media, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if _, ok := rawMap["stt"]; ok {
+		if err := mergo.Merge(&dst.STT, src.STT, mergo.WithOverride); err != nil {
 			return err
 		}
 	}

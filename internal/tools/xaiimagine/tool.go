@@ -65,7 +65,7 @@ func (t *Tool) Name() string {
 }
 
 func (t *Tool) Description() string {
-	return "Generate images using xAI's Grok image generation. Image is returned in tool result - you can see it, describe it, and deliver to user with {{media:path}}. Use for creating illustrations, diagrams, artwork, etc."
+	return "Generate images using xAI's Grok image generation. Returns {\"images\": [\"path\", ...]} and you can see the images - describe them and deliver to user with {{media:path}}. Use for creating illustrations, diagrams, artwork, etc."
 }
 
 func (t *Tool) Schema() map[string]any {
@@ -231,6 +231,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	// Execute request
 	resp, err := t.client.GenerateImage(ctx, req)
 	if err != nil {
+		L_error("xai_imagine: API call failed",
+			"error", err,
+			"model", t.getModel(params.Model),
+			"promptPreview", params.Prompt[:min(50, len(params.Prompt))],
+		)
 		return nil, fmt.Errorf("image generation failed: %w", err)
 	}
 
@@ -238,10 +243,10 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		return nil, fmt.Errorf("no images generated")
 	}
 
-	// Process results - build content blocks
+	// Process results - build content blocks and collect paths
 	var blocks []types.ContentBlock
-	var savedCount int
-	var textResults []string
+	var savedPaths []string
+	var urlResults []string
 
 	for i, img := range resp.Images {
 		if img.URL == "" {
@@ -253,33 +258,36 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 			absPath, relPath, mimeType, err := t.downloadAndSave(ctx, img.URL, i)
 			if err != nil {
 				L_warn("xai_imagine: failed to save image", "error", err)
-				textResults = append(textResults, fmt.Sprintf("Image %d: %s (save failed: %v)", i+1, img.URL, err))
+				urlResults = append(urlResults, img.URL)
 			} else {
 				// Add image block so agent can "see" the generated image
 				blocks = append(blocks, types.ImageBlock(absPath, mimeType, "xai_imagine"))
-				// Also track for MEDIA: delivery to user
-				textResults = append(textResults, fmt.Sprintf("MEDIA:%s", relPath))
-				savedCount++
+				savedPaths = append(savedPaths, relPath)
 			}
 		} else {
-			textResults = append(textResults, fmt.Sprintf("Image %d: %s", i+1, img.URL))
+			urlResults = append(urlResults, img.URL)
 		}
 	}
 
 	L_info("xai_imagine: generated",
 		"count", len(resp.Images),
-		"saved", savedCount,
+		"saved", len(savedPaths),
 	)
 
-	// Build summary text block
-	summary := fmt.Sprintf("Generated %d image(s):", len(textResults))
-	if len(textResults) > 0 {
-		summary += "\n" + strings.Join(textResults, "\n")
+	// Build JSON result for consistency with other image tools
+	jsonData := map[string]any{
+		"images": savedPaths,
+		"count":  len(savedPaths),
+		"prompt": params.Prompt,
 	}
+	if len(urlResults) > 0 {
+		jsonData["urls"] = urlResults
+	}
+	jsonResult, _ := json.Marshal(jsonData)
 
-	// Prepend text summary, then image blocks
+	// Prepend JSON text, then image blocks
 	result := &types.ToolResult{
-		Content: append([]types.ContentBlock{types.TextBlock(summary)}, blocks...),
+		Content: append([]types.ContentBlock{types.TextBlock(string(jsonResult))}, blocks...),
 	}
 	return result, nil
 }

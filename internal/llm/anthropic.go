@@ -630,12 +630,21 @@ func convertMessages(messages []types.Message) []anthropic.MessageParam {
 				contentBlocks = append(contentBlocks, anthropic.NewTextBlock(msg.Content))
 			}
 
-			// Add image blocks from ContentBlocks (already resolved by gateway)
+			// Add content blocks (text, image)
+			// Note: audio blocks are converted to text by gateway's resolveMediaContent
 			for _, block := range msg.ContentBlocks {
-				if block.Type == "image" && block.Data != "" {
-					imageBlock := anthropic.NewImageBlockBase64(block.MimeType, block.Data)
-					contentBlocks = append(contentBlocks, imageBlock)
-					L_trace("added image block to message", "mimeType", block.MimeType, "source", block.Source)
+				switch block.Type {
+				case "text":
+					if block.Text != "" {
+						contentBlocks = append(contentBlocks, anthropic.NewTextBlock(block.Text))
+						L_trace("added text block from ContentBlocks", "length", len(block.Text))
+					}
+				case "image":
+					if block.Data != "" {
+						imageBlock := anthropic.NewImageBlockBase64(block.MimeType, block.Data)
+						contentBlocks = append(contentBlocks, imageBlock)
+						L_trace("added image block to message", "mimeType", block.MimeType, "source", block.Source)
+					}
 				}
 			}
 

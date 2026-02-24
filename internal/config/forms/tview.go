@@ -24,7 +24,7 @@ import (
 type TviewResult int
 
 const (
-	ResultSaved TviewResult = iota
+	ResultAccepted TviewResult = iota
 	ResultCancelled
 	ResultError
 )
@@ -58,36 +58,33 @@ func BuildFormContent(def FormDef, value any, component string, onResult func(Tv
 		form:     form,
 	}
 
-	// Add fields for each section
-	for _, section := range def.Sections {
-		// Check ShowWhen condition
-		if section.ShowWhen != "" {
-			if !evaluateShowWhen(section.ShowWhen, rv) {
-				continue // Skip this section
-			}
-		}
+	// Dynamic ShowWhen: detect which fields control section visibility
+	showWhenFields := extractShowWhenFields(def.Sections)
 
-		// Add section header as a separator
-		if section.Title != "" {
-			form.AddTextView(fmt.Sprintf("─── %s ", section.Title), section.Desc, 0, 1, false, false)
+	// rebuildForm clears and repopulates form fields based on current ShowWhen state.
+	// Called directly from dropdown callbacks — safe because event handlers run on
+	// the main goroutine and tview redraws automatically after the handler returns.
+	// See AGENTS.md in this package for deadlock rules.
+	//
+	// Re-entrancy guard: tview's AddDropDown calls SetCurrentOption which fires
+	// the selection callback during form construction. Without this guard,
+	// that triggers an infinite rebuild loop (stack overflow).
+	rebuilding := false
+	var rebuildForm func()
+	rebuildForm = func() {
+		if rebuilding {
+			return
 		}
-
-		// Handle nested FormDef
-		if section.Nested != nil {
-			fieldName := section.FieldName
-			if fieldName == "" {
-				fieldName = section.Title
-			}
-			nestedField := findFieldByPath(rv, fieldName)
-			if nestedField.IsValid() {
-				addFieldsToForm(form, section.Nested.Sections, nestedField)
-			}
-			continue
-		}
-
-		// Add fields
-		addFieldsToForm(form, []Section{section}, rv)
+		rebuilding = true
+		form.Clear(true)
+		populateFormSections(form, def.Sections, rv, showWhenFields, rebuildForm)
+		rebuilding = false
 	}
+
+	// Initial population (guarded)
+	rebuilding = true
+	populateFormSections(form, def.Sections, rv, showWhenFields, rebuildForm)
+	rebuilding = false
 
 	// Check if form has any input fields (not just headers)
 	if form.GetFormItemCount() == 0 {
@@ -117,10 +114,10 @@ func BuildFormContent(def FormDef, value any, component string, onResult func(Tv
 		})
 	}
 
-	// Add Save button
-	buttonBar.AddButton("Save", func() {
+	// Add Accept button
+	buttonBar.AddButton("Accept", func() {
 		if content.OnResult != nil {
-			content.OnResult(ResultSaved)
+			content.OnResult(ResultAccepted)
 		}
 	})
 
@@ -342,37 +339,22 @@ func RenderTview(def FormDef, value any, component string) (TviewResult, error) 
 	// Ensure we clear the hook when done (deferred)
 	defer logging.SetHookExclusive(nil)
 
-	// Add fields for each section
-	for _, section := range def.Sections {
-		// Check ShowWhen condition
-		if section.ShowWhen != "" {
-			if !evaluateShowWhen(section.ShowWhen, rv) {
-				continue // Skip this section
-			}
+	// Dynamic ShowWhen (same pattern as BuildFormContent — see re-entrancy comment there)
+	showWhenFields := extractShowWhenFields(def.Sections)
+	rebuilding := false
+	var rebuildForm func()
+	rebuildForm = func() {
+		if rebuilding {
+			return
 		}
-
-		// Add section header as a separator
-		if section.Title != "" {
-			form.AddTextView(fmt.Sprintf("─── %s ", section.Title), section.Desc, 0, 1, false, false)
-		}
-
-		// Handle nested FormDef
-		if section.Nested != nil {
-			// Use FieldName if specified, otherwise try section title
-			fieldName := section.FieldName
-			if fieldName == "" {
-				fieldName = section.Title
-			}
-			nestedField := findFieldByPath(rv, fieldName)
-			if nestedField.IsValid() {
-				addFieldsToForm(form, section.Nested.Sections, nestedField)
-			}
-			continue
-		}
-
-		// Add fields
-		addFieldsToForm(form, []Section{section}, rv)
+		rebuilding = true
+		form.Clear(true)
+		populateFormSections(form, def.Sections, rv, showWhenFields, rebuildForm)
+		rebuilding = false
 	}
+	rebuilding = true
+	populateFormSections(form, def.Sections, rv, showWhenFields, rebuildForm)
+	rebuilding = false
 
 	// Check if form has any input fields (not just headers)
 	if form.GetFormItemCount() == 0 {
@@ -402,9 +384,9 @@ func RenderTview(def FormDef, value any, component string) (TviewResult, error) 
 		})
 	}
 
-	// Add Save button
-	buttonBar.AddButton("Save", func() {
-		result = ResultSaved
+	// Add Accept button
+	buttonBar.AddButton("Accept", func() {
+		result = ResultAccepted
 		app.Stop()
 	})
 
@@ -570,12 +552,69 @@ func RenderTview(def FormDef, value any, component string) (TviewResult, error) 
 	return result, resultErr
 }
 
+// populateFormSections adds sections to a form, evaluating ShowWhen conditions.
+// If rebuild is non-nil, Select fields that control ShowWhen visibility will
+// call it directly on change. This is safe because dropdown callbacks run on
+// the main goroutine and tview redraws automatically after the handler returns.
+// See AGENTS.md in this package for the deadlock rules.
+func populateFormSections(form *tview.Form, sections []Section, rv reflect.Value, showWhenFields map[string]bool, rebuild func()) {
+	for _, section := range sections {
+		if section.ShowWhen != "" {
+			if !evaluateShowWhen(section.ShowWhen, rv) {
+				continue
+			}
+		}
+
+		if section.Title != "" {
+			form.AddTextView(fmt.Sprintf("─── %s ", section.Title), section.Desc, 0, 1, false, false)
+		}
+
+		if section.Nested != nil {
+			fieldName := section.FieldName
+			if fieldName == "" {
+				fieldName = section.Title
+			}
+			nestedField := findFieldByPath(rv, fieldName)
+			if nestedField.IsValid() {
+				addFieldsToForm(form, section.Nested.Sections, nestedField)
+			}
+			continue
+		}
+
+		for _, field := range section.Fields {
+			fv := findFieldByPath(rv, field.Name)
+			if !fv.IsValid() {
+				logging.L_warn("forms: field not found", "field", field.Name)
+				continue
+			}
+
+			var afterSelect func()
+			if rebuild != nil && showWhenFields[strings.ToLower(field.Name)] {
+				afterSelect = rebuild
+			}
+			addFieldToFormInternal(form, field, fv, afterSelect)
+		}
+	}
+}
+
+// extractShowWhenFields returns lowercased field names referenced in ShowWhen conditions
+func extractShowWhenFields(sections []Section) map[string]bool {
+	fields := make(map[string]bool)
+	for _, section := range sections {
+		if section.ShowWhen != "" {
+			parts := strings.SplitN(section.ShowWhen, "=", 2)
+			if len(parts) == 2 {
+				fields[strings.ToLower(strings.TrimSpace(parts[0]))] = true
+			}
+		}
+	}
+	return fields
+}
+
 // addFieldsToForm adds fields from sections to the tview form
 func addFieldsToForm(form *tview.Form, sections []Section, rv reflect.Value) {
 	for _, section := range sections {
 		for _, field := range section.Fields {
-			// findFieldByPath handles dotted paths like "Gateway.LogFile"
-			// and is case-insensitive for robustness
 			fv := findFieldByPath(rv, field.Name)
 			if !fv.IsValid() {
 				logging.L_warn("forms: field not found", "field", field.Name)
@@ -589,6 +628,13 @@ func addFieldsToForm(form *tview.Form, sections []Section, rv reflect.Value) {
 
 // addFieldToForm adds a single field to the form
 func addFieldToForm(form *tview.Form, field Field, fv reflect.Value) {
+	addFieldToFormInternal(form, field, fv, nil)
+}
+
+// addFieldToFormInternal adds a single field to the form.
+// afterSelect, if non-nil, is called directly after a Select field value changes.
+// Used for dynamic ShowWhen: the callback clears and repopulates the form.
+func addFieldToFormInternal(form *tview.Form, field Field, fv reflect.Value, afterSelect func()) {
 	label := field.Title
 	if field.Desc != "" {
 		label = fmt.Sprintf("%s [gray](%s)", field.Title, truncate(field.Desc, 40))
@@ -696,6 +742,10 @@ func addFieldToForm(form *tview.Form, field Field, fv reflect.Value) {
 				}
 			} else {
 				fv.SetString(val)
+			}
+
+			if afterSelect != nil {
+				afterSelect()
 			}
 		})
 

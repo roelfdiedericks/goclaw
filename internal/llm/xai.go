@@ -692,17 +692,34 @@ func (p *XAIProvider) addMessageToRequest(req *xai.ChatRequest, msg types.Messag
 	switch msg.Role {
 	case "user":
 		// User message with optional image
-		content := xai.UserContent{Text: msg.Content}
-		// Find first image in ContentBlocks (xai-go UserContent only supports one image)
+		// Build text from Content + text ContentBlocks
+		textParts := []string{}
+		if msg.Content != "" {
+			textParts = append(textParts, msg.Content)
+		}
+
+		// Note: audio blocks are converted to text by gateway's resolveMediaContent
+		var imageURL string
 		for _, block := range msg.ContentBlocks {
-			if block.Type == "image" && block.Data != "" {
-				content.ImageURL = "data:" + block.MimeType + ";base64," + block.Data
-				L_info("xai: user message with image",
-					"mimeType", block.MimeType,
-					"dataLen", len(block.Data),
-					"textLen", len(msg.Content))
-				break
+			switch block.Type {
+			case "text":
+				if block.Text != "" {
+					textParts = append(textParts, block.Text)
+				}
+			case "image":
+				// xai-go UserContent only supports one image - use first
+				if block.Data != "" && imageURL == "" {
+					imageURL = "data:" + block.MimeType + ";base64," + block.Data
+					L_info("xai: user message with image",
+						"mimeType", block.MimeType,
+						"dataLen", len(block.Data))
+				}
 			}
+		}
+
+		content := xai.UserContent{Text: strings.Join(textParts, "\n")}
+		if imageURL != "" {
+			content.ImageURL = imageURL
 		}
 		req.UserMessage(content)
 

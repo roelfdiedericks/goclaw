@@ -26,6 +26,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
+	"github.com/roelfdiedericks/goclaw/internal/stt"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 	"github.com/roelfdiedericks/goclaw/internal/user"
@@ -331,6 +332,13 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 			"maxSize", cfg.Media.MaxSize)
 	}
 
+	// Initialize STT provider
+	if err := stt.ApplyConfig(cfg.STT); err != nil {
+		L_warn("stt: failed to initialize", "error", err)
+	} else if stt.GetProvider() != nil {
+		L_info("stt: provider initialized", "provider", stt.GetProvider().Name())
+	}
+
 	// Log memory flush config
 	L_debug("session: memory flush configured",
 		"enabled", cfg.Session.MemoryFlush.Enabled,
@@ -438,11 +446,13 @@ func (g *Gateway) resolveMediaContent(messages []types.Message, provider llm.Pro
 
 	supportsVision := llm.SupportsVision(provider)
 	supportsToolImages := llm.SupportsToolResultImages(provider)
+	sttProvider := stt.GetProvider()
 
 	L_debug("resolveMediaContent: starting",
 		"messageCount", len(messages),
 		"supportsVision", supportsVision,
 		"supportsToolImages", supportsToolImages,
+		"sttEnabled", sttProvider != nil,
 	)
 
 	for i := range resolved {
@@ -476,8 +486,15 @@ func (g *Gateway) resolveMediaContent(messages []types.Message, provider llm.Pro
 				continue
 			}
 
-			// Resolve FilePath to Data for image/audio blocks
-			if (block.Type == "image" || block.Type == "audio") && block.FilePath != "" && block.Data == "" {
+			// Handle audio blocks: transcribe to text if STT is available
+			if block.Type == "audio" && block.FilePath != "" {
+				resolvedBlock := g.resolveAudioBlock(block, sttProvider)
+				resolvedBlocks = append(resolvedBlocks, resolvedBlock)
+				continue
+			}
+
+			// Resolve FilePath to Data for image blocks
+			if block.Type == "image" && block.FilePath != "" && block.Data == "" {
 				data, err := os.ReadFile(block.FilePath)
 				if err != nil {
 					L_warn("gateway: failed to read media file", "path", block.FilePath, "error", err)
@@ -490,7 +507,7 @@ func (g *Gateway) resolveMediaContent(messages []types.Message, provider llm.Pro
 					block.MimeType = media.DetectMIME(data)
 				}
 
-				L_debug("gateway: resolved media", "type", block.Type, "path", block.FilePath, "size", len(data))
+				L_debug("gateway: resolved image", "path", block.FilePath, "size", len(data))
 			}
 
 			resolvedBlocks = append(resolvedBlocks, block)
@@ -507,6 +524,48 @@ func (g *Gateway) resolveMediaContent(messages []types.Message, provider llm.Pro
 	}
 
 	return resolved
+}
+
+// resolveAudioBlock handles audio content blocks, transcribing if STT is available.
+// Returns a text block with JSON containing transcription and metadata.
+func (g *Gateway) resolveAudioBlock(block types.ContentBlock, sttProvider stt.Provider) types.ContentBlock {
+	// Build audio metadata for the JSON response
+	audioMeta := map[string]interface{}{
+		"audio":    []string{block.FilePath},
+		"duration": block.Duration,
+		"source":   block.Source,
+	}
+
+	// Attempt transcription if STT provider is available
+	if sttProvider != nil {
+		L_debug("gateway: transcribing audio", "path", block.FilePath, "provider", sttProvider.Name())
+
+		transcription, err := sttProvider.Transcribe(block.FilePath)
+		if err != nil {
+			L_warn("gateway: STT transcription failed", "path", block.FilePath, "error", err)
+			audioMeta["transcription_error"] = err.Error()
+		} else {
+			audioMeta["transcription"] = transcription
+			L_debug("gateway: transcription complete", "path", block.FilePath, "length", len(transcription))
+		}
+	} else {
+		L_debug("gateway: no STT provider, skipping transcription", "path", block.FilePath)
+	}
+
+	// Convert to JSON text block
+	jsonBytes, err := json.Marshal(audioMeta)
+	if err != nil {
+		L_error("gateway: failed to marshal audio metadata", "error", err)
+		return types.ContentBlock{
+			Type: "text",
+			Text: fmt.Sprintf("[Audio file: %s, duration: %ds]", block.FilePath, block.Duration),
+		}
+	}
+
+	return types.ContentBlock{
+		Type: "text",
+		Text: string(jsonBytes),
+	}
 }
 
 // MemoryManager returns the memory manager
@@ -1292,6 +1351,9 @@ func (g *Gateway) Shutdown() {
 		g.mediaStore.Close()
 	}
 
+	// Close STT provider
+	stt.Close()
+
 	if g.memoryManager != nil {
 		g.memoryManager.Close() //nolint:errcheck // shutdown cleanup
 	}
@@ -1823,69 +1885,69 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				transcriptScope = resolvedRole.GetTranscriptScope()
 			}
 			toolCtx := tools.WithSessionContext(ctx, &tools.SessionContext{
-			Channel:         req.Source,
-			ChatID:          req.ChatID,
-			OwnerChatID:     ownerChatID,
-			User:            req.User,
-			TranscriptScope: transcriptScope,
-			Session:         sess,
-		})
-		toolResult, err := g.tools.Execute(toolCtx, response.ToolName, response.ToolInput)
-		toolDuration := time.Since(toolStartTime)
+				Channel:         req.Source,
+				ChatID:          req.ChatID,
+				OwnerChatID:     ownerChatID,
+				User:            req.User,
+				TranscriptScope: transcriptScope,
+				Session:         sess,
+			})
+			toolResult, err := g.tools.Execute(toolCtx, response.ToolName, response.ToolInput)
+			toolDuration := time.Since(toolStartTime)
 
-		errStr := ""
-		if err != nil {
-			errStr = err.Error()
-			toolResult = types.ErrorResult(err.Error())
-		}
+			errStr := ""
+			if err != nil {
+				errStr = err.Error()
+				toolResult = types.ErrorResult(err.Error())
+			}
 
-		// Get text content for downstream processing
-		resultText := toolResult.GetText()
+			// Get text content for downstream processing
+			resultText := toolResult.GetText()
 
-		// Check for media in tool output
-		if req.OnMediaToSend != nil {
-			parseResult := media.SplitMediaFromOutput(resultText)
-			resultText = parseResult.Text
-			for _, mediaPath := range parseResult.MediaURLs {
-				if mediaErr := req.OnMediaToSend(mediaPath, ""); mediaErr != nil {
-					L_warn("failed to send media", "path", mediaPath, "error", mediaErr)
+			// Check for media in tool output
+			if req.OnMediaToSend != nil {
+				parseResult := media.SplitMediaFromOutput(resultText)
+				resultText = parseResult.Text
+				for _, mediaPath := range parseResult.MediaURLs {
+					if mediaErr := req.OnMediaToSend(mediaPath, ""); mediaErr != nil {
+						L_warn("failed to send media", "path", mediaPath, "error", mediaErr)
+					}
 				}
 			}
-		}
 
-		sendEvent(EventToolEnd{
-			RunID:      runID,
-			ToolName:   response.ToolName,
-			ToolID:     response.ToolUseID,
-			Result:     resultText,
-			Error:      errStr,
-			DurationMs: toolDuration.Milliseconds(),
-		})
+			sendEvent(EventToolEnd{
+				RunID:      runID,
+				ToolName:   response.ToolName,
+				ToolID:     response.ToolUseID,
+				Result:     resultText,
+				Error:      errStr,
+				DurationMs: toolDuration.Milliseconds(),
+			})
 
-		// Add to session and continue loop
-		sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
-		sess.AddToolResult(response.ToolUseID, resultText, toolResult.Content)
+			// Add to session and continue loop
+			sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
+			sess.AddToolResult(response.ToolUseID, resultText, toolResult.Content)
 
-		// Debug: log ContentBlocks being stored
-		if len(toolResult.Content) > 0 {
-			for i, block := range toolResult.Content {
-				L_debug("tool result content block",
-					"tool", response.ToolName,
-					"blockIndex", i,
-					"type", block.Type,
-					"hasFilePath", block.FilePath != "",
-					"hasData", block.Data != "",
-					"mimeType", block.MimeType,
-				)
+			// Debug: log ContentBlocks being stored
+			if len(toolResult.Content) > 0 {
+				for i, block := range toolResult.Content {
+					L_debug("tool result content block",
+						"tool", response.ToolName,
+						"blockIndex", i,
+						"type", block.Type,
+						"hasFilePath", block.FilePath != "",
+						"hasData", block.Data != "",
+						"mimeType", block.MimeType,
+					)
+				}
 			}
+			// Persist tool use and result to SQLite (skip for heartbeat - ephemeral)
+			if !req.IsHeartbeat {
+				g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
+				g.persistMessage(ctx, sessionKey, "tool_result", resultText, req.Source, response.ToolUseID, "", nil, errStr, "", "", "")
+			}
+			continue
 		}
-		// Persist tool use and result to SQLite (skip for heartbeat - ephemeral)
-		if !req.IsHeartbeat {
-			g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
-			g.persistMessage(ctx, sessionKey, "tool_result", resultText, req.Source, response.ToolUseID, "", nil, errStr, "", "", "")
-		}
-		continue
-	}
 
 		// No tool use - we're done
 		finalText = response.Text
