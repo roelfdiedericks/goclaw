@@ -1,48 +1,23 @@
-// Package metadata provides provider metadata for the LLM configuration UI.
+// Package metadata provides model metadata for LLM configuration and runtime.
 package metadata
 
 import (
 	_ "embed"
 	"encoding/json"
-	"os"
+	"sort"
+	"strings"
 	"sync"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/roelfdiedericks/goclaw/internal/paths"
 )
 
-//go:embed providers.json
-var embeddedProviders []byte
+//go:embed models.json
+var embeddedModels []byte
 
-// ProviderMeta contains metadata about an LLM provider type.
-type ProviderMeta struct {
-	Name         string        `json:"name"`
-	Description  string        `json:"description,omitempty"`
-	SignupURL    string        `json:"signupURL,omitempty"`
-	Instructions string        `json:"instructions,omitempty"`
-	DefaultURL   string        `json:"defaultURL,omitempty"` // For Ollama
-	Subtypes     []SubtypeMeta `json:"subtypes"`
-}
-
-// SubtypeMeta contains metadata about a provider subtype (e.g., OpenRouter for openai type).
-type SubtypeMeta struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	Description    string `json:"description,omitempty"`
-	DefaultBaseURL string `json:"defaultBaseURL,omitempty"`
-	SignupURL      string `json:"signupURL,omitempty"`
-	RequiresAPIKey bool   `json:"requiresAPIKey"`
-}
-
-// ProvidersData is the root structure of providers.json.
-type ProvidersData struct {
-	Providers map[string]ProviderMeta `json:"providers"`
-}
-
-// Manager provides access to provider metadata.
+// Manager provides access to model metadata from models.json.
 type Manager struct {
-	data ProvidersData
-	mu   sync.RWMutex
+	models ModelsData
+	mu     sync.RWMutex
 }
 
 var (
@@ -59,106 +34,248 @@ func Get() *Manager {
 	return instance
 }
 
-// load loads metadata from local file or embedded fallback.
+// load loads the embedded models.json data.
 func (m *Manager) load() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	localPath := m.localPath()
-
-	// Try loading from local file first
-	if data, err := os.ReadFile(localPath); err == nil {
-		if err := json.Unmarshal(data, &m.data); err == nil {
-			L_debug("metadata: loaded from local file", "path", localPath)
-			return
-		}
-		L_warn("metadata: failed to parse local file, using embedded", "path", localPath, "error", err)
-	}
-
-	// Fall back to embedded
-	if err := json.Unmarshal(embeddedProviders, &m.data); err != nil {
-		L_error("metadata: failed to parse embedded providers.json", "error", err)
-		m.data = ProvidersData{Providers: make(map[string]ProviderMeta)}
-		return
-	}
-	L_debug("metadata: loaded from embedded")
-
-	// Bootstrap: write to local if it doesn't exist
-	m.bootstrap(localPath)
-}
-
-// bootstrap writes the embedded metadata to the local path if it doesn't exist.
-func (m *Manager) bootstrap(localPath string) {
-	if _, err := os.Stat(localPath); err == nil {
-		return // Already exists
-	}
-
-	if err := paths.EnsureParentDir(localPath); err != nil {
-		L_warn("metadata: failed to create directory", "path", localPath, "error", err)
+	if err := json.Unmarshal(embeddedModels, &m.models); err != nil {
+		L_error("metadata: failed to parse embedded models.json", "error", err)
+		m.models = ModelsData{Providers: make(map[string]*ModelProvider)}
 		return
 	}
 
-	if err := os.WriteFile(localPath, embeddedProviders, 0600); err != nil {
-		L_warn("metadata: failed to write local file", "path", localPath, "error", err)
-		return
+	totalModels := 0
+	for _, p := range m.models.Providers {
+		totalModels += len(p.Models)
 	}
-
-	L_info("metadata: bootstrapped local file", "path", localPath)
+	L_info("metadata: models loaded", "providers", len(m.models.Providers), "models", totalModels)
 }
 
-// localPath returns the path to the local metadata file.
-func (m *Manager) localPath() string {
-	p, _ := paths.DataPath("metadata/providers.json")
-	return p
-}
+// --- Provider-level ---
 
-// GetProvider returns metadata for a provider type.
-func (m *Manager) GetProvider(providerType string) (ProviderMeta, bool) {
+// GetModelProvider returns provider info from models.json.
+func (m *Manager) GetModelProvider(providerID string) (*ModelProvider, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	p, ok := m.data.Providers[providerType]
+	p, ok := m.models.Providers[providerID]
 	return p, ok
 }
 
-// GetAllProviders returns all provider metadata.
-func (m *Manager) GetAllProviders() map[string]ProviderMeta {
+// GetDriver returns the GoClaw driver name for a provider (anthropic/openai/xai/ollama).
+// Returns empty string if the provider is not in models.json.
+func (m *Manager) GetDriver(providerID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	result := make(map[string]ProviderMeta, len(m.data.Providers))
-	for k, v := range m.data.Providers {
-		result[k] = v
+	if p, ok := m.models.Providers[providerID]; ok {
+		return p.Driver
 	}
-	return result
+	return ""
 }
 
-// GetSubtype returns metadata for a specific subtype of a provider.
-func (m *Manager) GetSubtype(providerType, subtypeID string) (SubtypeMeta, bool) {
+// InferProviderByURL matches a base URL against known provider endpoints.
+// Tries exact match first, then hostname-keyword fallback.
+// Returns the provider ID if found, or empty string if no match.
+func (m *Manager) InferProviderByURL(baseURL string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	provider, ok := m.data.Providers[providerType]
-	if !ok {
-		return SubtypeMeta{}, false
-	}
+	baseURL = strings.TrimSuffix(baseURL, "/")
 
-	for _, st := range provider.Subtypes {
-		if st.ID == subtypeID {
-			return st, true
+	// Exact match
+	for id, p := range m.models.Providers {
+		ep := strings.TrimSuffix(p.APIEndpoint, "/")
+		if ep != "" && strings.EqualFold(ep, baseURL) {
+			return id
 		}
 	}
-	return SubtypeMeta{}, false
+
+	// Hostname-keyword fallback: extract hostname and match against provider IDs
+	// and known domain keywords (e.g. "moonshot" in api.moonshot.ai → kimi)
+	lower := strings.ToLower(baseURL)
+	for id, p := range m.models.Providers {
+		ep := strings.ToLower(p.APIEndpoint)
+		if ep == "" {
+			continue
+		}
+
+		// Extract hostnames for comparison
+		idHost := extractHostname(ep)
+		urlHost := extractHostname(lower)
+		if idHost == "" || urlHost == "" {
+			continue
+		}
+
+		// Match if hostnames share a significant keyword
+		// e.g. api.moonshot.cn and api.moonshot.ai both contain "moonshot"
+		idParts := strings.Split(idHost, ".")
+		urlParts := strings.Split(urlHost, ".")
+		for _, ip := range idParts {
+			if len(ip) < 4 || ip == "api" || ip == "com" || ip == "openai" {
+				continue
+			}
+			for _, up := range urlParts {
+				if ip == up {
+					return id
+				}
+			}
+		}
+		_ = p
+	}
+
+	return ""
 }
 
-// ProviderTypes returns the list of available provider type IDs.
-func (m *Manager) ProviderTypes() []string {
+func extractHostname(url string) string {
+	url = strings.TrimPrefix(url, "https://")
+	url = strings.TrimPrefix(url, "http://")
+	if idx := strings.Index(url, "/"); idx != -1 {
+		url = url[:idx]
+	}
+	if idx := strings.Index(url, ":"); idx != -1 {
+		url = url[:idx]
+	}
+	return url
+}
+
+// ModelProviderIDs returns all provider IDs from models.json, sorted.
+func (m *Manager) ModelProviderIDs() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	types := make([]string, 0, len(m.data.Providers))
-	for k := range m.data.Providers {
-		types = append(types, k)
+	ids := make([]string, 0, len(m.models.Providers))
+	for k := range m.models.Providers {
+		ids = append(ids, k)
 	}
-	return types
+	sort.Strings(ids)
+	return ids
+}
+
+// --- Model-level ---
+
+// GetModel returns a single model's metadata.
+// Performs exact match first, then bidirectional prefix matching:
+//   - modelID is a prefix of a metadata ID (claude-opus-4-5 -> claude-opus-4-5-20251101)
+//   - a metadata ID is a prefix of modelID (grok-4 -> grok-4-latest)
+// On multiple prefix matches, the longest (most specific) metadata ID wins.
+func (m *Manager) GetModel(providerID, modelID string) (*Model, bool) {
+	_, model, ok := m.ResolveModel(providerID, modelID)
+	return model, ok
+}
+
+// ResolveModel returns the matched metadata ID, model, and whether a match was found.
+// Use this when you need to know which metadata ID was actually matched (e.g. for display).
+func (m *Manager) ResolveModel(providerID, modelID string) (matchedID string, model *Model, ok bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	p, pok := m.models.Providers[providerID]
+	if !pok {
+		return "", nil, false
+	}
+
+	if model, ok := p.Models[modelID]; ok {
+		return modelID, model, true
+	}
+
+	id, model, ok := m.fuzzyMatchModel(p.Models, modelID)
+	return id, model, ok
+}
+
+// fuzzyMatchModel tries bidirectional prefix matching against the model map.
+func (m *Manager) fuzzyMatchModel(models map[string]*Model, modelID string) (string, *Model, bool) {
+	var bestID string
+	var bestModel *Model
+
+	for id, model := range models {
+		matched := false
+		if strings.HasPrefix(id, modelID) {
+			matched = true
+		} else if strings.HasPrefix(modelID, id) {
+			matched = true
+		}
+
+		if matched {
+			if bestModel == nil || len(id) > len(bestID) {
+				bestID = id
+				bestModel = model
+			}
+		}
+	}
+
+	if bestModel != nil {
+		return bestID, bestModel, true
+	}
+	return "", nil, false
+}
+
+// GetModels returns all models for a provider. Returns nil if provider not found.
+func (m *Manager) GetModels(providerID string) map[string]*Model {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	p, ok := m.models.Providers[providerID]
+	if !ok {
+		return nil
+	}
+	return p.Models
+}
+
+// --- Capability queries ---
+
+// GetContextWindow returns the context window size for a model, or 0 if unknown.
+func (m *Manager) GetContextWindow(providerID, modelID string) int64 {
+	if model, ok := m.GetModel(providerID, modelID); ok {
+		return model.ContextWindow
+	}
+	return 0
+}
+
+// SupportsVision returns whether a model supports image input.
+func (m *Manager) SupportsVision(providerID, modelID string) bool {
+	if model, ok := m.GetModel(providerID, modelID); ok {
+		return model.Capabilities.Vision
+	}
+	return false
+}
+
+// SupportsReasoning returns whether a model supports extended thinking.
+func (m *Manager) SupportsReasoning(providerID, modelID string) bool {
+	if model, ok := m.GetModel(providerID, modelID); ok {
+		return model.Capabilities.Reasoning
+	}
+	return false
+}
+
+// --- For setup UI ---
+
+// GetKnownChatModels returns sorted model IDs for a provider.
+func (m *Manager) GetKnownChatModels(providerID string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	p, ok := m.models.Providers[providerID]
+	if !ok {
+		return nil
+	}
+
+	ids := make([]string, 0, len(p.Models))
+	for id := range p.Models {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// GetDefaultModels returns the default large and small model IDs for a provider.
+func (m *Manager) GetDefaultModels(providerID string) (large, small string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if p, ok := m.models.Providers[providerID]; ok {
+		return p.DefaultLargeModel, p.DefaultSmallModel
+	}
+	return "", ""
 }

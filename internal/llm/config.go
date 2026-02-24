@@ -78,7 +78,8 @@ func (c *LLMPurposeConfig) GetAutoRebuild() bool {
 // --- Form Definition ---
 
 // ProviderConfigFormDef returns the form definition for editing a single LLM provider.
-func ProviderConfigFormDef() forms.FormDef {
+// subtypeOptions should be built from models.json providers matching the driver type.
+func ProviderConfigFormDef(subtypeOptions []forms.Option) forms.FormDef {
 	return forms.FormDef{
 		Title:       "LLM Provider",
 		Description: "Configure an LLM provider connection",
@@ -89,27 +90,22 @@ func ProviderConfigFormDef() forms.FormDef {
 					{
 						Name:     "type",
 						Title:    "Provider Type",
-						Desc:     "The LLM provider type",
+						Desc:     "The LLM driver (anthropic, openai, ollama, xai)",
 						Type:     forms.Select,
 						Required: true,
 						Options: []forms.Option{
-							{Label: "Anthropic (Claude)", Value: "anthropic"},
+							{Label: "Anthropic", Value: "anthropic"},
 							{Label: "OpenAI Compatible", Value: "openai"},
-							{Label: "Ollama (Local)", Value: "ollama"},
-							{Label: "xAI (Grok)", Value: "xai"},
+							{Label: "Ollama", Value: "ollama"},
+							{Label: "xAI", Value: "xai"},
 						},
 					},
 					{
-						Name:  "subtype",
-						Title: "Service",
-						Desc:  "Specific service (for OpenAI-compatible)",
-						Type:  forms.Select,
-						Options: []forms.Option{
-							{Label: "OpenAI", Value: "openai"},
-							{Label: "OpenRouter", Value: "openrouter"},
-							{Label: "LM Studio", Value: "lmstudio"},
-							{Label: "Custom", Value: "custom"},
-						},
+						Name:    "subtype",
+						Title:   "Subtype",
+						Desc:    "The specific provider for this connection",
+						Type:    forms.Select,
+						Options: subtypeOptions,
 					},
 					{
 						Name:  "apiKey",

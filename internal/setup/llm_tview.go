@@ -11,6 +11,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/metadata"
 )
 
 // breadcrumbBase is the base path for LLM navigation
@@ -310,7 +311,9 @@ func (e *LLMEditor) renameProvider(oldName string) {
 func (e *LLMEditor) editProvider(name string, cfg *llm.LLMProviderConfig) {
 	L_info("llm editor: editing provider", "name", name)
 
-	formDef := llm.ProviderConfigFormDef()
+	e.resolveProviderID(name, cfg)
+	formDef := llm.ProviderConfigFormDef(buildSubtypeOptions(cfg.Type))
+	formDef.Title = fmt.Sprintf("Provider: %s", name)
 
 	content, err := forms.BuildFormContent(formDef, cfg, "llm", func(result forms.TviewResult) {
 		if result == forms.ResultAccepted {
@@ -340,85 +343,52 @@ func (e *LLMEditor) addProvider() {
 	e.selectProviderType(&newCfg)
 }
 
-// selectProviderType shows provider type selection
+// selectProviderType shows a flat list of all known providers from models.json
+// plus a Custom Endpoint escape hatch.
 func (e *LLMEditor) selectProviderType(cfg *llm.LLMProviderConfig) {
-	// Set breadcrumbs
 	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", "Providers", "Add Provider"})
 	e.app.SetStatusText(forms.StatusMenu)
 
-	items := []forms.MenuItem{
-		{Label: "Anthropic (Claude)", OnSelect: func() {
-			cfg.Type = "anthropic"
-			e.selectProviderSubtype(cfg)
-		}},
-		{Label: "OpenAI Compatible", OnSelect: func() {
-			cfg.Type = "openai"
-			e.selectProviderSubtype(cfg)
-		}},
-		{Label: "Ollama (Local)", OnSelect: func() {
-			cfg.Type = "ollama"
-			cfg.URL = "http://localhost:11434"
-			e.selectProviderSubtype(cfg)
-		}},
-		{Label: "xAI (Grok)", OnSelect: func() {
-			cfg.Type = "xai"
-			e.selectProviderSubtype(cfg)
-		}},
-	}
+	meta := metadata.Get()
+	providerIDs := meta.ModelProviderIDs()
 
-	menu := forms.NewMenuList(forms.MenuListConfig{
-		Title:     "Select Provider Type",
-		Items:     items,
-		OnBack:    e.showProviderList,
-		BackLabel: "Cancel",
-	})
+	var items []forms.MenuItem
 
-	e.app.SetMenuContent(menu)
-}
+	for _, pid := range providerIDs {
+		providerID := pid
+		prov, ok := meta.GetModelProvider(providerID)
+		if !ok {
+			continue
+		}
 
-// selectProviderSubtype shows subtype selection for providers that have subtypes
-func (e *LLMEditor) selectProviderSubtype(cfg *llm.LLMProviderConfig) {
-	// Get subtypes from provider
-	provider, err := llm.NewProvider("temp", *cfg)
-	if err != nil {
-		L_warn("llm editor: failed to create provider for subtypes", "error", err)
-		e.promptProviderName(cfg)
-		return
-	}
-
-	subtypeProvider, ok := provider.(llm.SubtypeProvider)
-	if !ok {
-		e.promptProviderName(cfg)
-		return
-	}
-
-	subtypes := subtypeProvider.GetSubtypes()
-	if len(subtypes) == 0 {
-		e.promptProviderName(cfg)
-		return
-	}
-
-	// Set breadcrumbs
-	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", "Providers", "Add Provider", "Select Service"})
-	e.app.SetStatusText(forms.StatusMenu)
-
-	items := make([]forms.MenuItem, 0, len(subtypes))
-	for _, st := range subtypes {
-		subtype := st
 		items = append(items, forms.MenuItem{
-			Label: subtype.Name,
+			Label: prov.Name,
 			OnSelect: func() {
-				cfg.Subtype = subtype.ID
-				if subtype.DefaultBaseURL != "" {
-					cfg.BaseURL = subtype.DefaultBaseURL
+				cfg.Subtype = providerID
+				if prov.Driver == "ollama" {
+					cfg.Type = "ollama"
+					cfg.URL = prov.APIEndpoint
+				} else {
+					cfg.Type = prov.Driver
+					cfg.BaseURL = prov.APIEndpoint
 				}
 				e.promptProviderName(cfg)
 			},
 		})
 	}
 
+	items = append(items, forms.MenuItem{IsSeparator: true})
+	items = append(items, forms.MenuItem{
+		Label: "Custom Endpoint",
+		OnSelect: func() {
+			cfg.Type = "openai"
+			cfg.Subtype = "custom"
+			e.promptProviderName(cfg)
+		},
+	})
+
 	menu := forms.NewMenuList(forms.MenuListConfig{
-		Title:     "Select Service",
+		Title:     "Select Provider",
 		Items:     items,
 		OnBack:    e.showProviderList,
 		BackLabel: "Cancel",
@@ -474,7 +444,7 @@ func (e *LLMEditor) promptProviderName(cfg *llm.LLMProviderConfig) {
 func (e *LLMEditor) finishAddProvider(name string, cfg *llm.LLMProviderConfig) {
 	L_info("llm editor: finishing add provider", "name", name, "type", cfg.Type)
 
-	formDef := llm.ProviderConfigFormDef()
+	formDef := llm.ProviderConfigFormDef(buildSubtypeOptions(cfg.Type))
 
 	content, err := forms.BuildFormContent(formDef, cfg, "llm", func(result forms.TviewResult) {
 		if result == forms.ResultAccepted {
@@ -496,23 +466,18 @@ func (e *LLMEditor) finishAddProvider(name string, cfg *llm.LLMProviderConfig) {
 	e.app.SetFormContent(content)
 }
 
-// editPurpose opens the purpose configuration editor
+// editPurpose opens the purpose configuration editor.
+// Agent and summarization get the model chain picker; embeddings stays as a form.
 func (e *LLMEditor) editPurpose(name string, cfg *llm.LLMPurposeConfig) {
 	L_info("llm editor: editing purpose", "name", name)
 
-	var formDef forms.FormDef
-	switch name {
-	case "agent":
-		formDef = llm.AgentPurposeFormDef()
-	case "summarization":
-		formDef = llm.SummarizationPurposeFormDef()
-	case "embeddings":
-		formDef = llm.EmbeddingsPurposeFormDef()
-	default:
-		L_error("llm editor: unknown purpose", "name", name)
+	if name == "agent" || name == "summarization" {
+		e.showModelChain(name, cfg)
 		return
 	}
 
+	// Embeddings: keep the old form-based editor
+	formDef := llm.EmbeddingsPurposeFormDef()
 	content, err := forms.BuildFormContent(formDef, cfg, "llm", func(result forms.TviewResult) {
 		if result == forms.ResultAccepted {
 			e.onSave()
@@ -525,7 +490,462 @@ func (e *LLMEditor) editPurpose(name string, cfg *llm.LLMPurposeConfig) {
 		return
 	}
 
-	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "LLM Configuration", name})
+	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", name})
+	e.app.SetFormContent(content)
+}
+
+// --- Model chain picker (agent/summarization) ---
+
+// showModelChain displays the model chain as a split pane with preview.
+func (e *LLMEditor) showModelChain(purpose string, cfg *llm.LLMPurposeConfig, focusIndex ...int) {
+	title := strings.Title(purpose)
+	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", title})
+	e.app.SetStatusText("d=Delete  Shift+Up/Down=Reorder")
+
+	var items []forms.SplitItem
+
+	for i, ref := range cfg.Models {
+		idx := i
+		modelRef := ref
+		preview := e.buildChainEntryPreview(modelRef, purpose)
+
+		label := modelRef
+		if idx == 0 {
+			label = modelRef + " [primary]"
+		}
+
+		// Parse alias from the model reference for the replace flow
+		parts := strings.SplitN(modelRef, "/", 2)
+		refAlias := ""
+		if len(parts) == 2 {
+			refAlias = parts[0]
+		}
+
+		items = append(items, forms.SplitItem{
+			Label:   label,
+			Preview: preview,
+			OnSelect: func() {
+				if refAlias == "" {
+					return
+				}
+				provCfg, ok := e.cfg.Providers[refAlias]
+				if !ok {
+					return
+				}
+				e.pickModelFromProvider(refAlias, provCfg, purpose, cfg, func(newRef string) {
+					cfg.Models[idx] = newRef
+				})
+			},
+			OnDelete: func() {
+				cfg.Models = append(cfg.Models[:idx], cfg.Models[idx+1:]...)
+				e.onSave()
+				e.showModelChain(purpose, cfg)
+			},
+		})
+	}
+
+	items = append(items, forms.SplitItem{IsSeparator: true})
+
+	items = append(items, forms.SplitItem{
+		Label:   "[+] Add Model",
+		Preview: "Add a model to the chain.\nFirst model is primary, rest are fallbacks.",
+		OnSelect: func() {
+			e.addModelToChain(purpose, cfg)
+		},
+	})
+
+	settingsLabel := fmt.Sprintf("[settings] Max Output Tokens: %d", cfg.MaxTokens)
+	settingsPreview := "Override the default output token limit.\n0 = use model default."
+	if purpose == "summarization" && cfg.MaxInputTokens > 0 {
+		settingsLabel += fmt.Sprintf(", Max Input: %d", cfg.MaxInputTokens)
+		settingsPreview += fmt.Sprintf("\n\nMax Input Tokens: %d", cfg.MaxInputTokens)
+	}
+
+	items = append(items, forms.SplitItem{
+		Label:   settingsLabel,
+		Preview: settingsPreview,
+		OnSelect: func() {
+			e.editPurposeSettings(purpose, cfg)
+		},
+	})
+
+	pane := forms.NewSplitPane(forms.SplitPaneConfig{
+		Title:     title + " Model Chain",
+		Items:     items,
+		OnBack:    e.Show,
+		ListWidth: 40,
+	})
+	pane.SetPreviewTitle("Model Details")
+
+	// Add move up/down key handling
+	origCapture := pane.Focusable().(*tview.List).GetInputCapture()
+	pane.Focusable().(*tview.List).SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		idx := pane.Focusable().(*tview.List).GetCurrentItem()
+		chainLen := len(cfg.Models)
+
+		if event.Modifiers()&tcell.ModShift != 0 {
+			switch event.Key() {
+			case tcell.KeyUp:
+				if idx > 0 && idx < chainLen {
+					cfg.Models[idx], cfg.Models[idx-1] = cfg.Models[idx-1], cfg.Models[idx]
+					e.onSave()
+					e.showModelChain(purpose, cfg, idx-1)
+					return nil
+				}
+			case tcell.KeyDown:
+				if idx >= 0 && idx < chainLen-1 {
+					cfg.Models[idx], cfg.Models[idx+1] = cfg.Models[idx+1], cfg.Models[idx]
+					e.onSave()
+					e.showModelChain(purpose, cfg, idx+1)
+					return nil
+				}
+			}
+		}
+
+		if origCapture != nil {
+			return origCapture(event)
+		}
+		return event
+	})
+
+	if len(focusIndex) > 0 && focusIndex[0] >= 0 {
+		pane.Focusable().(*tview.List).SetCurrentItem(focusIndex[0])
+	}
+
+	e.app.SetSplitPaneContent(pane)
+}
+
+// buildSubtypeOptions returns form options for the subtype dropdown,
+// filtered to providers that use the same driver as the given config.
+func buildSubtypeOptions(driverType string) []forms.Option {
+	meta := metadata.Get()
+	var options []forms.Option
+
+	for _, pid := range meta.ModelProviderIDs() {
+		prov, ok := meta.GetModelProvider(pid)
+		if !ok {
+			continue
+		}
+		if prov.Driver == driverType {
+			options = append(options, forms.Option{Label: prov.Name, Value: pid})
+		}
+	}
+
+	options = append(options, forms.Option{Label: "Custom", Value: "custom"})
+	return options
+}
+
+// resolveProviderID returns the models.json provider ID for a configured provider.
+// If subtype is missing, infers it from the base URL and persists it to the config.
+func (e *LLMEditor) resolveProviderID(alias string, provCfg *llm.LLMProviderConfig) string {
+	if provCfg.Subtype != "" {
+		return provCfg.Subtype
+	}
+
+	if provCfg.BaseURL != "" {
+		if inferred := metadata.Get().InferProviderByURL(provCfg.BaseURL); inferred != "" {
+			provCfg.Subtype = inferred
+			e.cfg.Providers[alias] = *provCfg
+			e.onSave()
+			L_info("llm editor: inferred subtype from URL", "alias", alias, "subtype", inferred)
+			return inferred
+		}
+	}
+
+	return provCfg.Type
+}
+
+// buildChainEntryPreview builds a preview string for a model chain entry.
+func (e *LLMEditor) buildChainEntryPreview(modelRef, purpose string) string {
+	parts := strings.SplitN(modelRef, "/", 2)
+	if len(parts) != 2 {
+		return fmt.Sprintf("[red]Invalid format:[white] %s\nExpected: provider/model", modelRef)
+	}
+
+	alias := parts[0]
+	modelID := parts[1]
+
+	provCfg, ok := e.cfg.Providers[alias]
+	if !ok {
+		return fmt.Sprintf("[red]Unknown provider:[white] %s\nThis provider is not configured.", alias)
+	}
+
+	providerID := e.resolveProviderID(alias, &provCfg)
+	return buildModelPreview(providerID, modelID, purpose)
+}
+
+// buildModelPreview formats model metadata from models.json into a preview string.
+func buildModelPreview(providerID, modelID, purpose string) string {
+	meta := metadata.Get()
+	matchedID, model, ok := meta.ResolveModel(providerID, modelID)
+	if !ok {
+		return fmt.Sprintf("[green::b]%s[-:-:-]\n[yellow]Provider:[white] %s\n\nModel not found in metadata.\nThis may be a custom or dynamically discovered model.", modelID, providerID)
+	}
+
+	var lines []string
+	lines = append(lines, fmt.Sprintf("[green::b]%s[-:-:-] [dim](%s)[-]", model.Name, matchedID))
+	lines = append(lines, "")
+	lines = append(lines, fmt.Sprintf("[yellow]Context:[white]  %dk tokens", model.ContextWindow/1000))
+	lines = append(lines, fmt.Sprintf("[yellow]Output:[white]   %dk tokens", model.MaxOutputTokens/1000))
+	lines = append(lines, "")
+
+	// Capabilities with purpose-aware warnings
+	cap := model.Capabilities
+	var capFlags []string
+
+	visionStr := "No"
+	if cap.Vision {
+		visionStr = "[green]Yes[-]"
+	} else if purpose == "agent" {
+		visionStr = "[red]No (required for agent)[-]"
+	}
+	capFlags = append(capFlags, fmt.Sprintf("[yellow]Vision:[white]    %s", visionStr))
+
+	toolStr := "No"
+	if cap.ToolUse {
+		toolStr = "[green]Yes[-]"
+	} else if purpose == "agent" {
+		toolStr = "[red]No (required for agent)[-]"
+	}
+	capFlags = append(capFlags, fmt.Sprintf("[yellow]Tool Use:[white]  %s", toolStr))
+
+	if cap.Reasoning {
+		reasonStr := "[green]Yes[-]"
+		if cap.DefaultReasoningEffort != "" {
+			reasonStr += fmt.Sprintf(" (default: %s)", cap.DefaultReasoningEffort)
+		}
+		capFlags = append(capFlags, fmt.Sprintf("[yellow]Reasoning:[white] %s", reasonStr))
+	}
+	if cap.StructuredOutput {
+		capFlags = append(capFlags, "[yellow]Structured Output:[white] [green]Yes[-]")
+	}
+
+	lines = append(lines, capFlags...)
+	lines = append(lines, "")
+
+	// Cost
+	cost := model.Cost
+	costLine := fmt.Sprintf("[yellow]Cost:[white]     $%.2f / $%.2f per 1M tokens", cost.Input, cost.Output)
+	if cost.CacheRead > 0 {
+		costLine += fmt.Sprintf("\n[yellow]Cache:[white]    read $%.2f / write $%.2f", cost.CacheRead, cost.CacheWrite)
+	}
+	lines = append(lines, costLine)
+
+	// Metadata
+	if model.Metadata.KnowledgeCutoff != "" {
+		lines = append(lines, "")
+		lines = append(lines, fmt.Sprintf("[yellow]Knowledge:[white] %s", model.Metadata.KnowledgeCutoff))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// addModelToChain shows the provider selection step for adding a model.
+func (e *LLMEditor) addModelToChain(purpose string, cfg *llm.LLMPurposeConfig) {
+	title := strings.Title(purpose)
+	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", title, "Add Model"})
+	e.app.SetStatusText(forms.StatusMenu)
+
+	providerNames := make([]string, 0, len(e.cfg.Providers))
+	for name := range e.cfg.Providers {
+		providerNames = append(providerNames, name)
+	}
+	sort.Strings(providerNames)
+
+	if len(providerNames) == 0 {
+		modal := tview.NewModal().
+			SetText("No providers configured.\nAdd a provider first.").
+			AddButtons([]string{"OK"}).
+			SetDoneFunc(func(int, string) { e.showModelChain(purpose, cfg) })
+		e.app.SetContent(modal)
+		return
+	}
+
+	meta := metadata.Get()
+	var items []forms.MenuItem
+
+	for _, name := range providerNames {
+		alias := name
+		provCfg := e.cfg.Providers[alias]
+		providerID := e.resolveProviderID(alias, &provCfg)
+
+		label := alias
+		if prov, ok := meta.GetModelProvider(providerID); ok {
+			label = fmt.Sprintf("%s (%s)", alias, prov.Name)
+		}
+
+		items = append(items, forms.MenuItem{
+			Label: label,
+			OnSelect: func() {
+				e.pickModelFromProvider(alias, provCfg, purpose, cfg, func(ref string) {
+					cfg.Models = append(cfg.Models, ref)
+				})
+			},
+		})
+	}
+
+	menu := forms.NewMenuList(forms.MenuListConfig{
+		Title:     "Select Provider",
+		Items:     items,
+		OnBack:    func() { e.showModelChain(purpose, cfg) },
+		BackLabel: "Cancel",
+	})
+
+	e.app.SetMenuContent(menu)
+}
+
+// pickModelFromProvider shows available models for a provider with purpose filtering.
+// onPick is called with the selected model reference before saving. Use it to either
+// append (for add) or replace (for swap) the chain entry.
+func (e *LLMEditor) pickModelFromProvider(alias string, provCfg llm.LLMProviderConfig, purpose string, cfg *llm.LLMPurposeConfig, onPick func(ref string)) {
+	title := strings.Title(purpose)
+	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", title, "Select Model", alias})
+
+	providerID := e.resolveProviderID(alias, &provCfg)
+
+	meta := metadata.Get()
+	models := meta.GetModels(providerID)
+
+	if len(models) == 0 {
+		e.freeTextModelInput(alias, purpose, cfg, onPick)
+		return
+	}
+
+	modelIDs := meta.GetKnownChatModels(providerID)
+
+	var items []forms.SplitItem
+	for _, mid := range modelIDs {
+		modelID := mid
+		model := models[modelID]
+
+		label := modelID
+		if purpose == "agent" && model != nil {
+			if !model.Capabilities.Vision || !model.Capabilities.ToolUse {
+				label = "⚠ " + label
+			}
+		}
+
+		preview := buildModelPreview(providerID, modelID, purpose)
+
+		items = append(items, forms.SplitItem{
+			Label:   label,
+			Preview: preview,
+			OnSelect: func() {
+				ref := alias + "/" + modelID
+				onPick(ref)
+				e.onSave()
+				L_info("llm editor: model selected", "purpose", purpose, "model", ref)
+				e.showModelChain(purpose, cfg)
+			},
+		})
+	}
+
+	pane := forms.NewSplitPane(forms.SplitPaneConfig{
+		Title:     alias + ": Select Model",
+		Items:     items,
+		OnBack:    func() { e.showModelChain(purpose, cfg) },
+		ListWidth: 35,
+	})
+	pane.SetPreviewTitle("Model Details")
+
+	e.app.SetSplitPaneContent(pane)
+}
+
+// freeTextModelInput shows a text input for typing a model name manually.
+func (e *LLMEditor) freeTextModelInput(alias, purpose string, cfg *llm.LLMPurposeConfig, onPick func(ref string)) {
+	title := strings.Title(purpose)
+	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", title, "Select Model", alias, "Model Name"})
+	e.app.SetStatusText(forms.StatusForm)
+
+	input := tview.NewInputField().
+		SetLabel("Model ID: ").
+		SetFieldWidth(50)
+
+	input.SetDoneFunc(func(key tcell.Key) {
+		if key == tcell.KeyEnter {
+			modelID := strings.TrimSpace(input.GetText())
+			if modelID == "" {
+				return
+			}
+			ref := alias + "/" + modelID
+			onPick(ref)
+			e.onSave()
+			L_info("llm editor: model selected (manual)", "purpose", purpose, "model", ref)
+			e.showModelChain(purpose, cfg)
+		} else if key == tcell.KeyEscape {
+			e.showModelChain(purpose, cfg)
+		}
+	})
+
+	info := fmt.Sprintf("Enter model ID for provider '%s'.\nNo known models in metadata (custom/local provider).", alias)
+
+	form := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(tview.NewTextView().SetText(info), 2, 0, false).
+		AddItem(nil, 1, 0, false).
+		AddItem(input, 1, 0, true).
+		AddItem(nil, 0, 1, false)
+
+	e.app.SetContent(form)
+}
+
+// editPurposeSettings opens a small form for maxTokens/maxInputTokens.
+func (e *LLMEditor) editPurposeSettings(purpose string, cfg *llm.LLMPurposeConfig) {
+	title := strings.Title(purpose)
+	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", title, "Settings"})
+
+	var formDef forms.FormDef
+	switch purpose {
+	case "agent":
+		formDef = forms.FormDef{
+			Title: "Agent Settings",
+			Sections: []forms.Section{{
+				Fields: []forms.Field{{
+					Name:  "maxTokens",
+					Title: "Max Output Tokens",
+					Desc:  "Override output limit (0 = model default)",
+					Type:  forms.Number,
+					Min:   0,
+					Max:   100000,
+				}},
+			}},
+		}
+	case "summarization":
+		formDef = forms.FormDef{
+			Title: "Summarization Settings",
+			Sections: []forms.Section{{
+				Fields: []forms.Field{
+					{
+						Name:  "maxTokens",
+						Title: "Max Output Tokens",
+						Desc:  "Override output limit (0 = model default)",
+						Type:  forms.Number,
+						Min:   0,
+						Max:   100000,
+					},
+					{
+						Name:  "maxInputTokens",
+						Title: "Max Input Tokens",
+						Desc:  "Input limit for summarization (0 = context - buffer)",
+						Type:  forms.Number,
+						Min:   0,
+						Max:   2000000,
+					},
+				},
+			}},
+		}
+	}
+
+	content, err := forms.BuildFormContent(formDef, cfg, "llm", func(result forms.TviewResult) {
+		if result == forms.ResultAccepted {
+			e.onSave()
+		}
+		e.showModelChain(purpose, cfg)
+	}, e.app.App())
+	if err != nil {
+		L_error("llm editor: settings form error", "error", err)
+		return
+	}
+
 	e.app.SetFormContent(content)
 }
 

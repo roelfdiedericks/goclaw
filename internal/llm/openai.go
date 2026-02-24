@@ -14,7 +14,6 @@ import (
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	. "github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/tokens"
 	"github.com/roelfdiedericks/goclaw/internal/types"
@@ -1716,21 +1715,8 @@ func (p *OpenAIProvider) TestConnection(ctx context.Context) error {
 
 // GetSubtypes returns available subtypes for OpenAI-compatible providers.
 // Implements SubtypeProvider interface.
+// NOTE: returns empty — subtypes are no longer used. The flat provider list
+// in the setup UI replaces the old type->subtype drill-down flow.
 func (p *OpenAIProvider) GetSubtypes() []ProviderSubtype {
-	provider, ok := metadata.Get().GetProvider("openai")
-	if !ok {
-		return []ProviderSubtype{}
-	}
-
-	subtypes := make([]ProviderSubtype, len(provider.Subtypes))
-	for i, st := range provider.Subtypes {
-		subtypes[i] = ProviderSubtype{
-			ID:             st.ID,
-			Name:           st.Name,
-			Description:    st.Description,
-			DefaultBaseURL: st.DefaultBaseURL,
-			RequiresAPIKey: st.RequiresAPIKey,
-		}
-	}
-	return subtypes
+	return []ProviderSubtype{}
 }
