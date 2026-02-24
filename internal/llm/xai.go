@@ -198,28 +198,40 @@ var allowedXAIModels = map[string]bool{
 	"grok-4-1":                    true,
 }
 
+// normalizeXAIModel normalizes common xAI model aliases/variants to canonical IDs.
+func normalizeXAIModel(model string) string {
+	m := strings.ToLower(strings.TrimSpace(model))
+	m = strings.TrimPrefix(m, "xai/")
+	// Accept dotted 4.1 variants from older docs/configs.
+	m = strings.ReplaceAll(m, "grok-4.1", "grok-4-1")
+	// Accept "latest" alias forms and normalize to canonical model IDs.
+	if m == "grok-4-latest" {
+		m = "grok-4"
+	}
+	return m
+}
+
 // ValidateModel implements ModelValidator. Returns fatal result if model is not in allowlist.
 func (p *XAIProvider) ValidateModel(model string) *ModelValidationResult {
-	if model == "" || allowedXAIModels[model] {
+	normalized := normalizeXAIModel(model)
+	if normalized == "" || allowedXAIModels[normalized] {
 		return nil
 	}
 	return &ModelValidationResult{
 		Fatal: true,
 		Message: fmt.Sprintf(`xai: %s cannot be used for conversational AI agents.
 
-WHY: The xAI API rejects requests when %s is used with server-side tool
-definitions (web_search, x_search, code_execution). Error returned:
-"the model grok-2-vision is not supported when using server-side tools,
-only the grok-4 family of models are supported".
+WHY: GoClaw always attaches server-side tool definitions
+(web_search, x_search, code_execution). Some xAI models reject requests when
+those tools are present.
 
-We always attach tool definitions so the agent can use tools. grok-2-vision
-refuses the entire request before processing—so images never get analyzed either.
-Use the grok-4 family instead:
+Use one of the validated Grok-4 models instead:
 
   • xai/grok-4-1-fast-reasoning
   • xai/grok-4-1-fast-non-reasoning
 
-Fix goclaw.json and try again.`, model, model),
+If this was intended as Grok 4.1, use hyphenated model IDs
+(e.g. grok-4-1-fast-reasoning), not dotted forms.`, model),
 	}
 }
 
@@ -335,10 +347,11 @@ func (p *XAIProvider) Model() string {
 // WithModel returns a new provider instance configured for the specified model.
 // This is used by the registry to create model-specific provider instances.
 func (p *XAIProvider) WithModel(model string) Provider {
+	normalizedModel := normalizeXAIModel(model)
 	return &XAIProvider{
 		name:      p.name,
 		config:    p.config,
-		model:     model,
+		model:     normalizedModel,
 		maxTokens: p.maxTokens,
 		// client is shared - no need to recreate
 		client:   p.client,
