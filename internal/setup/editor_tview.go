@@ -527,7 +527,7 @@ func (e *EditorTview) showBackups() {
 	}
 
 	// Build menu items from backups
-	items := make([]forms.MenuItem, 0, len(backups)+1)
+	items := []forms.MenuItem{}
 	for _, backup := range backups {
 		b := backup // capture for closure
 		name := ".bak"
@@ -538,18 +538,33 @@ func (e *EditorTview) showBackups() {
 		items = append(items, forms.MenuItem{
 			Label: label,
 			OnSelect: func() {
-				e.restoreBackup(configPath, b.Index)
+				e.confirmRestore(configPath, b.Index, name, b.ModTime.Format("2006-01-02 15:04:05"))
 			},
 		})
 	}
-	items = append(items, forms.MenuItem{IsSeparator: true})
-	items = append(items, forms.MenuItem{Label: "Back", OnSelect: e.showMainMenu})
 
-	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Backups"})
-	e.app.SetStatusText("Select a backup to restore")
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Restore Backup"})
+	e.app.SetStatusText("Select a backup to restore — this will replace your current config")
 	e.app.SetMenuContent(forms.NewMenuList(forms.MenuListConfig{
+		Title:  "Restore Backup",
 		Items:  items,
 		OnBack: e.showMainMenu,
+	}))
+}
+
+// confirmRestore shows a confirmation prompt before restoring a backup
+func (e *EditorTview) confirmRestore(configPath string, backupIndex int, name string, timestamp string) {
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Backups", "Confirm Restore"})
+	e.app.SetStatusText(fmt.Sprintf("Restore %s from %s? This replaces your current config.", name, timestamp))
+	e.app.SetMenuContent(forms.NewMenuList(forms.MenuListConfig{
+		Items: []forms.MenuItem{
+			{Label: fmt.Sprintf("Restore %s (%s)", name, timestamp), OnSelect: func() {
+				e.restoreBackup(configPath, backupIndex)
+			}},
+			{IsSeparator: true},
+			{Label: "Cancel", OnSelect: e.showBackups},
+		},
+		OnBack: e.showBackups,
 	}))
 }
 
@@ -562,7 +577,6 @@ func (e *EditorTview) restoreBackup(configPath string, backupIndex int) {
 	}
 
 	L_info("editor: backup restored", "index", backupIndex)
-	e.app.SetStatusText("Backup restored - reload to see changes")
 
 	// Reload config
 	if err := e.loadConfig(); err != nil {
