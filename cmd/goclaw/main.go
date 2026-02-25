@@ -39,6 +39,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
+	"github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/setup"
@@ -1981,6 +1982,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		if transcriptMgr != nil {
 			transcriptMgr.Stop()
 		}
+		metrics.GetInstance().Close() //nolint:errcheck // shutdown cleanup
 		gw.Shutdown()
 	}()
 

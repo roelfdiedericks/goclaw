@@ -131,6 +131,9 @@ go test ./...
 
 The Makefile has the correct flags, environment variables, and configuration. Running tools directly bypasses this and causes problems.
 
+Do not run "make lint" or do lintian checks when busy with todo items. Do it after a major run of coding, at the end.
+Linting wastes time and tokens between each todo item. A simple "make build" is good enough.
+
 ## Why These Rules Exist
 
 **Git:** On 2026-02-02, a `git restore` command wiped out an entire day's worth of uncommitted work including all files in `internal/skills/`. This happened because the assistant panicked and ran `git restore` without understanding the situation. **Never again.**
