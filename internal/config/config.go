@@ -221,8 +221,7 @@ func Load() (*LoadResult, error) {
 				},
 			},
 			Agent: llm.LLMPurposeConfig{
-				Models:    []string{"anthropic/claude-sonnet-4-20250514"},
-				MaxTokens: 8192,
+				Models: []string{"anthropic/claude-sonnet-4-20250514"},
 			},
 			Summarization: llm.LLMPurposeConfig{
 				Models: []string{}, // Empty = use agent fallback

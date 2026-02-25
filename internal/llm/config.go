@@ -62,7 +62,6 @@ type LLMProviderConfig struct {
 // LLMPurposeConfig defines the model chain for a specific purpose (agent, summarization, embeddings).
 type LLMPurposeConfig struct {
 	Models         []string `json:"models"`                   // First = primary, rest = fallbacks
-	MaxTokens      int      `json:"maxTokens,omitempty"`      // Output limit override (0 = use model default)
 	MaxInputTokens int      `json:"maxInputTokens,omitempty"` // Input limit for summarization (0 = use model context - buffer)
 	AutoRebuild    *bool    `json:"autoRebuild,omitempty"`    // Embeddings: auto-rebuild on model mismatch (default: true)
 }
@@ -470,19 +469,6 @@ func AgentPurposeFormDef() forms.FormDef {
 					},
 				},
 			},
-			{
-				Title: "Limits",
-				Fields: []forms.Field{
-					{
-						Name:  "maxTokens",
-						Title: "Max Output Tokens",
-						Desc:  "Override output limit (0 = model default)",
-						Type:  forms.Number,
-						Min:   0,
-						Max:   100000,
-					},
-				},
-			},
 		},
 	}
 }
@@ -508,14 +494,6 @@ func SummarizationPurposeFormDef() forms.FormDef {
 			{
 				Title: "Limits",
 				Fields: []forms.Field{
-					{
-						Name:  "maxTokens",
-						Title: "Max Output Tokens",
-						Desc:  "Override output limit (0 = model default)",
-						Type:  forms.Number,
-						Min:   0,
-						Max:   100000,
-					},
 					{
 						Name:  "maxInputTokens",
 						Title: "Max Input Tokens",

@@ -75,6 +75,20 @@ func (m *Manager) GetDriver(providerID string) string {
 	return ""
 }
 
+// ResolveProvider resolves a provider config to a models.json provider ID.
+// Checks subtype first, then infers from URL, then falls back to driver name.
+func (m *Manager) ResolveProvider(subtype, driver, baseURL string) string {
+	if subtype != "" {
+		return subtype
+	}
+	if baseURL != "" {
+		if id := m.InferProviderByURL(baseURL); id != "" {
+			return id
+		}
+	}
+	return driver
+}
+
 // InferProviderByURL matches a base URL against known provider endpoints.
 // Tries exact match first, then hostname-keyword fallback.
 // Returns the provider ID if found, or empty string if no match.

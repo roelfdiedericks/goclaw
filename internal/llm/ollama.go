@@ -536,6 +536,11 @@ func (p *OllamaProvider) Type() string {
 	return "ollama"
 }
 
+// MetadataProvider returns the models.json provider ID for metadata lookups.
+func (p *OllamaProvider) MetadataProvider() string {
+	return "ollama"
+}
+
 // WithModel returns a clone of the provider configured with a specific model
 func (p *OllamaProvider) WithModel(model string) Provider {
 	clone := *p                //nolint:govet // copylocks: mu is reset immediately below

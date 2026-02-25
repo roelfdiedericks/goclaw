@@ -12,9 +12,10 @@ import (
 // Implementations: AnthropicProvider, OllamaProvider, OpenAIProvider
 type Provider interface {
 	// Identity
-	Name() string  // Provider instance name (e.g., "anthropic", "ollama-local")
-	Type() string  // Provider type (e.g., "anthropic", "openai", "ollama")
-	Model() string // Current model name
+	Name() string             // Provider instance name (e.g., "anthropic", "ollama-local")
+	Type() string             // Provider type (e.g., "anthropic", "openai", "ollama")
+	Model() string            // Current model name
+	MetadataProvider() string // models.json provider ID for metadata lookups
 
 	// Cloning with overrides
 	WithModel(model string) Provider // Clone with different model

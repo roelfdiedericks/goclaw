@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 	"github.com/roelfdiedericks/xai-go"
 )
@@ -33,10 +33,11 @@ func safeInt32(n int) int32 {
 // Supports streaming, native tool calling, server-side tools, and context preservation.
 // Also implements StatefulProvider for session-scoped state (responseID).
 type XAIProvider struct {
-	name      string            // Provider instance name (e.g., "xai")
-	config    LLMProviderConfig // Full provider configuration
-	model     string            // Current model (e.g., "grok-4-1-fast-reasoning")
-	maxTokens int               // Output token limit
+	name             string            // Provider instance name (e.g., "xai")
+	config           LLMProviderConfig // Full provider configuration
+	model            string            // Current model (e.g., "grok-4-1-fast-reasoning")
+	maxTokens        int               // Output token limit
+	metadataProvider string            // models.json provider ID ("xai")
 
 	// Client management (lazy initialization)
 	client   *xai.Client
@@ -153,9 +154,8 @@ func FetchXAIModelInfo(apiKey string) {
 }
 
 // getXAIModelContextTokens returns the context window size for a model.
-// Checks API cache first, then falls back to hardcoded values.
+// Priority: API cache → models.json → hardcoded map → default.
 func getXAIModelContextTokens(model string) int {
-	// Check API cache first
 	xaiModelInfoCacheMu.RLock()
 	if info, ok := xaiModelInfoCache[model]; ok {
 		xaiModelInfoCacheMu.RUnlock()
@@ -163,84 +163,45 @@ func getXAIModelContextTokens(model string) int {
 	}
 	xaiModelInfoCacheMu.RUnlock()
 
-	// Fallback to hardcoded
+	if ctx := metadata.Get().GetContextWindow("xai", model); ctx > 0 {
+		return int(ctx)
+	}
+
 	if size, ok := xaiModelContextFallback[model]; ok {
 		return size
 	}
 	return defaultXAIContextSize
 }
 
-// =============================================================================
-// HARDCODED MODEL RESTRICTION - ATTENTION xAI / FUTURE MAINTAINERS
-// =============================================================================
-//
-// This provider ONLY supports models that can handle BOTH:
-//   1. Vision (image input) - e.g. user sends photo from Telegram
-//   2. Server-side tools (web_search, x_search, code_execution)
-//
-// Models like grok-2-vision support vision but REJECT requests that include
-// server-side tool definitions. The xAI API returns invalid_request_error and
-// refuses to process the request entirely. So we lock to grok-4 family only.
-//
-// If you configure an unsupported model (e.g. grok-2-vision), GoClaw will
-// exit immediately with a fatal error. Fix your goclaw.json.
-//
-// =============================================================================
-
-var allowedXAIModels = map[string]bool{
-	"grok-4-1-fast-reasoning":     true,
-	"grok-4-1-fast-non-reasoning": true,
-	"grok-4-fast-reasoning":       true,
-	"grok-4-fast-non-reasoning":   true,
-	"grok-4":                      true,
-	"grok-4-0414":                 true,
-	"grok-4-0709":                 true,
-	"grok-4-1":                    true,
-}
-
-// normalizeXAIModel normalizes common xAI model aliases/variants to canonical IDs.
-func normalizeXAIModel(model string) string {
-	m := strings.ToLower(strings.TrimSpace(model))
-	m = strings.TrimPrefix(m, "xai/")
-	// Accept dotted 4.1 variants from older docs/configs.
-	m = strings.ReplaceAll(m, "grok-4.1", "grok-4-1")
-	// Accept "latest" alias forms and normalize to canonical model IDs.
-	if m == "grok-4-latest" {
-		m = "grok-4"
-	}
-	return m
-}
-
-// ValidateModel implements ModelValidator. Returns fatal result if model is not in allowlist.
+// ValidateModel checks model capabilities via models.json metadata.
+// Requires vision + tool_use for xAI models. Optimistic for unknown models.
 func (p *XAIProvider) ValidateModel(model string) *ModelValidationResult {
-	normalized := normalizeXAIModel(model)
-	if normalized == "" || allowedXAIModels[normalized] {
+	if model == "" {
 		return nil
 	}
-	return &ModelValidationResult{
-		Fatal: true,
-		Message: fmt.Sprintf(`xai: %s cannot be used for conversational AI agents.
 
-WHY: GoClaw always attaches server-side tool definitions
-(web_search, x_search, code_execution). Some xAI models reject requests when
-those tools are present.
-
-Use one of the validated Grok-4 models instead:
-
-  • xai/grok-4-1-fast-reasoning
-  • xai/grok-4-1-fast-non-reasoning
-
-If this was intended as Grok 4.1, use hyphenated model IDs
-(e.g. grok-4-1-fast-reasoning), not dotted forms.`, model),
+	m, ok := metadata.Get().GetModel("xai", model)
+	if !ok {
+		L_warn("xai: model not in metadata, allowing optimistically", "model", model)
+		return nil
 	}
-}
 
-// ensureModelAllowed exits the process if the configured model is not supported.
-func (p *XAIProvider) ensureModelAllowed() {
-	if r := p.ValidateModel(p.model); r != nil {
-		L_error("xai: unsupported model", "model", p.model, "message", r.Message)
-		os.Exit(1)
+	var missing []string
+	if !m.Capabilities.Vision {
+		missing = append(missing, "vision")
 	}
+	if !m.Capabilities.ToolUse {
+		missing = append(missing, "tool_use")
+	}
+
+	if len(missing) > 0 {
+		return &ModelValidationResult{
+			Fatal:   false,
+			Message: fmt.Sprintf("xai: model %s lacks required capabilities: %s", model, strings.Join(missing, ", ")),
+		}
+	}
+
+	return nil
 }
 
 // NewXAIProvider creates a new xAI provider from LLMProviderConfig.
@@ -273,12 +234,11 @@ func NewXAIProvider(name string, cfg LLMProviderConfig) (*XAIProvider, error) {
 	)
 
 	return &XAIProvider{
-		name:      name,
-		config:    cfg,
-		model:     "", // Model set via WithModel()
-		maxTokens: maxTokens,
-		// client is lazily initialized in getClient()
-		// responseID and lastMessageCount are loaded via LoadSessionState()
+		name:             name,
+		config:           cfg,
+		model:            "", // Model set via WithModel()
+		maxTokens:        maxTokens,
+		metadataProvider: "xai",
 	}, nil
 }
 
@@ -339,6 +299,11 @@ func (p *XAIProvider) Type() string {
 	return "xai"
 }
 
+// MetadataProvider returns the models.json provider ID for metadata lookups.
+func (p *XAIProvider) MetadataProvider() string {
+	return p.metadataProvider
+}
+
 // Model returns the current model name.
 func (p *XAIProvider) Model() string {
 	return p.model
@@ -347,7 +312,9 @@ func (p *XAIProvider) Model() string {
 // WithModel returns a new provider instance configured for the specified model.
 // This is used by the registry to create model-specific provider instances.
 func (p *XAIProvider) WithModel(model string) Provider {
-	normalizedModel := normalizeXAIModel(model)
+	normalizedModel := strings.ToLower(strings.TrimSpace(model))
+	normalizedModel = strings.TrimPrefix(normalizedModel, "xai/")
+	normalizedModel = strings.ReplaceAll(normalizedModel, "grok-4.1", "grok-4-1")
 	return &XAIProvider{
 		name:      p.name,
 		config:    p.config,
@@ -384,7 +351,14 @@ func (p *XAIProvider) IsAvailable() bool {
 }
 
 // MaxTokens returns the current output token limit.
+// If no explicit config override was set, uses models.json max_output_tokens.
 func (p *XAIProvider) MaxTokens() int {
+	if p.maxTokens > 0 && p.maxTokens != 4096 {
+		return p.maxTokens
+	}
+	if model, ok := metadata.Get().GetModel("xai", p.model); ok && model.MaxOutputTokens > 0 {
+		return int(model.MaxOutputTokens)
+	}
 	return p.maxTokens
 }
 
@@ -411,7 +385,6 @@ func (p *XAIProvider) StreamMessage(
 	onDelta func(delta string),
 	opts *StreamOptions,
 ) (*Response, error) {
-	p.ensureModelAllowed()
 	// Get or create client
 	client, err := p.getClient()
 	if err != nil {
@@ -572,7 +545,6 @@ func toolCallStatusString(s xai.ToolCallStatus) string {
 // SimpleMessage sends a single message without streaming (for summarization).
 // This is a simpler interface used for tasks like compaction/summarization.
 func (p *XAIProvider) SimpleMessage(ctx context.Context, userMessage, systemPrompt string) (string, error) {
-	p.ensureModelAllowed()
 	// Get or create client
 	client, err := p.getClient()
 	if err != nil {

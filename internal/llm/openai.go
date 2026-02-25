@@ -14,6 +14,7 @@ import (
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	. "github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/tokens"
 	"github.com/roelfdiedericks/goclaw/internal/types"
@@ -38,14 +39,15 @@ func (t *openRouterTransport) RoundTrip(req *http.Request) (*http.Response, erro
 // Supports streaming, native tool calling, vision (images), and embeddings.
 // Works with OpenAI, Kimi, LM Studio, OpenRouter, and other compatible APIs via BaseURL.
 type OpenAIProvider struct {
-	name          string // Provider instance name (e.g., "openai", "kimi", "lmstudio")
-	client        *openai.Client
-	model         string
-	maxTokens     int
-	contextTokens int    // Context window size override (0 = auto-detect from model name)
-	apiKey        string // Stored for cloning
-	baseURL       string // Custom API base URL
-	metricPrefix  string // e.g., "llm/openai/kimi/kimi-k2.5"
+	name             string // Provider instance name (e.g., "openai", "kimi", "lmstudio")
+	client           *openai.Client
+	model            string
+	maxTokens        int
+	contextTokens    int    // Context window size override (0 = auto-detect from model name)
+	apiKey           string // Stored for cloning
+	baseURL          string // Custom API base URL
+	metricPrefix     string // e.g., "llm/openai/kimi/kimi-k2.5"
+	metadataProvider string // models.json provider ID for metadata lookups
 
 	// Embedding support
 	embeddingOnly       bool // If true, only used for embeddings (not chat)
@@ -124,16 +126,17 @@ func NewOpenAIProvider(name string, cfg LLMProviderConfig) (*OpenAIProvider, err
 	L_debug("openai provider created", "name", name, "baseURL", displayURL, "maxTokens", maxTokens, "contextTokens", cfg.ContextTokens, "trace", traceEnabled)
 
 	p := &OpenAIProvider{
-		name:          name,
-		client:        client,
-		model:         "", // Model set via WithModel()
-		maxTokens:     maxTokens,
-		contextTokens: cfg.ContextTokens,
-		apiKey:        cfg.APIKey,
-		baseURL:       baseURL,
-		traceEnabled:  traceEnabled,
-		transport:     transport,
-		dumpOnSuccess: cfg.DumpOnSuccess,
+		name:             name,
+		client:           client,
+		model:            "", // Model set via WithModel()
+		maxTokens:        maxTokens,
+		contextTokens:    cfg.ContextTokens,
+		apiKey:           cfg.APIKey,
+		baseURL:          baseURL,
+		metadataProvider: metadata.Get().ResolveProvider(cfg.Subtype, cfg.Driver, cfg.BaseURL),
+		traceEnabled:     traceEnabled,
+		transport:        transport,
+		dumpOnSuccess:    cfg.DumpOnSuccess,
 	}
 
 	// Fetch model metadata from /v1/models endpoint (if supported)
@@ -350,6 +353,11 @@ func (p *OpenAIProvider) Type() string {
 	return "openai"
 }
 
+// MetadataProvider returns the models.json provider ID for metadata lookups.
+func (p *OpenAIProvider) MetadataProvider() string {
+	return p.metadataProvider
+}
+
 // Model returns the configured model name
 func (p *OpenAIProvider) Model() string {
 	return p.model
@@ -443,37 +451,42 @@ func (p *OpenAIProvider) IsAvailable() bool {
 }
 
 // ContextTokens returns the model's context window size in tokens.
-// Priority: 1) Config override, 2) Cached from /v1/models, 3) Hardcoded patterns, 4) Default
+// Priority: 1) Config override, 2) Runtime API cache, 3) models.json, 4) Hardcoded patterns
 func (p *OpenAIProvider) ContextTokens() int {
-	// 1. Config override always wins
 	if p.contextTokens > 0 {
 		return p.contextTokens
 	}
 
-	// 2. Check cache from /v1/models endpoint (populated at startup)
 	if p.modelContextCache != nil {
 		if ctx, ok := p.modelContextCache[p.model]; ok && ctx > 0 {
-			L_debug("openai: context from cache", "provider", p.name, "model", p.model, "contextTokens", ctx)
+			L_debug("openai: context from API cache", "provider", p.name, "model", p.model, "contextTokens", ctx)
 			return ctx
-		}
-		// Cache miss - log what we have for debugging
-		if len(p.modelContextCache) > 0 {
-			var cached []string
-			for k := range p.modelContextCache {
-				cached = append(cached, k)
-			}
-			L_debug("openai: context cache miss", "provider", p.name, "lookingFor", p.model, "cachedModels", cached)
 		}
 	}
 
-	// 3. Fall back to hardcoded patterns / default
+	if p.metadataProvider != "" {
+		if ctx := metadata.Get().GetContextWindow(p.metadataProvider, p.model); ctx > 0 {
+			L_debug("openai: context from models.json", "provider", p.name, "model", p.model, "contextTokens", ctx)
+			return int(ctx)
+		}
+	}
+
 	fallback := getOpenAIModelContextWindow(p.model)
-	L_debug("openai: context fallback", "provider", p.name, "model", p.model, "contextTokens", fallback)
+	L_debug("openai: context hardcoded fallback", "provider", p.name, "model", p.model, "contextTokens", fallback)
 	return fallback
 }
 
-// MaxTokens returns the current output limit
+// MaxTokens returns the current output limit.
+// If no explicit config override was set, uses models.json max_output_tokens.
 func (p *OpenAIProvider) MaxTokens() int {
+	if p.maxTokens > 0 && p.maxTokens != 8192 {
+		return p.maxTokens
+	}
+	if p.metadataProvider != "" {
+		if model, ok := metadata.Get().GetModel(p.metadataProvider, p.model); ok && model.MaxOutputTokens > 0 {
+			return int(model.MaxOutputTokens)
+		}
+	}
 	return p.maxTokens
 }
 

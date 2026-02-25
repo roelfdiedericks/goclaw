@@ -554,20 +554,18 @@ func (e *LLMEditor) showModelChain(purpose string, cfg *llm.LLMPurposeConfig, fo
 		},
 	})
 
-	settingsLabel := fmt.Sprintf("[settings] Max Output Tokens: %d", cfg.MaxTokens)
-	settingsPreview := "Override the default output token limit.\n0 = use model default."
-	if purpose == "summarization" && cfg.MaxInputTokens > 0 {
-		settingsLabel += fmt.Sprintf(", Max Input: %d", cfg.MaxInputTokens)
-		settingsPreview += fmt.Sprintf("\n\nMax Input Tokens: %d", cfg.MaxInputTokens)
-	}
+	if purpose == "summarization" {
+		settingsLabel := fmt.Sprintf("[settings] Max Input Tokens: %d", cfg.MaxInputTokens)
+		settingsPreview := "Input limit for summarization.\n0 = use model context - buffer."
 
-	items = append(items, forms.SplitItem{
-		Label:   settingsLabel,
-		Preview: settingsPreview,
-		OnSelect: func() {
-			e.editPurposeSettings(purpose, cfg)
-		},
-	})
+		items = append(items, forms.SplitItem{
+			Label:   settingsLabel,
+			Preview: settingsPreview,
+			OnSelect: func() {
+				e.editPurposeSettings(purpose, cfg)
+			},
+		})
+	}
 
 	pane := forms.NewSplitPane(forms.SplitPaneConfig{
 		Title:     title + " Model Chain",
@@ -636,23 +634,18 @@ func buildSubtypeOptions(driverType string) []forms.Option {
 }
 
 // resolveProviderID returns the models.json provider ID for a configured provider.
-// If subtype is missing, infers it from the base URL and persists it to the config.
+// If subtype is missing, infers it and persists to config.
 func (e *LLMEditor) resolveProviderID(alias string, provCfg *llm.LLMProviderConfig) string {
-	if provCfg.Subtype != "" {
-		return provCfg.Subtype
+	resolved := metadata.Get().ResolveProvider(provCfg.Subtype, provCfg.Driver, provCfg.BaseURL)
+
+	if provCfg.Subtype == "" && resolved != provCfg.Driver {
+		provCfg.Subtype = resolved
+		e.cfg.Providers[alias] = *provCfg
+		e.onSave()
+		L_info("llm editor: inferred subtype from URL", "alias", alias, "subtype", resolved)
 	}
 
-	if provCfg.BaseURL != "" {
-		if inferred := metadata.Get().InferProviderByURL(provCfg.BaseURL); inferred != "" {
-			provCfg.Subtype = inferred
-			e.cfg.Providers[alias] = *provCfg
-			e.onSave()
-			L_info("llm editor: inferred subtype from URL", "alias", alias, "subtype", inferred)
-			return inferred
-		}
-	}
-
-	return provCfg.Driver
+	return resolved
 }
 
 // buildChainEntryPreview builds a preview string for a model chain entry.
@@ -888,51 +881,25 @@ func (e *LLMEditor) freeTextModelInput(alias, purpose string, cfg *llm.LLMPurpos
 	e.app.SetContent(form)
 }
 
-// editPurposeSettings opens a small form for maxTokens/maxInputTokens.
+// editPurposeSettings opens a small form for purpose-specific settings.
 func (e *LLMEditor) editPurposeSettings(purpose string, cfg *llm.LLMPurposeConfig) {
 	title := strings.Title(purpose)
 	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", title, "Settings"})
 
-	var formDef forms.FormDef
-	switch purpose {
-	case "agent":
-		formDef = forms.FormDef{
-			Title: "Agent Settings",
-			Sections: []forms.Section{{
-				Fields: []forms.Field{{
-					Name:  "maxTokens",
-					Title: "Max Output Tokens",
-					Desc:  "Override output limit (0 = model default)",
+	formDef := forms.FormDef{
+		Title: title + " Settings",
+		Sections: []forms.Section{{
+			Fields: []forms.Field{
+				{
+					Name:  "maxInputTokens",
+					Title: "Max Input Tokens",
+					Desc:  "Input limit for summarization (0 = context - buffer)",
 					Type:  forms.Number,
 					Min:   0,
-					Max:   100000,
-				}},
-			}},
-		}
-	case "summarization":
-		formDef = forms.FormDef{
-			Title: "Summarization Settings",
-			Sections: []forms.Section{{
-				Fields: []forms.Field{
-					{
-						Name:  "maxTokens",
-						Title: "Max Output Tokens",
-						Desc:  "Override output limit (0 = model default)",
-						Type:  forms.Number,
-						Min:   0,
-						Max:   100000,
-					},
-					{
-						Name:  "maxInputTokens",
-						Title: "Max Input Tokens",
-						Desc:  "Input limit for summarization (0 = context - buffer)",
-						Type:  forms.Number,
-						Min:   0,
-						Max:   2000000,
-					},
+					Max:   2000000,
 				},
-			}},
-		}
+			},
+		}},
 	}
 
 	content, err := forms.BuildFormContent(formDef, cfg, "llm", func(result forms.TviewResult) {

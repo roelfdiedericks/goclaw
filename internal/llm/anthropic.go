@@ -15,6 +15,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	. "github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/tokens"
 	"github.com/roelfdiedericks/goclaw/internal/types"
@@ -33,15 +34,16 @@ var modelMaxOutputTokens sync.Map
 // Supports streaming, native tool calling, and prompt caching.
 // Also works with Anthropic-compatible APIs (e.g., Kimi K2) via BaseURL.
 type AnthropicProvider struct {
-	name          string // Provider instance name (e.g., "anthropic")
-	client        *anthropic.Client
-	model         string
-	maxTokens     int
-	promptCaching bool
-	apiKey        string // Stored for cloning
-	baseURL       string // Custom API base URL (for Kimi K2, etc.)
-	metricPrefix  string // e.g., "llm/anthropic/anthropic/claude-opus-4-5"
-	traceEnabled  bool   // Per-provider trace logging control
+	name             string // Provider instance name (e.g., "anthropic")
+	client           *anthropic.Client
+	model            string
+	maxTokens        int
+	promptCaching    bool
+	apiKey           string // Stored for cloning
+	baseURL          string // Custom API base URL (for Kimi K2, etc.)
+	metricPrefix     string // e.g., "llm/anthropic/anthropic/claude-opus-4-5"
+	metadataProvider string // models.json provider ID for metadata lookups
+	traceEnabled     bool   // Per-provider trace logging control
 
 	// HTTP transport for capturing request/response (for error dumps)
 	transport     *CapturingTransport
@@ -109,16 +111,17 @@ func NewAnthropicProvider(name string, cfg LLMProviderConfig) (*AnthropicProvide
 	L_debug("anthropic provider created", "name", name, "baseURL", baseURL, "maxTokens", maxTokens, "promptCaching", cfg.PromptCaching, "trace", traceEnabled)
 
 	return &AnthropicProvider{
-		name:          name,
-		client:        &client,
-		model:         "", // Model set via WithModel()
-		maxTokens:     maxTokens,
-		promptCaching: cfg.PromptCaching,
-		apiKey:        cfg.APIKey,
-		baseURL:       cfg.BaseURL,
-		traceEnabled:  traceEnabled,
-		transport:     transport,
-		dumpOnSuccess: cfg.DumpOnSuccess,
+		name:             name,
+		client:           &client,
+		model:            "", // Model set via WithModel()
+		maxTokens:        maxTokens,
+		promptCaching:    cfg.PromptCaching,
+		apiKey:           cfg.APIKey,
+		baseURL:          cfg.BaseURL,
+		metadataProvider: metadata.Get().ResolveProvider(cfg.Subtype, cfg.Driver, cfg.BaseURL),
+		traceEnabled:     traceEnabled,
+		transport:        transport,
+		dumpOnSuccess:    cfg.DumpOnSuccess,
 	}, nil
 }
 
@@ -138,6 +141,11 @@ func (p *AnthropicProvider) Name() string {
 // Type returns the provider type
 func (p *AnthropicProvider) Type() string {
 	return "anthropic"
+}
+
+// MetadataProvider returns the models.json provider ID for metadata lookups.
+func (p *AnthropicProvider) MetadataProvider() string {
+	return p.metadataProvider
 }
 
 // Model returns the configured model name
@@ -165,13 +173,28 @@ func (p *AnthropicProvider) IsAvailable() bool {
 	return p != nil && p.client != nil && p.model != ""
 }
 
-// ContextTokens returns the model's context window size in tokens
+// ContextTokens returns the model's context window size in tokens.
+// Priority: models.json → hardcoded 200K fallback.
 func (p *AnthropicProvider) ContextTokens() int {
-	return getModelContextWindow(p.model)
+	if p.metadataProvider != "" {
+		if ctx := metadata.Get().GetContextWindow(p.metadataProvider, p.model); ctx > 0 {
+			return int(ctx)
+		}
+	}
+	return 200000
 }
 
-// MaxTokens returns the current output limit
+// MaxTokens returns the current output limit.
+// If no explicit config override was set, uses models.json max_output_tokens.
 func (p *AnthropicProvider) MaxTokens() int {
+	if p.maxTokens > 0 && p.maxTokens != 8192 {
+		return p.maxTokens
+	}
+	if p.metadataProvider != "" {
+		if model, ok := metadata.Get().GetModel(p.metadataProvider, p.model); ok && model.MaxOutputTokens > 0 {
+			return int(model.MaxOutputTokens)
+		}
+	}
 	return p.maxTokens
 }
 
@@ -193,14 +216,6 @@ func (p *AnthropicProvider) EmbeddingDimensions() int {
 // SupportsEmbeddings returns false - Anthropic doesn't support embeddings
 func (p *AnthropicProvider) SupportsEmbeddings() bool {
 	return false
-}
-
-// getModelContextWindow returns the context window size for a given model
-// Based on: https://docs.anthropic.com/en/docs/about-claude/models
-// Standard context window is 200k for all Claude models
-// (Extended 1M context is a separate beta feature)
-func getModelContextWindow(_ string) int {
-	return 200000
 }
 
 // SimpleMessage sends a simple user message and returns the response text.

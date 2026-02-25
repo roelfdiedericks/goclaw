@@ -196,7 +196,7 @@ func (r *Registry) validatePurposeModels(purpose string) error {
 	}
 
 	r.mu.Lock()
-	r.purposes[purpose] = LLMPurposeConfig{Models: kept, MaxTokens: cfg.MaxTokens, MaxInputTokens: cfg.MaxInputTokens}
+	r.purposes[purpose] = LLMPurposeConfig{Models: kept, MaxInputTokens: cfg.MaxInputTokens}
 	r.mu.Unlock()
 
 	return nil
@@ -204,7 +204,6 @@ func (r *Registry) validatePurposeModels(purpose string) error {
 
 // GetProvider returns the first available provider for a purpose.
 // Iterates through the model chain until one is available.
-// Also applies maxTokens override from LLMPurposeConfig if set.
 func (r *Registry) GetProvider(purpose string) (Provider, error) {
 	r.mu.RLock()
 	cfg, ok := r.purposes[purpose]
@@ -219,62 +218,27 @@ func (r *Registry) GetProvider(purpose string) (Provider, error) {
 	}
 
 	for i, ref := range cfg.Models {
-		provider, err := r.resolveForPurpose(ref, purpose)
+		resolved, err := r.resolveForPurpose(ref, purpose)
 		if err != nil {
 			L_debug("llm: failed to resolve model", "ref", ref, "error", err)
 			continue
 		}
 
-		// Check availability and apply maxTokens override
-		var result Provider
-		switch p := provider.(type) {
-		case *AnthropicProvider:
-			if !p.IsAvailable() {
-				continue
-			}
-			if cfg.MaxTokens > 0 {
-				result = p.WithMaxTokens(cfg.MaxTokens)
-			} else {
-				result = p
-			}
-		case *OllamaProvider:
-			if !p.IsAvailable() {
-				continue
-			}
-			if cfg.MaxTokens > 0 {
-				result = p.WithMaxTokens(cfg.MaxTokens)
-			} else {
-				result = p
-			}
-		case *OpenAIProvider:
-			if !p.IsAvailable() {
-				continue
-			}
-			if cfg.MaxTokens > 0 {
-				result = p.WithMaxTokens(cfg.MaxTokens)
-			} else {
-				result = p
-			}
-		case *XAIProvider:
-			if !p.IsAvailable() {
-				continue
-			}
-			if cfg.MaxTokens > 0 {
-				result = p.WithMaxTokens(cfg.MaxTokens)
-			} else {
-				result = p
-			}
-		default:
-			L_warn("llm: unknown provider type", "purpose", purpose, "ref", ref)
+		provider, ok := resolved.(Provider)
+		if !ok {
+			L_warn("llm: resolved provider does not implement Provider interface", "ref", ref)
+			continue
+		}
+
+		if !provider.IsAvailable() {
 			continue
 		}
 
 		if i > 0 {
-			// Log fallback event when not using primary
 			L_info("llm: using fallback", "purpose", purpose, "model", ref, "position", i+1)
 		}
 		L_debug("llm: provider selected", "purpose", purpose, "ref", ref)
-		return result, nil
+		return provider, nil
 	}
 
 	return nil, fmt.Errorf("no available provider for %s (tried: %v)", purpose, cfg.Models)
@@ -633,53 +597,14 @@ func (r *Registry) StreamMessageWithFailover(
 		}
 
 		// Resolve provider with model
-		provider, err := r.resolveForPurpose(modelRef, purpose)
+		resolved, err := r.resolveForPurpose(modelRef, purpose)
 		if err != nil {
 			L_debug("failover: model unavailable", "model", modelRef, "error", err)
 			continue
 		}
 
-		// Apply maxTokens override if configured
-		var p Provider
-		switch typed := provider.(type) {
-		case *AnthropicProvider:
-			if !typed.IsAvailable() {
-				continue
-			}
-			if cfg.MaxTokens > 0 {
-				p = typed.WithMaxTokens(cfg.MaxTokens)
-			} else {
-				p = typed
-			}
-		case *OllamaProvider:
-			if !typed.IsAvailable() {
-				continue
-			}
-			if cfg.MaxTokens > 0 {
-				p = typed.WithMaxTokens(cfg.MaxTokens)
-			} else {
-				p = typed
-			}
-		case *OpenAIProvider:
-			if !typed.IsAvailable() {
-				continue
-			}
-			if cfg.MaxTokens > 0 {
-				p = typed.WithMaxTokens(cfg.MaxTokens)
-			} else {
-				p = typed
-			}
-		case *XAIProvider:
-			if !typed.IsAvailable() {
-				continue
-			}
-			if cfg.MaxTokens > 0 {
-				p = typed.WithMaxTokens(cfg.MaxTokens)
-			} else {
-				p = typed
-			}
-		default:
-			L_warn("failover: unknown provider type", "model", modelRef)
+		p, ok := resolved.(Provider)
+		if !ok || !p.IsAvailable() {
 			continue
 		}
 
@@ -805,52 +730,14 @@ func (r *Registry) SimpleMessageWithFailover(
 		}
 
 		// Resolve provider
-		provider, err := r.resolveForPurpose(modelRef, purpose)
+		resolved, err := r.resolveForPurpose(modelRef, purpose)
 		if err != nil {
 			L_debug("failover: model unavailable", "model", modelRef, "error", err)
 			continue
 		}
 
-		// Get typed provider
-		var p Provider
-		switch typed := provider.(type) {
-		case *AnthropicProvider:
-			if !typed.IsAvailable() {
-				continue
-			}
-			if cfg.MaxTokens > 0 {
-				p = typed.WithMaxTokens(cfg.MaxTokens)
-			} else {
-				p = typed
-			}
-		case *OllamaProvider:
-			if !typed.IsAvailable() {
-				continue
-			}
-			if cfg.MaxTokens > 0 {
-				p = typed.WithMaxTokens(cfg.MaxTokens)
-			} else {
-				p = typed
-			}
-		case *OpenAIProvider:
-			if !typed.IsAvailable() {
-				continue
-			}
-			if cfg.MaxTokens > 0 {
-				p = typed.WithMaxTokens(cfg.MaxTokens)
-			} else {
-				p = typed
-			}
-		case *XAIProvider:
-			if !typed.IsAvailable() {
-				continue
-			}
-			if cfg.MaxTokens > 0 {
-				p = typed.WithMaxTokens(cfg.MaxTokens)
-			} else {
-				p = typed
-			}
-		default:
+		p, ok := resolved.(Provider)
+		if !ok || !p.IsAvailable() {
 			continue
 		}
 
