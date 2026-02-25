@@ -64,6 +64,10 @@
         background-color: #fff3e0;
         color: #f57c00;
     }
+    .cost-badge {
+        background-color: #fce4ec;
+        color: #c62828;
+    }
     .stats-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -159,6 +163,22 @@
         return num.toString();
     }
 
+    function formatCost(usd) {
+        if (usd >= 1) {
+            return '$' + usd.toFixed(2);
+        }
+        if (usd >= 0.01) {
+            return '$' + usd.toFixed(4);
+        }
+        if (usd >= 0.0001) {
+            return '$' + usd.toFixed(6);
+        }
+        if (usd === 0) {
+            return '$0.00';
+        }
+        return '$' + usd.toExponential(2);
+    }
+
     function getHealthClass(health) {
         switch(health) {
             case 0: return 'health-good';
@@ -188,6 +208,7 @@
             case 'error': return 'counter-badge';
             case 'condition': return 'gauge-badge';
             case 'threshold': return 'gauge-badge';
+            case 'cost': return 'cost-badge';
             default: return '';
         }
     }
@@ -299,6 +320,13 @@
                 html += 'value: ' + data.value.toFixed(2);
                 html += ' / threshold: ' + data.threshold.toFixed(2);
                 html += data.is_exceeded ? ' ⚠️ EXCEEDED' : ' ✓';
+            } else if (metric.type === 'cost' && metric.data) {
+                const data = metric.data;
+                html += 'total: ' + formatCost(data.total_usd);
+                html += ', last: ' + formatCost(data.last_usd);
+                html += ' (min: ' + formatCost(data.min_usd);
+                html += ', max: ' + formatCost(data.max_usd) + ')';
+                html += ', requests: ' + formatNumber(data.count);
             }
             
             html += '</span>';

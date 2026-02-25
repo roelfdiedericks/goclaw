@@ -35,7 +35,7 @@ type ThinkingConfig struct {
 // LLMProviderConfig is the configuration for a single provider instance.
 // This is the canonical type used by both config loading and the LLM registry.
 type LLMProviderConfig struct {
-	Driver         string `json:"driver"`                    // "anthropic", "openai", "ollama", "xai"
+	Driver         string `json:"driver"`                   // "anthropic", "openai", "ollama", "xai"
 	Subtype        string `json:"subtype,omitempty"`        // Hint for UI: "openrouter", "lmstudio", etc.
 	APIKey         string `json:"apiKey,omitempty"`         // For cloud providers
 	BaseURL        string `json:"baseURL,omitempty"`        // For OpenAI-compatible endpoints
@@ -50,6 +50,12 @@ type LLMProviderConfig struct {
 	// Debug/Advanced
 	Trace         *bool `json:"trace,omitempty"`         // Per-provider trace logging (nil = default enabled when -t flag used)
 	DumpOnSuccess bool  `json:"dumpOnSuccess,omitempty"` // Keep request dumps even on success (for debugging)
+
+	// Cost overrides (USD per 1M tokens; 0 = use models.json pricing)
+	CostInput      float64 `json:"costInput,omitempty"`
+	CostOutput     float64 `json:"costOutput,omitempty"`
+	CostCacheRead  float64 `json:"costCacheRead,omitempty"`
+	CostCacheWrite float64 `json:"costCacheWrite,omitempty"`
 
 	// xAI-specific fields
 	ServerToolsAllowed []string `json:"serverToolsAllowed,omitempty"` // xAI server-side tools to enable (empty = all known tools)
@@ -206,6 +212,44 @@ func ProviderConfigFormDef(subtypeOptions []forms.Option) forms.FormDef {
 						Title: "Dump on Success",
 						Desc:  "Keep request dumps even on success",
 						Type:  forms.Toggle,
+					},
+				},
+			},
+			{
+				Title:     "Cost Overrides",
+				Collapsed: true,
+				Fields: []forms.Field{
+					{
+						Name:  "costInput",
+						Title: "Input Cost",
+						Desc:  "USD per 1M input tokens (0 = use models.json)",
+						Type:  forms.Number,
+						Min:   0,
+						Max:   1000,
+					},
+					{
+						Name:  "costOutput",
+						Title: "Output Cost",
+						Desc:  "USD per 1M output tokens (0 = use models.json)",
+						Type:  forms.Number,
+						Min:   0,
+						Max:   1000,
+					},
+					{
+						Name:  "costCacheRead",
+						Title: "Cache Read Cost",
+						Desc:  "USD per 1M cache read tokens (0 = use models.json)",
+						Type:  forms.Number,
+						Min:   0,
+						Max:   1000,
+					},
+					{
+						Name:  "costCacheWrite",
+						Title: "Cache Write Cost",
+						Desc:  "USD per 1M cache write tokens (0 = use models.json)",
+						Type:  forms.Number,
+						Min:   0,
+						Max:   1000,
 					},
 				},
 			},

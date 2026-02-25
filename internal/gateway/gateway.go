@@ -1702,6 +1702,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			L_info("user", "msg", "\033[1;30;102m "+preview+" \033[0m")
 		}
 
+		estimatedInputCost := llm.EstimateInputCost(g.llm.MetadataProvider(), g.llm.Model(), contextTokens)
 		L_debug("invoking LLM",
 			"provider", g.llm.Name(),
 			"model", g.llm.Model(),
@@ -1712,6 +1713,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			"contextUsage", fmt.Sprintf("%.1f%%", contextUsage),
 			"thinking", enableThinking,
 			"thinkingLevel", thinkingLevel,
+			"estimatedInputCost", fmt.Sprintf("$%.4f", estimatedInputCost),
 		)
 
 		// Build stream options (OnServerToolCall always; thinking opts when enabled)

@@ -14,6 +14,7 @@ import (
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
+	. "github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 	"github.com/roelfdiedericks/xai-go"
 )
@@ -38,6 +39,7 @@ type XAIProvider struct {
 	model            string            // Current model (e.g., "grok-4-1-fast-reasoning")
 	maxTokens        int               // Output token limit
 	metadataProvider string            // models.json provider ID ("xai")
+	metricPrefix     string            // e.g., "llm/xai/xai/grok-4-1-fast-reasoning"
 
 	// Client management (lazy initialization)
 	client   *xai.Client
@@ -144,7 +146,7 @@ func FetchXAIModelInfo(apiKey string) {
 
 	L_info("xai: fetched model info from API", "models", len(models))
 	for name, info := range xaiModelInfoCache {
-		L_debug("xai: model info cached",
+		L_trace("xai: model info cached",
 			"model", name,
 			"contextTokens", info.ContextTokens,
 			"inputPrice", info.InputPrice,
@@ -173,49 +175,12 @@ func getXAIModelContextTokens(model string) int {
 	return defaultXAIContextSize
 }
 
-// ValidateModel checks model capabilities via models.json metadata.
-// Requires vision + tool_use for xAI models. Optimistic for unknown models.
-func (p *XAIProvider) ValidateModel(model string) *ModelValidationResult {
-	if model == "" {
-		return nil
-	}
-
-	m, ok := metadata.Get().GetModel("xai", model)
-	if !ok {
-		L_warn("xai: model not in metadata, allowing optimistically", "model", model)
-		return nil
-	}
-
-	var missing []string
-	if !m.Capabilities.Vision {
-		missing = append(missing, "vision")
-	}
-	if !m.Capabilities.ToolUse {
-		missing = append(missing, "tool_use")
-	}
-
-	if len(missing) > 0 {
-		return &ModelValidationResult{
-			Fatal:   false,
-			Message: fmt.Sprintf("xai: model %s lacks required capabilities: %s", model, strings.Join(missing, ", ")),
-		}
-	}
-
-	return nil
-}
-
 // NewXAIProvider creates a new xAI provider from LLMProviderConfig.
 // Client is lazily initialized on first use to support keepalive configuration.
 func NewXAIProvider(name string, cfg LLMProviderConfig) (*XAIProvider, error) {
 	// Fetch model info from API on first provider creation (async-safe, only runs once)
 	if cfg.APIKey != "" {
 		go FetchXAIModelInfo(cfg.APIKey)
-	}
-
-	// Default maxTokens
-	maxTokens := cfg.MaxTokens
-	if maxTokens == 0 {
-		maxTokens = 4096
 	}
 
 	// Default IncrementalContext to true if not explicitly set
@@ -227,7 +192,7 @@ func NewXAIProvider(name string, cfg LLMProviderConfig) (*XAIProvider, error) {
 
 	L_debug("xai provider created",
 		"name", name,
-		"maxTokens", maxTokens,
+		"maxTokens", cfg.MaxTokens,
 		"incrementalContext", incrementalContext,
 		"serverTools", cfg.ServerToolsAllowed,
 		"maxTurns", cfg.MaxTurns,
@@ -237,7 +202,7 @@ func NewXAIProvider(name string, cfg LLMProviderConfig) (*XAIProvider, error) {
 		name:             name,
 		config:           cfg,
 		model:            "", // Model set via WithModel()
-		maxTokens:        maxTokens,
+		maxTokens:        cfg.MaxTokens,
 		metadataProvider: "xai",
 	}, nil
 }
@@ -316,10 +281,11 @@ func (p *XAIProvider) WithModel(model string) Provider {
 	normalizedModel = strings.TrimPrefix(normalizedModel, "xai/")
 	normalizedModel = strings.ReplaceAll(normalizedModel, "grok-4.1", "grok-4-1")
 	return &XAIProvider{
-		name:      p.name,
-		config:    p.config,
-		model:     normalizedModel,
-		maxTokens: p.maxTokens,
+		name:         p.name,
+		config:       p.config,
+		model:        normalizedModel,
+		maxTokens:    p.maxTokens,
+		metricPrefix: fmt.Sprintf("llm/%s/%s/%s", p.Type(), p.Name(), normalizedModel),
 		// client is shared - no need to recreate
 		client:   p.client,
 		clientMu: sync.Mutex{},
@@ -334,6 +300,7 @@ func (p *XAIProvider) WithMaxTokens(maxTokens int) Provider {
 		config:           p.config,
 		model:            p.model,
 		maxTokens:        maxTokens,
+		metricPrefix:     p.metricPrefix,
 		client:           p.client,
 		clientMu:         sync.Mutex{},
 		responseID:       p.responseID,
@@ -351,15 +318,15 @@ func (p *XAIProvider) IsAvailable() bool {
 }
 
 // MaxTokens returns the current output token limit.
-// If no explicit config override was set, uses models.json max_output_tokens.
+// Priority: explicit config override → models.json max_output_tokens → fallback default.
 func (p *XAIProvider) MaxTokens() int {
-	if p.maxTokens > 0 && p.maxTokens != 4096 {
+	if p.maxTokens > 0 {
 		return p.maxTokens
 	}
-	if model, ok := metadata.Get().GetModel("xai", p.model); ok && model.MaxOutputTokens > 0 {
+	if model, ok := metadata.Get().GetModel(p.metadataProvider, p.model); ok && model.MaxOutputTokens > 0 {
 		return int(model.MaxOutputTokens)
 	}
-	return p.maxTokens
+	return DefaultMaxOutputTokens
 }
 
 // ContextTokens returns the model's context window size.
@@ -404,7 +371,7 @@ func (p *XAIProvider) StreamMessage(
 	// Build request
 	req := xai.NewChatRequest().
 		WithModel(p.model).
-		WithMaxTokens(safeInt32(p.maxTokens)).
+		WithMaxTokens(safeInt32(p.MaxTokens())).
 		WithStoreMessages(incrementalMode)
 
 	usedPreviousResponseId := false
@@ -485,7 +452,7 @@ func (p *XAIProvider) StreamMessage(
 			// Rebuild request without previousResponseId
 			req = xai.NewChatRequest().
 				WithModel(p.model).
-				WithMaxTokens(safeInt32(p.maxTokens))
+				WithMaxTokens(safeInt32(p.MaxTokens()))
 			if systemPrompt != "" {
 				req.SystemMessage(xai.SystemContent{Text: systemPrompt})
 			}
@@ -518,7 +485,7 @@ func (p *XAIProvider) StreamMessage(
 	defer stream.Close()
 
 	// Process stream with opts for OnThinkingDelta and OnServerToolCall
-	resp, err := p.processStream(stream, onDelta, opts, toolDefs)
+	resp, err := p.processStream(ctx, stream, onDelta, opts, toolDefs)
 	if err != nil {
 		return nil, err
 	}
@@ -554,7 +521,7 @@ func (p *XAIProvider) SimpleMessage(ctx context.Context, userMessage, systemProm
 	// Build request
 	req := xai.NewChatRequest().
 		WithModel(p.model).
-		WithMaxTokens(safeInt32(p.maxTokens))
+		WithMaxTokens(safeInt32(p.MaxTokens()))
 
 	// Add system prompt
 	if systemPrompt != "" {
@@ -576,8 +543,30 @@ func (p *XAIProvider) SimpleMessage(ctx context.Context, userMessage, systemProm
 	L_debug("xai: simple message completed",
 		"inputTokens", resp.Usage.PromptTokens,
 		"outputTokens", resp.Usage.CompletionTokens,
+		"cacheReadTokens", resp.Usage.CachedPromptTokens,
+		"reasoningTokens", resp.Usage.ReasoningTokens,
 		"responseLen", len(resp.Content),
 	)
+
+	// Record metrics
+	if p.metricPrefix != "" {
+		MetricAdd(p.metricPrefix, "input_tokens", int64(resp.Usage.PromptTokens))
+		MetricAdd(p.metricPrefix, "output_tokens", int64(resp.Usage.CompletionTokens))
+		if resp.Usage.CachedPromptTokens > 0 {
+			MetricAdd(p.metricPrefix, "cache_read_tokens", int64(resp.Usage.CachedPromptTokens))
+		}
+		if resp.Usage.ReasoningTokens > 0 {
+			MetricAdd(p.metricPrefix, "reasoning_tokens", int64(resp.Usage.ReasoningTokens))
+		}
+		MetricSuccess(p.metricPrefix, "request_status")
+		simpleResp := &Response{
+			InputTokens:     int(resp.Usage.PromptTokens),
+			OutputTokens:    int(resp.Usage.CompletionTokens),
+			CacheReadTokens: int(resp.Usage.CachedPromptTokens),
+			ReasoningTokens: int(resp.Usage.ReasoningTokens),
+		}
+		emitCostMetrics(p.metricPrefix, PurposeFromContext(ctx), p.config, p.metadataProvider, p.model, simpleResp)
+	}
 
 	return resp.Content, nil
 }
@@ -835,6 +824,7 @@ func isNotFoundError(err error) bool {
 // It captures responseID, accumulates text/reasoning, extracts tool calls, and tracks usage.
 // opts provides OnThinkingDelta and OnServerToolCall callbacks (may be nil).
 func (p *XAIProvider) processStream(
+	ctx context.Context,
 	stream *xai.ChunkStream,
 	onDelta func(delta string),
 	opts *StreamOptions,
@@ -944,10 +934,12 @@ func (p *XAIProvider) processStream(
 
 	// Build response
 	resp := &Response{
-		Text:         textBuilder.String(),
-		Thinking:     reasoningBuilder.String(),
-		InputTokens:  int(usage.PromptTokens),
-		OutputTokens: int(usage.CompletionTokens),
+		Text:            textBuilder.String(),
+		Thinking:        reasoningBuilder.String(),
+		InputTokens:     int(usage.PromptTokens),
+		OutputTokens:    int(usage.CompletionTokens),
+		CacheReadTokens: int(usage.CachedPromptTokens),
+		ReasoningTokens: int(usage.ReasoningTokens),
 	}
 
 	// Map finish reason to stop reason
@@ -986,6 +978,8 @@ func (p *XAIProvider) processStream(
 		"stopReason", resp.StopReason,
 		"inputTokens", resp.InputTokens,
 		"outputTokens", resp.OutputTokens,
+		"cacheReadTokens", resp.CacheReadTokens,
+		"reasoningTokens", resp.ReasoningTokens,
 	)
 	if toolCall != nil {
 		L_debug("xai: tool call",
@@ -993,6 +987,21 @@ func (p *XAIProvider) processStream(
 			"id", resp.ToolUseID,
 			"argsLen", len(toolCall.Function.Arguments),
 		)
+	}
+
+	// Record metrics
+	if p.metricPrefix != "" {
+		MetricAdd(p.metricPrefix, "input_tokens", int64(resp.InputTokens))
+		MetricAdd(p.metricPrefix, "output_tokens", int64(resp.OutputTokens))
+		if resp.CacheReadTokens > 0 {
+			MetricAdd(p.metricPrefix, "cache_read_tokens", int64(resp.CacheReadTokens))
+		}
+		if resp.ReasoningTokens > 0 {
+			MetricAdd(p.metricPrefix, "reasoning_tokens", int64(resp.ReasoningTokens))
+		}
+		MetricOutcome(p.metricPrefix, "stop_reason", resp.StopReason)
+		MetricSuccess(p.metricPrefix, "request_status")
+		emitCostMetrics(p.metricPrefix, PurposeFromContext(ctx), p.config, p.metadataProvider, p.model, resp)
 	}
 
 	return resp, nil

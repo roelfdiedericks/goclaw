@@ -13,6 +13,7 @@ import (
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	. "github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/tokens"
 	"github.com/roelfdiedericks/goclaw/internal/types"
@@ -21,18 +22,20 @@ import (
 // OllamaProvider implements the Provider interface for Ollama.
 // Supports chat completion, embeddings, and summarization tasks.
 type OllamaProvider struct {
-	name          string // Provider instance name (e.g., "ollama-local")
-	url           string
-	model         string
-	maxTokens     int    // Output limit (0 = use model default)
-	contextTokens int    // Model's context window in tokens (queried from Ollama)
-	dimensions    int    // Embedding dimensions (detected on first embed)
-	embeddingOnly bool   // True if this is an embedding-only model (skip chat availability check)
-	metricPrefix  string // e.g., "llm/ollama/ollama/nomic-embed-text"
-	client        *http.Client
-	available     bool
-	mu            sync.RWMutex
-	traceEnabled  bool // Per-provider trace logging control
+	name             string // Provider instance name (e.g., "ollama-local")
+	url              string
+	model            string
+	maxTokens        int    // Output limit (0 = use model default)
+	contextTokens    int    // Model's context window in tokens (queried from Ollama)
+	dimensions       int    // Embedding dimensions (detected on first embed)
+	embeddingOnly    bool   // True if this is an embedding-only model (skip chat availability check)
+	metricPrefix     string // e.g., "llm/ollama/ollama/nomic-embed-text"
+	metadataProvider string // models.json provider ID for metadata lookups
+	config           LLMProviderConfig
+	client           *http.Client
+	available        bool
+	mu               sync.RWMutex
+	traceEnabled     bool // Per-provider trace logging control
 
 	// HTTP transport for capturing request/response (for error dumps)
 	transport     *CapturingTransport
@@ -75,8 +78,10 @@ type ollamaChatMessage struct {
 
 // ollamaChatResponse is the response from Ollama chat API
 type ollamaChatResponse struct {
-	Message ollamaChatMessage `json:"message"`
-	Done    bool              `json:"done"`
+	Message         ollamaChatMessage `json:"message"`
+	Done            bool              `json:"done"`
+	PromptEvalCount int               `json:"prompt_eval_count,omitempty"`
+	EvalCount       int               `json:"eval_count,omitempty"`
 }
 
 // NewOllamaProvider creates a new Ollama provider from LLMProviderConfig.
@@ -99,12 +104,14 @@ func NewOllamaProvider(name string, cfg LLMProviderConfig) (*OllamaProvider, err
 	transport := &CapturingTransport{Base: http.DefaultTransport}
 
 	p := &OllamaProvider{
-		name:          name,
-		url:           url,
-		model:         "", // Model set via WithModel()
-		maxTokens:     cfg.MaxTokens,
-		contextTokens: 4096, // Conservative default, updated by queryModelInfo
-		embeddingOnly: cfg.EmbeddingOnly,
+		name:             name,
+		url:              url,
+		model:            "", // Model set via WithModel()
+		maxTokens:        cfg.MaxTokens,
+		contextTokens:    4096, // Conservative default, updated by queryModelInfo
+		embeddingOnly:    cfg.EmbeddingOnly,
+		metadataProvider: "ollama",
+		config:           cfg,
 		client: &http.Client{
 			Timeout:   time.Duration(timeoutSeconds) * time.Second,
 			Transport: transport,
@@ -386,13 +393,14 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 	})
 
 	// Build request first so we can estimate tokens from full JSON
+	configuredMax := c.MaxTokens()
 	reqBody := ollamaChatRequest{
 		Model:    c.model,
 		Messages: messages,
 		Stream:   false, // Non-streaming for simplicity in compaction use case
 		Options: &ollamaOptions{
 			NumCtx:     contextTokens, // Use detected context window
-			NumPredict: c.maxTokens,   // Will be capped below
+			NumPredict: configuredMax, // Will be capped below
 		},
 	}
 
@@ -406,11 +414,11 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 	estimatedInput := estimator.Count(string(jsonData))
 
 	// Cap output tokens to fit within context window
-	maxOutput := tokens.CapMaxTokens(c.maxTokens, contextTokens, estimatedInput, 100)
-	if c.maxTokens > 0 && maxOutput != c.maxTokens {
+	maxOutput := tokens.CapMaxTokens(configuredMax, contextTokens, estimatedInput, 100)
+	if maxOutput != configuredMax {
 		L_debug("ollama: capped num_predict to fit context",
 			"provider", c.name,
-			"original", c.maxTokens,
+			"original", configuredMax,
 			"capped", maxOutput,
 			"contextTokens", contextTokens,
 			"estimatedInput", estimatedInput)
@@ -424,7 +432,7 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 	dumpCtx.SetTokenInfo(TokenInfo{
 		ContextWindow:  contextTokens,
 		EstimatedInput: estimatedInput,
-		ConfiguredMax:  c.maxTokens,
+		ConfiguredMax:  configuredMax,
 		CappedMax:      maxOutput,
 		SafetyMargin:   tokens.SafetyMargin,
 		Buffer:         100,
@@ -500,20 +508,36 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 		MetricDuration(c.metricPrefix, "request", duration)
 		MetricSuccess(c.metricPrefix, "request_status")
 
+		if result.PromptEvalCount > 0 {
+			MetricAdd(c.metricPrefix, "input_tokens", int64(result.PromptEvalCount))
+		}
+		if result.EvalCount > 0 {
+			MetricAdd(c.metricPrefix, "output_tokens", int64(result.EvalCount))
+		}
+
 		// Context window metrics
 		contextWindow := c.ContextTokens()
 		if contextWindow > 0 {
 			MetricSet(c.metricPrefix, "context_window", int64(contextWindow))
-			// Estimate input tokens from message content (rough: 4 chars per token)
-			inputChars := 0
-			for _, m := range messages {
-				inputChars += len(m.Content)
+			inputTokens := result.PromptEvalCount
+			if inputTokens == 0 {
+				inputChars := 0
+				for _, m := range messages {
+					inputChars += len(m.Content)
+				}
+				inputTokens = inputChars / 4
 			}
-			estimatedInputTokens := inputChars / 4
-			MetricSet(c.metricPrefix, "context_used", int64(estimatedInputTokens))
-			usagePercent := float64(estimatedInputTokens) / float64(contextWindow) * 100.0
+			MetricSet(c.metricPrefix, "context_used", int64(inputTokens))
+			usagePercent := float64(inputTokens) / float64(contextWindow) * 100.0
 			MetricThreshold(c.metricPrefix, "context_usage_percent", usagePercent, 100.0)
 		}
+
+		// Cost tracking (ollama is typically local/free, but supports overrides)
+		costResp := &Response{
+			InputTokens:  result.PromptEvalCount,
+			OutputTokens: result.EvalCount,
+		}
+		emitCostMetrics(c.metricPrefix, PurposeFromContext(ctx), c.config, c.metadataProvider, c.model, costResp)
 	}
 
 	// Finalize dump (delete on success unless dumpOnSuccess is enabled)
@@ -596,9 +620,20 @@ func (p *OllamaProvider) StreamMessage(
 	return nil, ErrNotSupported{Provider: p.name, Operation: "StreamMessage (use Anthropic or OpenAI for agent)"}
 }
 
-// MaxTokens returns the current output limit
+// MaxTokens returns the current output limit.
+// Priority: explicit config override → models.json max_output_tokens → fallback default.
+// Note: Ollama models are typically not in models.json, so this usually returns
+// the config value or the fallback.
 func (p *OllamaProvider) MaxTokens() int {
-	return p.maxTokens
+	if p.maxTokens > 0 {
+		return p.maxTokens
+	}
+	if mp := p.MetadataProvider(); mp != "" {
+		if model, ok := metadata.Get().GetModel(mp, p.model); ok && model.MaxOutputTokens > 0 {
+			return int(model.MaxOutputTokens)
+		}
+	}
+	return DefaultMaxOutputTokens
 }
 
 // ============================================================================

@@ -18,6 +18,7 @@ const (
 	TypeError       MetricType = "error"
 	TypeCondition   MetricType = "condition"
 	TypeThreshold   MetricType = "threshold"
+	TypeCost        MetricType = "cost"
 )
 
 // HealthStatus represents the health of a metric
@@ -215,4 +216,24 @@ type ThresholdSnapshot struct {
 	ExceedCount int64   `json:"exceed_count"`
 	TotalChecks int64   `json:"total_checks"`
 	ExceedRate  float64 `json:"exceed_rate"`
+}
+
+// CostMetric tracks costs in microdollars (USD * 1,000,000).
+// Combines accumulating total with per-request tracking (last/min/max).
+type CostMetric struct {
+	mu    sync.RWMutex
+	Total int64 // accumulated microdollars
+	Last  int64 // last recorded value
+	Min   int64 // minimum single-request cost
+	Max   int64 // maximum single-request cost
+	Count int64 // number of recordings
+}
+
+// CostSnapshot for JSON serialization. Values in USD (float64).
+type CostSnapshot struct {
+	TotalUSD float64 `json:"total_usd"`
+	LastUSD  float64 `json:"last_usd"`
+	MinUSD   float64 `json:"min_usd"`
+	MaxUSD   float64 `json:"max_usd"`
+	Count    int64   `json:"count"`
 }

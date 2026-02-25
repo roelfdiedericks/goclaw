@@ -38,12 +38,14 @@ type AnthropicProvider struct {
 	client           *anthropic.Client
 	model            string
 	maxTokens        int
+	contextTokens    int // Context window override (0 = auto-detect)
 	promptCaching    bool
 	apiKey           string // Stored for cloning
 	baseURL          string // Custom API base URL (for Kimi K2, etc.)
 	metricPrefix     string // e.g., "llm/anthropic/anthropic/claude-opus-4-5"
 	metadataProvider string // models.json provider ID for metadata lookups
 	traceEnabled     bool   // Per-provider trace logging control
+	config           LLMProviderConfig
 
 	// HTTP transport for capturing request/response (for error dumps)
 	transport     *CapturingTransport
@@ -63,6 +65,7 @@ type Response struct {
 	OutputTokens        int
 	CacheCreationTokens int // tokens used to create cache entry
 	CacheReadTokens     int // tokens read from cache (saved cost!)
+	ReasoningTokens     int // tokens used for reasoning/thinking (xAI, OpenAI o-series)
 }
 
 // HasToolUse returns true if the response contains a tool use request
@@ -81,6 +84,9 @@ func NewAnthropicProvider(name string, cfg LLMProviderConfig) (*AnthropicProvide
 	// Create capturing transport for request/response debugging
 	transport := &CapturingTransport{Base: http.DefaultTransport}
 	httpClient := &http.Client{Transport: transport}
+	if cfg.TimeoutSeconds > 0 {
+		httpClient.Timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
+	}
 
 	// Build client options
 	opts := []option.RequestOption{
@@ -91,11 +97,6 @@ func NewAnthropicProvider(name string, cfg LLMProviderConfig) (*AnthropicProvide
 		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
 	}
 	client := anthropic.NewClient(opts...)
-
-	maxTokens := cfg.MaxTokens
-	if maxTokens == 0 {
-		maxTokens = 8192
-	}
 
 	baseURL := cfg.BaseURL
 	if baseURL == "" {
@@ -108,18 +109,20 @@ func NewAnthropicProvider(name string, cfg LLMProviderConfig) (*AnthropicProvide
 		traceEnabled = false
 	}
 
-	L_debug("anthropic provider created", "name", name, "baseURL", baseURL, "maxTokens", maxTokens, "promptCaching", cfg.PromptCaching, "trace", traceEnabled)
+	L_debug("anthropic provider created", "name", name, "baseURL", baseURL, "maxTokens", cfg.MaxTokens, "promptCaching", cfg.PromptCaching, "timeoutSeconds", cfg.TimeoutSeconds, "trace", traceEnabled)
 
 	return &AnthropicProvider{
 		name:             name,
 		client:           &client,
 		model:            "", // Model set via WithModel()
-		maxTokens:        maxTokens,
+		maxTokens:        cfg.MaxTokens,
+		contextTokens:    cfg.ContextTokens,
 		promptCaching:    cfg.PromptCaching,
 		apiKey:           cfg.APIKey,
 		baseURL:          cfg.BaseURL,
 		metadataProvider: metadata.Get().ResolveProvider(cfg.Subtype, cfg.Driver, cfg.BaseURL),
 		traceEnabled:     traceEnabled,
+		config:           cfg,
 		transport:        transport,
 		dumpOnSuccess:    cfg.DumpOnSuccess,
 	}, nil
@@ -174,20 +177,23 @@ func (p *AnthropicProvider) IsAvailable() bool {
 }
 
 // ContextTokens returns the model's context window size in tokens.
-// Priority: models.json → hardcoded 200K fallback.
+// Priority: config override → models.json → fallback default.
 func (p *AnthropicProvider) ContextTokens() int {
+	if p.contextTokens > 0 {
+		return p.contextTokens
+	}
 	if p.metadataProvider != "" {
 		if ctx := metadata.Get().GetContextWindow(p.metadataProvider, p.model); ctx > 0 {
 			return int(ctx)
 		}
 	}
-	return 200000
+	return DefaultContextTokens
 }
 
 // MaxTokens returns the current output limit.
-// If no explicit config override was set, uses models.json max_output_tokens.
+// Priority: explicit config override → models.json max_output_tokens → fallback default.
 func (p *AnthropicProvider) MaxTokens() int {
-	if p.maxTokens > 0 && p.maxTokens != 8192 {
+	if p.maxTokens > 0 {
 		return p.maxTokens
 	}
 	if p.metadataProvider != "" {
@@ -195,7 +201,7 @@ func (p *AnthropicProvider) MaxTokens() int {
 			return int(model.MaxOutputTokens)
 		}
 	}
-	return p.maxTokens
+	return DefaultMaxOutputTokens
 }
 
 // Embed is not supported by Anthropic - returns error
@@ -301,7 +307,7 @@ func (c *AnthropicProvider) StreamMessage(
 	anthropicTools := convertTools(toolDefs)
 
 	// Build request params first so we can estimate tokens from full JSON
-	maxTokens := c.maxTokens
+	maxTokens := c.MaxTokens()
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(c.model),
 		MaxTokens: int64(maxTokens),
@@ -340,11 +346,12 @@ func (c *AnthropicProvider) StreamMessage(
 	estimatedInput := estimator.Count(string(reqBytes))
 
 	// Cap max_tokens to fit within context window
-	maxTokens = tokens.CapMaxTokens(c.maxTokens, contextWindow, estimatedInput, 100)
-	if maxTokens != c.maxTokens {
+	configuredMax := maxTokens
+	maxTokens = tokens.CapMaxTokens(configuredMax, contextWindow, estimatedInput, 100)
+	if maxTokens != configuredMax {
 		L_debug("anthropic: capped max_tokens to fit context",
 			"provider", c.name,
-			"original", c.maxTokens,
+			"original", configuredMax,
 			"capped", maxTokens,
 			"contextWindow", contextWindow,
 			"estimatedInput", estimatedInput)
@@ -392,7 +399,7 @@ func (c *AnthropicProvider) StreamMessage(
 	dumpCtx.SetTokenInfo(TokenInfo{
 		ContextWindow:  contextWindow,
 		EstimatedInput: estimatedInput,
-		ConfiguredMax:  c.maxTokens,
+		ConfiguredMax:  configuredMax,
 		CappedMax:      maxTokens,
 		SafetyMargin:   tokens.SafetyMargin,
 		Buffer:         100,
@@ -602,6 +609,9 @@ func (c *AnthropicProvider) StreamMessage(
 			MetricSet(c.metricPrefix, "context_used", int64(response.InputTokens))
 			MetricThreshold(c.metricPrefix, "context_usage_percent", usagePercent, 100.0)
 		}
+
+		// Cost tracking (per-provider and per-purpose)
+		emitCostMetrics(c.metricPrefix, PurposeFromContext(ctx), c.config, c.metadataProvider, c.model, response)
 	}
 
 	// Finalize dump (delete on success unless dumpOnSuccess is enabled)

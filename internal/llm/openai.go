@@ -48,6 +48,7 @@ type OpenAIProvider struct {
 	baseURL          string // Custom API base URL
 	metricPrefix     string // e.g., "llm/openai/kimi/kimi-k2.5"
 	metadataProvider string // models.json provider ID for metadata lookups
+	config           LLMProviderConfig
 
 	// Embedding support
 	embeddingOnly       bool // If true, only used for embeddings (not chat)
@@ -103,14 +104,13 @@ func NewOpenAIProvider(name string, cfg LLMProviderConfig) (*OpenAIProvider, err
 		L_debug("openai: using OpenRouter headers", "referer", "https://goclaw.org", "title", "GoClaw")
 	}
 	transport := &CapturingTransport{Base: baseTransport}
-	config.HTTPClient = &http.Client{Transport: transport}
+	httpClient := &http.Client{Transport: transport}
+	if cfg.TimeoutSeconds > 0 {
+		httpClient.Timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
+	}
+	config.HTTPClient = httpClient
 
 	client := openai.NewClientWithConfig(config)
-
-	maxTokens := cfg.MaxTokens
-	if maxTokens == 0 {
-		maxTokens = 8192
-	}
 
 	displayURL := baseURL
 	if displayURL == "" {
@@ -123,18 +123,19 @@ func NewOpenAIProvider(name string, cfg LLMProviderConfig) (*OpenAIProvider, err
 		traceEnabled = false
 	}
 
-	L_debug("openai provider created", "name", name, "baseURL", displayURL, "maxTokens", maxTokens, "contextTokens", cfg.ContextTokens, "trace", traceEnabled)
+	L_debug("openai provider created", "name", name, "baseURL", displayURL, "maxTokens", cfg.MaxTokens, "contextTokens", cfg.ContextTokens, "timeoutSeconds", cfg.TimeoutSeconds, "trace", traceEnabled)
 
 	p := &OpenAIProvider{
 		name:             name,
 		client:           client,
 		model:            "", // Model set via WithModel()
-		maxTokens:        maxTokens,
+		maxTokens:        cfg.MaxTokens,
 		contextTokens:    cfg.ContextTokens,
 		apiKey:           cfg.APIKey,
 		baseURL:          baseURL,
 		metadataProvider: metadata.Get().ResolveProvider(cfg.Subtype, cfg.Driver, cfg.BaseURL),
 		traceEnabled:     traceEnabled,
+		config:           cfg,
 		transport:        transport,
 		dumpOnSuccess:    cfg.DumpOnSuccess,
 	}
@@ -477,9 +478,9 @@ func (p *OpenAIProvider) ContextTokens() int {
 }
 
 // MaxTokens returns the current output limit.
-// If no explicit config override was set, uses models.json max_output_tokens.
+// Priority: explicit config override → models.json max_output_tokens → fallback default.
 func (p *OpenAIProvider) MaxTokens() int {
-	if p.maxTokens > 0 && p.maxTokens != 8192 {
+	if p.maxTokens > 0 {
 		return p.maxTokens
 	}
 	if p.metadataProvider != "" {
@@ -487,7 +488,7 @@ func (p *OpenAIProvider) MaxTokens() int {
 			return int(model.MaxOutputTokens)
 		}
 	}
-	return p.maxTokens
+	return DefaultMaxOutputTokens
 }
 
 // Embed generates an embedding for a single text using the OpenAI-compatible /v1/embeddings endpoint.
@@ -712,9 +713,10 @@ func (p *OpenAIProvider) StreamMessage(
 	openaiTools := convertToOpenAITools(toolDefs)
 
 	// Build request first so we can estimate tokens from full JSON
+	configuredMax := p.MaxTokens()
 	req := openai.ChatCompletionRequest{
 		Model:     p.model,
-		MaxTokens: p.maxTokens,
+		MaxTokens: configuredMax,
 		Messages:  openaiMessages,
 		Stream:    true,
 		StreamOptions: &openai.StreamOptions{
@@ -742,11 +744,11 @@ func (p *OpenAIProvider) StreamMessage(
 	estimatedInput := estimator.Count(string(reqBytes))
 
 	// Cap max_tokens to fit within context window
-	maxTokens := tokens.CapMaxTokens(p.maxTokens, contextWindow, estimatedInput, 100)
-	if maxTokens != p.maxTokens {
+	maxTokens := tokens.CapMaxTokens(configuredMax, contextWindow, estimatedInput, 100)
+	if maxTokens != configuredMax {
 		L_debug("openai: capped max_tokens to fit context",
 			"provider", p.name,
-			"original", p.maxTokens,
+			"original", configuredMax,
 			"capped", maxTokens,
 			"contextWindow", contextWindow,
 			"estimatedInput", estimatedInput)
@@ -810,7 +812,7 @@ func (p *OpenAIProvider) StreamMessage(
 	dumpCtx.SetTokenInfo(TokenInfo{
 		ContextWindow:  contextWindow,
 		EstimatedInput: estimatedInput,
-		ConfiguredMax:  p.maxTokens,
+		ConfiguredMax:  configuredMax,
 		CappedMax:      maxTokens,
 		SafetyMargin:   tokens.SafetyMargin,
 		Buffer:         100,
@@ -842,7 +844,7 @@ func (p *OpenAIProvider) StreamMessage(
 			"provider", p.name,
 			"baseURL", p.baseURL,
 			"model", p.model,
-			"maxTokens", p.maxTokens,
+			"maxTokens", configuredMax,
 			"messageCount", len(openaiMessages),
 			"toolCount", len(openaiTools),
 			"requestSizeKB", reqSizeKB,
@@ -1145,6 +1147,12 @@ func (p *OpenAIProvider) StreamMessage(
 		if chunk.Usage != nil {
 			response.InputTokens = chunk.Usage.PromptTokens
 			response.OutputTokens = chunk.Usage.CompletionTokens
+			if chunk.Usage.PromptTokensDetails != nil {
+				response.CacheReadTokens = chunk.Usage.PromptTokensDetails.CachedTokens
+			}
+			if chunk.Usage.CompletionTokensDetails != nil {
+				response.ReasoningTokens = chunk.Usage.CompletionTokensDetails.ReasoningTokens
+			}
 		}
 	}
 
@@ -1237,6 +1245,12 @@ func (p *OpenAIProvider) StreamMessage(
 		MetricDuration(p.metricPrefix, "request", elapsed)
 		MetricAdd(p.metricPrefix, "input_tokens", int64(response.InputTokens))
 		MetricAdd(p.metricPrefix, "output_tokens", int64(response.OutputTokens))
+		if response.CacheReadTokens > 0 {
+			MetricAdd(p.metricPrefix, "cache_read_tokens", int64(response.CacheReadTokens))
+		}
+		if response.ReasoningTokens > 0 {
+			MetricAdd(p.metricPrefix, "reasoning_tokens", int64(response.ReasoningTokens))
+		}
 		MetricOutcome(p.metricPrefix, "stop_reason", response.StopReason)
 		MetricSuccess(p.metricPrefix, "request_status")
 
@@ -1246,6 +1260,9 @@ func (p *OpenAIProvider) StreamMessage(
 			MetricSet(p.metricPrefix, "context_used", int64(response.InputTokens))
 			MetricThreshold(p.metricPrefix, "context_usage_percent", usagePercent, 100.0)
 		}
+
+		// Cost tracking (per-provider and per-purpose)
+		emitCostMetrics(p.metricPrefix, PurposeFromContext(ctx), p.config, p.metadataProvider, p.model, response)
 	}
 
 	// Finalize dump (delete on success unless dumpOnSuccess is enabled)

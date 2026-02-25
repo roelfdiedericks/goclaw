@@ -117,3 +117,9 @@ func MetricCondition(topic, condition string, value bool) {
 func MetricThreshold(topic, metric string, value, threshold float64) {
 	GetInstance().RecordThreshold(topic, metric, value, threshold)
 }
+
+// MetricCost records a cost in microdollars (USD * 1,000,000).
+// Single call updates running total, last value, min/max, and count.
+func MetricCost(topic, function string, microUSD int64) {
+	GetInstance().RecordCost(topic, function, microUSD)
+}

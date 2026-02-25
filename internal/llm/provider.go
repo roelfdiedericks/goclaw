@@ -8,6 +8,12 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
+// Fallback defaults when neither config nor metadata provide a value.
+const (
+	DefaultMaxOutputTokens = 8192
+	DefaultContextTokens   = 128000
+)
+
 // Provider is the unified interface for all LLM backends.
 // Implementations: AnthropicProvider, OllamaProvider, OpenAIProvider
 type Provider interface {

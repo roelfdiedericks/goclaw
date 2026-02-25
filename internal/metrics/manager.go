@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"database/sql"
 	"fmt"
 	"runtime"
 	"sort"
@@ -27,8 +28,13 @@ type MetricsManager struct {
 	errors      map[string]*ErrorMetric
 	conditions  map[string]*ConditionMetric
 	thresholds  map[string]*ThresholdMetric
+	costs       map[string]*CostMetric
 	active      map[string]time.Time // For tracking active timings
 	keyCounter  uint64               // For generating unique timer keys
+
+	// Persistence (nil if disabled/unavailable)
+	db       *sql.DB
+	stopSave chan struct{}
 }
 
 var (
@@ -54,8 +60,10 @@ func GetInstance() *MetricsManager {
 			errors:      make(map[string]*ErrorMetric),
 			conditions:  make(map[string]*ConditionMetric),
 			thresholds:  make(map[string]*ThresholdMetric),
+			costs:       make(map[string]*CostMetric),
 			active:      make(map[string]time.Time),
 		}
+		instance.initPersistence()
 	})
 	return instance
 }
@@ -497,6 +505,41 @@ func (m *MetricsManager) RecordThreshold(topic, metric string, value, threshold 
 	}
 }
 
+// RecordCost records a cost in microdollars. Adds to running total and tracks last/min/max.
+func (m *MetricsManager) RecordCost(topic, function string, microUSD int64) {
+	path := buildPath(topic, function)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	metric, exists := m.costs[path]
+	if !exists {
+		metric = &CostMetric{
+			Min: microUSD,
+			Max: microUSD,
+		}
+		m.costs[path] = metric
+
+		node := m.getOrCreateNode(path)
+		node.Type = TypeCost
+		node.Metric = metric
+	}
+
+	metric.mu.Lock()
+	defer metric.mu.Unlock()
+
+	metric.Total += microUSD
+	metric.Last = microUSD
+	metric.Count++
+
+	if microUSD < metric.Min {
+		metric.Min = microUSD
+	}
+	if microUSD > metric.Max {
+		metric.Max = microUSD
+	}
+}
+
 // GetSnapshot returns a snapshot of all metrics
 func (m *MetricsManager) GetSnapshot() map[string]*MetricSnapshot {
 	m.mu.RLock()
@@ -769,6 +812,25 @@ func (m *MetricsManager) GetSnapshot() map[string]*MetricSnapshot {
 			snapshot.Health = HealthGood
 		}
 
+		metric.mu.RUnlock()
+		snapshots[path] = snapshot
+	}
+
+	// Process cost metrics
+	for path, metric := range m.costs {
+		metric.mu.RLock()
+		snapshot := &MetricSnapshot{
+			Path:   path,
+			Type:   TypeCost,
+			Health: HealthGood,
+			Data: CostSnapshot{
+				TotalUSD: float64(metric.Total) / 1_000_000,
+				LastUSD:  float64(metric.Last) / 1_000_000,
+				MinUSD:   float64(metric.Min) / 1_000_000,
+				MaxUSD:   float64(metric.Max) / 1_000_000,
+				Count:    metric.Count,
+			},
+		}
 		metric.mu.RUnlock()
 		snapshots[path] = snapshot
 	}

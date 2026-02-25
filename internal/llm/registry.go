@@ -5,12 +5,12 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
@@ -64,6 +64,21 @@ type Registry struct {
 type providerInstance struct {
 	config   LLMProviderConfig
 	provider interface{} // *AnthropicProvider or *OllamaProvider
+}
+
+// purposeCapReq defines capability requirements for a model purpose.
+type purposeCapReq struct {
+	required []string // missing = remove from chain
+	warnOnly []string // missing = warn but keep
+}
+
+// purposeCapabilities maps purpose names to their required model capabilities.
+// Capabilities are checked against models.json metadata at startup.
+var purposeCapabilities = map[string]purposeCapReq{
+	"agent": {
+		required: []string{"tool_use"},
+		warnOnly: []string{"vision"},
+	},
 }
 
 // RegistryConfig is the configuration for the LLM registry
@@ -140,12 +155,15 @@ func (r *Registry) initProvider(name string, cfg LLMProviderConfig) error {
 	return nil
 }
 
-// validatePurposeModels checks each model ref against provider restrictions.
-// Fatal results: return error, process exits. Non-fatal: L_error and remove model from chain.
+// validatePurposeModels checks each model ref against driver restrictions and
+// metadata capability requirements. Models missing required capabilities for
+// their purpose are removed from the chain. If the agent chain ends up empty,
+// returns a fatal error since the gateway cannot function without it.
 func (r *Registry) validatePurposeModels(purpose string) error {
 	cfg := r.purposes[purpose]
 	models := cfg.Models
 	var kept []string
+	var removed []string
 
 	for _, ref := range models {
 		parts := strings.SplitN(ref, "/", 2)
@@ -165,34 +183,46 @@ func (r *Registry) validatePurposeModels(purpose string) error {
 			continue
 		}
 
-		v, ok := instance.provider.(ModelValidator)
-		if !ok {
-			kept = append(kept, ref)
+		// Phase 1: Driver-specific validation (e.g. xAI model restrictions)
+		if v, ok := instance.provider.(ModelValidator); ok {
+			result := v.ValidateModel(modelName)
+			if result != nil {
+				if result.Fatal {
+					return fmt.Errorf("model validation fatal: %s", result.Message)
+				}
+				L_warn("llm: driver validation failed, removing from chain",
+					"purpose", purpose, "model", ref, "message", result.Message)
+				removed = append(removed, fmt.Sprintf("%s: %s", ref, result.Message))
+				continue
+			}
+		}
+
+		// Phase 2: Metadata capability validation
+		if reason := checkMetadataCapabilities(instance.config, modelName, purpose); reason != "" {
+			L_warn("llm: model lacks required capabilities, removing from chain",
+				"purpose", purpose, "model", ref, "reason", reason)
+			removed = append(removed, fmt.Sprintf("%s: %s", ref, reason))
 			continue
 		}
 
-		result := v.ValidateModel(modelName)
-		if result == nil {
-			kept = append(kept, ref)
-			continue
-		}
+		kept = append(kept, ref)
+	}
 
-		if result.Fatal {
-			fmt.Fprintln(os.Stderr, "")
-			fmt.Fprintln(os.Stderr, "========================================")
-			fmt.Fprintln(os.Stderr, "  ❌ LLM MODEL VALIDATION FAILED")
-			fmt.Fprintln(os.Stderr, "========================================")
-			fmt.Fprintln(os.Stderr, "")
-			fmt.Fprintln(os.Stderr, result.Message)
-			fmt.Fprintln(os.Stderr, "")
-			fmt.Fprintln(os.Stderr, "========================================")
-			os.Exit(1)
+	// Empty-chain guard
+	if len(kept) == 0 && len(models) > 0 {
+		if purpose == "agent" {
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("no valid models remaining for %q purpose after validation\n\n", purpose))
+			sb.WriteString("All configured models were removed:\n")
+			for _, r := range removed {
+				sb.WriteString(fmt.Sprintf("  - %s\n", r))
+			}
+			sb.WriteString("\nThe agent purpose requires at least one model with tool_use capability.\n")
+			sb.WriteString("Run 'goclaw setup' to reconfigure your model chains.")
+			return fmt.Errorf("%s", sb.String())
 		}
-
-		L_error("llm: model validation failed, removing from chain",
-			"purpose", purpose,
-			"model", ref,
-			"message", result.Message)
+		L_warn("llm: no valid models remaining after validation",
+			"purpose", purpose, "removed", len(removed))
 	}
 
 	r.mu.Lock()
@@ -200,6 +230,59 @@ func (r *Registry) validatePurposeModels(purpose string) error {
 	r.mu.Unlock()
 
 	return nil
+}
+
+// checkMetadataCapabilities checks a model's capabilities against purpose
+// requirements using models.json metadata. Returns a reason string if the
+// model should be removed, or empty string if it passes (or is unknown).
+func checkMetadataCapabilities(cfg LLMProviderConfig, modelName, purpose string) string {
+	reqs, ok := purposeCapabilities[purpose]
+	if !ok {
+		return ""
+	}
+
+	metaProviderID := metadata.Get().ResolveProvider(cfg.Subtype, cfg.Driver, cfg.BaseURL)
+	model, found := metadata.Get().GetModel(metaProviderID, modelName)
+	if !found {
+		L_debug("llm: model not in metadata, allowing optimistically",
+			"provider", metaProviderID, "model", modelName, "purpose", purpose)
+		return ""
+	}
+
+	caps := model.Capabilities
+	capMap := map[string]bool{
+		"tool_use":          caps.ToolUse,
+		"vision":            caps.Vision,
+		"streaming":         caps.Streaming,
+		"reasoning":         caps.Reasoning,
+		"structured_output": caps.StructuredOutput,
+	}
+
+	var missing []string
+	for _, req := range reqs.required {
+		if !capMap[req] {
+			missing = append(missing, req)
+		}
+	}
+
+	if len(missing) > 0 {
+		return fmt.Sprintf("missing required capabilities: %s", strings.Join(missing, ", "))
+	}
+
+	// Warn-only checks (don't remove, just log)
+	var warnings []string
+	for _, w := range reqs.warnOnly {
+		if !capMap[w] {
+			warnings = append(warnings, w)
+		}
+	}
+	if len(warnings) > 0 {
+		L_warn("llm: model missing optional capabilities",
+			"provider", metaProviderID, "model", modelName,
+			"purpose", purpose, "missing", strings.Join(warnings, ", "))
+	}
+
+	return ""
 }
 
 // GetProvider returns the first available provider for a purpose.
@@ -521,6 +604,45 @@ func (r *Registry) GetProviderStatus() []ProviderStatus {
 	return statuses
 }
 
+// getModelsWithAgentFallback returns the model chain for a purpose,
+// appending agent chain models as last-resort fallbacks for non-agent purposes.
+// This ensures summarization/output can fall back to the agent model if its own
+// chain is exhausted or empty, since these operations are critical to gateway function.
+func (r *Registry) getModelsWithAgentFallback(purpose string) []string {
+	r.mu.RLock()
+	cfg := r.purposes[purpose]
+	agentCfg := r.purposes["agent"]
+	r.mu.RUnlock()
+
+	models := make([]string, len(cfg.Models))
+	copy(models, cfg.Models)
+
+	if purpose == "agent" || len(agentCfg.Models) == 0 {
+		return models
+	}
+
+	// Build set of already-present models to avoid duplicates
+	seen := make(map[string]bool, len(models))
+	for _, m := range models {
+		seen[m] = true
+	}
+
+	for _, m := range agentCfg.Models {
+		if !seen[m] {
+			models = append(models, m)
+		}
+	}
+
+	if len(models) > len(cfg.Models) {
+		L_debug("failover: agent chain appended as fallback",
+			"purpose", purpose,
+			"purposeModels", len(cfg.Models),
+			"totalCandidates", len(models))
+	}
+
+	return models
+}
+
 // ==================== Failover Streaming ====================
 
 // FailoverAttempt records a single attempt in the failover chain
@@ -559,25 +681,32 @@ func (r *Registry) StreamMessageWithFailover(
 	opts *StreamOptions,
 ) (*FailoverResult, error) {
 	r.mu.RLock()
-	cfg, ok := r.purposes[purpose]
+	purposeCfg, ok := r.purposes[purpose]
 	r.mu.RUnlock()
 
 	if !ok {
 		return nil, fmt.Errorf("unknown purpose: %s", purpose)
 	}
 
-	if len(cfg.Models) == 0 {
+	candidates := r.getModelsWithAgentFallback(purpose)
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no models configured for purpose: %s", purpose)
 	}
 
+	// Track which models belong to this purpose vs agent fallback
+	purposeModels := make(map[string]bool, len(purposeCfg.Models))
+	for _, m := range purposeCfg.Models {
+		purposeModels[m] = true
+	}
+
 	result := &FailoverResult{
-		Attempts: make([]FailoverAttempt, 0, len(cfg.Models)),
+		Attempts: make([]FailoverAttempt, 0, len(candidates)),
 	}
 
 	var lastErr error
-	primaryModel := cfg.Models[0]
+	primaryModel := candidates[0]
 
-	for _, modelRef := range cfg.Models {
+	for _, modelRef := range candidates {
 		// Parse provider alias from "provider/model" or "provider/subpath/model"
 		parts := strings.SplitN(modelRef, "/", 2)
 		if len(parts) < 2 {
@@ -618,8 +747,9 @@ func (r *Registry) StreamMessageWithFailover(
 			L_debug("stateful provider: loaded state", "key", stateKey, "hasState", state != nil)
 		}
 
-		// Try the call
-		resp, err := p.StreamMessage(ctx, messages, toolDefs, systemPrompt, onDelta, opts)
+		// Try the call (inject purpose into context for per-purpose metrics)
+		purposeCtx := ContextWithPurpose(ctx, purpose)
+		resp, err := p.StreamMessage(purposeCtx, messages, toolDefs, systemPrompt, onDelta, opts)
 
 		// Save state after call (even on error - state may have changed)
 		if sp, ok := p.(StatefulProvider); ok && stateAccessor != nil {
@@ -643,7 +773,10 @@ func (r *Registry) StreamMessageWithFailover(
 				}
 			}
 
-			if result.FailedOver {
+			if !purposeModels[modelRef] {
+				L_warn("failover: using agent model for non-agent purpose",
+					"purpose", purpose, "model", modelRef)
+			} else if result.FailedOver {
 				L_info("failover: using fallback model", "model", modelRef, "primary", primaryModel)
 			}
 			return result, nil
@@ -699,22 +832,29 @@ func (r *Registry) SimpleMessageWithFailover(
 	systemPrompt string,
 ) (*SimpleMessageResult, error) {
 	r.mu.RLock()
-	cfg, ok := r.purposes[purpose]
+	purposeCfg, ok := r.purposes[purpose]
 	r.mu.RUnlock()
 
 	if !ok {
 		return nil, fmt.Errorf("unknown purpose: %s", purpose)
 	}
 
-	if len(cfg.Models) == 0 {
+	candidates := r.getModelsWithAgentFallback(purpose)
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no models configured for purpose: %s", purpose)
+	}
+
+	// Track which models belong to this purpose vs agent fallback
+	purposeModels := make(map[string]bool, len(purposeCfg.Models))
+	for _, m := range purposeCfg.Models {
+		purposeModels[m] = true
 	}
 
 	result := &SimpleMessageResult{}
 	var lastErr error
-	primaryModel := cfg.Models[0]
+	primaryModel := candidates[0]
 
-	for _, modelRef := range cfg.Models {
+	for _, modelRef := range candidates {
 		// Parse provider alias
 		parts := strings.SplitN(modelRef, "/", 2)
 		if len(parts) < 2 {
@@ -751,8 +891,9 @@ func (r *Registry) SimpleMessageWithFailover(
 			L_debug("stateful provider: loaded state", "key", stateKey, "hasState", state != nil)
 		}
 
-		// Try the call
-		text, err := p.SimpleMessage(ctx, userMessage, systemPrompt)
+		// Try the call (inject purpose into context for per-purpose metrics)
+		purposeCtx := ContextWithPurpose(ctx, purpose)
+		text, err := p.SimpleMessage(purposeCtx, userMessage, systemPrompt)
 
 		// Save state after call (even on error - state may have changed)
 		if sp, ok := p.(StatefulProvider); ok && stateAccessor != nil {
@@ -776,7 +917,10 @@ func (r *Registry) SimpleMessageWithFailover(
 				}
 			}
 
-			if result.FailedOver {
+			if !purposeModels[modelRef] {
+				L_warn("failover: using agent model for non-agent purpose",
+					"purpose", purpose, "model", modelRef)
+			} else if result.FailedOver {
 				L_info("failover: using fallback model", "model", modelRef, "primary", primaryModel, "purpose", purpose)
 			}
 			return result, nil
