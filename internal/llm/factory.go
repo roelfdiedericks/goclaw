@@ -4,10 +4,10 @@ package llm
 import "fmt"
 
 // NewProvider creates a provider instance from config.
-// Dispatches to the appropriate constructor based on cfg.Type.
+// Dispatches to the appropriate constructor based on cfg.Driver.
 // Used by registry.initProvider() and for standalone testing in the editor.
 func NewProvider(name string, cfg LLMProviderConfig) (Provider, error) {
-	switch cfg.Type {
+	switch cfg.Driver {
 	case "anthropic":
 		return NewAnthropicProvider(name, cfg)
 	case "openai":
@@ -17,6 +17,6 @@ func NewProvider(name string, cfg LLMProviderConfig) (Provider, error) {
 	case "xai":
 		return NewXAIProvider(name, cfg)
 	default:
-		return nil, fmt.Errorf("unknown provider type: %s", cfg.Type)
+		return nil, fmt.Errorf("unknown provider driver: %s", cfg.Driver)
 	}
 }

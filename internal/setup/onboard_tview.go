@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/rivo/tview"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -30,10 +32,12 @@ type WizardData struct {
 	WorkspacePath string
 
 	// User setup
-	UserName        string
-	UserDisplayName string
-	UserRole        string
-	UserTelegramID  string
+	UserName         string
+	UserDisplayName  string
+	UserRole         string
+	UserTelegramID   string
+	UserPassword     string
+	UserPasswordConf string
 
 	// Telegram
 	TelegramEnabled bool
@@ -49,14 +53,25 @@ type WizardData struct {
 	// Sandboxing
 	ExecBubblewrap    bool
 	BrowserBubblewrap bool
+
+	// LLM
+	LLMProviderID   string
+	LLMProviderName string
+	LLMDriver       string
+	LLMAPIKey       string
+	LLMBaseURL      string
+	LLMModel        string
+	LLMSkipped      bool
 }
 
 // NewWizardData creates a new WizardData with defaults
 func NewWizardData() *WizardData {
 	return &WizardData{
-		UserRole:    "owner",
-		HTTPEnabled: true,
-		HTTPListen:  "127.0.0.1:1337",
+		UserRole:          "owner",
+		HTTPEnabled:       true,
+		HTTPListen:        "127.0.0.1:1337",
+		ExecBubblewrap:    true,
+		BrowserBubblewrap: true,
 	}
 }
 
@@ -82,6 +97,32 @@ func (d *WizardData) LoadFromExisting(cfg *config.Config, path string) {
 	// Sandboxing
 	d.ExecBubblewrap = cfg.Tools.Exec.Bubblewrap.Enabled
 	d.BrowserBubblewrap = cfg.Tools.Browser.Bubblewrap.Enabled
+
+	// LLM: load from first agent chain entry
+	if len(cfg.LLM.Agent.Models) > 0 {
+		parts := strings.SplitN(cfg.LLM.Agent.Models[0], "/", 2)
+		if len(parts) == 2 {
+			alias := parts[0]
+			if provCfg, ok := cfg.LLM.Providers[alias]; ok {
+				d.LLMProviderID = provCfg.Subtype
+				if d.LLMProviderID == "" {
+					d.LLMProviderID = provCfg.Driver
+				}
+				d.LLMDriver = provCfg.Driver
+				d.LLMAPIKey = provCfg.APIKey
+				if provCfg.Driver == "ollama" {
+					d.LLMBaseURL = provCfg.URL
+				} else {
+					d.LLMBaseURL = provCfg.BaseURL
+				}
+				d.LLMModel = parts[1]
+
+				if prov, ok := metadata.Get().GetModelProvider(d.LLMProviderID); ok {
+					d.LLMProviderName = prov.Name
+				}
+			}
+		}
+	}
 
 	// Load user data from users.json
 	d.loadUserFromUsersJSON()
@@ -234,9 +275,8 @@ func buildWizardSteps(data *WizardData) []forms.WizardStep {
 		stepUserSetup(data),
 		stepTelegram(data),
 		stepHTTP(data),
-		stepBrowser(data),
+		stepLLMProvider(data),
 		stepSandbox(data),
-		stepLLMNote(data),
 		stepReview(data),
 	)
 
@@ -391,15 +431,26 @@ func stepUserSetup(data *WizardData) forms.WizardStep {
 				data.UserTelegramID = text
 			})
 
-			return form
+			form.AddPasswordField("HTTP Password", data.UserPassword, 40, '*', func(text string) {
+				data.UserPassword = text
+			})
+
+			form.AddPasswordField("Confirm Password", data.UserPasswordConf, 40, '*', func(text string) {
+				data.UserPasswordConf = text
+			})
+
+			return formWithHeader(`Set up your user profile.
+Password is used for HTTP web interface authentication.`, 3, form)
 		},
 		OnExit: func(w *forms.Wizard) error {
 			if data.UserDisplayName == "" {
 				return fmt.Errorf("name is required")
 			}
 			if data.UserName == "" {
-				// Generate username from display name
 				data.UserName = sanitizeUsername(data.UserDisplayName)
+			}
+			if data.UserPassword != "" && data.UserPassword != data.UserPasswordConf {
+				return fmt.Errorf("passwords do not match")
 			}
 			L_info("wizard: user set", "name", data.UserDisplayName, "username", data.UserName)
 			return nil
@@ -574,31 +625,192 @@ preventing accidental or malicious access to system files.
 	}
 }
 
-// Step: LLM Note
-func stepLLMNote(data *WizardData) forms.WizardStep {
+// Step: LLM Provider selection + config (combined into one wizard step)
+func stepLLMProvider(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
-		Title: "LLM Providers",
+		Title: "LLM Provider",
 		Content: func(w *forms.Wizard) tview.Primitive {
-			text := `[yellow]Important:[white] LLM providers are not configured in this wizard.
-
-After completing setup, run:
-
-  [cyan]goclaw setup edit[white]
-
-This will open the configuration editor where you can:
-  • Add API keys for Anthropic, OpenAI, etc.
-  • Configure local models (Ollama, LM Studio)
-  • Select agent and embedding models
-
-Press [yellow]Next[white] to continue to the summary.`
-
-			tv := tview.NewTextView().
-				SetDynamicColors(true).
-				SetText(text)
-			tv.SetBorder(false)
-			return tv
+			// If we already have a provider selected (re-run), show the config form
+			if data.LLMProviderID != "" && !data.LLMSkipped {
+				return buildLLMConfigForm(data, w)
+			}
+			return buildLLMProviderList(data, w)
 		},
 	}
+}
+
+// buildLLMProviderList shows the flat provider list for selection.
+func buildLLMProviderList(data *WizardData, w *forms.Wizard) tview.Primitive {
+	meta := metadata.Get()
+	providerIDs := meta.ModelProviderIDs()
+
+	list := tview.NewList()
+	list.SetBorder(false)
+	list.ShowSecondaryText(false)
+
+	for _, pid := range providerIDs {
+		providerID := pid
+		prov, ok := meta.GetModelProvider(providerID)
+		if !ok {
+			continue
+		}
+		list.AddItem(prov.Name, "", 0, func() {
+			data.LLMProviderID = providerID
+			data.LLMProviderName = prov.Name
+			data.LLMDriver = prov.Driver
+			data.LLMBaseURL = prov.APIEndpoint
+			data.LLMAPIKey = ""
+			data.LLMModel = ""
+			data.LLMSkipped = false
+
+			large, _ := meta.GetDefaultModels(providerID)
+			data.LLMModel = large
+
+			w.RefreshCurrentStep()
+		})
+	}
+
+	list.AddItem("", "", 0, nil) // separator
+	list.AddItem("Skip (configure later)", "", 0, func() {
+		data.LLMSkipped = true
+		data.LLMProviderID = ""
+		w.NextStep()
+	})
+
+	header := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(`GoClaw needs an LLM provider to function. This is the AI model
+that powers your agent — it handles conversations, tool use, and reasoning.
+
+[yellow]Select a provider and enter your API key.[white]
+[gray]You can add more providers later with[white] [cyan]goclaw setup edit[white]`)
+	header.SetBorder(false)
+
+	layout := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(header, 5, 0, false).
+		AddItem(list, 0, 1, true)
+
+	return layout
+}
+
+// buildLLMConfigForm shows the API key / URL form for the selected provider.
+func buildLLMConfigForm(data *WizardData, w *forms.Wizard) tview.Primitive {
+	meta := metadata.Get()
+	isLocal := data.LLMDriver == "ollama" || data.LLMProviderID == "lmstudio"
+
+	// Provider info header (static)
+	headerInfo := fmt.Sprintf("[cyan]%s[white]\n", data.LLMProviderName)
+	headerInfo += fmt.Sprintf("Driver:   %s\n", data.LLMDriver)
+	if !isLocal {
+		headerInfo += fmt.Sprintf("Endpoint: %s", data.LLMBaseURL)
+	}
+	header := tview.NewTextView().SetDynamicColors(true).SetText(headerInfo)
+	header.SetBorder(false)
+
+	// Model info panel (updates when dropdown changes)
+	modelInfo := tview.NewTextView().SetDynamicColors(true)
+	modelInfo.SetBorder(false)
+
+	updateModelInfo := func(modelID string) {
+		if model, ok := meta.GetModel(data.LLMProviderID, modelID); ok {
+			var lines []string
+			lines = append(lines, fmt.Sprintf("[green]%s[white] (%s)", model.Name, modelID))
+			lines = append(lines, fmt.Sprintf("Context: %dk  Output: %dk", model.ContextWindow/1000, model.MaxOutputTokens/1000))
+
+			var caps []string
+			if model.Capabilities.Vision {
+				caps = append(caps, "Vision")
+			}
+			if model.Capabilities.ToolUse {
+				caps = append(caps, "Tool Use")
+			}
+			if model.Capabilities.Reasoning {
+				caps = append(caps, "Reasoning")
+			}
+			if len(caps) > 0 {
+				lines = append(lines, strings.Join(caps, " | "))
+			}
+			lines = append(lines, fmt.Sprintf("Cost: $%.2f / $%.2f per 1M tokens", model.Cost.Input, model.Cost.Output))
+			modelInfo.SetText(strings.Join(lines, "\n"))
+		} else {
+			modelInfo.SetText(fmt.Sprintf("%s (no metadata available)", modelID))
+		}
+	}
+
+	// Form
+	form := tview.NewForm()
+	form.SetBorder(false)
+
+	if isLocal {
+		form.AddInputField("URL", data.LLMBaseURL, 50, nil, func(text string) {
+			data.LLMBaseURL = text
+		})
+		form.AddInputField("Model", data.LLMModel, 50, nil, func(text string) {
+			data.LLMModel = text
+		})
+	} else {
+		// Model dropdown
+		modelIDs := meta.GetKnownChatModels(data.LLMProviderID)
+		large, _ := meta.GetDefaultModels(data.LLMProviderID)
+
+		if len(modelIDs) > 0 {
+			options := make([]string, 0, len(modelIDs))
+			selectedIdx := 0
+			for i, mid := range modelIDs {
+				label := mid
+				if mid == large {
+					label += " (default)"
+				}
+				if m, ok := meta.GetModel(data.LLMProviderID, mid); ok {
+					label = fmt.Sprintf("%s - %s", m.Name, mid)
+					if mid == large {
+						label += " (default)"
+					}
+				}
+				options = append(options, label)
+				if mid == data.LLMModel || (data.LLMModel == "" && mid == large) {
+					selectedIdx = i
+				}
+			}
+
+			form.AddDropDown("Agent Model", options, selectedIdx, func(option string, index int) {
+				if index >= 0 && index < len(modelIDs) {
+					data.LLMModel = modelIDs[index]
+					updateModelInfo(data.LLMModel)
+				}
+			})
+
+			// Set initial model
+			if data.LLMModel == "" {
+				data.LLMModel = large
+			}
+		}
+
+		form.AddPasswordField("API Key", data.LLMAPIKey, 60, '*', func(text string) {
+			data.LLMAPIKey = text
+		})
+	}
+
+	form.AddButton("Change Provider", func() {
+		data.LLMProviderID = ""
+		data.LLMProviderName = ""
+		w.RefreshCurrentStep()
+	})
+
+	// Initialize model info
+	if data.LLMModel != "" {
+		updateModelInfo(data.LLMModel)
+	}
+
+	layout := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(header, 4, 0, false).
+		AddItem(form, 7, 0, true).
+		AddItem(modelInfo, 5, 0, false).
+		AddItem(nil, 0, 1, false)
+
+	return layout
 }
 
 // Step: Review
@@ -606,26 +818,29 @@ func stepReview(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
 		Title: "Review",
 		Content: func(w *forms.Wizard) tview.Primitive {
+			llmInfo := "(skipped)"
+			if !data.LLMSkipped && data.LLMProviderID != "" {
+				llmInfo = fmt.Sprintf("%s (%s)", data.LLMProviderName, data.LLMModel)
+			}
+
 			summary := fmt.Sprintf(`[cyan]Configuration Summary[white]
 
 Workspace:    %s
 User:         %s (%s)
 Telegram:     %s
 HTTP:         %s
-Browser:      %s
 Sandboxing:   exec=%v, browser=%v
+LLM:          %s
 
-Press [yellow]Finish[white] to complete setup.
-
-[gray](Note: Configuration will be printed but not saved during testing)[white]`,
+Press [yellow]Finish[white] to complete setup.`,
 				data.WorkspacePath,
 				data.UserDisplayName,
 				data.UserName,
 				boolToEnabled(data.TelegramEnabled),
 				formatHTTP(data),
-				boolToSetup(data.BrowserSetup),
 				data.ExecBubblewrap,
 				data.BrowserBubblewrap,
+				llmInfo,
 			)
 
 			tv := tview.NewTextView().
@@ -754,6 +969,14 @@ func printWizardConfig(data *WizardData) {
 	if data.UserTelegramID != "" {
 		userEntry["telegram_id"] = data.UserTelegramID
 	}
+	if data.UserPassword != "" {
+		hash, err := user.HashPassword(data.UserPassword)
+		if err != nil {
+			fmt.Printf("Error hashing password: %v\n", err)
+		} else {
+			userEntry["http_password_hash"] = hash
+		}
+	}
 	users := map[string]interface{}{
 		data.UserName: userEntry,
 	}
@@ -766,43 +989,138 @@ func printWizardConfig(data *WizardData) {
 
 	// Print next steps
 	fmt.Println("\nSetup complete! Next steps:")
-	fmt.Println("  1. Run 'goclaw setup edit' to configure LLM providers")
-	fmt.Println("  2. Run 'goclaw tui' to start GoClaw")
-	if data.BrowserSetup {
-		fmt.Println("  3. Run 'goclaw browser setup' to configure browser profiles")
+	if data.LLMSkipped || data.LLMProviderID == "" {
+		fmt.Println("  1. Run 'goclaw setup edit' to configure LLM providers")
+		fmt.Println("  2. Run 'goclaw tui' to start GoClaw")
+	} else {
+		fmt.Println("  1. Run 'goclaw tui' to start GoClaw")
 	}
+	fmt.Println("\nOptional:")
+	fmt.Println("  - Run 'goclaw setup edit' to add more providers or fine-tune settings")
+	fmt.Println("  - Run 'goclaw browser setup' to configure browser profiles for authenticated web access")
 }
 
-// buildConfigFromWizardData creates a config structure from wizard data
+// buildConfigFromWizardData creates a config structure from wizard data.
+// When an existing config exists, starts from it to preserve all settings,
+// then overlays only the fields the wizard manages.
 func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
-	cfg := map[string]interface{}{
-		"gateway": map[string]interface{}{
-			"workingDir": data.WorkspacePath,
-		},
-		"telegram": map[string]interface{}{
-			"enabled":  data.TelegramEnabled,
-			"botToken": data.TelegramToken,
-		},
-		"http": map[string]interface{}{
-			"enabled": data.HTTPEnabled,
-			"listen":  data.HTTPListen,
-		},
-		"session": map[string]interface{}{
-			"storePath": func() string { p, _ := paths.DataPath("sessions.db"); return p }(),
-		},
-		"tools": map[string]interface{}{
-			"exec": map[string]interface{}{
-				"bubblewrap": map[string]interface{}{
-					"enabled": data.ExecBubblewrap,
-				},
-			},
-			"browser": map[string]interface{}{
-				"bubblewrap": map[string]interface{}{
-					"enabled": data.BrowserBubblewrap,
-				},
-			},
-		},
+	var cfg map[string]interface{}
+
+	if data.ExistingConfig != nil {
+		raw, err := json.Marshal(data.ExistingConfig)
+		if err == nil {
+			json.Unmarshal(raw, &cfg)
+		}
+	}
+	if cfg == nil {
+		cfg = make(map[string]interface{})
+	}
+
+	// Overlay wizard-managed fields
+	deepSet(cfg, "gateway.workingDir", data.WorkspacePath)
+
+	deepSet(cfg, "channels.telegram.enabled", data.TelegramEnabled)
+	deepSet(cfg, "channels.telegram.botToken", data.TelegramToken)
+	deepSet(cfg, "channels.http.enabled", data.HTTPEnabled)
+	deepSet(cfg, "channels.http.listen", data.HTTPListen)
+
+	storePath, _ := paths.DataPath("sessions.db")
+	deepSet(cfg, "session.storePath", storePath)
+
+	deepSet(cfg, "tools.exec.bubblewrap.enabled", data.ExecBubblewrap)
+	deepSet(cfg, "tools.browser.bubblewrap.enabled", data.BrowserBubblewrap)
+
+	// LLM provider
+	if !data.LLMSkipped && data.LLMProviderID != "" {
+		alias := data.LLMProviderID
+
+		deepSet(cfg, "llm.providers."+alias+".driver", data.LLMDriver)
+		deepSet(cfg, "llm.providers."+alias+".subtype", data.LLMProviderID)
+
+		if data.LLMAPIKey != "" {
+			deepSet(cfg, "llm.providers."+alias+".apiKey", data.LLMAPIKey)
+		}
+		if data.LLMDriver == "ollama" {
+			deepSet(cfg, "llm.providers."+alias+".url", data.LLMBaseURL)
+		} else if data.LLMBaseURL != "" {
+			deepSet(cfg, "llm.providers."+alias+".baseURL", data.LLMBaseURL)
+		}
+
+		// Anthropic: auto-enable prompt caching
+		if data.LLMDriver == "anthropic" {
+			deepSet(cfg, "llm.providers."+alias+".promptCaching", true)
+		}
+
+		// Agent chain: replace first model, preserve fallbacks
+		ref := alias + "/" + data.LLMModel
+		agentModels := getStringSlice(cfg, "llm.agent.models")
+		if len(agentModels) > 0 {
+			agentModels[0] = ref
+		} else {
+			agentModels = []string{ref}
+		}
+		deepSet(cfg, "llm.agent.models", agentModels)
 	}
 
 	return cfg
+}
+
+// deepSet sets a value at a dotted path in a nested map, creating
+// intermediate maps as needed. Does not destroy sibling keys.
+func deepSet(m map[string]interface{}, path string, value interface{}) {
+	parts := strings.Split(path, ".")
+	current := m
+	for i, part := range parts {
+		if i == len(parts)-1 {
+			current[part] = value
+			return
+		}
+		next, ok := current[part]
+		if !ok {
+			next = make(map[string]interface{})
+			current[part] = next
+		}
+		if nextMap, ok := next.(map[string]interface{}); ok {
+			current = nextMap
+		} else {
+			newMap := make(map[string]interface{})
+			current[part] = newMap
+			current = newMap
+		}
+	}
+}
+
+// getStringSlice extracts a []string from a nested map at a dotted path.
+func getStringSlice(m map[string]interface{}, path string) []string {
+	parts := strings.Split(path, ".")
+	current := m
+	for i, part := range parts {
+		if i == len(parts)-1 {
+			if val, ok := current[part]; ok {
+				if slice, ok := val.([]interface{}); ok {
+					result := make([]string, 0, len(slice))
+					for _, v := range slice {
+						if s, ok := v.(string); ok {
+							result = append(result, s)
+						}
+					}
+					return result
+				}
+				if slice, ok := val.([]string); ok {
+					return slice
+				}
+			}
+			return nil
+		}
+		next, ok := current[part]
+		if !ok {
+			return nil
+		}
+		if nextMap, ok := next.(map[string]interface{}); ok {
+			current = nextMap
+		} else {
+			return nil
+		}
+	}
+	return nil
 }

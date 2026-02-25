@@ -20,7 +20,7 @@ func ConfigFormDef() forms.FormDef {
 				Title: "Storage",
 				Fields: []forms.Field{
 					{Name: "Store", Title: "Storage Backend", Type: forms.Select, Default: "sqlite",
-						Options: []forms.Option{{Label: "SQLite", Value: "sqlite"}, {Label: "JSONL", Value: "jsonl"}},
+						Options: []forms.Option{{Label: "SQLite", Value: "sqlite"}},
 						Desc:    "Storage backend for sessions"},
 					{Name: "StorePath", Title: "Store Path", Type: forms.Text, Desc: "Path to storage (DB file or sessions directory)"},
 				},

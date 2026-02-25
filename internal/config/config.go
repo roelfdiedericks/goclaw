@@ -216,7 +216,7 @@ func Load() (*LoadResult, error) {
 		LLM: llm.LLMConfig{
 			Providers: map[string]llm.LLMProviderConfig{
 				"anthropic": {
-					Type:          "anthropic",
+					Driver:        "anthropic",
 					PromptCaching: true,
 				},
 			},
@@ -255,7 +255,7 @@ func Load() (*LoadResult, error) {
 				Device:         "clear", // No viewport emulation, fills window
 				ProfileDomains: map[string]string{},
 				Bubblewrap: toolsconfig.BrowserBubblewrapConfig{
-					Enabled:     false, // Disabled by default
+					Enabled:     true,
 					ExtraRoBind: []string{},
 					ExtraBind:   []string{},
 					GPU:         true, // GPU enabled by default when sandbox is used
@@ -264,7 +264,7 @@ func Load() (*LoadResult, error) {
 			Exec: toolsconfig.ExecToolsConfig{
 				Timeout: 1800, // 30 minutes (matches OpenClaw)
 				Bubblewrap: toolsconfig.ExecBubblewrapConfig{
-					Enabled:      false, // Disabled by default
+					Enabled:      true,
 					ExtraRoBind:  []string{},
 					ExtraBind:    []string{},
 					ExtraEnv:     map[string]string{},
@@ -464,7 +464,7 @@ func DefaultConfig() *DefaultConfigTemplate {
 		LLM: DefaultLLMTemplate{
 			Providers: map[string]llm.LLMProviderConfig{
 				"anthropic": {
-					Type:          "anthropic",
+					Driver:        "anthropic",
 					APIKey:        "YOUR_ANTHROPIC_API_KEY",
 					PromptCaching: true,
 				},

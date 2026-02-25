@@ -114,7 +114,7 @@ func (r *Registry) initProvider(name string, cfg LLMProviderConfig) error {
 	var provider interface{}
 	var err error
 
-	switch cfg.Type {
+	switch cfg.Driver {
 	case "anthropic":
 		provider, err = NewAnthropicProvider(name, cfg)
 	case "ollama":
@@ -124,7 +124,7 @@ func (r *Registry) initProvider(name string, cfg LLMProviderConfig) error {
 	case "xai":
 		provider, err = NewXAIProvider(name, cfg)
 	default:
-		return fmt.Errorf("unknown provider type: %s", cfg.Type)
+		return fmt.Errorf("unknown provider driver: %s", cfg.Driver)
 	}
 
 	if err != nil {
@@ -136,7 +136,7 @@ func (r *Registry) initProvider(name string, cfg LLMProviderConfig) error {
 		provider: provider,
 	}
 
-	L_debug("llm: provider initialized", "name", name, "type", cfg.Type)
+	L_debug("llm: provider initialized", "name", name, "driver", cfg.Driver)
 	return nil
 }
 

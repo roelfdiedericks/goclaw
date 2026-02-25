@@ -7,7 +7,7 @@ import (
 // SessionConfig configures session management
 // Note: This was previously config.SessionConfig, moved here to avoid import cycles
 type SessionConfig struct {
-	// Storage backend: "sqlite" (default) or "jsonl"
+	// Storage backend: "sqlite" (only supported backend)
 	Store     string `json:"store"`
 	StorePath string `json:"storePath"` // SQLite DB path (when store="sqlite")
 

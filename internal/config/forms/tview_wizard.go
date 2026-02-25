@@ -147,11 +147,15 @@ func (w *Wizard) showStep(index int) {
 	// Update step indicator
 	w.stepLabel.SetText(fmt.Sprintf("[gray]Step %d of %d", index+1, len(w.steps)))
 
-	// Clear and rebuild content
+	// Clear and rebuild content, centered at ~75% width
 	w.contentArea.Clear()
 	if step.Content != nil {
 		content := step.Content(w)
-		w.contentArea.AddItem(content, 0, 1, true)
+		centered := tview.NewFlex().
+			AddItem(nil, 0, 1, false).
+			AddItem(content, 0, 4, true).
+			AddItem(nil, 0, 1, false)
+		w.contentArea.AddItem(centered, 0, 1, true)
 		w.app.App().SetFocus(content)
 	}
 
@@ -227,6 +231,11 @@ func (w *Wizard) nextStep() {
 // NextStep advances to the next step (public, for use from step content)
 func (w *Wizard) NextStep() {
 	w.nextStep()
+}
+
+// RefreshCurrentStep re-renders the current step's content.
+func (w *Wizard) RefreshCurrentStep() {
+	w.showStep(w.stepIndex)
 }
 
 // prevStep goes back to the previous step

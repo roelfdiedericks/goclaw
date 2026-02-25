@@ -88,8 +88,8 @@ func ProviderConfigFormDef(subtypeOptions []forms.Option) forms.FormDef {
 				Title: "Connection",
 				Fields: []forms.Field{
 					{
-						Name:     "type",
-						Title:    "Provider Type",
+						Name:     "driver",
+						Title:    "Driver",
 						Desc:     "The LLM driver (anthropic, openai, ollama, xai)",
 						Type:     forms.Select,
 						Required: true,
@@ -212,7 +212,7 @@ func ProviderConfigFormDef(subtypeOptions []forms.Option) forms.FormDef {
 			},
 			{
 				Title:     "xAI Advanced",
-				ShowWhen:  "type=xai",
+				ShowWhen:  "driver=xai",
 				Collapsed: true,
 				Fields: []forms.Field{
 					{
@@ -351,10 +351,10 @@ func handleListModels(cmd bus.Command) bus.CommandResult {
 		}
 	}
 
-	if cfg.Type == "" {
+	if cfg.Driver == "" {
 		return bus.CommandResult{
-			Error:   fmt.Errorf("provider type is required"),
-			Message: "Select a provider type first",
+			Error:   fmt.Errorf("provider driver is required"),
+			Message: "Select a provider driver first",
 		}
 	}
 
@@ -379,7 +379,7 @@ func handleListModels(cmd bus.Command) bus.CommandResult {
 
 	models, err := lister.ListModels(ctx)
 	if err != nil {
-		L_warn("llm: list models failed", "type", cfg.Type, "error", err)
+		L_warn("llm: list models failed", "driver", cfg.Driver, "error", err)
 		return bus.CommandResult{
 			Error:   err,
 			Message: fmt.Sprintf("Failed to list models: %s", err),
@@ -401,7 +401,7 @@ func handleListModels(cmd bus.Command) bus.CommandResult {
 		}
 	}
 
-	L_info("llm: list models successful", "type", cfg.Type, "count", len(models))
+	L_info("llm: list models successful", "driver", cfg.Driver, "count", len(models))
 	return bus.CommandResult{
 		Success: true,
 		Message: sb.String(),

@@ -24,7 +24,7 @@ func TestProvider(preset ProviderPreset, apiKey string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	switch preset.Type {
+	switch preset.Driver {
 	case "anthropic":
 		return ListAnthropicModels(ctx, apiKey)
 	case "openai":
@@ -32,7 +32,7 @@ func TestProvider(preset ProviderPreset, apiKey string) ([]string, error) {
 	case "ollama":
 		return ListOllamaModels(ctx, preset.BaseURL)
 	default:
-		return nil, fmt.Errorf("unknown provider type: %s", preset.Type)
+		return nil, fmt.Errorf("unknown provider driver: %s", preset.Driver)
 	}
 }
 

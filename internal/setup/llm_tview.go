@@ -90,7 +90,7 @@ func (e *LLMEditor) showProviderList() {
 		preview := e.buildProviderPreview(providerName, cfg)
 
 		items = append(items, forms.SplitItem{
-			Label:   fmt.Sprintf("%s (%s)", providerName, cfg.Type),
+			Label:   fmt.Sprintf("%s (%s)", providerName, cfg.Driver),
 			Preview: preview,
 			OnSelect: func() {
 				provCfg := e.cfg.Providers[providerName]
@@ -130,7 +130,7 @@ func (e *LLMEditor) buildProviderPreview(name string, cfg llm.LLMProviderConfig)
 	var lines []string
 
 	// Type
-	lines = append(lines, fmt.Sprintf("[yellow]Type:[white] %s", cfg.Type))
+	lines = append(lines, fmt.Sprintf("[yellow]Driver:[white] %s", cfg.Driver))
 	if cfg.Subtype != "" {
 		lines = append(lines, fmt.Sprintf("[yellow]Subtype:[white] %s", cfg.Subtype))
 	}
@@ -312,7 +312,7 @@ func (e *LLMEditor) editProvider(name string, cfg *llm.LLMProviderConfig) {
 	L_info("llm editor: editing provider", "name", name)
 
 	e.resolveProviderID(name, cfg)
-	formDef := llm.ProviderConfigFormDef(buildSubtypeOptions(cfg.Type))
+	formDef := llm.ProviderConfigFormDef(buildSubtypeOptions(cfg.Driver))
 	formDef.Title = fmt.Sprintf("Provider: %s", name)
 
 	content, err := forms.BuildFormContent(formDef, cfg, "llm", func(result forms.TviewResult) {
@@ -366,10 +366,10 @@ func (e *LLMEditor) selectProviderType(cfg *llm.LLMProviderConfig) {
 			OnSelect: func() {
 				cfg.Subtype = providerID
 				if prov.Driver == "ollama" {
-					cfg.Type = "ollama"
+					cfg.Driver = "ollama"
 					cfg.URL = prov.APIEndpoint
 				} else {
-					cfg.Type = prov.Driver
+					cfg.Driver = prov.Driver
 					cfg.BaseURL = prov.APIEndpoint
 				}
 				e.promptProviderName(cfg)
@@ -381,7 +381,7 @@ func (e *LLMEditor) selectProviderType(cfg *llm.LLMProviderConfig) {
 	items = append(items, forms.MenuItem{
 		Label: "Custom Endpoint",
 		OnSelect: func() {
-			cfg.Type = "openai"
+			cfg.Driver = "openai"
 			cfg.Subtype = "custom"
 			e.promptProviderName(cfg)
 		},
@@ -404,8 +404,8 @@ func (e *LLMEditor) promptProviderName(cfg *llm.LLMProviderConfig) {
 	e.app.SetStatusText(forms.StatusForm)
 
 	// Default name based on type/subtype
-	defaultName := cfg.Type
-	if cfg.Subtype != "" && cfg.Subtype != cfg.Type {
+	defaultName := cfg.Driver
+	if cfg.Subtype != "" && cfg.Subtype != cfg.Driver {
 		defaultName = cfg.Subtype
 	}
 
@@ -442,9 +442,9 @@ func (e *LLMEditor) promptProviderName(cfg *llm.LLMProviderConfig) {
 
 // finishAddProvider completes adding a new provider
 func (e *LLMEditor) finishAddProvider(name string, cfg *llm.LLMProviderConfig) {
-	L_info("llm editor: finishing add provider", "name", name, "type", cfg.Type)
+	L_info("llm editor: finishing add provider", "name", name, "driver", cfg.Driver)
 
-	formDef := llm.ProviderConfigFormDef(buildSubtypeOptions(cfg.Type))
+	formDef := llm.ProviderConfigFormDef(buildSubtypeOptions(cfg.Driver))
 
 	content, err := forms.BuildFormContent(formDef, cfg, "llm", func(result forms.TviewResult) {
 		if result == forms.ResultAccepted {
@@ -652,7 +652,7 @@ func (e *LLMEditor) resolveProviderID(alias string, provCfg *llm.LLMProviderConf
 		}
 	}
 
-	return provCfg.Type
+	return provCfg.Driver
 }
 
 // buildChainEntryPreview builds a preview string for a model chain entry.

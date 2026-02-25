@@ -8,7 +8,7 @@ import (
 type ProviderPreset struct {
 	Name               string
 	Key                string
-	Type               string // Driver: "anthropic", "openai", "ollama", "xai"
+	Driver             string // "anthropic", "openai", "ollama", "xai"
 	BaseURL            string
 	Description        string
 	IsLocal            bool
@@ -32,12 +32,12 @@ func BuildPresets() []ProviderPreset {
 		preset := ProviderPreset{
 			Name:            prov.Name,
 			Key:             pid,
-			Type:            prov.Driver,
+			Driver:          prov.Driver,
 			BaseURL:         prov.APIEndpoint,
 			KnownChatModels: meta.GetKnownChatModels(pid),
 		}
 
-		if prov.Driver == "ollama" || pid == "lmstudio" {
+		if preset.Driver == "ollama" || pid == "lmstudio" {
 			preset.IsLocal = true
 		}
 
@@ -74,7 +74,7 @@ func CustomPreset(name, baseURL string) ProviderPreset {
 	return ProviderPreset{
 		Name:               name,
 		Key:                name,
-		Type:               "openai",
+		Driver:             "openai",
 		BaseURL:            baseURL,
 		Description:        "Custom endpoint",
 		SupportsEmbeddings: true,
