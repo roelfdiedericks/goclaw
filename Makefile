@@ -56,6 +56,10 @@ debug: build
 trace: build
 	./$(BINARY) -t gateway
 
+menuconfig: build
+	./$(BINARY) setup edit
+
+
 clean:
 	rm -f $(BINARY)
 

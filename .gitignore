@@ -1,5 +1,6 @@
 # Binary (root level only)
 /goclaw
+/metamerge
 
 # Go
 *.exe
