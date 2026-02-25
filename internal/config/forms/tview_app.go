@@ -30,6 +30,7 @@ type TviewApp struct {
 	logPanel  *tview.TextView
 	statusBar *tview.TextView
 	layout    *tview.Flex
+	pages     *tview.Pages // overlay layer for modals
 
 	// Content area (set via SetContent)
 	contentFlex  *tview.Flex
@@ -84,6 +85,10 @@ func NewTviewApp(title string) *TviewApp {
 		AddItem(a.frame, 0, 1, true).
 		AddItem(a.statusBar, 1, 0, false).
 		AddItem(a.logPanel, 6, 0, false)
+
+	// Pages wrapper allows modal overlays on top of the main layout
+	a.pages = tview.NewPages().
+		AddPage("main", a.layout, true, true)
 
 	// Set up log hook
 	a.setupLogHook()
@@ -205,6 +210,31 @@ func (a *TviewApp) FocusLog() {
 	a.app.SetFocus(a.logPanel)
 }
 
+// ShowModal displays a modal dialog over the current content.
+// handler receives the button index and label when a button is pressed.
+// Safe to call from tview event handlers (checkbox callbacks, etc.).
+func (a *TviewApp) ShowModal(text string, buttons []string, handler func(buttonIndex int, buttonLabel string)) {
+	modal := tview.NewModal().
+		SetText(text).
+		AddButtons(buttons).
+		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+			a.pages.RemovePage("modal")
+			a.FocusContent()
+			if handler != nil {
+				handler(buttonIndex, buttonLabel)
+			}
+		})
+	modal.SetBackgroundColor(tcell.ColorDarkSlateGray)
+	a.pages.AddPage("modal", modal, true, true)
+	a.app.SetFocus(modal)
+}
+
+// DismissModal removes the modal overlay if one is showing.
+func (a *TviewApp) DismissModal() {
+	a.pages.RemovePage("modal")
+	a.FocusContent()
+}
+
 // Stop stops the application
 func (a *TviewApp) Stop() {
 	a.app.Stop()
@@ -214,7 +244,7 @@ func (a *TviewApp) Stop() {
 func (a *TviewApp) Run() error {
 	logging.L_info("setup: opened", "title", a.title)
 	a.appRunning = true
-	return a.app.SetRoot(a.layout, true).EnableMouse(true).Run()
+	return a.app.SetRoot(a.pages, true).EnableMouse(true).Run()
 }
 
 // RunWithCleanup runs and ensures log hook is cleared on exit

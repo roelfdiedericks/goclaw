@@ -54,6 +54,11 @@ func NewRegistryFromUsers(users UsersConfig, rolesConfig RolesConfig) *Registry 
 
 		r.users[username] = user
 
+		if !user.Sandbox {
+			logging.L_warn("users: user running with sandbox disabled",
+				"user", username, "role", entry.Role)
+		}
+
 		// Build telegram lookup map
 		if entry.TelegramID != "" {
 			r.telegramID[entry.TelegramID] = username

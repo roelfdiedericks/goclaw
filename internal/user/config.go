@@ -86,10 +86,11 @@ type UserEntry struct {
 	HTTPPasswordHash string  `json:"http_password_hash,omitempty"` // Argon2id hash of HTTP password
 	Thinking         *bool   `json:"thinking,omitempty"`           // Default /thinking toggle state (nil = role default)
 	ThinkingLevel    *string `json:"thinking_level,omitempty"`     // Preferred thinking level: off/minimal/low/medium/high/xhigh
-	Sandbox          *bool   `json:"sandbox,omitempty"`            // Enable file sandboxing (nil = role default)
+	Sandbox          *bool   `json:"sandbox,omitempty"`            // Enable file sandboxing (nil = default true)
 }
 
-// applyDefaults sets role-based defaults for nil Thinking and Sandbox fields
+// applyDefaults sets defaults for nil Thinking and Sandbox fields.
+// Sandbox defaults to true (secure) for all roles — owners must explicitly opt out.
 func (e *UserEntry) applyDefaults() {
 	isOwner := e.Role == "owner"
 
@@ -98,7 +99,7 @@ func (e *UserEntry) applyDefaults() {
 		e.Thinking = &val
 	}
 	if e.Sandbox == nil {
-		val := !isOwner // false for owner, true for others
+		val := true
 		e.Sandbox = &val
 	}
 }

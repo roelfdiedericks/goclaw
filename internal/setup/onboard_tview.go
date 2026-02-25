@@ -589,12 +589,11 @@ You can set this up later with [yellow]goclaw browser setup[white].`, 3, form)
 	}
 }
 
-// Step: Sandboxing (placeholder)
+// Step: Sandboxing
 func stepSandbox(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
 		Title: "Sandboxing",
 		Content: func(w *forms.Wizard) tview.Primitive {
-			// Check if on Linux
 			isLinux := isLinuxOS()
 
 			if !isLinux {
@@ -610,19 +609,56 @@ The exec and browser tools will run without kernel sandboxing.`)
 			form.SetBorder(false)
 
 			form.AddCheckbox("Enable exec sandboxing", data.ExecBubblewrap, func(checked bool) {
+				if !checked {
+					data.ExecBubblewrap = true
+					sandboxConfirmModal(w, form, 0, func() {
+						data.ExecBubblewrap = false
+					})
+					return
+				}
 				data.ExecBubblewrap = checked
 			})
 
 			form.AddCheckbox("Enable browser sandboxing", data.BrowserBubblewrap, func(checked bool) {
+				if !checked {
+					data.BrowserBubblewrap = true
+					sandboxConfirmModal(w, form, 1, func() {
+						data.BrowserBubblewrap = false
+					})
+					return
+				}
 				data.BrowserBubblewrap = checked
 			})
 
 			return formWithHeader(`[cyan]Sandboxing[white] restricts tools to only access files within your workspace,
 preventing accidental or malicious access to system files.
 
-[green]Highly recommended for security.[white]`, 5, form)
+[green]Highly recommended.[white] Disabling gives the agent unrestricted filesystem access.`, 5, form)
 		},
 	}
+}
+
+// sandboxConfirmModal pops a modal asking the user to confirm disabling sandbox.
+// If confirmed, onConfirm is called and the checkbox is unchecked visually.
+// If cancelled, the checkbox stays checked (data was already reverted by caller).
+func sandboxConfirmModal(w *forms.Wizard, form *tview.Form, checkboxIndex int, onConfirm func()) {
+	w.App().ShowModal(
+		"Disabling sandbox gives the agent unrestricted filesystem access.\n\n"+
+			"Only recommended if you trust all installed skills and prompts.\n\nContinue?",
+		[]string{"No", "Yes"},
+		func(buttonIndex int, buttonLabel string) {
+			if buttonLabel == "Yes" {
+				onConfirm()
+				cb := form.GetFormItemByLabel("Enable exec sandboxing")
+				if checkboxIndex == 1 {
+					cb = form.GetFormItemByLabel("Enable browser sandboxing")
+				}
+				if checkbox, ok := cb.(*tview.Checkbox); ok {
+					checkbox.SetChecked(false)
+				}
+			}
+		},
+	)
 }
 
 // Step: LLM Provider selection + config (combined into one wizard step)
