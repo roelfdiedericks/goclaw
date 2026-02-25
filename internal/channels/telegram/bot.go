@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -984,60 +983,14 @@ func (b *Bot) sendWithHTMLFallback(chat *tele.Chat, text string) (*tele.Message,
 	return msg, nil
 }
 
-// mediaRefPattern matches enriched media refs: {{media:mime:'path'}}
-var mediaRefPattern = regexp.MustCompile(`\{\{media:([a-z]+/[a-z0-9.+-]+):'((?:[^'\\]|\\.)*)'\}\}`)
-
-// containsMediaRefs checks if text contains any media references
+// containsMediaRefs checks if text contains any media references (delegates to shared media package)
 func containsMediaRefs(text string) bool {
-	return mediaRefPattern.MatchString(text)
+	return media.ContainsMediaRefs(text)
 }
 
-// mediaSegment represents a segment of text or media
-type mediaSegment struct {
-	IsMedia bool
-	Text    string // for text segments
-	Path    string // for media segments
-	Mime    string // for media segments
-}
-
-// splitMediaSegments splits text into text and media segments
-func splitMediaSegments(text string) []mediaSegment {
-	var segments []mediaSegment
-	lastIndex := 0
-
-	matches := mediaRefPattern.FindAllStringSubmatchIndex(text, -1)
-	for _, match := range matches {
-		// Text before this match
-		if match[0] > lastIndex {
-			textBefore := strings.TrimSpace(text[lastIndex:match[0]])
-			if textBefore != "" {
-				segments = append(segments, mediaSegment{Text: textBefore})
-			}
-		}
-
-		// Extract mime and path from match
-		mime := text[match[2]:match[3]]
-		escapedPath := text[match[4]:match[5]]
-		path := media.UnescapePath(escapedPath)
-
-		segments = append(segments, mediaSegment{
-			IsMedia: true,
-			Path:    path,
-			Mime:    mime,
-		})
-
-		lastIndex = match[1]
-	}
-
-	// Text after last match
-	if lastIndex < len(text) {
-		textAfter := strings.TrimSpace(text[lastIndex:])
-		if textAfter != "" {
-			segments = append(segments, mediaSegment{Text: textAfter})
-		}
-	}
-
-	return segments
+// splitMediaSegments splits text into text and media segments (delegates to shared media package)
+func splitMediaSegments(text string) []media.MediaSegment {
+	return media.SplitMediaSegments(text)
 }
 
 // sendWithMediaRefs parses and sends text with inline media references
@@ -1128,8 +1081,8 @@ func (b *Bot) sendWithMediaRefs(chat *tele.Chat, text string) error {
 }
 
 // collectConsecutiveImages collects consecutive image segments starting at index
-func (b *Bot) collectConsecutiveImages(segments []mediaSegment, startIdx int) []mediaSegment {
-	var images []mediaSegment
+func (b *Bot) collectConsecutiveImages(segments []media.MediaSegment, startIdx int) []media.MediaSegment {
+	var images []media.MediaSegment
 	for j := startIdx; j < len(segments); j++ {
 		seg := segments[j]
 		if !seg.IsMedia {
@@ -1147,7 +1100,7 @@ func (b *Bot) collectConsecutiveImages(segments []mediaSegment, startIdx int) []
 }
 
 // sendAlbum sends multiple images as a Telegram album
-func (b *Bot) sendAlbum(chat *tele.Chat, mediaRoot string, segments []mediaSegment, caption string) {
+func (b *Bot) sendAlbum(chat *tele.Chat, mediaRoot string, segments []media.MediaSegment, caption string) {
 	if len(segments) == 0 {
 		return
 	}

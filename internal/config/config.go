@@ -11,6 +11,7 @@ import (
 	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
 	telegramconfig "github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
 	tuiconfig "github.com/roelfdiedericks/goclaw/internal/channels/tui/config"
+	whatsappconfig "github.com/roelfdiedericks/goclaw/internal/channels/whatsapp/config"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
 	"github.com/roelfdiedericks/goclaw/internal/hass"
@@ -137,6 +138,7 @@ func splitLines(data []byte) []string {
 // This lives in config package to avoid import cycles (channel packages import gateway).
 type ChannelsConfig struct {
 	Telegram telegramconfig.Config `json:"telegram"`
+	WhatsApp whatsappconfig.Config `json:"whatsapp"`
 	HTTP     httpconfig.Config     `json:"http"`
 	TUI      tuiconfig.Config      `json:"tui"`
 }
@@ -569,6 +571,11 @@ func mergeConfigSelective(dst, src *Config, rawMap map[string]interface{}) error
 	if channelsMap, ok := rawMap["channels"].(map[string]interface{}); ok {
 		if _, ok := channelsMap["telegram"]; ok {
 			if err := mergo.Merge(&dst.Channels.Telegram, src.Channels.Telegram, mergo.WithOverride); err != nil {
+				return err
+			}
+		}
+		if _, ok := channelsMap["whatsapp"]; ok {
+			if err := mergo.Merge(&dst.Channels.WhatsApp, src.Channels.WhatsApp, mergo.WithOverride); err != nil {
 				return err
 			}
 		}

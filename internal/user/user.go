@@ -141,6 +141,7 @@ type User struct {
 	Name             string          // display name
 	Role             Role            // owner or user
 	TelegramID       string          // Telegram user ID (for telegram auth)
+	WhatsAppID       string          // WhatsApp JID (phone number, for whatsapp auth)
 	HTTPPasswordHash string          // Argon2id hash of HTTP password
 	Permissions      map[string]bool // tool whitelist (nil = use role defaults)
 	Thinking         bool            // default /thinking toggle state
@@ -164,6 +165,11 @@ func (u *User) HasHTTPAuth() bool {
 // HasTelegramAuth returns true if user has Telegram authentication configured
 func (u *User) HasTelegramAuth() bool {
 	return u != nil && u.TelegramID != ""
+}
+
+// HasWhatsAppAuth returns true if user has WhatsApp authentication configured
+func (u *User) HasWhatsAppAuth() bool {
+	return u != nil && u.WhatsAppID != ""
 }
 
 // Default tool permissions by role
@@ -212,8 +218,9 @@ func (u *User) HasIdentity(provider, value string) bool {
 	switch provider {
 	case "telegram":
 		return u.TelegramID == value
+	case "whatsapp":
+		return u.WhatsAppID == value
 	case "http":
-		// HTTP auth uses username (user ID), not a separate identity value
 		return u.ID == value && u.HTTPPasswordHash != ""
 	}
 	return false

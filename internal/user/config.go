@@ -83,6 +83,7 @@ type UserEntry struct {
 	Name             string  `json:"name"`                         // Display name
 	Role             string  `json:"role"`                         // "owner" or "user"
 	TelegramID       string  `json:"telegram_id,omitempty"`        // Telegram user ID (numeric string)
+	WhatsAppID       string  `json:"whatsapp_id,omitempty"`        // WhatsApp JID (phone number, e.g. "27821234567")
 	HTTPPasswordHash string  `json:"http_password_hash,omitempty"` // Argon2id hash of HTTP password
 	Thinking         *bool   `json:"thinking,omitempty"`           // Default /thinking toggle state (nil = role default)
 	ThinkingLevel    *string `json:"thinking_level,omitempty"`     // Preferred thinking level: off/minimal/low/medium/high/xhigh
@@ -175,7 +176,7 @@ func LoadUsers() (UsersConfig, error) {
 			return nil, fmt.Errorf("user %q has no role defined", username)
 		}
 		// Warn about users without credentials (but don't fail - allows CLI setup flow)
-		if entry.TelegramID == "" && entry.HTTPPasswordHash == "" {
+		if entry.TelegramID == "" && entry.WhatsAppID == "" && entry.HTTPPasswordHash == "" {
 			usersWithoutCredentials++
 		}
 		// Apply role-based defaults for thinking/sandbox

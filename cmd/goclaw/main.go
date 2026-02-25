@@ -31,6 +31,7 @@ import (
 	telegramconfig "github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
 	"github.com/roelfdiedericks/goclaw/internal/channels/tui"
 	tuiconfig "github.com/roelfdiedericks/goclaw/internal/channels/tui/config"
+	"github.com/roelfdiedericks/goclaw/internal/channels/whatsapp"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/embeddings"
@@ -92,7 +93,10 @@ func loadRuntimePaths() (*RuntimePaths, error) {
 	}, nil
 }
 
-// CLI defines the command-line interface
+// CLI defines the command-line interface.
+// Kong derives command names from field names via kebab-case. CamelCase word
+// boundaries produce hyphens (e.g. WhatsApp → whats-app). To get a single
+// word like "whatsapp", use a flat name: Whatsapp, not WhatsApp.
 type CLI struct {
 	Debug  bool   `help:"Enable debug logging" short:"d"`
 	Trace  bool   `help:"Enable trace logging" short:"t"`
@@ -106,6 +110,7 @@ type CLI struct {
 	Update     UpdateCmd     `cmd:"" help:"Check for and install updates"`
 	Cron       CronCmd       `cmd:"" help:"Manage cron jobs"`
 	User       UserCmd       `cmd:"" help:"Manage users"`
+	Whatsapp WhatsAppCmd `cmd:"" help:"Manage WhatsApp connection"`
 	Browser    BrowserCmd    `cmd:"" help:"Manage browser (download, profiles, setup)"`
 	Embeddings EmbeddingsCmd `cmd:"" help:"Manage embeddings (status, rebuild)"`
 	Setup      SetupCmd      `cmd:"" help:"Interactive setup wizard"`
@@ -636,6 +641,7 @@ type UserCmd struct {
 	List        UserListCmd     `cmd:"" help:"List all users"`
 	Delete      UserDeleteCmd   `cmd:"" help:"Delete a user"`
 	SetTelegram UserTelegramCmd `cmd:"set-telegram" help:"Set Telegram ID"`
+	SetWhatsapp UserWhatsAppCmd `cmd:"" help:"Set WhatsApp ID"`
 	SetPassword UserPasswordCmd `cmd:"set-password" help:"Set HTTP password"`
 }
 
@@ -700,6 +706,9 @@ func (u *UserListCmd) Run(ctx *Context) error {
 		if entry.TelegramID != "" {
 			fmt.Printf("  Telegram: %s\n", entry.TelegramID)
 		}
+		if entry.WhatsAppID != "" {
+			fmt.Printf("  WhatsApp: %s\n", entry.WhatsAppID)
+		}
 		if entry.HTTPPasswordHash != "" {
 			fmt.Printf("  HTTP: configured\n")
 		}
@@ -733,6 +742,34 @@ func (u *UserTelegramCmd) Run(ctx *Context) error {
 	}
 
 	fmt.Printf("Telegram ID set for user %q.\n", u.Username)
+	return nil
+}
+
+// UserWhatsAppCmd sets a user's WhatsApp ID
+type UserWhatsAppCmd struct {
+	Username   string `arg:"" help:"Username"`
+	WhatsappID string `arg:"" help:"WhatsApp phone number (international format, e.g. 27821234567)"`
+}
+
+func (u *UserWhatsAppCmd) Run(ctx *Context) error {
+	users, err := user.LoadUsers()
+	if err != nil {
+		return fmt.Errorf("failed to load users: %w", err)
+	}
+
+	entry, exists := users[u.Username]
+	if !exists {
+		return fmt.Errorf("user %q not found", u.Username)
+	}
+
+	entry.WhatsAppID = u.WhatsappID
+
+	path := user.GetUsersFilePath()
+	if err := user.SaveUsers(users, path); err != nil {
+		return err
+	}
+
+	fmt.Printf("WhatsApp ID set for user %q.\n", u.Username)
 	return nil
 }
 
@@ -1407,6 +1444,34 @@ func (e *EmbeddingsRebuildCmd) Run(ctx *Context) error {
 	return runEmbeddingsRebuild(e.BatchSize)
 }
 
+// WhatsAppCmd manages WhatsApp connection
+type WhatsAppCmd struct {
+	Link   WhatsAppLinkCmd   `cmd:"link" help:"Pair with WhatsApp via QR code"`
+	Unlink WhatsAppUnlinkCmd `cmd:"unlink" help:"Remove WhatsApp pairing"`
+	Status WhatsAppStatusCmd `cmd:"status" default:"withargs" help:"Show WhatsApp pairing status"`
+}
+
+// WhatsAppLinkCmd pairs a new WhatsApp device via QR code
+type WhatsAppLinkCmd struct{}
+
+func (w *WhatsAppLinkCmd) Run(ctx *Context) error {
+	return whatsapp.LinkDevice()
+}
+
+// WhatsAppUnlinkCmd removes the WhatsApp session
+type WhatsAppUnlinkCmd struct{}
+
+func (w *WhatsAppUnlinkCmd) Run(ctx *Context) error {
+	return whatsapp.UnlinkDevice()
+}
+
+// WhatsAppStatusCmd shows WhatsApp pairing status
+type WhatsAppStatusCmd struct{}
+
+func (w *WhatsAppStatusCmd) Run(ctx *Context) error {
+	return whatsapp.DeviceStatus()
+}
+
 // runEmbeddingsStatus shows detailed embedding status
 func runEmbeddingsStatus() error {
 	// Load config
@@ -1609,8 +1674,8 @@ func openMemoryDB(cfg *config.Config) (*sql.DB, error) {
 // SetupCmd is the interactive setup wizard
 type SetupCmd struct {
 	Auto     SetupAutoCmd     `cmd:"" default:"withargs" help:"Run setup (auto-detect mode)"`
-	Wizard SetupWizardCmd `cmd:"wizard" help:"Run full setup wizard (even if config exists)"`
-	Edit   SetupEditCmd   `cmd:"edit" help:"Edit existing configuration"`
+	Wizard   SetupWizardCmd   `cmd:"wizard" help:"Run full setup wizard (even if config exists)"`
+	Edit     SetupEditCmd     `cmd:"edit" help:"Edit existing configuration"`
 	Generate SetupGenerateCmd `cmd:"generate" help:"Output default config template to stdout"`
 }
 
@@ -2007,6 +2072,17 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	})
 	bus.SubscribeEvent("channels.telegram.stopped", func(event bus.Event) {
 		messageTool.RemoveChannel("telegram")
+	})
+	bus.SubscribeEvent("channels.whatsapp.started", func(event bus.Event) {
+		if bot := chanMgr.GetWhatsApp(); bot != nil {
+			if mediaStore := gw.MediaStore(); mediaStore != nil {
+				adapter := whatsapp.NewMessageChannelAdapter(bot, mediaStore.BaseDir())
+				messageTool.SetChannel("whatsapp", adapter)
+			}
+		}
+	})
+	bus.SubscribeEvent("channels.whatsapp.stopped", func(event bus.Event) {
+		messageTool.RemoveChannel("whatsapp")
 	})
 	bus.SubscribeEvent("channels.http.started", func(event bus.Event) {
 		if srv := chanMgr.GetHTTP(); srv != nil {

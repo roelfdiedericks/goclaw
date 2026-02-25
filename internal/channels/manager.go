@@ -14,6 +14,8 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/channels/tui"
 	tuiconfig "github.com/roelfdiedericks/goclaw/internal/channels/tui/config"
 	"github.com/roelfdiedericks/goclaw/internal/channels/types"
+	"github.com/roelfdiedericks/goclaw/internal/channels/whatsapp"
+	whatsappconfig "github.com/roelfdiedericks/goclaw/internal/channels/whatsapp/config"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
@@ -47,6 +49,11 @@ type Manager struct {
 	telegramRetrying bool
 	telegramCancel   context.CancelFunc
 
+	// WhatsApp-specific: bot instance and retry state
+	whatsappBot      *whatsapp.Bot
+	whatsappRetrying bool
+	whatsappCancel   context.CancelFunc
+
 	// HTTP server instance
 	httpServer *http.Server
 
@@ -79,6 +86,16 @@ func (m *Manager) StartAll(ctx context.Context, cfg config.ChannelsConfig, opts 
 		}
 	} else {
 		logging.L_info("telegram: disabled by configuration")
+	}
+
+	// Start WhatsApp if enabled
+	if cfg.WhatsApp.Enabled {
+		if err := m.startWhatsApp(ctx, &cfg.WhatsApp); err != nil {
+			logging.L_warn("whatsapp: initial start failed, will retry in background", "error", err)
+			m.startWhatsAppRetry(ctx, &cfg.WhatsApp)
+		}
+	} else {
+		logging.L_info("whatsapp: disabled by configuration")
 	}
 
 	// Start HTTP if enabled (default: true)
@@ -171,6 +188,111 @@ func (m *Manager) startTelegramRetry(ctx context.Context, cfg *telegramconfig.Co
 	}()
 }
 
+// startWhatsApp creates and starts the WhatsApp bot
+func (m *Manager) startWhatsApp(ctx context.Context, cfg *whatsappconfig.Config) error {
+	bot, err := whatsapp.New(cfg, m.gw, m.users)
+	if err != nil {
+		return err
+	}
+
+	if err := bot.Start(ctx); err != nil {
+		return err
+	}
+
+	bot.RegisterOperationalCommands()
+	m.gw.RegisterChannel(bot)
+
+	m.mu.Lock()
+	m.whatsappBot = bot
+	m.channels["whatsapp"] = bot
+	m.mu.Unlock()
+
+	bus.PublishEvent("channels.whatsapp.started", nil)
+
+	logging.L_info("whatsapp: channel ready and listening")
+	return nil
+}
+
+// startWhatsAppRetry starts background retry for whatsapp connection
+func (m *Manager) startWhatsAppRetry(ctx context.Context, cfg *whatsappconfig.Config) {
+	m.mu.Lock()
+	if m.whatsappRetrying {
+		m.mu.Unlock()
+		return
+	}
+	m.whatsappRetrying = true
+	retryCtx, cancel := context.WithCancel(ctx)
+	m.whatsappCancel = cancel
+	m.mu.Unlock()
+
+	go func() {
+		backoff := 5 * time.Second
+		maxBackoff := 5 * time.Minute
+		attempt := 1
+
+		for {
+			select {
+			case <-retryCtx.Done():
+				logging.L_info("whatsapp: shutdown requested, stopping retry")
+				return
+			case <-time.After(backoff):
+			}
+
+			logging.L_info("whatsapp: retrying connection", "attempt", attempt, "backoff", backoff)
+
+			if err := m.startWhatsApp(retryCtx, cfg); err != nil {
+				logging.L_warn("whatsapp: connection failed", "error", err, "nextRetry", backoff)
+				attempt++
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+				continue
+			}
+
+			m.mu.Lock()
+			m.whatsappRetrying = false
+			m.mu.Unlock()
+			logging.L_info("whatsapp: channel ready after retry", "attempts", attempt)
+			return
+		}
+	}()
+}
+
+// reloadWhatsApp handles whatsapp config changes
+func (m *Manager) reloadWhatsApp(cfg *whatsappconfig.Config) {
+	m.mu.Lock()
+	bot := m.whatsappBot
+	m.mu.Unlock()
+
+	if m.whatsappCancel != nil {
+		m.whatsappCancel()
+	}
+
+	if bot != nil {
+		logging.L_info("whatsapp: stopping for config reload")
+		_ = bot.Stop()
+		m.gw.UnregisterChannel("whatsapp")
+		m.mu.Lock()
+		m.whatsappBot = nil
+		delete(m.channels, "whatsapp")
+		m.mu.Unlock()
+		bus.PublishEvent("channels.whatsapp.stopped", nil)
+	}
+
+	if !cfg.Enabled {
+		logging.L_info("whatsapp: disabled by new config")
+		return
+	}
+
+	if err := m.startWhatsApp(m.ctx, cfg); err != nil {
+		logging.L_error("whatsapp: failed to start with new config", "error", err)
+		m.startWhatsAppRetry(m.ctx, cfg)
+	} else {
+		logging.L_info("whatsapp: reloaded with new config")
+	}
+}
+
 // startHTTP creates and starts the HTTP server
 func (m *Manager) startHTTP(ctx context.Context, cfg *httpconfig.Config) error {
 	listen := cfg.Listen
@@ -228,6 +350,16 @@ func (m *Manager) subscribeConfigEvents() {
 			return
 		}
 		m.reloadTelegram(cfg)
+	})
+
+	// WhatsApp config reload
+	bus.SubscribeEvent("channels.whatsapp.config.applied", func(event bus.Event) {
+		cfg, ok := event.Data.(*whatsappconfig.Config)
+		if !ok {
+			logging.L_error("whatsapp: invalid config event data")
+			return
+		}
+		m.reloadWhatsApp(cfg)
 	})
 
 	// HTTP config reload
@@ -297,9 +429,12 @@ func (m *Manager) StopAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Stop telegram retry if running
+	// Stop retries if running
 	if m.telegramCancel != nil {
 		m.telegramCancel()
+	}
+	if m.whatsappCancel != nil {
+		m.whatsappCancel()
 	}
 
 	for name, ch := range m.channels {
@@ -314,6 +449,7 @@ func (m *Manager) StopAll() {
 	}
 	m.channels = make(map[string]ManagedChannel)
 	m.telegramBot = nil
+	m.whatsappBot = nil
 	m.httpServer = nil
 }
 
@@ -363,6 +499,13 @@ func (m *Manager) GetTelegram() *telegram.Bot {
 	return m.telegramBot
 }
 
+// GetWhatsApp returns the WhatsApp bot (for message tool adapter)
+func (m *Manager) GetWhatsApp() *whatsapp.Bot {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.whatsappBot
+}
+
 // GetHTTP returns the HTTP server
 func (m *Manager) GetHTTP() *http.Server {
 	m.mu.RLock()
@@ -385,6 +528,7 @@ func (m *Manager) Status() map[string]ChannelStatus {
 // RegisterCommands registers bus commands for all channel types
 func (m *Manager) RegisterCommands() {
 	telegramconfig.RegisterCommands()
+	whatsappconfig.RegisterCommands()
 	httpconfig.RegisterCommands()
 	tuiconfig.RegisterCommands()
 }
@@ -392,6 +536,7 @@ func (m *Manager) RegisterCommands() {
 // UnregisterCommands unregisters all bus commands
 func (m *Manager) UnregisterCommands() {
 	telegramconfig.UnregisterCommands()
+	whatsappconfig.UnregisterCommands()
 	httpconfig.UnregisterCommands()
 	tuiconfig.UnregisterCommands()
 }

@@ -10,6 +10,7 @@ import (
 type Registry struct {
 	users       map[string]*User  // by username (user ID)
 	telegramID  map[string]string // telegram user ID -> username
+	whatsappID  map[string]string // whatsapp JID -> username
 	ownerID     string            // cached owner username
 	rolesConfig RolesConfig       // role definitions from goclaw.json
 	mu          sync.RWMutex
@@ -21,6 +22,7 @@ func NewRegistryFromUsers(users UsersConfig, rolesConfig RolesConfig) *Registry 
 	r := &Registry{
 		users:       make(map[string]*User),
 		telegramID:  make(map[string]string),
+		whatsappID:  make(map[string]string),
 		rolesConfig: rolesConfig,
 	}
 
@@ -46,6 +48,7 @@ func NewRegistryFromUsers(users UsersConfig, rolesConfig RolesConfig) *Registry 
 			Name:             entry.Name,
 			Role:             Role(entry.Role),
 			TelegramID:       entry.TelegramID,
+			WhatsAppID:       entry.WhatsAppID,
 			HTTPPasswordHash: entry.HTTPPasswordHash,
 			Thinking:         entry.Thinking != nil && *entry.Thinking,
 			ThinkingLevel:    thinkingLevel,
@@ -59,9 +62,12 @@ func NewRegistryFromUsers(users UsersConfig, rolesConfig RolesConfig) *Registry 
 				"user", username, "role", entry.Role)
 		}
 
-		// Build telegram lookup map
+		// Build identity lookup maps
 		if entry.TelegramID != "" {
 			r.telegramID[entry.TelegramID] = username
+		}
+		if entry.WhatsAppID != "" {
+			r.whatsappID[entry.WhatsAppID] = username
 		}
 
 		// Track owner
@@ -87,7 +93,7 @@ func (r *Registry) ResolveUserRole(u *User) (*ResolvedRole, error) {
 }
 
 // FromIdentity looks up a user by their external identity
-// Supported providers: "telegram"
+// Supported providers: "telegram", "whatsapp"
 // Returns nil if no user is found with that identity
 func (r *Registry) FromIdentity(provider, value string) *User {
 	r.mu.RLock()
@@ -98,6 +104,10 @@ func (r *Registry) FromIdentity(provider, value string) *User {
 		if username, ok := r.telegramID[value]; ok {
 			return r.users[username]
 		}
+	case "whatsapp":
+		if username, ok := r.whatsappID[value]; ok {
+			return r.users[username]
+		}
 	}
 
 	return nil
@@ -106,6 +116,11 @@ func (r *Registry) FromIdentity(provider, value string) *User {
 // FromTelegramID looks up a user by their Telegram user ID
 func (r *Registry) FromTelegramID(telegramID string) *User {
 	return r.FromIdentity("telegram", telegramID)
+}
+
+// FromWhatsAppID looks up a user by their WhatsApp JID
+func (r *Registry) FromWhatsAppID(whatsappID string) *User {
+	return r.FromIdentity("whatsapp", whatsappID)
 }
 
 // Owner returns the owner user (first user with owner role)

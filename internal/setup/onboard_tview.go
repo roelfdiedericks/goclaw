@@ -36,12 +36,16 @@ type WizardData struct {
 	UserDisplayName  string
 	UserRole         string
 	UserTelegramID   string
-	UserPassword     string
-	UserPasswordConf string
+	UserPassword         string
+	UserPasswordConf     string
+	UserExistingPwdHash  string // preserved from existing users.json
 
 	// Telegram
 	TelegramEnabled bool
 	TelegramToken   string
+
+	// WhatsApp
+	WhatsAppEnabled bool
 
 	// HTTP
 	HTTPEnabled bool
@@ -85,6 +89,7 @@ func (d *WizardData) LoadFromExisting(cfg *config.Config, path string) {
 	d.WorkspacePath = cfg.Gateway.WorkingDir
 	d.TelegramEnabled = cfg.Channels.Telegram.Enabled
 	d.TelegramToken = cfg.Channels.Telegram.BotToken
+	d.WhatsAppEnabled = cfg.Channels.WhatsApp.Enabled
 
 	// HTTP.Enabled is a pointer (nil = default true)
 	if cfg.Channels.HTTP.Enabled != nil {
@@ -160,6 +165,9 @@ func (d *WizardData) loadUserFromUsersJSON() {
 	d.UserRole = user.Role
 	if user.TelegramID != "" {
 		d.UserTelegramID = user.TelegramID
+	}
+	if user.HTTPPasswordHash != "" {
+		d.UserExistingPwdHash = user.HTTPPasswordHash
 	}
 
 	L_info("wizard: loaded user from users.json", "username", ownerUsername)
@@ -274,6 +282,7 @@ func buildWizardSteps(data *WizardData) []forms.WizardStep {
 		stepWorkspace(data),
 		stepUserSetup(data),
 		stepTelegram(data),
+		stepWhatsApp(data),
 		stepHTTP(data),
 		stepLLMProvider(data),
 		stepSandbox(data),
@@ -431,7 +440,11 @@ func stepUserSetup(data *WizardData) forms.WizardStep {
 				data.UserTelegramID = text
 			})
 
-			form.AddPasswordField("HTTP Password", data.UserPassword, 40, '*', func(text string) {
+			pwdLabel := "HTTP Password"
+			if data.UserExistingPwdHash != "" {
+				pwdLabel = "HTTP Password (set — leave blank to keep)"
+			}
+			form.AddPasswordField(pwdLabel, data.UserPassword, 40, '*', func(text string) {
 				data.UserPassword = text
 			})
 
@@ -482,6 +495,34 @@ Get a bot token from [yellow]@BotFather[white] on Telegram.`, 3, form)
 				return fmt.Errorf("bot token is required when Telegram is enabled")
 			}
 			L_info("wizard: telegram", "enabled", data.TelegramEnabled)
+			return nil
+		},
+	}
+}
+
+// Step: WhatsApp
+func stepWhatsApp(data *WizardData) forms.WizardStep {
+	return forms.WizardStep{
+		Title: "WhatsApp",
+		Content: func(w *forms.Wizard) tview.Primitive {
+			form := tview.NewForm()
+			form.SetBorder(false)
+
+			form.AddCheckbox("Enable WhatsApp Channel", data.WhatsAppEnabled, func(checked bool) {
+				data.WhatsAppEnabled = checked
+			})
+
+			return formWithHeader(`[cyan]WhatsApp[white] allows you to chat with GoClaw from WhatsApp.
+
+After setup, pair your phone by running:
+  [yellow]goclaw whatsapp link[white]
+
+This will display a QR code to scan with your WhatsApp app.
+You also need to set your WhatsApp ID:
+  [yellow]goclaw user set-whatsapp <username> <phone>[white]`, 9, form)
+		},
+		OnExit: func(w *forms.Wizard) error {
+			L_info("wizard: whatsapp", "enabled", data.WhatsAppEnabled)
 			return nil
 		},
 	}
@@ -864,6 +905,7 @@ func stepReview(data *WizardData) forms.WizardStep {
 Workspace:    %s
 User:         %s (%s)
 Telegram:     %s
+WhatsApp:     %s
 HTTP:         %s
 Sandboxing:   exec=%v, browser=%v
 LLM:          %s
@@ -873,6 +915,7 @@ Press [yellow]Finish[white] to complete setup.`,
 				data.UserDisplayName,
 				data.UserName,
 				boolToEnabled(data.TelegramEnabled),
+				boolToEnabled(data.WhatsAppEnabled),
 				formatHTTP(data),
 				data.ExecBubblewrap,
 				data.BrowserBubblewrap,
@@ -1012,6 +1055,8 @@ func printWizardConfig(data *WizardData) {
 		} else {
 			userEntry["http_password_hash"] = hash
 		}
+	} else if data.UserExistingPwdHash != "" {
+		userEntry["http_password_hash"] = data.UserExistingPwdHash
 	}
 	users := map[string]interface{}{
 		data.UserName: userEntry,
@@ -1057,6 +1102,7 @@ func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
 
 	deepSet(cfg, "channels.telegram.enabled", data.TelegramEnabled)
 	deepSet(cfg, "channels.telegram.botToken", data.TelegramToken)
+	deepSet(cfg, "channels.whatsapp.enabled", data.WhatsAppEnabled)
 	deepSet(cfg, "channels.http.enabled", data.HTTPEnabled)
 	deepSet(cfg, "channels.http.listen", data.HTTPListen)
 
