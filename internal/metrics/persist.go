@@ -3,11 +3,10 @@ package metrics
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
-	"os"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 )
 
@@ -30,23 +29,23 @@ const schemaSQL = `CREATE TABLE IF NOT EXISTS metrics (
 func (m *MetricsManager) initPersistence() {
 	dbPath, err := paths.DataPath(dbFileName)
 	if err != nil {
-		persistLog("warn", "metrics: persistence disabled, cannot resolve data path", "error", err)
+		L_warn("metrics: persistence disabled, cannot resolve data path", "error", err)
 		return
 	}
 
 	if err := paths.EnsureParentDir(dbPath); err != nil {
-		persistLog("warn", "metrics: persistence disabled, cannot create directory", "error", err)
+		L_warn("metrics: persistence disabled, cannot create directory", "error", err)
 		return
 	}
 
 	db, err := sql.Open("sqlite3", dbPath+dbOpenOptions)
 	if err != nil {
-		persistLog("warn", "metrics: persistence disabled, cannot open database", "error", err)
+		L_warn("metrics: persistence disabled, cannot open database", "error", err)
 		return
 	}
 
 	if _, err := db.Exec(schemaSQL); err != nil {
-		persistLog("warn", "metrics: persistence disabled, schema creation failed", "error", err)
+		L_warn("metrics: persistence disabled, schema creation failed", "error", err)
 		db.Close()
 		return
 	}
@@ -56,16 +55,16 @@ func (m *MetricsManager) initPersistence() {
 
 	loaded, err := m.load()
 	if err != nil {
-		persistLog("warn", "metrics: failed to load persisted data", "error", err)
+		L_warn("metrics: failed to load persisted data", "error", err)
 	} else if loaded > 0 {
-		persistLog("info", "metrics: loaded persisted data", "count", loaded)
+		L_info("metrics: loaded persisted data", "count", loaded)
 	}
 
 	pruned, err := m.prune()
 	if err != nil {
-		persistLog("warn", "metrics: failed to prune stale data", "error", err)
+		L_warn("metrics: failed to prune stale data", "error", err)
 	} else if pruned > 0 {
-		persistLog("info", "metrics: pruned stale metrics", "count", pruned)
+		L_info("metrics: pruned stale metrics", "count", pruned)
 	}
 
 	go m.saveLoop()
@@ -80,7 +79,7 @@ func (m *MetricsManager) saveLoop() {
 		select {
 		case <-ticker.C:
 			if err := m.save(); err != nil {
-				persistLog("warn", "metrics: periodic save failed", "error", err)
+				L_warn("metrics: periodic save failed", "error", err)
 			}
 		case <-m.stopSave:
 			return
@@ -100,7 +99,7 @@ func (m *MetricsManager) Close() error {
 	}
 
 	if err := m.save(); err != nil {
-		persistLog("warn", "metrics: final save failed", "error", err)
+		L_warn("metrics: final save failed", "error", err)
 	}
 
 	err := m.db.Close()
@@ -172,7 +171,7 @@ func saveMapEntries[T any](stmt *sql.Stmt, now int64, metrics map[string]*T, met
 	for path, metric := range metrics {
 		data, err := marshal(metric)
 		if err != nil {
-			persistLog("warn", "metrics: failed to marshal metric", "path", path, "type", metricType, "error", err)
+			L_warn("metrics: failed to marshal metric", "path", path, "type", metricType, "error", err)
 			continue
 		}
 		if _, err := stmt.Exec(path, string(metricType), data, now); err != nil {
@@ -198,12 +197,12 @@ func (m *MetricsManager) load() (int, error) {
 		var path, metricType string
 		var data []byte
 		if err := rows.Scan(&path, &metricType, &data); err != nil {
-			persistLog("warn", "metrics: failed to scan row", "error", err)
+			L_warn("metrics: failed to scan row", "error", err)
 			continue
 		}
 
 		if err := m.restoreMetric(path, MetricType(metricType), data); err != nil {
-			persistLog("warn", "metrics: failed to restore metric", "path", path, "type", metricType, "error", err)
+			L_warn("metrics: failed to restore metric", "path", path, "type", metricType, "error", err)
 			continue
 		}
 		count++
@@ -628,13 +627,3 @@ func unmarshalCost(data []byte) (*CostMetric, error) {
 	}, nil
 }
 
-// persistLog is a simple logging helper that avoids importing the logging package
-// (which dot-imports metrics, creating a cycle). Uses fmt + stderr.
-func persistLog(level string, msg string, args ...any) {
-	// Build a simple structured log line
-	line := msg
-	for i := 0; i+1 < len(args); i += 2 {
-		line += " " + fmt.Sprintf("%v=%v", args[i], args[i+1])
-	}
-	fmt.Fprintf(os.Stderr, "%s [%s] %s\n", time.Now().Format("15:04:05"), level, line)
-}
