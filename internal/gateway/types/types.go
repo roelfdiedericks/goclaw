@@ -9,9 +9,27 @@ type GatewayConfig struct {
 	WorkingDir string `json:"workingDir"`
 }
 
-// PromptCacheConfig configures system prompt caching
+// PromptCacheConfig configures system prompt caching and time injection
 type PromptCacheConfig struct {
-	PollInterval int `json:"pollInterval"` // Hash poll interval in seconds (default: 60, 0 = disabled)
+	PollInterval       int   `json:"pollInterval"`       // Hash poll interval in seconds (default: 60, 0 = disabled)
+	TimeInSystemPrompt *bool `json:"timeInSystemPrompt"` // Include time in system prompt (default: false)
+	TimeInUserMessage  *bool `json:"timeInUserMessage"`  // Prefix latest user message with timestamp (default: true)
+}
+
+// GetTimeInSystemPrompt returns whether time should be in the system prompt (default: false)
+func (c *PromptCacheConfig) GetTimeInSystemPrompt() bool {
+	if c.TimeInSystemPrompt != nil {
+		return *c.TimeInSystemPrompt
+	}
+	return false
+}
+
+// GetTimeInUserMessage returns whether time should prefix user messages (default: true)
+func (c *PromptCacheConfig) GetTimeInUserMessage() bool {
+	if c.TimeInUserMessage != nil {
+		return *c.TimeInUserMessage
+	}
+	return true
 }
 
 // AgentIdentityConfig configures the agent's display identity

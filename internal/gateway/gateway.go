@@ -22,6 +22,8 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
+	"github.com/roelfdiedericks/goclaw/internal/metrics"
+	"github.com/roelfdiedericks/goclaw/internal/tokens"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/session"
@@ -132,11 +134,13 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 
 	// Initialize session manager with config
 	managerCfg := &session.ManagerConfig{
-		StoreType:   storeType,
-		StorePath:   cfg.Session.StorePath,
-		SessionsDir: cfg.Session.InheritPath, // For OpenClaw inheritance
-		InheritFrom: cfg.Session.InheritFrom,
-		WorkingDir:  cfg.Gateway.WorkingDir,
+		StoreType:  storeType,
+		StorePath:  cfg.Session.StorePath,
+		WorkingDir: cfg.Gateway.WorkingDir,
+	}
+	if cfg.Session.Inherit {
+		managerCfg.SessionsDir = cfg.Session.InheritPath
+		managerCfg.InheritFrom = cfg.Session.InheritFrom
 	}
 
 	g.sessions, err = session.NewManagerWithConfig(managerCfg)
@@ -147,7 +151,7 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 		"store", storeType,
 		"path", cfg.Session.StorePath)
 
-	// Inherit from OpenClaw session if configured
+	// Load primary session: either from SQLite only, or merged with OpenClaw history
 	if cfg.Session.Inherit && cfg.Session.InheritFrom != "" && cfg.Session.InheritPath != "" {
 		if err := g.sessions.InheritOpenClawSession(cfg.Session.InheritPath, cfg.Session.InheritFrom); err != nil {
 			L_warn("session: failed to inherit OpenClaw session (starting fresh)",
@@ -161,6 +165,10 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 					"messages", len(primary.Messages),
 					"file", primary.SessionFile)
 			}
+		}
+	} else {
+		if err := g.sessions.LoadPrimarySession(); err != nil {
+			L_warn("session: failed to load primary session", "error", err)
 		}
 	}
 
@@ -1458,6 +1466,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	}
 
 	runID := uuid.New().String()
+	runStart := time.Now()
 	sessionKey := g.sessionKeyFor(req)
 
 	// Get or create session first so we can check supervision
@@ -1552,6 +1561,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		IncludeMemory:        includeMemory,
 		RoleSystemPrompt:     roleSystemPrompt,
 		RoleSystemPromptFile: roleSystemPromptFile,
+		TimeInSystemPrompt:   g.config.PromptCache.GetTimeInSystemPrompt(),
 	})
 
 	// Append media storage instructions
@@ -1703,11 +1713,13 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		}
 
 		estimatedInputCost := llm.EstimateInputCost(g.llm.MetadataProvider(), g.llm.Model(), contextTokens)
+		systemPromptTokens := tokens.Estimate(systemPrompt)
 		L_debug("invoking LLM",
 			"provider", g.llm.Name(),
 			"model", g.llm.Model(),
 			"messages", len(messages),
 			"tools", len(toolDefs),
+			"systemPromptTokens", systemPromptTokens,
 			"contextTokens", contextTokens,
 			"contextWindow", contextWindow,
 			"contextUsage", fmt.Sprintf("%.1f%%", contextUsage),
@@ -1715,6 +1727,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			"thinkingLevel", thinkingLevel,
 			"estimatedInputCost", fmt.Sprintf("$%.4f", estimatedInputCost),
 		)
+
+		metrics.MetricSet("session", "messages", int64(len(messages)))
+		metrics.MetricSet("session", "context_tokens", int64(contextTokens))
+		metrics.MetricSet("session", "context_window", int64(contextWindow))
+		metrics.MetricSet("session", "system_prompt_tokens", int64(systemPromptTokens))
+		metrics.MetricInc("session", "agent_runs")
 
 		// Build stream options (OnServerToolCall always; thinking opts when enabled)
 		streamOpts := &llm.StreamOptions{
@@ -1741,6 +1759,11 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 		// Resolve media content (FilePath -> base64 Data) before sending to LLM
 		resolvedMessages := g.resolveMediaContent(messages, g.llm)
+
+		// Inject timestamp into last user message (ephemeral — not stored in session or SQLite)
+		if g.config.PromptCache.GetTimeInUserMessage() {
+			resolvedMessages = injectTimeInLastUserMessage(resolvedMessages)
+		}
 
 		var response *llm.Response
 		var failoverResult *llm.FailoverResult
@@ -1947,6 +1970,14 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			if !req.IsHeartbeat {
 				g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
 				g.persistMessage(ctx, sessionKey, "tool_result", resultText, req.Source, response.ToolUseID, "", nil, errStr, "", "", "")
+
+				// Persist sent message content as a first-class assistant message for transcript searchability
+				if errStr == "" && response.ToolName == "message" {
+					if sentText := extractMessageToolText(response.ToolInput); sentText != "" {
+						g.persistMessage(ctx, sessionKey, "assistant", sentText, "message_tool", "", "", nil, "", "", "", "")
+						L_debug("gateway: persisted message tool send as assistant message", "session", sessionKey, "contentLen", len(sentText))
+					}
+				}
 			}
 			continue
 		}
@@ -1964,7 +1995,9 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	if finalText == "" {
 		L_warn("agent run completed with empty response", "runID", runID, "messages", sess.MessageCount())
 	}
-	L_info("agent run completed", "runID", runID, "responseLen", len(finalText))
+	runElapsed := time.Since(runStart)
+	L_info("agent run completed", "runID", runID, "responseLen", len(finalText), "elapsed", runElapsed.Round(time.Millisecond))
+	metrics.MetricDuration("session", "agent_response_time", runElapsed)
 
 	// Agent response preview (same style as user message - green, 100 chars)
 	if finalText != "" {
@@ -2711,6 +2744,39 @@ func (g *Gateway) persistMessage(ctx context.Context, sessionKey, role, content,
 	} else {
 		L_trace("message persisted to SQLite", "role", role, "toolName", toolName, "supervisor", supervisor)
 	}
+}
+
+// injectTimeInLastUserMessage returns a copy of messages with a timestamp prefixed
+// to the last user message's content. This is ephemeral — the original session
+// messages are not modified, keeping persistence and transcripts clean.
+func injectTimeInLastUserMessage(messages []types.Message) []types.Message {
+	result := make([]types.Message, len(messages))
+	copy(result, messages)
+
+	for i := len(result) - 1; i >= 0; i-- {
+		if result[i].Role == "user" && result[i].Content != "" {
+			ts := time.Now().Format("[Mon 2006-01-02 15:04 MST]")
+			result[i].Content = ts + " " + result[i].Content
+			return result
+		}
+	}
+	return result
+}
+
+// extractMessageToolText extracts the sent text from a message tool's input JSON.
+// Returns empty string if the action isn't "send" or no message text is found.
+func extractMessageToolText(toolInput []byte) string {
+	var input struct {
+		Action  string `json:"action"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(toolInput, &input); err != nil {
+		return ""
+	}
+	if input.Action != "send" {
+		return ""
+	}
+	return input.Message
 }
 
 // buildMediaInstructions returns media storage instructions for the system prompt.
