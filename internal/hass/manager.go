@@ -573,7 +573,13 @@ func (m *Manager) processMatch(sub *Subscription, event *HAEvent, entityID, newS
 
 	L_debug("hass: processing matched event", "entity", entityID, "state", newState, "subID", sub.ID, "pattern", sub.Pattern, "regex", sub.Regex, "wake", sub.Wake, "full", sub.Full)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	eventTimeout := 120 * time.Second
+	if m.cfg.EventTimeout != "" {
+		if d, err := time.ParseDuration(m.cfg.EventTimeout); err == nil {
+			eventTimeout = d
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), eventTimeout)
 	defer cancel()
 
 	if sub.Wake {

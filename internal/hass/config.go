@@ -15,6 +15,7 @@ type HomeAssistantConfig struct {
 	Token            string `json:"token"`                      // Long-lived access token
 	Insecure         bool   `json:"insecure,omitempty"`         // Skip TLS verification for self-signed certs
 	Timeout          string `json:"timeout,omitempty"`          // Request timeout (default: "10s")
+	EventTimeout     string `json:"eventTimeout,omitempty"`     // Agent invocation timeout for wake events (default: "120s")
 	EventPrefix      string `json:"eventPrefix,omitempty"`      // Prefix for injected events (default: "[HomeAssistant Event]")
 	SubscriptionFile string `json:"subscriptionFile,omitempty"` // Subscription persistence file (default: "hass-subscriptions.json")
 	ReconnectDelay   string `json:"reconnectDelay,omitempty"`   // WebSocket reconnect delay (default: "5s")
