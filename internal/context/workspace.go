@@ -2,9 +2,11 @@
 package context
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 )
@@ -103,6 +105,37 @@ func LoadWorkspaceFiles(workspaceDir string, includeMemory bool) []WorkspaceFile
 		}
 	}
 
+	// Load daily memory files (today and yesterday)
+	if includeMemory {
+		files = append(files, loadDailyMemoryFiles(workspaceDir)...)
+	}
+
+	return files
+}
+
+// loadDailyMemoryFiles loads memory/YYYY-MM-DD.md for today and yesterday.
+func loadDailyMemoryFiles(workspaceDir string) []WorkspaceFile {
+	now := time.Now()
+	dates := []time.Time{now.AddDate(0, 0, -1), now}
+	memoryDir := filepath.Join(workspaceDir, "memory")
+
+	var files []WorkspaceFile
+	for _, d := range dates {
+		name := fmt.Sprintf("memory/%s.md", d.Format("2006-01-02"))
+		path := filepath.Join(memoryDir, d.Format("2006-01-02")+".md")
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		contentStr := stripFrontmatter(string(content))
+		files = append(files, WorkspaceFile{
+			Name:    name,
+			Path:    path,
+			Content: contentStr,
+			Missing: false,
+		})
+		logging.L_debug("context: loaded daily memory file", "name", name, "chars", len(contentStr))
+	}
 	return files
 }
 

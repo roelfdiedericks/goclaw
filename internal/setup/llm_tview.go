@@ -638,7 +638,7 @@ func buildSubtypeOptions(driverType string) []forms.Option {
 		if !ok {
 			continue
 		}
-		if prov.Driver == driverType {
+		if prov.Driver == driverType || (driverType == "oai-next" && pid == "openai") {
 			options = append(options, forms.Option{Label: prov.Name, Value: pid})
 		}
 	}

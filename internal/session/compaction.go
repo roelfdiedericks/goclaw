@@ -295,6 +295,14 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 	// Truncate messages immediately (fast)
 	m.truncateMessages(sess, firstKeptID)
 
+	// Invalidate stateful provider state (e.g. oai-next incremental indices).
+	// After truncation the message array has shifted, so saved indices are stale.
+	if m.store != nil {
+		if err := m.store.DeleteProviderStates(ctx, sessionKey); err != nil {
+			L_warn("compaction: failed to clear provider states", "error", err)
+		}
+	}
+
 	// Recalculate token count after truncation
 	estimator := GetTokenEstimator()
 	sess.SetTotalTokens(estimator.EstimateSessionTokens(sess))
@@ -624,6 +632,12 @@ func (m *CompactionManager) findFirstKeptID(sess *Session, keepPercent int) stri
 	startIdx := len(sess.Messages) - keepCount
 	if startIdx < 0 {
 		startIdx = 0
+	}
+
+	// Walk boundary backwards to avoid splitting tool call/result pairs.
+	// The Responses API rejects orphaned function_call_output items.
+	for startIdx > 0 && (sess.Messages[startIdx].Role == "tool_result" || sess.Messages[startIdx].Role == "tool_use") {
+		startIdx--
 	}
 
 	L_debug("compaction: calculating keep range",

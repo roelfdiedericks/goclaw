@@ -27,7 +27,7 @@ func TestProvider(preset ProviderPreset, apiKey string) ([]string, error) {
 	switch preset.Driver {
 	case "anthropic":
 		return ListAnthropicModels(ctx, apiKey)
-	case "openai":
+	case "openai", "oai-next":
 		return ListOpenAIModels(ctx, preset.BaseURL, apiKey)
 	case "ollama":
 		return ListOllamaModels(ctx, preset.BaseURL)

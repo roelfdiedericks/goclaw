@@ -8,14 +8,11 @@ If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out w
 
 ## Every Session
 
-Before doing anything else:
+GoClaw loads these files directly into your system prompt — you already have them:
+- SOUL.md, USER.md, MEMORY.md
+- memory/YYYY-MM-DD.md for today and yesterday
 
-1. Read `SOUL.md` — this is who you are
-2. Read `USER.md` — this is who you're helping
-3. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
-4. **If in MAIN SESSION** (direct chat with your human): Also read `MEMORY.md`
-
-Don't ask permission. Just do it.
+Do NOT re-read any of these with the read tool. Their contents are already in your context.
 
 ## Memory
 

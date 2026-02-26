@@ -16,6 +16,8 @@ func NewProvider(name string, cfg LLMProviderConfig) (Provider, error) {
 		return NewOllamaProvider(name, cfg)
 	case "xai":
 		return NewXAIProvider(name, cfg)
+	case "oai-next":
+		return NewOaiNextProvider(name, cfg)
 	default:
 		return nil, fmt.Errorf("unknown provider driver: %s", cfg.Driver)
 	}

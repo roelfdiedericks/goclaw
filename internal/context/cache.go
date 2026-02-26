@@ -206,9 +206,13 @@ func (pc *PromptCache) computeFileHashes() map[string]string {
 	return hashes
 }
 
-// computeHash computes a combined hash of all watched files
+// computeHash computes a combined hash of all watched files.
+// Includes the current date so the cache invalidates at midnight
+// (daily memory files shift from today/yesterday).
 func (pc *PromptCache) computeHash() string {
 	h := sha256.New()
+
+	h.Write([]byte(time.Now().Format("2006-01-02")))
 
 	for _, name := range pc.watchedFiles {
 		path := filepath.Join(pc.workspaceDir, name)

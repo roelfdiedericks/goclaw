@@ -98,12 +98,13 @@ func ProviderConfigFormDef(subtypeOptions []forms.Option) forms.FormDef {
 					{
 						Name:     "driver",
 						Title:    "Driver",
-						Desc:     "The LLM driver (anthropic, openai, ollama, xai)",
+						Desc:     "The LLM driver (anthropic, openai, ollama, xai, oai-next)",
 						Type:     forms.Select,
 						Required: true,
 						Options: []forms.Option{
 							{Label: "Anthropic", Value: "anthropic"},
 							{Label: "OpenAI Compatible", Value: "openai"},
+							{Label: "OpenAI (Next)", Value: "oai-next"},
 							{Label: "Ollama", Value: "ollama"},
 							{Label: "xAI", Value: "xai"},
 						},
@@ -301,6 +302,30 @@ func ProviderConfigFormDef(subtypeOptions []forms.Option) forms.FormDef {
 						Type:  forms.Number,
 						Min:   0,
 						Max:   3600,
+					},
+				},
+			},
+			{
+				Title:     "OpenAI Next Advanced",
+				ShowWhen:  "driver=oai-next",
+				Collapsed: true,
+				Fields: []forms.Field{
+					{
+						Name:  "serverToolsAllowed",
+						Title: "Server Tools",
+						Desc:  "Server-side tools (web_search, code_interpreter)",
+						Type:  forms.StringList,
+					},
+					{
+						Name:  "incrementalContext",
+						Title: "Incremental Context",
+						Desc:  "Chain context via previous_response_id",
+						Type:  forms.Select,
+						Options: []forms.Option{
+							{Label: "Default (enabled)", Value: "default"},
+							{Label: "Enabled", Value: "true"},
+							{Label: "Disabled", Value: "false"},
+						},
 					},
 				},
 			},

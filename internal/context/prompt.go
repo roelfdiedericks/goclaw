@@ -381,7 +381,7 @@ func buildProjectContextSection(files []WorkspaceFile, isSubagent bool) string {
 
 	lines = append(lines, "# Project Context")
 	lines = append(lines, "")
-	lines = append(lines, "The following project context files have been loaded:")
+	lines = append(lines, "The following project context files have been loaded into this prompt — their full contents appear below. Do NOT re-read any of these with the read tool.")
 
 	if HasSoulFile(files) && !isSubagent {
 		lines = append(lines, "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.")

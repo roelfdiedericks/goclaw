@@ -147,6 +147,8 @@ func (r *Registry) initProvider(name string, cfg LLMProviderConfig) error {
 		provider, err = NewOpenAIProvider(name, cfg)
 	case "xai":
 		provider, err = NewXAIProvider(name, cfg)
+	case "oai-next":
+		provider, err = NewOaiNextProvider(name, cfg)
 	default:
 		return fmt.Errorf("unknown provider driver: %s", cfg.Driver)
 	}
@@ -409,7 +411,8 @@ func (r *Registry) resolveForPurpose(ref, purpose string) (interface{}, error) {
 		}
 		return p.WithModel(modelName), nil
 	case *XAIProvider:
-		// xAI doesn't support embeddings
+		return p.WithModel(modelName), nil
+	case *OaiNextProvider:
 		return p.WithModel(modelName), nil
 	default:
 		return nil, fmt.Errorf("provider %s has unexpected type", providerName)
