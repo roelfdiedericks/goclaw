@@ -595,7 +595,10 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 	userID := fmt.Sprintf("%d", c.Sender().ID)
 	u := b.users.FromIdentity("telegram", userID)
 	prefs := b.getChatPrefs(c.Chat().ID, u)
-	bufferMode := prefs.ShowThinking // When thinking is ON, buffer response until end
+	// When thinking is ON, buffer text until tools are done to preserve timeline order.
+	// Once text deltas start flowing (tools are finished), switch to streaming.
+	bufferMode := prefs.ShowThinking
+	toolsActive := false // true while a tool is running
 
 	logging.L_debug("telegram: starting response stream", "chatID", c.Chat().ID, "bufferMode", bufferMode)
 
@@ -604,11 +607,12 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 		case gateway.EventTextDelta:
 			response.WriteString(e.Delta)
 
-			// In buffer mode (thinking ON): just accumulate, don't stream
-			// This ensures tools appear before the response in the timeline
-			if bufferMode {
+			// Buffer text while tools are still active (preserves timeline order).
+			// Once tools are done and text starts flowing, stream normally.
+			if bufferMode && toolsActive {
 				continue
 			}
+			bufferMode = false
 
 			// Normal streaming mode (thinking OFF)
 			// Update message periodically to show streaming
@@ -640,6 +644,7 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 			}
 
 		case gateway.EventToolStart:
+			toolsActive = true
 			logging.L_debug("telegram: tool started", "tool", e.ToolName)
 			_ = c.Notify(tele.Typing)
 
@@ -664,6 +669,7 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 			}
 
 		case gateway.EventToolEnd:
+			toolsActive = false
 			logging.L_debug("telegram: tool ended", "tool", e.ToolName, "hasError", e.Error != "")
 
 			// Show tool result if thinking mode is on
