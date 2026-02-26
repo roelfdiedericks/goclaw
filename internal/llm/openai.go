@@ -1211,12 +1211,15 @@ func (p *OpenAIProvider) StreamMessage(
 
 	// Process accumulated tool calls
 	if len(toolCalls) > 0 && toolCalls[0].ID != "" {
-		tc := toolCalls[0] // Return first tool call (like Anthropic)
+		tc := toolCalls[0]
 		response.ToolUseID = tc.ID
 		response.ToolName = tc.Function.Name
 		response.ToolInput = json.RawMessage(tc.Function.Arguments)
 		response.StopReason = "tool_use"
 		L_info("llm: tool use detected", "provider", p.name, "tool", tc.Function.Name, "id", tc.ID)
+		if len(toolCalls) > 1 {
+			L_warn("llm: multiple tool calls returned, processing first only", "total", len(toolCalls), "processing", tc.Function.Name)
+		}
 	} else if len(toolCalls) > 0 {
 		// Tool calls exist but first one has empty ID - log this edge case
 		L_warn("openai: tool_calls present but first ID empty",

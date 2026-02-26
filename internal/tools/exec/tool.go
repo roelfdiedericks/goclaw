@@ -149,7 +149,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		output.WriteString("Command completed successfully (no output)")
 	}
 
-	return types.TextResult(output.String()), nil
+	return types.ExternalTextResult(output.String(), "exec"), nil
 }
 
 // ToolConfig holds configuration for the exec tool

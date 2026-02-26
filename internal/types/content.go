@@ -25,8 +25,10 @@ type ContentBlock struct {
 // ToolResult represents the structured result from a tool execution.
 // Tools return this instead of a plain string.
 type ToolResult struct {
-	Content []ContentBlock `json:"content"`
-	IsError bool           `json:"is_error,omitempty"`
+	Content         []ContentBlock `json:"content"`
+	IsError         bool           `json:"is_error,omitempty"`
+	ExternalContent bool           `json:"-"` // true if content is from untrusted external source
+	ExternalSource  string         `json:"-"` // "web", "exec", "browser", etc.
 }
 
 // TextResult creates a ToolResult with a single text block.
@@ -45,6 +47,18 @@ func ErrorResult(msg string) *ToolResult {
 			{Type: "text", Text: msg},
 		},
 		IsError: true,
+	}
+}
+
+// ExternalTextResult creates a ToolResult flagged as external/untrusted content.
+// The gateway will wrap this content with security boundaries before passing to the LLM.
+func ExternalTextResult(text, source string) *ToolResult {
+	return &ToolResult{
+		Content: []ContentBlock{
+			{Type: "text", Text: text},
+		},
+		ExternalContent: true,
+		ExternalSource:  source,
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	gcontext "github.com/roelfdiedericks/goclaw/internal/context"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/embeddings"
+	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
 	"github.com/roelfdiedericks/goclaw/internal/hass"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -25,6 +26,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/memory"
 	"github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
+	"github.com/roelfdiedericks/goclaw/internal/security"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/stt"
@@ -1449,6 +1451,67 @@ func isMemoryTool(name string) bool {
 	return name == "memory_search" || name == "memory_get"
 }
 
+// Hardcoded default tool restrictions per purpose.
+// User config overrides these entirely per purpose key.
+var defaultToolRestrictions = map[string]gwtypes.ToolRestriction{
+	"hass":    {Deny: []string{"exec", "write", "edit"}},
+	"webhook": {Deny: []string{"exec", "write", "edit", "cron"}},
+}
+
+// getToolRestriction returns the tool restriction for a purpose, checking
+// user config first, then falling back to hardcoded defaults.
+func (g *Gateway) getToolRestriction(purpose string) *gwtypes.ToolRestriction {
+	if r, ok := g.config.Security.ToolRestrictions[purpose]; ok {
+		return &r
+	}
+	if r, ok := defaultToolRestrictions[purpose]; ok {
+		return &r
+	}
+	return nil
+}
+
+// filterToolsForPurpose removes tools that are denied for the given purpose.
+func (g *Gateway) filterToolsForPurpose(defs []tools.ToolDefinition, purpose string) []tools.ToolDefinition {
+	restriction := g.getToolRestriction(purpose)
+	if restriction == nil || len(restriction.Deny) == 0 {
+		return defs
+	}
+
+	denied := make(map[string]bool, len(restriction.Deny))
+	for _, name := range restriction.Deny {
+		denied[name] = true
+	}
+
+	filtered := make([]tools.ToolDefinition, 0, len(defs))
+	for _, def := range defs {
+		if denied[def.Name] {
+			L_debug("filterToolsForPurpose: excluded", "tool", def.Name, "purpose", purpose)
+			continue
+		}
+		filtered = append(filtered, def)
+	}
+
+	if len(filtered) < len(defs) {
+		L_debug("filterToolsForPurpose: filtered tools", "purpose", purpose, "total", len(defs), "allowed", len(filtered))
+	}
+	return filtered
+}
+
+// isToolDeniedForPurpose checks if a specific tool is denied for the purpose.
+// Used as a runtime safety net in case the LLM hallucinates a hidden tool name.
+func (g *Gateway) isToolDeniedForPurpose(toolName, purpose string) bool {
+	restriction := g.getToolRestriction(purpose)
+	if restriction == nil {
+		return false
+	}
+	for _, name := range restriction.Deny {
+		if name == toolName {
+			return true
+		}
+	}
+	return false
+}
+
 // CanUserUseCommands checks if a user has permission to use slash commands
 func (g *Gateway) CanUserUseCommands(u *user.User) bool {
 	if u == nil {
@@ -1655,6 +1718,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	var finalText string
 	const maxOverflowRetries = 2 // Max times to retry after compaction
 
+	// Resolve purpose once before the loop
+	purpose := req.Purpose
+	if purpose == "" {
+		purpose = "agent"
+	}
+
 	// Agent loop - keep going until no more tool use
 	for {
 		// Check for cancellation (emergency stop, /stop command, panic phrase)
@@ -1676,6 +1745,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		// Build context from session (messages and tool definitions)
 		messages := sess.GetMessages()
 		toolDefs := g.filterToolsForUser(req.User)
+		toolDefs = g.filterToolsForPurpose(toolDefs, purpose)
 
 		// Pre-flight check: estimate if we're approaching context limit
 		estimatedTokens := sess.GetTotalTokens()
@@ -1783,12 +1853,6 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		// Inject timestamp into last user message (ephemeral — not stored in session or SQLite)
 		if g.config.PromptCache.GetTimeInUserMessage() {
 			resolvedMessages = injectTimeInLastUserMessage(resolvedMessages)
-		}
-
-		// Resolve LLM purpose (empty defaults to "agent")
-		purpose := req.Purpose
-		if purpose == "" {
-			purpose = "agent"
 		}
 
 		var response *llm.Response
@@ -1909,7 +1973,26 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				})
 				sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
 				sess.AddToolResult(response.ToolUseID, result, nil)
-				// Persist denied tool use/result (skip for heartbeat - ephemeral)
+				if !req.IsHeartbeat {
+					g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
+					g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, "", "", "", "")
+				}
+				continue
+			}
+
+			// Runtime safety net: deny tools restricted by purpose
+			if g.isToolDeniedForPurpose(response.ToolName, purpose) {
+				L_warn("gateway: tool denied for purpose", "tool", response.ToolName, "purpose", purpose)
+				result := fmt.Sprintf("Permission denied: tool %s is not available for purpose %q", response.ToolName, purpose)
+				sendEvent(EventToolEnd{
+					RunID:    runID,
+					ToolName: response.ToolName,
+					ToolID:   response.ToolUseID,
+					Result:   result,
+					Error:    "purpose_denied",
+				})
+				sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
+				sess.AddToolResult(response.ToolUseID, result, nil)
 				if !req.IsHeartbeat {
 					g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
 					g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, "", "", "", "")
@@ -1954,6 +2037,21 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 			// Get text content for downstream processing
 			resultText := toolResult.GetText()
+
+			// Wrap external content with security boundaries
+			if toolResult.ExternalContent {
+				wrapped, spoofed := security.WrapExternalContent(resultText, toolResult.ExternalSource, response.ToolName)
+				if spoofed {
+					L_warn("security: marker spoofing detected, content blocked",
+						"tool", response.ToolName, "source", toolResult.ExternalSource)
+					g.SendStatusMessage(ctx, req.User,
+						"⚠️ Security: Marker spoofing attack detected in content from "+response.ToolName+". Content discarded.")
+				} else {
+					L_debug("gateway: wrapped external content",
+						"tool", response.ToolName, "source", toolResult.ExternalSource)
+				}
+				resultText = wrapped
+			}
 
 			// Check for media in tool output
 			if req.OnMediaToSend != nil {

@@ -118,6 +118,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	// Get JSON data from the appropriate source
 	var data []byte
 	var err error
+	isExecMode := false
 
 	if params.File != "" {
 		data, err = t.readFile(params.File, sandboxed)
@@ -129,6 +130,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		data = []byte(params.Input)
 		L_debug("jq tool: using inline input", "bytes", len(data))
 	} else if params.Exec != "" {
+		isExecMode = true
 		data, err = t.execCommand(ctx, params.Exec, sandboxed)
 		if err != nil {
 			var execErr *exec.Error
@@ -147,6 +149,9 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	}
 
 	L_debug("jq tool: query completed", "query", truncate(params.Query, 50), "resultLen", len(result))
+	if isExecMode {
+		return types.ExternalTextResult(result, "exec"), nil
+	}
 	return types.TextResult(result), nil
 }
 

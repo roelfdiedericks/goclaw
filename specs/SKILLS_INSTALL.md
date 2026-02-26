@@ -1,194 +1,187 @@
-# Skills Installation - Security Analysis & Design
+# Skills Install & Reload Actions
 
-## Status: NOT IMPLEMENTED
+## Status
 
-The `Manager.Install()` function exists but is **dead code** - never called from anywhere. The `skills` tool only exposes `list`, `info`, `check` actions. This appears intentional due to unresolved security concerns.
+Extracted from `SKILLS_TOOL.md` (now in attic). The query side (`list`, `info`, `check`) is implemented. This spec covers the remaining write-side actions.
 
-## Current State
+**Note:** The `skills/` directory is now write-protected in the file sandbox. The `install` action must write through the skills manager directly, bypassing the sandbox file tools. This is by design — skill installation is a privileged operation.
 
-### What Exists
+## Install Action
 
-1. **Installer infrastructure** (`internal/skills/installer.go`):
-   - `installBrew()` - runs `brew install <formula>`
-   - `installGo()` - runs `go install <module>`
-   - `installUV()` - runs `uv tool install <package>`
-   - `installDownload()` - downloads from URL
-   - Node.js **explicitly blocked** (security measure)
+### Philosophy: Separation of Concerns
 
-2. **InstallSpec in SKILL.md** - Skills can declare install options in frontmatter:
-   ```yaml
-   metadata:
-     openclaw:
-       install:
-         - kind: brew
-           formula: himalaya
-           bins: [himalaya]
+The `install` action handles **skill file management only** — fetching, validating, and writing SKILL.md files. It does NOT execute binary installations.
+
+**Skills tool handles:**
+- Fetching SKILL.md from trusted sources
+- Validating source trust (clawhub, allowlisted repos, local)
+- Scanning for dangerous patterns
+- Writing to the skills directory
+- Refusing untrusted/dangerous skills
+
+**Agent handles (separately, in chat):**
+- Running install commands from skill metadata
+- `apt install ffmpeg`, `cargo install himalaya`, etc.
+- User sees and approves these commands
+
+This keeps dangerous operations (arbitrary SKILL.md content) gated through the tool, while keeping visible operations (binary installs) transparent in the conversation.
+
+### Workflow Example
+
+```
+User: "install the himalaya email skill"
+
+Agent calls: skills(action="install", skill="himalaya", from="clawhub")
+
+Tool response:
+{
+  "installed": true,
+  "name": "himalaya",
+  "path": "/home/openclaw/.openclaw/workspace/goclaw/skills/himalaya/SKILL.md",
+  "eligible": false,
+  "missing": {"bins": ["himalaya"]},
+  "install_hints": [
+    {"kind": "cargo", "command": "cargo install himalaya"},
+    {"kind": "brew", "command": "brew install himalaya"}
+  ]
+}
+
+Agent: "Skill installed. It needs the himalaya binary. Want me to run:
+       cargo install himalaya"
+
+User: "yes"
+
+Agent calls: exec("cargo install himalaya")
+
+Agent calls: skills(action="reload")
+
+Agent: "Done. himalaya skill is now eligible."
+```
+
+### Input
+
+```json
+{
+  "action": "install",
+  "skill": "himalaya",
+  "from": "clawhub",
+  "force": false
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| skill | string | Skill name to install |
+| from | string | Source: "clawhub", repo URL, or "local:/path" |
+| force | bool | Overwrite existing skill (default: false) |
+
+### Validation & Gating
+
+Before writing a skill, the tool MUST:
+
+1. **Check source trust**
+   ```json
+   {"error": "untrusted source", "source": "https://sketchy.site/skill.md", "hint": "Add to trusted sources or use --from clawhub"}
    ```
 
-3. **Manager.Install()** - Orchestrates installation but is never invoked
+2. **Scan SKILL.md for dangerous patterns**
+   - Embedded scripts that run on load
+   - Environment variable exfiltration
+   - Suspicious exec patterns
+   - Obfuscated content
+   
+   ```json
+   {"error": "dangerous pattern detected", "pattern": "env exfiltration", "line": 45}
+   ```
 
-### What's Missing
+3. **Check for conflicts**
+   ```json
+   {"error": "skill exists", "name": "himalaya", "hint": "Use force=true to overwrite"}
+   ```
 
-- No `skills(action="install")` in the tool schema
-- No user approval flow
-- No audit/verification before install
-- No sandboxing of install commands
+### Trusted Sources
 
-## Security Concerns
+Default trusted:
+- `clawhub` — Official ClawHub registry (when API available)
+- `local:*` — Local filesystem paths
 
-### 1. Supply Chain Attacks via Package Managers
-
-Even with Node.js blocked, other package managers are vulnerable:
-
-| Manager | Attack Vector |
-|---------|---------------|
-| brew | Malicious formula, tap hijacking |
-| go install | Typosquatting, dependency confusion |
-| uv/pip | PyPI package hijacking |
-| download | Arbitrary URL execution |
-
-**Risk**: Agent-controlled input to package managers = arbitrary code execution.
-
-### 2. Skill File Injection
-
-**Attack flow**:
-1. Agent writes malicious SKILL.md to workspace `skills/` directory
-2. File watcher detects change, reloads skill registry
-3. Skill becomes eligible
-4. Agent (or future install action) triggers install with attacker-controlled spec
-
-**Mitigations needed**:
-- Skills from workspace should require explicit user trust
-- New skills should trigger audit before becoming eligible
-- Install specs should be validated against allowlist
-
-### Sandboxing as Defense-in-Depth
-
-GoClaw's bubblewrap (bwrap) sandboxing provides significant protection against malicious skills:
-
-**What sandboxing prevents:**
-- Skills cannot access directories outside the allowed sandbox paths
-- Sensitive files (`~/.ssh`, `~/.gnupg`, credentials) can be excluded from mounts
-- Network access can be disabled for skills that don't need it
-- Environment variables can be cleared to prevent credential leakage
-
-**What sandboxing does NOT prevent:**
-- **Install commands run unsandboxed** - `brew install`, `go install`, `uv tool install` need system access
-- Package manager post-install scripts execute with full privileges
-- Downloaded binaries are placed in system paths
-
-**Implication**: Even with bwrap protecting tool execution, the install step itself is a privileged operation. A malicious skill's install spec could:
-1. Install a trojanized package that runs code during install
-2. Place a backdoored binary that later executes inside the sandbox
-
-This is why user approval and package allowlists are critical for the install flow - sandboxing alone is not sufficient.
-
-### 3. ClawHub Remote Installation
-
-The `clawhub` skill (if binary is installed) allows:
-```bash
-clawhub install <skill-name>
+Configurable in goclaw.json:
+```json
+{
+  "skills": {
+    "trustedSources": [
+      "clawhub",
+      "github.com/openclaw/*",
+      "github.com/roelfdiedericks/*"
+    ]
+  }
+}
 ```
 
-This pulls skills from clawhub.com registry - a remote source the agent can invoke via exec.
+### Output
 
-**Concerns**:
-- Registry could be compromised
-- Agent could install any published skill
-- No local approval before install
-
-### 4. The OpenClaw Precedent
-
-Skills were identified as a "known vulnerability" in OpenClaw. Specific issues (to be documented):
-- [ ] What specific attacks were possible?
-- [ ] What mitigations were attempted?
-- [ ] Why was install functionality not completed?
-
-## Proposed Design
-
-### User Approval Flow
-
-```
-Agent: "The himalaya skill needs `himalaya` binary. Install via brew?"
-       [Install options displayed]
-       
-User: Approves in UI
-
-Agent: skills(action="install", skill="himalaya", spec="brew")
-
-System: Runs `brew install himalaya` with output streaming
+**Success:**
+```json
+{
+  "installed": true,
+  "name": "himalaya",
+  "path": "/path/to/skills/himalaya/SKILL.md",
+  "eligible": false,
+  "missing": {"bins": ["himalaya"]},
+  "install_hints": [
+    {"kind": "cargo", "command": "cargo install himalaya"}
+  ]
+}
 ```
 
-### Trust Levels
-
-| Source | Trust | Install Allowed |
-|--------|-------|-----------------|
-| Bundled (`<goclaw>/skills/`) | High | Auto-approve known packages |
-| Managed (`~/.goclaw/skills/`) | Medium | Require user approval |
-| Workspace | Low | Require approval + audit |
-| ClawHub | Low | Require approval + audit |
-
-### Install Allowlist
-
-Consider maintaining an allowlist of known-safe packages:
-
-```yaml
-# Known safe installs (vetted formulas/modules)
-brew:
-  - himalaya
-  - ripgrep
-  - jq
-go:
-  - github.com/charmbracelet/glow@latest
-uv:
-  - posting
+**Failure:**
+```json
+{
+  "installed": false,
+  "error": "untrusted source",
+  "source": "https://example.com/skill.md"
+}
 ```
 
-Packages not on allowlist require explicit user confirmation with warning.
+## Reload Action
 
-### Sandboxing Considerations
+Re-scan the skills directory and update the registry. Use after installing binaries.
 
-Install commands currently run unsandboxed. Options:
-1. **Accept risk** - Package managers need system access anyway
-2. **Dry-run first** - Show what would be installed before executing
-3. **Container isolation** - Run installs in ephemeral container (complex)
+```json
+{"action": "reload"}
+```
 
-Recommendation: Dry-run + user approval is practical; full sandboxing is overkill for package managers.
+```json
+{
+  "reloaded": true,
+  "previous": {"eligible": 11, "total": 55},
+  "current": {"eligible": 12, "total": 55},
+  "changes": [
+    {"skill": "himalaya", "was": "ineligible", "now": "eligible"}
+  ]
+}
+```
 
-## Implementation Checklist
+## Existing Infrastructure
 
-- [ ] Research OpenClaw's specific skill vulnerabilities
-- [ ] Add `install` action to skills tool schema
-- [ ] Implement user approval flow (UI/Telegram prompt)
-- [ ] Add trust level checking before install
-- [ ] Consider package allowlist
-- [ ] Add install audit logging
-- [ ] Handle clawhub integration securely
-- [ ] Document security model for users
+- `internal/skills/installer.go` — Handles dependency installation (brew, go, uv, download). Node/npm blocked for security.
+- `internal/skills/auditor.go` — Pattern scanning for dangerous content.
+- `internal/skills/manager.go` — Singleton skill registry with load/reload capability.
+- `internal/sandbox/sandbox.go` — `skills/` is in `writeProtectedDirs`, so the install action must write through the manager, not through file tools.
 
-## Linter Warnings (G204 - Intentionally Unsuppressed)
+## Future Extensions
 
-The installer code triggers `gosec` G204 warnings for subprocess execution with variable input. These are **intentionally left unsuppressed** as a reminder that security review is required before enabling:
+- `skills search <query>` — Fuzzy search skill names/descriptions
+- `skills enable/disable <name>` — Runtime toggle without uninstalling
+- `skills trust <source>` — Add to trusted sources
+- `skills audit <name>` — Deep scan of skill for security review
 
-| File | Line | Code | Risk |
-|------|------|------|------|
-| `installer.go` | 82 | `exec.CommandContext(ctx, "brew", "install", spec.Formula)` | Formula from SKILL.md |
-| `installer.go` | 120 | `exec.CommandContext(ctx, "go", "install", module)` | Module from SKILL.md |
-| `installer.go` | 153 | `exec.CommandContext(ctx, "uv", "tool", "install", spec.Package)` | Package from SKILL.md |
+## Priority
 
-**Why not suppress?**
-- The `spec.*` values originate from SKILL.md files which could be agent-written
-- No input validation or allowlist checking exists
-- No user approval flow before execution
-- Code is dead but warnings serve as visible reminder
+Medium — the query side works, this adds the write side.
 
-**When to suppress:**
-Once the implementation checklist above is complete (user approval, trust levels, allowlist), these can be suppressed with appropriate `//nolint:gosec` comments explaining the mitigations in place.
+## See Also
 
-## References
-
-- `internal/skills/installer.go` - Install implementations
-- `internal/skills/manager.go:354` - Dead `Install()` function  
-- `internal/tools/skills.go` - Tool schema (no install action)
-- `specs/SKILLS_TOOL.md` - Original design (includes install in examples)
-- `skills/clawhub/SKILL.md` - Remote skill installation via CLI
+- [SKILLS_TOOL.md](attic/SKILLS_TOOL.md) — Original full spec (attic)
+- [internal/skills/](../internal/skills/) — Skill loading implementation
+- [internal/tools/skills/](../internal/tools/skills/) — Skills tool (query actions implemented)

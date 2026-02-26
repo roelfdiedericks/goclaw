@@ -121,14 +121,14 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		if err != nil {
 			return nil, err
 		}
-		return types.TextResult(content), nil
+		return types.ExternalTextResult(content, "web"), nil
 	}
 
 	mgr := browser.GetManager()
 	if mgr != nil {
 		content, err := t.fetchWithBrowser(ctx, params.URL, maxLen)
 		if err == nil {
-			return types.TextResult(content), nil
+			return types.ExternalTextResult(content, "web"), nil
 		}
 		if t.useBrowser == "always" {
 			return nil, err
@@ -142,7 +142,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	if err != nil {
 		return nil, err
 	}
-	return types.TextResult(content), nil
+	return types.ExternalTextResult(content, "web"), nil
 }
 
 func (t *Tool) fetchWithHTTP(ctx context.Context, urlStr string, maxLen int, parsedURL *url.URL) (string, error) {

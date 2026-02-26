@@ -96,3 +96,13 @@ func (c *SafetyConfig) GetPanicPhrases() []string {
 	}
 	return []string{"STOP"}
 }
+
+// SecurityConfig configures security policies for the gateway
+type SecurityConfig struct {
+	ToolRestrictions map[string]ToolRestriction `json:"toolRestrictions,omitempty"`
+}
+
+// ToolRestriction defines which tools are denied for a given purpose
+type ToolRestriction struct {
+	Deny []string `json:"deny"`
+}

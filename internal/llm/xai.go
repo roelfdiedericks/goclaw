@@ -865,9 +865,10 @@ func (p *XAIProvider) processStream(
 		textBuilder      strings.Builder
 		reasoningBuilder strings.Builder
 		responseID       string
-		finishReason     xai.FinishReason
-		usage            xai.Usage
-		toolCall         *xai.ToolCallInfo
+		finishReason         xai.FinishReason
+		usage                xai.Usage
+		toolCall             *xai.ToolCallInfo
+		clientToolCallCount  int
 	)
 
 	for {
@@ -937,6 +938,9 @@ func (p *XAIProvider) processStream(
 					"id", tc.ID,
 				)
 				toolCall = tc
+				clientToolCallCount++
+			} else if clientToolNames[name] {
+				clientToolCallCount++
 			} else if toolCall == nil {
 				L_debug("xai: ignoring non-client tool call",
 					"name", name,
@@ -981,7 +985,6 @@ func (p *XAIProvider) processStream(
 	// Extract tool call info if present
 	if toolCall != nil && toolCall.Function != nil {
 		resp.ToolUseID = toolCall.ID
-		// Strip client tool prefix if present (restores canonical name for persistence)
 		toolName := toolCall.Function.Name
 		if strings.HasPrefix(toolName, clientToolPrefix) {
 			toolName = strings.TrimPrefix(toolName, clientToolPrefix)
@@ -993,6 +996,9 @@ func (p *XAIProvider) processStream(
 		resp.ToolName = toolName
 		resp.ToolInput = json.RawMessage(toolCall.Function.Arguments)
 		resp.StopReason = "tool_use"
+		if clientToolCallCount > 1 {
+			L_warn("llm: multiple tool calls returned, processing first only", "total", clientToolCallCount, "processing", toolName)
+		}
 	}
 
 	L_debug("xai: stream complete",

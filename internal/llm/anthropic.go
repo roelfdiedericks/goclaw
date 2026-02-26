@@ -528,22 +528,27 @@ func (c *AnthropicProvider) StreamMessage(
 	}
 
 	// Check for tool use and thinking in the response
+	var toolCallCount int
 	for _, block := range message.Content {
 		switch variant := block.AsAny().(type) {
 		case anthropic.ToolUseBlock:
-			response.ToolUseID = variant.ID
-			response.ToolName = variant.Name
-			// Marshal the input back to JSON
-			inputBytes, _ := json.Marshal(variant.Input)
-			response.ToolInput = inputBytes
-			L_info("llm: tool use", "tool", variant.Name, "id", variant.ID)
+			toolCallCount++
+			if response.ToolUseID == "" {
+				response.ToolUseID = variant.ID
+				response.ToolName = variant.Name
+				inputBytes, _ := json.Marshal(variant.Input)
+				response.ToolInput = inputBytes
+				L_info("llm: tool use", "tool", variant.Name, "id", variant.ID)
+			}
 		case anthropic.ThinkingBlock:
-			// Capture thinking content from final block
 			if variant.Thinking != "" {
 				response.Thinking = variant.Thinking
 				L_info("llm: thinking completed", "length", len(variant.Thinking))
 			}
 		}
+	}
+	if toolCallCount > 1 {
+		L_warn("llm: multiple tool calls returned, processing first only", "total", toolCallCount, "processing", response.ToolName)
 	}
 
 	// If we accumulated thinking from deltas but didn't get a final block, use that

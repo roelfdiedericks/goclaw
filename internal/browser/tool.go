@@ -271,6 +271,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		result = result + profileNote
 	}
 
+	// Snapshot returns web page content — flag as external/untrusted
+	if params.Action == "snapshot" {
+		return types.ExternalTextResult(result, "browser"), nil
+	}
+
 	return types.TextResult(result), nil
 }
 

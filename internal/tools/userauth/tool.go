@@ -46,6 +46,17 @@ type AuthResult struct {
 
 // NewTool creates a new user_auth tool.
 func NewTool(authConfig auth.AuthConfig, rolesConfig user.RolesConfig) *Tool {
+	// Filter allowedRoles to only include roles that actually exist in rolesConfig
+	var validRoles []string
+	for _, role := range authConfig.AllowedRoles {
+		if _, ok := rolesConfig[role]; ok {
+			validRoles = append(validRoles, role)
+		} else {
+			L_warn("user_auth: allowedRole has no matching role definition, removing", "role", role)
+		}
+	}
+	authConfig.AllowedRoles = validRoles
+
 	return &Tool{
 		config:      authConfig,
 		rolesConfig: rolesConfig,
