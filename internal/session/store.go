@@ -29,6 +29,7 @@ type Store interface {
 	// Compaction operations
 	AppendCompaction(ctx context.Context, sessionKey string, comp *StoredCompaction) error
 	GetCompactions(ctx context.Context, sessionKey string) ([]StoredCompaction, error)
+	GetLatestCompaction(ctx context.Context, sessionKey string) (*StoredCompaction, error)
 
 	// Compaction retry operations
 	GetPendingSummaryRetry(ctx context.Context) (*StoredCompaction, error)
@@ -52,7 +53,8 @@ type Store interface {
 
 // MessageQueryOpts controls message retrieval
 type MessageQueryOpts struct {
-	AfterID    string    // Get messages after this ID
+	AfterID    string    // Get messages after this ID (exclusive: timestamp > X)
+	SinceID    string    // Get messages from this ID onward (inclusive: timestamp >= X)
 	AfterTime  time.Time // Get messages after this timestamp
 	Limit      int       // Max messages to return (0 = no limit)
 	RolesOnly  []string  // Filter by roles (empty = all)

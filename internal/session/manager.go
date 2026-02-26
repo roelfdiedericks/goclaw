@@ -102,6 +102,37 @@ func NewManagerWithConfig(cfg *ManagerConfig) (*Manager, error) {
 	return m, nil
 }
 
+// LoadPrimarySession loads the primary session from SQLite, respecting compaction boundaries.
+// This is the standard startup path when OpenClaw inheritance is disabled.
+func (m *Manager) LoadPrimarySession() error {
+	sess := NewSession("goclaw-primary")
+
+	goclawMsgs, latestCompaction := m.loadSQLiteMessages()
+
+	if len(goclawMsgs) > 0 {
+		sess.Messages = storedToMessages(goclawMsgs)
+	}
+
+	m.applyCompactionContext(sess, latestCompaction)
+
+	sess.Key = PrimarySession
+
+	estimator := GetTokenEstimator()
+	sess.TotalTokens = estimator.EstimateSessionTokens(sess)
+
+	m.mu.Lock()
+	m.sessions[PrimarySession] = sess
+	m.mu.Unlock()
+
+	L_info("session: loaded from SQLite",
+		"sessionKey", PrimarySession,
+		"messages", len(sess.Messages),
+		"totalTokens", sess.TotalTokens,
+		"compactionCount", sess.CompactionCount)
+
+	return nil
+}
+
 // InheritOpenClawSession loads an OpenClaw session and merges with GoClaw's own history.
 // Messages from both sources are merged chronologically by timestamp.
 // GoClaw always uses PrimarySession ("primary") for the owner's session.
@@ -121,7 +152,6 @@ func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey string) error {
 		if err == ErrSessionNotFound {
 			L_info("session: no OpenClaw session to inherit (starting fresh)",
 				"inheritKey", inheritKey)
-			// Create empty session for GoClaw
 			sess = NewSession("goclaw-primary")
 		} else {
 			return fmt.Errorf("failed to load session %q: %w", inheritKey, err)
@@ -130,22 +160,9 @@ func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey string) error {
 
 	openclawMsgCount := len(sess.Messages)
 
-	// Load GoClaw's own messages from SQLite and merge
-	// Note: Runtime writes go to PrimarySession ("primary"), not writeKey
-	var goclawMsgs []StoredMessage
-	if m.store != nil {
-		ctx := context.Background()
-		goclawMsgs, err = m.store.GetMessages(ctx, PrimarySession, MessageQueryOpts{})
-		if err != nil {
-			L_warn("session: failed to load GoClaw messages from SQLite", "error", err)
-			goclawMsgs = nil
-		} else if len(goclawMsgs) > 0 {
-			L_debug("session: loaded GoClaw messages from SQLite", "count", len(goclawMsgs))
-		}
-	}
+	goclawMsgs, latestCompaction := m.loadSQLiteMessages()
 
 	// Store OpenClaw messages in SQLite for transcript indexing
-	// Only store messages that don't already exist in GoClaw's store
 	if m.store != nil && openclawMsgCount > 0 {
 		imported := m.importOpenClawMessages(sess.Messages, goclawMsgs)
 		if imported > 0 {
@@ -155,7 +172,7 @@ func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey string) error {
 		}
 	}
 
-	// Merge for in-memory session (after import, so we have accurate counts)
+	// Merge for in-memory session
 	if len(goclawMsgs) > 0 {
 		sess.Messages = mergeMessagesByTimestamp(sess.Messages, goclawMsgs)
 		L_info("session: merged message histories",
@@ -163,6 +180,8 @@ func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey string) error {
 			"goclaw", len(goclawMsgs),
 			"merged", len(sess.Messages))
 	}
+
+	m.applyCompactionContext(sess, latestCompaction)
 
 	// Set up the session for GoClaw use
 	sess.Key = PrimarySession
@@ -172,14 +191,11 @@ func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey string) error {
 		sess.LastCheckpoint = GetMostRecentCheckpoint(records)
 	}
 
-	// Recalculate total tokens from merged messages (not just OpenClaw records)
-	// This ensures accurate token count for compaction decisions
 	estimator := GetTokenEstimator()
 	sess.TotalTokens = estimator.EstimateSessionTokens(sess)
 	L_debug("session: recalculated tokens after merge", "totalTokens", sess.TotalTokens)
 
 	// Set SessionFile to OpenClaw's file path (for watcher to monitor)
-	// GoClaw uses SQLite for storage, not JSONL
 	if m.reader != nil {
 		if entry, err := m.reader.GetSessionEntry(inheritKey); err == nil {
 			sess.SessionFile = entry.SessionFile
@@ -187,7 +203,6 @@ func (m *Manager) InheritOpenClawSession(sessionsDir, inheritKey string) error {
 		}
 	}
 
-	// Store in session map
 	m.mu.Lock()
 	m.sessions[PrimarySession] = sess
 	m.mu.Unlock()
@@ -339,6 +354,95 @@ func (m *Manager) importOpenClawMessages(openclawMsgs []Message, goclawMsgs []St
 	}
 
 	return imported
+}
+
+// loadSQLiteMessages loads GoClaw messages from SQLite, respecting compaction boundaries.
+func (m *Manager) loadSQLiteMessages() ([]StoredMessage, *StoredCompaction) {
+	if m.store == nil {
+		return nil, nil
+	}
+
+	ctx := context.Background()
+
+	latestCompaction, err := m.store.GetLatestCompaction(ctx, PrimarySession)
+	if err != nil {
+		L_warn("session: failed to check compaction boundary", "error", err)
+	}
+
+	opts := MessageQueryOpts{}
+	if latestCompaction != nil && latestCompaction.FirstKeptEntryID != "" {
+		opts.SinceID = latestCompaction.FirstKeptEntryID
+		L_info("session: applying compaction boundary",
+			"firstKeptEntryID", latestCompaction.FirstKeptEntryID,
+			"compactionTime", latestCompaction.Timestamp,
+			"summaryLen", len(latestCompaction.Summary))
+	} else {
+		L_debug("session: no compaction boundary, loading all messages")
+	}
+
+	msgs, err := m.store.GetMessages(ctx, PrimarySession, opts)
+	if err != nil {
+		L_warn("session: failed to load GoClaw messages from SQLite", "error", err)
+		return nil, latestCompaction
+	}
+	if len(msgs) > 0 {
+		L_debug("session: loaded GoClaw messages from SQLite", "count", len(msgs))
+	}
+
+	return msgs, latestCompaction
+}
+
+// applyCompactionContext prepends the compaction summary and sets compaction metadata on the session.
+func (m *Manager) applyCompactionContext(sess *Session, comp *StoredCompaction) {
+	if comp == nil {
+		return
+	}
+
+	if comp.Summary != "" {
+		summaryMsg := Message{
+			ID:        "compaction-summary",
+			Role:      "user",
+			Content:   fmt.Sprintf("[Previous context summary]\n%s", comp.Summary),
+			Source:    "system",
+			Timestamp: comp.Timestamp,
+		}
+		sess.Messages = append([]Message{summaryMsg}, sess.Messages...)
+		L_info("session: prepended compaction summary",
+			"summaryLen", len(comp.Summary),
+			"totalMessages", len(sess.Messages))
+	}
+
+	compID := comp.ID
+	sess.LastRecordID = &compID
+	if m.store != nil {
+		if compactions, err := m.store.GetCompactions(context.Background(), PrimarySession); err == nil {
+			sess.CompactionCount = len(compactions)
+		}
+	}
+}
+
+// storedToMessages converts StoredMessage slice to Message slice.
+func storedToMessages(stored []StoredMessage) []Message {
+	msgs := make([]Message, len(stored))
+	for i, sm := range stored {
+		msgs[i] = Message{
+			ID:        sm.ID,
+			Role:      sm.Role,
+			Content:   sm.Content,
+			Source:    sm.Source,
+			Timestamp: sm.Timestamp,
+			ToolUseID: sm.ToolCallID,
+			ToolName:  sm.ToolName,
+			Thinking:  sm.Thinking,
+		}
+		if sm.ToolInput != nil {
+			msgs[i].ToolInput = sm.ToolInput
+		}
+		if sm.ToolResult != "" {
+			msgs[i].Content = sm.ToolResult
+		}
+	}
+	return msgs
 }
 
 // StartWatching begins monitoring the OpenClaw session file for changes.

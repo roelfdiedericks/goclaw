@@ -489,6 +489,11 @@ func (s *SQLiteStore) GetMessages(ctx context.Context, sessionKey string, opts M
 		args = append(args, opts.AfterID)
 	}
 
+	if opts.SinceID != "" {
+		query += " AND timestamp >= (SELECT timestamp FROM messages WHERE id = ?)"
+		args = append(args, opts.SinceID)
+	}
+
 	if !opts.AfterTime.IsZero() {
 		query += " AND timestamp > ?"
 		args = append(args, opts.AfterTime.Unix())
@@ -751,6 +756,41 @@ func (s *SQLiteStore) GetCompactions(ctx context.Context, sessionKey string) ([]
 	}
 
 	return compactions, rows.Err()
+}
+
+// GetLatestCompaction returns the most recent compaction for a session, or nil if none exist.
+func (s *SQLiteStore) GetLatestCompaction(ctx context.Context, sessionKey string) (*StoredCompaction, error) {
+	var comp StoredCompaction
+	var ts int64
+	var parentID, firstKeptID, checkpointID sql.NullString
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, session_key, parent_id, timestamp,
+		       summary, first_kept_entry_id, tokens_before, tokens_after,
+		       messages_removed, from_checkpoint, checkpoint_id, needs_summary_retry
+		FROM compactions
+		WHERE session_key = ?
+		ORDER BY timestamp DESC
+		LIMIT 1
+	`, sessionKey).Scan(
+		&comp.ID, &comp.SessionKey, &parentID, &ts,
+		&comp.Summary, &firstKeptID, &comp.TokensBefore, &comp.TokensAfter,
+		&comp.MessagesRemoved, &comp.FromCheckpoint, &checkpointID, &comp.NeedsSummaryRetry,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	comp.Timestamp = time.Unix(ts, 0)
+	comp.ParentID = parentID.String
+	comp.FirstKeptEntryID = firstKeptID.String
+	comp.CheckpointID = checkpointID.String
+
+	return &comp, nil
 }
 
 // GetPendingSummaryRetry returns a compaction that needs summary retry (for background processing)
