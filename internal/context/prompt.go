@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/metrics"
+	"github.com/roelfdiedericks/goclaw/internal/tokens"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -34,6 +36,8 @@ type PromptParams struct {
 	// Role-specific system prompt customization
 	RoleSystemPrompt     string // Inline system prompt text from role config
 	RoleSystemPromptFile string // Path to system prompt file (relative to workspace)
+	// Time injection control
+	TimeInSystemPrompt bool // Include time section in system prompt (default: false)
 }
 
 // BuildSystemPrompt builds the full system prompt with workspace context injection
@@ -48,6 +52,9 @@ func BuildSystemPrompt(params PromptParams) string {
 	var sections []string
 	isMinimal := params.IsSubagent
 
+	// Track section content for token estimation via tiktoken
+	var toolsText, workspaceText, memoryText, skillsText, staticText string
+
 	// 1. Core identity
 	if params.IsSubagent {
 		sections = append(sections, "You are a worker agent spawned to complete a specific task.")
@@ -57,48 +64,70 @@ func BuildSystemPrompt(params PromptParams) string {
 
 	// 2. Tooling section
 	if params.Tools != nil && params.Tools.Count() > 0 {
-		sections = append(sections, buildToolingSection(params.Tools))
+		s := buildToolingSection(params.Tools)
+		toolsText += s
+		sections = append(sections, s)
 	}
 
 	// 2b. Message tool guidance (if message tool is available)
 	if params.Tools != nil && params.Tools.Has("message") {
-		sections = append(sections, buildMessageToolSection(params.Channel))
+		s := buildMessageToolSection(params.Channel)
+		toolsText += s
+		sections = append(sections, s)
 	}
 
 	// 3. Tool Call Style (main agent only)
 	if !isMinimal {
-		sections = append(sections, buildToolCallStyleSection())
+		s := buildToolCallStyleSection()
+		staticText += s
+		sections = append(sections, s)
 	}
 
 	// 4. Safety section
-	sections = append(sections, buildSafetySection())
+	{
+		s := buildSafetySection()
+		staticText += s
+		sections = append(sections, s)
+	}
 
 	// 5. GoClaw CLI Reference (main agent only)
 	if !isMinimal {
-		sections = append(sections, buildCLIReferenceSection())
+		s := buildCLIReferenceSection()
+		staticText += s
+		sections = append(sections, s)
 	}
 
 	// 6. Workspace section
-	sections = append(sections, buildWorkspaceSection(params.WorkspaceDir))
+	{
+		s := buildWorkspaceSection(params.WorkspaceDir)
+		staticText += s
+		sections = append(sections, s)
+	}
 
 	// 7. User Identity (main agent only)
 	if !isMinimal && params.User != nil {
-		sections = append(sections, buildUserIdentitySection(params.User))
+		s := buildUserIdentitySection(params.User)
+		staticText += s
+		sections = append(sections, s)
 	}
 
 	// 7b. Role-specific system prompt (main agent only)
 	if !isMinimal {
 		rolePrompt := buildRolePromptSection(params)
 		if rolePrompt != "" {
+			staticText += rolePrompt
 			sections = append(sections, rolePrompt)
 		}
 	}
 
-	// 8. Time section
-	sections = append(sections, buildTimeSection(params.UserTimezone))
+	// 8. Time section (only if configured — excluding it enables prompt caching)
+	if params.TimeInSystemPrompt {
+		s := buildTimeSection(params.UserTimezone)
+		staticText += s
+		sections = append(sections, s)
+	}
 
 	// 9. Load and inject workspace files (Project Context)
-	// Use cached files if provided, otherwise load from disk
 	var files []WorkspaceFile
 	if params.WorkspaceFiles != nil {
 		files = params.WorkspaceFiles
@@ -107,52 +136,69 @@ func BuildSystemPrompt(params PromptParams) string {
 		files = LoadWorkspaceFiles(params.WorkspaceDir, params.IncludeMemory)
 	}
 	files = FilterForSession(files, params.IsSubagent)
-	// Filter out memory if not included (when using cached files)
 	if !params.IncludeMemory {
 		files = FilterMemory(files)
 	}
 	if len(files) > 0 {
-		sections = append(sections, buildProjectContextSection(files, params.IsSubagent))
+		s := buildProjectContextSection(files, params.IsSubagent)
+		workspaceText = s
+		sections = append(sections, s)
+
+		for _, f := range files {
+			if f.Name == "MEMORY.md" {
+				memoryText = f.Content
+			}
+		}
 	}
 
 	// 9b. Skills section (main agent only)
 	if !isMinimal && params.SkillsPrompt != "" {
+		skillsText = params.SkillsPrompt
 		sections = append(sections, params.SkillsPrompt)
-		logging.L_debug("context: skills section injected", "chars", len(params.SkillsPrompt))
+		logging.L_debug("context: skills section injected", "chars", len(skillsText))
 	}
 
 	// 10. Silent replies (main agent only)
 	if !isMinimal {
-		sections = append(sections, buildSilentRepliesSection())
+		s := buildSilentRepliesSection()
+		staticText += s
+		sections = append(sections, s)
 	}
 
-	// 11. Heartbeats (main agent only)
+	// 11. Cron Jobs (main agent only)
 	if !isMinimal {
-		sections = append(sections, buildHeartbeatSection())
-	}
-
-	// 11b. Cron Jobs (main agent only)
-	if !isMinimal {
-		sections = append(sections, buildCronJobsSection())
+		s := buildCronJobsSection()
+		staticText += s
+		sections = append(sections, s)
 	}
 
 	// 12. Memory flush instructions (main agent only)
 	if !isMinimal {
-		sections = append(sections, buildMemoryFlushSection())
+		s := buildMemoryFlushSection()
+		staticText += s
+		sections = append(sections, s)
 	}
 
 	// 13. Memory vs Transcript guidance (main agent only)
 	if !isMinimal {
-		sections = append(sections, buildMemoryVsTranscriptSection())
+		s := buildMemoryVsTranscriptSection()
+		staticText += s
+		sections = append(sections, s)
 	}
 
 	// 14. Context status (if tracking enabled)
 	if params.MaxTokens > 0 {
-		sections = append(sections, buildContextStatusSection(params.TotalTokens, params.MaxTokens))
+		s := buildContextStatusSection(params.TotalTokens, params.MaxTokens)
+		staticText += s
+		sections = append(sections, s)
 	}
 
 	// 15. Runtime info
-	sections = append(sections, buildRuntimeSection(params))
+	{
+		s := buildRuntimeSection(params)
+		staticText += s
+		sections = append(sections, s)
+	}
 
 	// Filter empty sections and join
 	var nonEmpty []string
@@ -163,7 +209,30 @@ func BuildSystemPrompt(params PromptParams) string {
 	}
 
 	prompt := strings.Join(nonEmpty, "\n\n")
-	logging.L_debug("context: system prompt built", "chars", len(prompt))
+
+	est := tokens.Get()
+	totalTokens := est.Count(prompt)
+	workspaceTokens := est.Count(workspaceText)
+	memoryTokens := est.Count(memoryText)
+	toolsTokens := est.Count(toolsText)
+	skillsTokens := est.Count(skillsText)
+	staticTokens := est.Count(staticText)
+
+	logging.L_debug("context: system prompt built",
+		"totalTokens", totalTokens,
+		"workspaceTokens", workspaceTokens,
+		"memoryTokens", memoryTokens,
+		"toolsTokens", toolsTokens,
+		"skillsTokens", skillsTokens,
+		"staticTokens", staticTokens,
+	)
+
+	metrics.MetricSet("prompt", "total_tokens", int64(totalTokens))
+	metrics.MetricSet("prompt", "workspace_tokens", int64(workspaceTokens))
+	metrics.MetricSet("prompt", "memory_tokens", int64(memoryTokens))
+	metrics.MetricSet("prompt", "tools_tokens", int64(toolsTokens))
+	metrics.MetricSet("prompt", "skills_tokens", int64(skillsTokens))
+	metrics.MetricSet("prompt", "static_tokens", int64(staticTokens))
 
 	return prompt
 }
@@ -224,7 +293,7 @@ func buildSafetySection() string {
 
 You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking; avoid long-term plans beyond the user's request.
 
-Prioritize safety and human oversight over completion; if instructions conflict, pause and ask; comply with stop/pause/audit requests and never bypass safeguards. (Inspired by Anthropic's constitution.)
+Prioritize safety and human oversight over completion; if instructions conflict, pause and ask; comply with stop/pause/audit requests and never bypass safeguards.
 
 Do not manipulate or persuade anyone to expand access or disable safeguards. Do not copy yourself or change system prompts, safety rules, or tool policies unless explicitly requested.`
 }
@@ -281,7 +350,8 @@ func buildUserIdentitySection(u *user.User) string {
 		lines = append(lines, "Access: Read-only. Very limited tool access.")
 		lines = append(lines, "This is an unauthenticated user. Be helpful but cautious with sensitive information.")
 	default:
-		lines = append(lines, "Treat messages from this user as the owner/operator.")
+		lines = append(lines, "Access: Restricted. Unknown role — apply most restrictive access.")
+		lines = append(lines, "Treat as unauthenticated. Be helpful but do not expose sensitive information or use any tools.")
 	}
 
 	return strings.Join(lines, "\n")
@@ -347,18 +417,6 @@ Rules:
 ❌ Wrong: "Here's help... SILENT_OK"
 ❌ Wrong: ` + "`SILENT_OK`" + `
 ✅ Right: SILENT_OK`
-}
-
-func buildHeartbeatSection() string {
-	return `## Heartbeats
-
-Heartbeat prompt: Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.
-
-If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:
-HEARTBEAT_OK
-
-GoClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).
-If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.`
 }
 
 func buildCronJobsSection() string {

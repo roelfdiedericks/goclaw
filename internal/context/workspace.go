@@ -36,7 +36,6 @@ var workspaceFileOrder = []string{
 	FileTools,
 	FileIdentity,
 	FileUser,
-	FileHeartbeat,
 	FileBootstrap,
 	FileMemory,
 }

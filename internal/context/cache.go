@@ -46,7 +46,6 @@ func NewPromptCache(workspaceDir string, pollIntervalSec int) (*PromptCache, err
 		FileTools,
 		FileIdentity,
 		FileUser,
-		FileHeartbeat,
 		FileBootstrap,
 		FileMemory,
 	}
