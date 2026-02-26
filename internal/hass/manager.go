@@ -587,11 +587,11 @@ func (m *Manager) processMatch(sub *Subscription, event *HAEvent, entityID, newS
 		// Build prompt with instructions
 		var prompt string
 		if sub.Prompt != "" {
-			// Use subscription-specific instructions
-			prompt = message + "\n\nInstructions: " + sub.Prompt + "\n\nReply EVENT_OK if no action needed."
+			prompt = message + "\n\nDo not re-query this entity — the current state is included above." +
+				"\n\nInstructions: " + sub.Prompt + "\n\nReply EVENT_OK if no action needed."
 		} else {
-			// Generic fallback
-			prompt = message + "\n\nProcess this event. Reply EVENT_OK if no action needed."
+			prompt = message + "\n\nDo not re-query this entity — the current state is included above." +
+				"\n\nProcess this event. Reply EVENT_OK if no action needed."
 		}
 
 		L_debug("hass: invoking agent", "entity", entityID, "subID", sub.ID, "promptLen", len(prompt), "hasPrompt", sub.Prompt != "")

@@ -12,6 +12,8 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 // breadcrumbBase is the base path for LLM navigation
@@ -508,7 +510,7 @@ func (e *LLMEditor) editPurpose(name string, cfg *llm.LLMPurposeConfig) {
 
 // showModelChain displays the model chain as a split pane with preview.
 func (e *LLMEditor) showModelChain(purpose string, cfg *llm.LLMPurposeConfig, focusIndex ...int) {
-	title := strings.Title(purpose)
+	title := cases.Title(language.English).String(purpose)
 	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", title})
 	e.app.SetStatusText("d=Delete  Shift+Up/Down=Reorder")
 
@@ -586,38 +588,40 @@ func (e *LLMEditor) showModelChain(purpose string, cfg *llm.LLMPurposeConfig, fo
 	pane.SetPreviewTitle("Model Details")
 
 	// Add move up/down key handling
-	origCapture := pane.Focusable().(*tview.List).GetInputCapture()
-	pane.Focusable().(*tview.List).SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		idx := pane.Focusable().(*tview.List).GetCurrentItem()
-		chainLen := len(cfg.Models)
+	if list, ok := pane.Focusable().(*tview.List); ok {
+		origCapture := list.GetInputCapture()
+		list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			idx := list.GetCurrentItem()
+			chainLen := len(cfg.Models)
 
-		if event.Modifiers()&tcell.ModShift != 0 {
-			switch event.Key() {
-			case tcell.KeyUp:
-				if idx > 0 && idx < chainLen {
-					cfg.Models[idx], cfg.Models[idx-1] = cfg.Models[idx-1], cfg.Models[idx]
-					e.onSave()
-					e.showModelChain(purpose, cfg, idx-1)
-					return nil
-				}
-			case tcell.KeyDown:
-				if idx >= 0 && idx < chainLen-1 {
-					cfg.Models[idx], cfg.Models[idx+1] = cfg.Models[idx+1], cfg.Models[idx]
-					e.onSave()
-					e.showModelChain(purpose, cfg, idx+1)
-					return nil
+			if event.Modifiers()&tcell.ModShift != 0 {
+				switch event.Key() {
+				case tcell.KeyUp:
+					if idx > 0 && idx < chainLen {
+						cfg.Models[idx], cfg.Models[idx-1] = cfg.Models[idx-1], cfg.Models[idx]
+						e.onSave()
+						e.showModelChain(purpose, cfg, idx-1)
+						return nil
+					}
+				case tcell.KeyDown:
+					if idx >= 0 && idx < chainLen-1 {
+						cfg.Models[idx], cfg.Models[idx+1] = cfg.Models[idx+1], cfg.Models[idx]
+						e.onSave()
+						e.showModelChain(purpose, cfg, idx+1)
+						return nil
+					}
 				}
 			}
-		}
 
-		if origCapture != nil {
-			return origCapture(event)
-		}
-		return event
-	})
+			if origCapture != nil {
+				return origCapture(event)
+			}
+			return event
+		})
 
-	if len(focusIndex) > 0 && focusIndex[0] >= 0 {
-		pane.Focusable().(*tview.List).SetCurrentItem(focusIndex[0])
+		if len(focusIndex) > 0 && focusIndex[0] >= 0 {
+			list.SetCurrentItem(focusIndex[0])
+		}
 	}
 
 	e.app.SetSplitPaneContent(pane)
@@ -745,7 +749,7 @@ func buildModelPreview(providerID, modelID, purpose string) string {
 
 // addModelToChain shows the provider selection step for adding a model.
 func (e *LLMEditor) addModelToChain(purpose string, cfg *llm.LLMPurposeConfig) {
-	title := strings.Title(purpose)
+	title := cases.Title(language.English).String(purpose)
 	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", title, "Add Model"})
 	e.app.SetStatusText(forms.StatusMenu)
 
@@ -801,7 +805,7 @@ func (e *LLMEditor) addModelToChain(purpose string, cfg *llm.LLMPurposeConfig) {
 // onPick is called with the selected model reference before saving. Use it to either
 // append (for add) or replace (for swap) the chain entry.
 func (e *LLMEditor) pickModelFromProvider(alias string, provCfg llm.LLMProviderConfig, purpose string, cfg *llm.LLMPurposeConfig, onPick func(ref string)) {
-	title := strings.Title(purpose)
+	title := cases.Title(language.English).String(purpose)
 	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", title, "Select Model", alias})
 
 	providerID := e.resolveProviderID(alias, &provCfg)
@@ -856,7 +860,7 @@ func (e *LLMEditor) pickModelFromProvider(alias string, provCfg llm.LLMProviderC
 
 // freeTextModelInput shows a text input for typing a model name manually.
 func (e *LLMEditor) freeTextModelInput(alias, purpose string, cfg *llm.LLMPurposeConfig, onPick func(ref string)) {
-	title := strings.Title(purpose)
+	title := cases.Title(language.English).String(purpose)
 	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", title, "Select Model", alias, "Model Name"})
 	e.app.SetStatusText(forms.StatusForm)
 
@@ -893,7 +897,7 @@ func (e *LLMEditor) freeTextModelInput(alias, purpose string, cfg *llm.LLMPurpos
 
 // editPurposeSettings opens a small form for purpose-specific settings.
 func (e *LLMEditor) editPurposeSettings(purpose string, cfg *llm.LLMPurposeConfig) {
-	title := strings.Title(purpose)
+	title := cases.Title(language.English).String(purpose)
 	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", title, "Settings"})
 
 	formDef := forms.FormDef{

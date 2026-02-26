@@ -117,7 +117,7 @@ type CLI struct {
 	Update     UpdateCmd     `cmd:"" help:"Check for and install updates"`
 	Cron       CronCmd       `cmd:"" help:"Manage cron jobs"`
 	User       UserCmd       `cmd:"" help:"Manage users"`
-	Whatsapp WhatsAppCmd `cmd:"" help:"Manage WhatsApp connection"`
+	Whatsapp   WhatsAppCmd   `cmd:"" help:"Manage WhatsApp connection"`
 	Browser    BrowserCmd    `cmd:"" help:"Manage browser (download, profiles, setup)"`
 	Embeddings EmbeddingsCmd `cmd:"" help:"Manage embeddings (status, rebuild)"`
 	Setup      SetupCmd      `cmd:"" help:"Interactive setup wizard"`

@@ -2,10 +2,11 @@ package main
 
 // driverMap maps Catwalk provider ID to the GoClaw runtime driver.
 // Driver corresponds to internal/llm/*.go implementation:
-//   anthropic -> anthropic.go
-//   openai    -> openai.go
-//   xai       -> xai.go
-//   ollama    -> ollama.go
+//
+//	anthropic -> anthropic.go
+//	openai    -> openai.go
+//	xai       -> xai.go
+//	ollama    -> ollama.go
 var driverMap = map[string]string{
 	"anthropic":   "anthropic",
 	"openai":      "openai",

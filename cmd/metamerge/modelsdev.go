@@ -65,12 +65,6 @@ func fetchModelsDevModel(mdProvider, mdModelID, cacheDir string, refresh, offlin
 	return &m
 }
 
-// modelsDevResult holds a lookup result for concurrent fetching.
-type modelsDevResult struct {
-	Key   string // "provider/model"
-	Model *ModelsDevModel
-}
-
 // fetchAllModelsDevBatch concurrently fetches models.dev data for a batch of lookups.
 // Each lookup is a (mdProvider, mdModelID) pair. Results are deduped by key.
 func fetchAllModelsDevBatch(lookups []struct{ Provider, ModelID string }, cacheDir string, refresh, offline bool) map[string]*ModelsDevModel {

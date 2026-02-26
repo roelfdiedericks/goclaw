@@ -173,6 +173,7 @@ func (m *Manager) ModelProviderIDs() []string {
 // Performs exact match first, then bidirectional prefix matching:
 //   - modelID is a prefix of a metadata ID (claude-opus-4-5 -> claude-opus-4-5-20251101)
 //   - a metadata ID is a prefix of modelID (grok-4 -> grok-4-latest)
+//
 // On multiple prefix matches, the longest (most specific) metadata ID wins.
 func (m *Manager) GetModel(providerID, modelID string) (*Model, bool) {
 	_, model, ok := m.ResolveModel(providerID, modelID)

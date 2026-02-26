@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,7 +31,11 @@ func fetchCached(url, cachePath string, refresh, offline bool) ([]byte, error) {
 		}
 	}
 
-	resp, err := httpClient.Get(url)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request for %s: %w", url, err)
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		// Network error — try cache fallback
 		if data, err2 := os.ReadFile(cachePath); err2 == nil {
@@ -67,8 +72,8 @@ func fetchCached(url, cachePath string, refresh, offline bool) ([]byte, error) {
 }
 
 func writeCache(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0600)
 }

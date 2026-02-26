@@ -20,7 +20,8 @@ const (
 	ErrorTypeBilling         ErrorType = "billing"
 	ErrorTypeTimeout         ErrorType = "timeout"
 	ErrorTypeFormat          ErrorType = "format"
-	ErrorTypeMaxTokens       ErrorType = "max_tokens" // max_tokens exceeds model limit
+	ErrorTypeMaxTokens       ErrorType = "max_tokens"   // max_tokens exceeds model limit
+	ErrorTypeServerError     ErrorType = "server_error" // transient server-side failure (RST_STREAM, 500, gRPC Internal)
 )
 
 // IsContextOverflowError checks if an error indicates context window exceeded.
@@ -78,6 +79,14 @@ func IsFormatError(err error) bool {
 		return false
 	}
 	return IsFormatMessage(err.Error())
+}
+
+// IsServerError checks if an error indicates a transient server-side failure.
+func IsServerError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return IsServerErrorMessage(err.Error())
 }
 
 // IsMaxTokensError checks if an error indicates max_tokens exceeds model limit.
@@ -163,6 +172,9 @@ func ClassifyError(msg string) ErrorType {
 	if IsOverloadedMessage(msg) {
 		return ErrorTypeOverloaded
 	}
+	if IsServerErrorMessage(msg) {
+		return ErrorTypeServerError
+	}
 	if IsBillingMessage(msg) {
 		return ErrorTypeBilling
 	}
@@ -185,7 +197,7 @@ func ClassifyError(msg string) ErrorType {
 //	max_tokens (retry with capped value first), unknown
 func IsFailoverError(errType ErrorType) bool {
 	switch errType {
-	case ErrorTypeRateLimit, ErrorTypeAuth, ErrorTypeBilling, ErrorTypeTimeout, ErrorTypeOverloaded:
+	case ErrorTypeRateLimit, ErrorTypeAuth, ErrorTypeBilling, ErrorTypeTimeout, ErrorTypeOverloaded, ErrorTypeServerError:
 		return true
 	case ErrorTypeMaxTokens:
 		return false // Retry with capped tokens first, don't failover immediately
@@ -213,6 +225,8 @@ func FormatErrorForUser(msg string, errType ErrorType) string {
 		return "Message format error - session may be corrupted. Try /new to start fresh."
 	case ErrorTypeMaxTokens:
 		return "Output token limit exceeded for this model. Retrying with adjusted settings."
+	case ErrorTypeServerError:
+		return "Server error from AI provider. Trying next model."
 	default:
 		// For unknown errors, include the original message
 		return fmt.Sprintf("LLM error: %s", msg)
@@ -268,6 +282,8 @@ func CheckResponseBody(originalErr error, respBody []byte) error {
 		return fmt.Errorf("request timed out (original error: %v)", originalErr)
 	case ErrorTypeFormat:
 		return fmt.Errorf("invalid request format (original error: %v)", originalErr)
+	case ErrorTypeServerError:
+		return fmt.Errorf("server error (original error: %v)", originalErr)
 	default:
 		return originalErr
 	}
@@ -470,6 +486,38 @@ func IsFormatMessage(msg string) bool {
 		strings.Contains(lower, "invalid_request_error") ||
 		strings.Contains(lower, "malformed") ||
 		strings.Contains(lower, "schema validation") {
+		return true
+	}
+
+	return false
+}
+
+// IsServerErrorMessage checks if a message indicates a transient server-side failure.
+// Matches gRPC stream resets, HTTP 500, and generic server errors.
+func IsServerErrorMessage(msg string) bool {
+	if msg == "" {
+		return false
+	}
+	lower := strings.ToLower(msg)
+
+	// gRPC stream reset (xAI)
+	if strings.Contains(lower, "rst_stream") ||
+		strings.Contains(lower, "stream terminated") {
+		return true
+	}
+
+	// gRPC internal error
+	if strings.Contains(lower, "code = internal") {
+		return true
+	}
+
+	// Generic server error prefix (xAI wraps errors as "server_error: ...")
+	if strings.Contains(lower, "server_error") {
+		return true
+	}
+
+	// HTTP 500
+	if strings.Contains(lower, "500") && strings.Contains(lower, "internal server error") {
 		return true
 	}
 

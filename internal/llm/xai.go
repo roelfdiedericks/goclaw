@@ -473,9 +473,18 @@ func (p *XAIProvider) StreamMessage(
 				req.WithMaxTurns(safeInt32(p.config.MaxTurns))
 			}
 			req.WithStoreMessages(incrementalMode)
-			// Note: NOT using previousResponseId this time
 
-			// Retry
+			stream, err = client.StreamChat(ctx, req)
+			if err != nil {
+				return nil, err
+			}
+		} else if isTransientServerError(err) && ctx.Err() == nil {
+			// Transient server error (RST_STREAM, INTERNAL_ERROR) — retry once after backoff
+			L_warn("xai: transient server error on connect, retrying in 1s",
+				"model", p.model,
+				"error", err,
+			)
+			time.Sleep(1 * time.Second)
 			stream, err = client.StreamChat(ctx, req)
 			if err != nil {
 				return nil, err
@@ -816,6 +825,19 @@ func isNotFoundError(err error) bool {
 		return xaiErr.Code == xai.ErrNotFound
 	}
 	return false
+}
+
+// isTransientServerError returns true if the error is a transient server-side
+// failure that's worth retrying (RST_STREAM, gRPC INTERNAL, server_error).
+func isTransientServerError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "rst_stream") ||
+		strings.Contains(msg, "internal_error") ||
+		strings.Contains(msg, "server_error") ||
+		strings.Contains(msg, "code = internal")
 }
 
 // =============================================================================

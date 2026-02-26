@@ -5,10 +5,10 @@ import "time"
 // --- Output schema (models.json) ---
 
 type ModelsFile struct {
-	Generated      string               `json:"generated"`
-	CatwalkCommit  string               `json:"catwalk_commit,omitempty"`
-	ModelsDevBranch string              `json:"models_dev_branch,omitempty"`
-	Providers      map[string]*Provider `json:"providers"`
+	Generated       string               `json:"generated"`
+	CatwalkCommit   string               `json:"catwalk_commit,omitempty"`
+	ModelsDevBranch string               `json:"models_dev_branch,omitempty"`
+	Providers       map[string]*Provider `json:"providers"`
 }
 
 type Provider struct {
@@ -41,13 +41,13 @@ type Cost struct {
 }
 
 type Capabilities struct {
-	Vision                  bool     `json:"vision"`
-	ToolUse                 bool     `json:"tool_use"`
-	Streaming               bool     `json:"streaming"`
-	Reasoning               bool     `json:"reasoning"`
-	StructuredOutput        bool     `json:"structured_output"`
-	ReasoningLevels         []string `json:"reasoning_levels,omitempty"`
-	DefaultReasoningEffort  string   `json:"default_reasoning_effort,omitempty"`
+	Vision                 bool     `json:"vision"`
+	ToolUse                bool     `json:"tool_use"`
+	Streaming              bool     `json:"streaming"`
+	Reasoning              bool     `json:"reasoning"`
+	StructuredOutput       bool     `json:"structured_output"`
+	ReasoningLevels        []string `json:"reasoning_levels,omitempty"`
+	DefaultReasoningEffort string   `json:"default_reasoning_effort,omitempty"`
 }
 
 type Modalities struct {
@@ -121,19 +121,19 @@ func (m *CatwalkModel) EffectiveReasoningEffort() string {
 // --- models.dev source structs ---
 
 type ModelsDevModel struct {
-	Name             string           `toml:"name"`
-	Family           string           `toml:"family"`
-	ReleaseDate      string           `toml:"release_date"`
-	LastUpdated      string           `toml:"last_updated"`
-	Attachment       bool             `toml:"attachment"`
-	Reasoning        bool             `toml:"reasoning"`
-	Temperature      bool             `toml:"temperature"`
-	Knowledge        string           `toml:"knowledge"`
-	ToolCall         *bool            `toml:"tool_call,omitempty"`
-	StructuredOutput *bool            `toml:"structured_output,omitempty"`
-	OpenWeights      bool             `toml:"open_weights"`
-	Cost             ModelsDevCost    `toml:"cost"`
-	Limit            ModelsDevLimit   `toml:"limit"`
+	Name             string            `toml:"name"`
+	Family           string            `toml:"family"`
+	ReleaseDate      string            `toml:"release_date"`
+	LastUpdated      string            `toml:"last_updated"`
+	Attachment       bool              `toml:"attachment"`
+	Reasoning        bool              `toml:"reasoning"`
+	Temperature      bool              `toml:"temperature"`
+	Knowledge        string            `toml:"knowledge"`
+	ToolCall         *bool             `toml:"tool_call,omitempty"`
+	StructuredOutput *bool             `toml:"structured_output,omitempty"`
+	OpenWeights      bool              `toml:"open_weights"`
+	Cost             ModelsDevCost     `toml:"cost"`
+	Limit            ModelsDevLimit    `toml:"limit"`
 	Modalities       ModelsDevModality `toml:"modalities"`
 }
 

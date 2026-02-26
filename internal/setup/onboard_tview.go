@@ -32,13 +32,13 @@ type WizardData struct {
 	WorkspacePath string
 
 	// User setup
-	UserName         string
-	UserDisplayName  string
-	UserRole         string
-	UserTelegramID   string
-	UserPassword         string
-	UserPasswordConf     string
-	UserExistingPwdHash  string // preserved from existing users.json
+	UserName            string
+	UserDisplayName     string
+	UserRole            string
+	UserTelegramID      string
+	UserPassword        string
+	UserPasswordConf    string
+	UserExistingPwdHash string // preserved from existing users.json
 
 	// Telegram
 	TelegramEnabled bool
@@ -612,8 +612,8 @@ func stepHTTP(data *WizardData) forms.WizardStep {
 	}
 }
 
-// Step: Browser Setup (placeholder)
-func stepBrowser(data *WizardData) forms.WizardStep {
+// Step: Browser Setup (placeholder — will be wired into wizard flow)
+func stepBrowser(data *WizardData) forms.WizardStep { //nolint:unused
 	return forms.WizardStep{
 		Title: "Browser",
 		Content: func(w *forms.Wizard) tview.Primitive {
@@ -954,7 +954,7 @@ func boolToEnabled(b bool) string {
 	return "disabled"
 }
 
-func boolToSetup(b bool) string {
+func boolToSetup(b bool) string { //nolint:unused
 	if b {
 		return "will setup after wizard"
 	}
@@ -1090,7 +1090,7 @@ func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
 	if data.ExistingConfig != nil {
 		raw, err := json.Marshal(data.ExistingConfig)
 		if err == nil {
-			json.Unmarshal(raw, &cfg)
+			_ = json.Unmarshal(raw, &cfg)
 		}
 	}
 	if cfg == nil {
