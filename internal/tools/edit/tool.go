@@ -93,8 +93,8 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	var err error
 
 	if sandboxed {
-		// Validate path (sandbox check)
-		resolved, err = sandbox.ValidatePath(params.Path, t.workingDir, t.workspaceRoot)
+		// Validate path for write (sandbox check + write-protection)
+		resolved, err = sandbox.ValidateWritePath(params.Path, t.workingDir, t.workspaceRoot)
 		if err != nil {
 			L_warn("edit tool: path validation failed", "path", params.Path, "error", err)
 			return nil, err

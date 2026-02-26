@@ -16,12 +16,25 @@ import (
 // Matches OpenClaw's UNICODE_SPACES pattern
 var unicodeSpaces = regexp.MustCompile(`[\x{00A0}\x{2000}-\x{200A}\x{202F}\x{205F}\x{3000}]`)
 
-// Denied files - these are blocked even within the sandbox
-// Contains sensitive configuration like API keys and password hashes
+// Denied files - these are blocked even within the sandbox.
+// Protects sensitive config that might exist in a development workspace.
+// Its not super useful, but reasonable and cheap to do.
 var deniedFiles = []string{
 	"users.json",
 	"goclaw.json",
 	"openclaw.json",
+	".env",
+	".env.local",
+	".env.production",
+	"id_rsa",
+	"id_ed25519",
+	".gitconfig",
+}
+
+// Write-protected directories - agent can read but not write to these
+var writeProtectedDirs = []string{
+	"skills",
+	"media",
 }
 
 // normalizeUnicodeSpaces replaces unicode space characters with regular spaces
@@ -218,10 +231,31 @@ func AtomicWriteFile(path string, data []byte, defaultPerm os.FileMode) error {
 	return nil
 }
 
-// WriteFileValidated validates the path, then writes atomically.
+// ValidateWritePath validates a path for write operations.
+// In addition to standard path validation, it blocks writes to protected directories.
+func ValidateWritePath(inputPath, workingDir, workspaceRoot string) (string, error) {
+	resolved, err := ValidatePath(inputPath, workingDir, workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+
+	rootResolved := filepath.Clean(workspaceRoot)
+	relative, _ := filepath.Rel(rootResolved, resolved)
+
+	for _, dir := range writeProtectedDirs {
+		if strings.HasPrefix(relative, dir+string(filepath.Separator)) || relative == dir {
+			L_warn("sandbox: write to protected directory blocked", "path", inputPath, "dir", dir)
+			return "", fmt.Errorf("write denied: %s/ is read-only", dir)
+		}
+	}
+
+	return resolved, nil
+}
+
+// WriteFileValidated validates the path for writes, then writes atomically.
 // Combines path validation with atomic write for convenience.
 func WriteFileValidated(inputPath, workingDir, workspaceRoot string, data []byte, defaultPerm os.FileMode) error {
-	resolved, err := ValidatePath(inputPath, workingDir, workspaceRoot)
+	resolved, err := ValidateWritePath(inputPath, workingDir, workspaceRoot)
 	if err != nil {
 		return err
 	}
