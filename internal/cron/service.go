@@ -18,7 +18,9 @@ import (
 const BackupTickInterval = 5 * time.Minute
 
 // DefaultHeartbeatPrompt is the default prompt sent to the agent during heartbeat.
-const DefaultHeartbeatPrompt = `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
+const DefaultHeartbeatPrompt = `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats.
+If nothing needs attention, reply exactly: HEARTBEAT_OK
+GoClaw treats "HEARTBEAT_OK" as a heartbeat ack and suppresses delivery. If something needs attention, do NOT include "HEARTBEAT_OK" — reply with the alert text instead.`
 
 // HeartbeatState holds runtime state for the heartbeat system.
 // Separate from HeartbeatConfig (JSON config) as it includes runtime fields like WorkspaceDir.
