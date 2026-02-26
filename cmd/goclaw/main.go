@@ -48,15 +48,22 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/stt"
 	"github.com/roelfdiedericks/goclaw/internal/supervisor"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
+	toolcron "github.com/roelfdiedericks/goclaw/internal/tools/cron"
+	"github.com/roelfdiedericks/goclaw/internal/tools/edit"
 	"github.com/roelfdiedericks/goclaw/internal/tools/exec"
 	toolhass "github.com/roelfdiedericks/goclaw/internal/tools/hass"
+	"github.com/roelfdiedericks/goclaw/internal/tools/jq"
 	"github.com/roelfdiedericks/goclaw/internal/tools/memoryget"
 	"github.com/roelfdiedericks/goclaw/internal/tools/memorysearch"
 	toolmessage "github.com/roelfdiedericks/goclaw/internal/tools/message"
+	"github.com/roelfdiedericks/goclaw/internal/tools/read"
 	toolskills "github.com/roelfdiedericks/goclaw/internal/tools/skills"
 	tooltranscript "github.com/roelfdiedericks/goclaw/internal/tools/transcript"
 	toolupdate "github.com/roelfdiedericks/goclaw/internal/tools/update"
 	"github.com/roelfdiedericks/goclaw/internal/tools/userauth"
+	"github.com/roelfdiedericks/goclaw/internal/tools/webfetch"
+	"github.com/roelfdiedericks/goclaw/internal/tools/websearch"
+	"github.com/roelfdiedericks/goclaw/internal/tools/write"
 	"github.com/roelfdiedericks/goclaw/internal/tools/xaiimagine"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
 	"github.com/roelfdiedericks/goclaw/internal/update"
@@ -1852,33 +1859,8 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		}
 	}
 
-	// Create tool registry and register base defaults (browser tool registered after gateway)
+	// Create tool registry (tools registered after gateway is ready)
 	toolsReg := tools.NewRegistry()
-	// Determine web_fetch headless mode (defaults to true if not specified)
-	webHeadless := true
-	if cfg.Tools.Web.Headless != nil {
-		webHeadless = *cfg.Tools.Web.Headless
-	}
-	tools.RegisterDefaults(toolsReg, tools.ToolsConfig{
-		WorkingDir:  cfg.Gateway.WorkingDir,
-		BraveAPIKey: cfg.Tools.Web.BraveAPIKey,
-		UseBrowser:  cfg.Tools.Web.UseBrowser, // "auto", "always", "never" for web_fetch
-		WebProfile:  cfg.Tools.Web.Profile,    // browser profile for web_fetch
-		WebHeadless: webHeadless,              // headless mode for web_fetch browser
-
-		// Exec tool config
-		ExecTimeout:    cfg.Tools.Exec.Timeout,
-		BubblewrapPath: cfg.Tools.Bubblewrap.Path,
-		ExecBubblewrap: exec.BubblewrapConfig{
-			Enabled:      cfg.Tools.Exec.Bubblewrap.Enabled,
-			ExtraRoBind:  cfg.Tools.Exec.Bubblewrap.ExtraRoBind,
-			ExtraBind:    cfg.Tools.Exec.Bubblewrap.ExtraBind,
-			ExtraEnv:     cfg.Tools.Exec.Bubblewrap.ExtraEnv,
-			AllowNetwork: cfg.Tools.Exec.Bubblewrap.AllowNetwork,
-			ClearEnv:     cfg.Tools.Exec.Bubblewrap.ClearEnv,
-		},
-	})
-	L_debug("base tools registered", "count", toolsReg.Count())
 
 	// Create gateway (creates MediaStore internally)
 	gw, err := gateway.New(cfg, users, llmRegistry, toolsReg)
@@ -1888,120 +1870,8 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	}
 	L_info("gateway initialized")
 
-	// Register browser tool (needs gateway's MediaStore and browser.Manager)
-	if cfg.Tools.Browser.Enabled {
-		if mediaStore := gw.MediaStore(); mediaStore != nil {
-			if browserMgr := browser.GetManager(); browserMgr != nil {
-				toolsReg.Register(browser.NewTool(browserMgr, mediaStore))
-				L_debug("browser tool registered", "headless", cfg.Tools.Browser.Headless)
-			} else {
-				L_warn("browser tool not registered: manager not initialized")
-			}
-		} else {
-			L_warn("browser tool not registered: no media store")
-		}
-	}
-
-	// Register memory tools (needs gateway's memory manager)
-	if memMgr := gw.MemoryManager(); memMgr != nil {
-		toolsReg.Register(memorysearch.NewTool(memMgr))
-		toolsReg.Register(memoryget.NewTool(memMgr))
-		L_debug("memory tools registered")
-	}
-
-	// Register skills tool (needs gateway's skills manager)
-	if skillsMgr := gw.SkillManager(); skillsMgr != nil {
-		toolsReg.Register(toolskills.NewTool(skillsMgr))
-		skillsMgr.RegisterOperationalCommands()
-		L_debug("skills tool registered")
-	}
-
-	// Register user_auth tool (for role elevation)
-	if cfg.Auth.Enabled && cfg.Auth.Script != "" {
-		toolsReg.Register(userauth.NewTool(cfg.Auth, cfg.Roles))
-		L_info("user_auth: tool registered", "allowedRoles", cfg.Auth.AllowedRoles)
-	}
-
-	// Register goclaw_update tool (allows agent to update GoClaw)
-	toolsReg.Register(toolupdate.NewTool(version))
-	L_debug("goclaw_update tool registered")
-
-	// Register Home Assistant tool
-	if cfg.HomeAssistant.Enabled && cfg.HomeAssistant.Token != "" {
-		if mediaStore := gw.MediaStore(); mediaStore != nil {
-			// Create WebSocket client for sync registry queries
-			wsClient := hass.NewWSClient(cfg.HomeAssistant)
-
-			// Create event subscription manager
-			dataDir, _ := paths.BaseDir()
-			hassManager := hass.NewManager(cfg.HomeAssistant, gw, dataDir)
-			gw.SetHassManager(hassManager)
-
-			// Start the manager (loads persisted subscriptions, connects if needed)
-			if err := gw.StartHassManager(context.Background()); err != nil {
-				L_warn("hass: failed to start manager", "error", err)
-			}
-
-			// Create and register the tool
-			hassTool, err := toolhass.NewTool(cfg.HomeAssistant, mediaStore, wsClient, hassManager)
-			if err != nil {
-				L_warn("hass tool not registered", "error", err)
-			} else {
-				toolsReg.Register(hassTool)
-				L_info("hass: tool registered", "url", cfg.HomeAssistant.URL)
-			}
-		} else {
-			L_warn("hass tool not registered: no media store")
-		}
-	}
-
-	// Register xAI Imagine tool
-	if cfg.Tools.XAIImagine.Enabled {
-		if mediaStore := gw.MediaStore(); mediaStore != nil {
-			xaiImagineTool, err := xaiimagine.NewTool(cfg.Tools.XAIImagine, mediaStore)
-			if err != nil {
-				L_warn("xai_imagine tool not registered", "error", err)
-			} else {
-				toolsReg.Register(xaiImagineTool)
-				L_info("xai_imagine: tool registered", "model", cfg.Tools.XAIImagine.Model)
-			}
-		} else {
-			L_warn("xai_imagine tool not registered: no media store")
-		}
-	}
-
-	// Initialize transcript manager (needs SQLite DB from session store)
-	var transcriptMgr *transcript.Manager
-	if cfg.Transcript.Enabled {
-		if db := gw.SessionDB(); db != nil {
-			// Get embedding provider from memory manager if available
-			var embeddingProvider llm.EmbeddingProvider
-			if memMgr := gw.MemoryManager(); memMgr != nil {
-				embeddingProvider = memMgr.Provider()
-			}
-
-			var err error
-			transcriptMgr, err = transcript.NewManager(db, embeddingProvider, cfg.Transcript)
-			if err != nil {
-				L_warn("transcript: failed to initialize manager", "error", err)
-			} else {
-				// Set agent name for transcript labels
-				if cfg.Agent.Name != "" {
-					transcriptMgr.SetAgentName(cfg.Agent.Name)
-				}
-				transcriptMgr.Start()
-				transcriptMgr.RegisterOperationalCommands()
-				// Note: transcriptMgr.Stop() is called in signal handler before gw.Shutdown()
-				// to ensure it stops before the SQLite database is closed
-				toolsReg.Register(tooltranscript.NewTool(transcriptMgr))
-				L_info("transcript: manager started and tool registered")
-			}
-		} else {
-			L_debug("transcript: skipped (no SQLite store)")
-		}
-	} else {
-		L_info("transcript: disabled by configuration")
-	}
+	// Register all tools now that gateway and managers are ready
+	messageTool, transcriptMgr := registerTools(toolsReg, cfg, gw, version)
 
 	// Register component config commands
 	// These allow config forms to trigger test/apply actions via the bus
@@ -2053,13 +1923,6 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 
 	// Create channel manager
 	chanMgr := channels.NewManager(gw, users)
-
-	// Create message tool early (channels will be added dynamically via bus events)
-	messageTool := toolmessage.NewTool(nil)
-	if mediaStore := gw.MediaStore(); mediaStore != nil {
-		messageTool.SetMediaRoot(mediaStore.BaseDir())
-	}
-	toolsReg.Register(messageTool)
 
 	// Subscribe to channel events to update message tool adapters
 	bus.SubscribeEvent("channels.telegram.started", func(event bus.Event) {
@@ -2326,4 +2189,149 @@ func runUpdate(checkOnly bool, channel string, noRestart, force bool) error {
 	// If not noRestart, the process will be replaced via exec and this line won't be reached
 
 	return nil
+}
+
+// registerTools registers all agent tools in one place, after the gateway and all
+// managers are ready. Returns the message tool (for dynamic channel updates) and
+// the transcript manager (for shutdown cleanup).
+func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway, version string) (*toolmessage.Tool, *transcript.Manager) {
+	// File tools
+	reg.Register(read.NewTool(cfg.Gateway.WorkingDir))
+	reg.Register(write.NewTool(cfg.Gateway.WorkingDir))
+	reg.Register(edit.NewTool(cfg.Gateway.WorkingDir))
+
+	// Exec tool
+	execTimeout := 30 * time.Minute
+	if cfg.Tools.Exec.Timeout > 0 {
+		execTimeout = time.Duration(cfg.Tools.Exec.Timeout) * time.Second
+	}
+	execRunner := exec.NewRunner(exec.RunnerConfig{
+		WorkingDir:     cfg.Gateway.WorkingDir,
+		Timeout:        execTimeout,
+		BubblewrapPath: cfg.Tools.Bubblewrap.Path,
+		Bubblewrap: exec.BubblewrapConfig{
+			Enabled:      cfg.Tools.Exec.Bubblewrap.Enabled,
+			ExtraRoBind:  cfg.Tools.Exec.Bubblewrap.ExtraRoBind,
+			ExtraBind:    cfg.Tools.Exec.Bubblewrap.ExtraBind,
+			ExtraEnv:     cfg.Tools.Exec.Bubblewrap.ExtraEnv,
+			AllowNetwork: cfg.Tools.Exec.Bubblewrap.AllowNetwork,
+			ClearEnv:     cfg.Tools.Exec.Bubblewrap.ClearEnv,
+		},
+	})
+	reg.Register(exec.NewToolWithRunner(execRunner))
+
+	// JQ tool (shares exec runner for sandbox)
+	reg.Register(jq.NewTool(cfg.Gateway.WorkingDir, execRunner))
+
+	// Web search
+	if cfg.Tools.Web.BraveAPIKey != "" {
+		reg.Register(websearch.NewTool(cfg.Tools.Web.BraveAPIKey))
+	}
+
+	// Web fetch
+	webHeadless := true
+	if cfg.Tools.Web.Headless != nil {
+		webHeadless = *cfg.Tools.Web.Headless
+	}
+	reg.Register(webfetch.NewToolWithConfig(webfetch.ToolConfig{
+		UseBrowser: cfg.Tools.Web.UseBrowser,
+		Profile:    cfg.Tools.Web.Profile,
+		Headless:   webHeadless,
+	}))
+
+	// Cron tool
+	reg.Register(toolcron.NewTool())
+
+	// GoClaw update tool
+	reg.Register(toolupdate.NewTool(version))
+
+	// Browser tool
+	if cfg.Tools.Browser.Enabled {
+		if mediaStore := gw.MediaStore(); mediaStore != nil {
+			if browserMgr := browser.GetManager(); browserMgr != nil {
+				reg.Register(browser.NewTool(browserMgr, mediaStore))
+			}
+		}
+	}
+
+	// Memory tools
+	if memMgr := gw.MemoryManager(); memMgr != nil {
+		reg.Register(memorysearch.NewTool(memMgr))
+		reg.Register(memoryget.NewTool(memMgr))
+	}
+
+	// Skills tool
+	if skillsMgr := gw.SkillManager(); skillsMgr != nil {
+		reg.Register(toolskills.NewTool(skillsMgr))
+		skillsMgr.RegisterOperationalCommands()
+	}
+
+	// User auth tool
+	if cfg.Auth.Enabled && cfg.Auth.Script != "" {
+		reg.Register(userauth.NewTool(cfg.Auth, cfg.Roles))
+	}
+
+	// Home Assistant tool
+	if cfg.HomeAssistant.Enabled && cfg.HomeAssistant.Token != "" {
+		if mediaStore := gw.MediaStore(); mediaStore != nil {
+			wsClient := hass.NewWSClient(cfg.HomeAssistant)
+			dataDir, _ := paths.BaseDir()
+			hassManager := hass.NewManager(cfg.HomeAssistant, gw, dataDir)
+			gw.SetHassManager(hassManager)
+			if err := gw.StartHassManager(context.Background()); err != nil {
+				L_warn("hass: failed to start manager", "error", err)
+			}
+			hassTool, err := toolhass.NewTool(cfg.HomeAssistant, mediaStore, wsClient, hassManager)
+			if err != nil {
+				L_warn("hass: tool not registered", "error", err)
+			} else {
+				reg.Register(hassTool)
+			}
+		}
+	}
+
+	// xAI Imagine tool
+	if cfg.Tools.XAIImagine.Enabled {
+		if mediaStore := gw.MediaStore(); mediaStore != nil {
+			xaiImagineTool, err := xaiimagine.NewTool(cfg.Tools.XAIImagine, mediaStore)
+			if err != nil {
+				L_warn("xai_imagine: tool not registered", "error", err)
+			} else {
+				reg.Register(xaiImagineTool)
+			}
+		}
+	}
+
+	// Message tool (channels added dynamically via bus events)
+	messageTool := toolmessage.NewTool(nil)
+	if mediaStore := gw.MediaStore(); mediaStore != nil {
+		messageTool.SetMediaRoot(mediaStore.BaseDir())
+	}
+	reg.Register(messageTool)
+
+	// Transcript tool (also creates the manager)
+	var transcriptMgr *transcript.Manager
+	if cfg.Transcript.Enabled {
+		if db := gw.SessionDB(); db != nil {
+			var embeddingProvider llm.EmbeddingProvider
+			if memMgr := gw.MemoryManager(); memMgr != nil {
+				embeddingProvider = memMgr.Provider()
+			}
+			var err error
+			transcriptMgr, err = transcript.NewManager(db, embeddingProvider, cfg.Transcript)
+			if err != nil {
+				L_warn("transcript: failed to initialize", "error", err)
+			} else {
+				if cfg.Agent.Name != "" {
+					transcriptMgr.SetAgentName(cfg.Agent.Name)
+				}
+				transcriptMgr.Start()
+				transcriptMgr.RegisterOperationalCommands()
+				reg.Register(tooltranscript.NewTool(transcriptMgr))
+			}
+		}
+	}
+
+	L_info("tools: registered", "count", reg.Count())
+	return messageTool, transcriptMgr
 }
