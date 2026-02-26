@@ -19,11 +19,14 @@ import (
 // Providers are aliased instances; models reference them via "alias/model" format.
 type LLMConfig struct {
 	Providers     map[string]LLMProviderConfig `json:"providers"`
-	Agent         LLMPurposeConfig             `json:"agent"`         // Main chat
-	Summarization LLMPurposeConfig             `json:"summarization"` // Checkpoint/compaction
-	Embeddings    LLMPurposeConfig             `json:"embeddings"`    // Memory/transcript
-	Thinking      ThinkingConfig               `json:"thinking"`      // Extended thinking settings
-	SystemPrompt  string                       `json:"systemPrompt"`  // System prompt for agent
+	Agent         LLMPurposeConfig             `json:"agent"`
+	Summarization LLMPurposeConfig             `json:"summarization"`
+	Embeddings    LLMPurposeConfig             `json:"embeddings"`
+	Heartbeat     LLMPurposeConfig             `json:"heartbeat,omitempty"`
+	Cron          LLMPurposeConfig             `json:"cron,omitempty"`
+	Hass          LLMPurposeConfig             `json:"hass,omitempty"`
+	Thinking      ThinkingConfig               `json:"thinking"`
+	SystemPrompt  string                       `json:"systemPrompt"`
 }
 
 // ThinkingConfig configures extended thinking for models that support it
@@ -468,6 +471,9 @@ func handleApply(cmd bus.Command) bus.CommandResult {
 		Agent:         cfg.Agent,
 		Summarization: cfg.Summarization,
 		Embeddings:    cfg.Embeddings,
+		Heartbeat:     cfg.Heartbeat,
+		Cron:          cfg.Cron,
+		Hass:          cfg.Hass,
 	}
 
 	// Create new registry

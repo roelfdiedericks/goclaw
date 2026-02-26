@@ -11,6 +11,7 @@ type EventInjector interface {
 
 	// InvokeAgent runs the agent with a message and delivers the response.
 	// source identifies the caller (e.g. "hass_event", "guidance").
+	// purpose is the LLM purpose for model routing (e.g. "hass", "agent").
 	// suppressPrefix, if non-empty, suppresses delivery if response starts with it.
-	InvokeAgent(ctx context.Context, source, message, suppressPrefix string) error
+	InvokeAgent(ctx context.Context, source, purpose, message, suppressPrefix string) error
 }

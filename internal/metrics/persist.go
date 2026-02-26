@@ -626,4 +626,3 @@ func unmarshalCost(data []byte) (*CostMetric, error) {
 		Count: p.Count,
 	}, nil
 }
-

@@ -598,7 +598,7 @@ func (m *Manager) processMatch(sub *Subscription, event *HAEvent, entityID, newS
 
 		// Include entity and state in source for status message
 		source := fmt.Sprintf("hass: %s → %s", entityID, newState)
-		if err := m.injector.InvokeAgent(ctx, source, prompt, "EVENT_OK"); err != nil {
+		if err := m.injector.InvokeAgent(ctx, source, "hass", prompt, "EVENT_OK"); err != nil {
 			L_error("hass: failed to invoke agent", "error", err, "entity", entityID, "subID", sub.ID)
 			return
 		}

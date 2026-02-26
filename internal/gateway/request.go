@@ -18,6 +18,9 @@ type AgentRequest struct {
 	ContentBlocks []types.ContentBlock // content blocks (images, audio, etc.)
 	OnMediaToSend MediaCallback        // optional callback for sending media to channel
 
+	// LLM purpose routing
+	Purpose string // LLM purpose (e.g., "heartbeat", "cron", "hass"). Empty = "agent"
+
 	// Cron-specific fields
 	SessionID    string // Override session ID (e.g., "cron:<jobId>" for isolated jobs)
 	FreshContext bool   // If true, skip prior conversation history (isolated cron jobs)

@@ -1064,6 +1064,7 @@ func (g *Gateway) RunAgentForCron(ctx context.Context, cronReq cron.AgentRequest
 	// Convert cron request to gateway request
 	req := AgentRequest{
 		Source:         cronReq.Source,
+		Purpose:        cronReq.Purpose,
 		UserMsg:        cronReq.UserMsg,
 		SessionID:      cronReq.SessionID,
 		FreshContext:   cronReq.FreshContext,
@@ -1182,6 +1183,7 @@ func (g *Gateway) ProcessMessage(ctx context.Context, msg *types.InboundMessage,
 	req := AgentRequest{
 		User:           msg.User,
 		Source:         msg.Source,
+		Purpose:        msg.Purpose,
 		UserMsg:        msg.Text,
 		SessionID:      sessionKey,
 		FreshContext:   msg.FreshContext,
@@ -1307,13 +1309,14 @@ func (g *Gateway) ProcessMessage(ctx context.Context, msg *types.InboundMessage,
 // InvokeAgent implements types.EventInjector interface.
 // It runs the agent with a message and delivers the response to channels.
 // Uses owner user and primary session.
-func (g *Gateway) InvokeAgent(ctx context.Context, source, message, suppressOn string) error {
+func (g *Gateway) InvokeAgent(ctx context.Context, source, purpose, message, suppressOn string) error {
 	u := g.users.Owner()
 	if u == nil {
 		return fmt.Errorf("no owner user configured")
 	}
 
 	msg := types.NewInboundMessage(source, u, message)
+	msg.Purpose = purpose
 	msg.SkipMirror = true // We handle delivery ourselves
 
 	if suppressOn != "" {
@@ -1765,13 +1768,19 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			resolvedMessages = injectTimeInLastUserMessage(resolvedMessages)
 		}
 
+		// Resolve LLM purpose (empty defaults to "agent")
+		purpose := req.Purpose
+		if purpose == "" {
+			purpose = "agent"
+		}
+
 		var response *llm.Response
 		var failoverResult *llm.FailoverResult
 		var llmErr error
 		for retry := 0; retry <= maxOverflowRetries; retry++ {
 			failoverResult, llmErr = g.registry.StreamMessageWithFailover(
 				agentCtx,
-				"agent",
+				purpose,
 				stateAccessor,
 				resolvedMessages,
 				toolDefs,

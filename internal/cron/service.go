@@ -50,6 +50,7 @@ type AgentRequest struct {
 	EnableThinking bool   // If true, enable extended thinking for models that support it
 	SkipMirror     bool   // If true, don't mirror to other channels (caller handles delivery)
 	JobName        string // Name of the cron job (for status messages)
+	Purpose        string // LLM purpose (e.g., "heartbeat", "cron"). Empty = "agent"
 }
 
 // AgentEvent is a marker interface for agent events.
@@ -685,8 +686,9 @@ func (s *Service) executeJob(ctx context.Context, job *CronJob) {
 		FreshContext: job.IsIsolated(),
 		SessionID:    sessionID,
 		UserID:       userID,
-		SkipMirror:   true, // We handle delivery via ch.Send()
+		SkipMirror:   true,
 		JobName:      job.Name,
+		Purpose:      "cron",
 	}
 
 	L_debug("cron: invoking agent",
@@ -927,8 +929,9 @@ func (s *Service) runHeartbeat(ctx context.Context) {
 		FreshContext: false, // Use main session with history (for reading)
 		SessionID:    "",    // Empty = main session
 		UserID:       userID,
-		IsHeartbeat:  true, // Ephemeral - don't persist to session
-		SkipMirror:   true, // We handle delivery via ch.Send()
+		IsHeartbeat:  true,        // Ephemeral - don't persist to session
+		SkipMirror:   true,        // We handle delivery via ch.Send()
+		Purpose:      "heartbeat", // Use heartbeat model chain (falls back to agent)
 	}
 
 	L_debug("heartbeat: invoking agent", "prompt", truncateLog(prompt, 100))

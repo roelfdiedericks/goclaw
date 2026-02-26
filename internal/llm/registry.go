@@ -87,6 +87,9 @@ type RegistryConfig struct {
 	Agent         LLMPurposeConfig             `json:"agent"`
 	Summarization LLMPurposeConfig             `json:"summarization"`
 	Embeddings    LLMPurposeConfig             `json:"embeddings"`
+	Heartbeat     LLMPurposeConfig             `json:"heartbeat,omitempty"`
+	Cron          LLMPurposeConfig             `json:"cron,omitempty"`
+	Hass          LLMPurposeConfig             `json:"hass,omitempty"`
 }
 
 // NewRegistry creates a new provider registry from configuration
@@ -97,6 +100,9 @@ func NewRegistry(cfg RegistryConfig) (*Registry, error) {
 			"agent":         cfg.Agent,
 			"summarization": cfg.Summarization,
 			"embeddings":    cfg.Embeddings,
+			"heartbeat":     cfg.Heartbeat,
+			"cron":          cfg.Cron,
+			"hass":          cfg.Hass,
 		},
 		cooldowns: make(map[string]*providerCooldown),
 	}
@@ -108,8 +114,11 @@ func NewRegistry(cfg RegistryConfig) (*Registry, error) {
 		}
 	}
 
-	// Validate models for all purposes (providers with restrictions may fail or remove models)
-	for _, purpose := range []string{"agent", "summarization", "embeddings"} {
+	// Validate models for all purposes (skip empty chains — they fall back to agent)
+	for _, purpose := range []string{"agent", "summarization", "embeddings", "heartbeat", "cron", "hass"} {
+		if len(r.purposes[purpose].Models) == 0 {
+			continue
+		}
 		if err := r.validatePurposeModels(purpose); err != nil {
 			return nil, err
 		}
@@ -287,14 +296,17 @@ func checkMetadataCapabilities(cfg LLMProviderConfig, modelName, purpose string)
 
 // GetProvider returns the first available provider for a purpose.
 // Iterates through the model chain until one is available.
+// Falls back to the agent chain if the purpose has no models configured.
 func (r *Registry) GetProvider(purpose string) (Provider, error) {
 	r.mu.RLock()
 	cfg, ok := r.purposes[purpose]
-	r.mu.RUnlock()
-
-	if !ok {
-		return nil, fmt.Errorf("unknown purpose: %s", purpose)
+	if !ok || len(cfg.Models) == 0 {
+		if purpose != "agent" {
+			cfg = r.purposes["agent"]
+			L_debug("llm: purpose has no models, falling back to agent", "purpose", purpose)
+		}
 	}
+	r.mu.RUnlock()
 
 	if len(cfg.Models) == 0 {
 		return nil, fmt.Errorf("no models configured for purpose: %s", purpose)

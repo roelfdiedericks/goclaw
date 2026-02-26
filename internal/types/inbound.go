@@ -25,6 +25,7 @@ type InboundMessage struct {
 	ContentBlocks []ContentBlock // Attached media (images, audio, etc.)
 
 	// === Routing ===
+	Purpose string            // LLM purpose (e.g., "heartbeat", "cron", "hass"). Empty = "agent"
 	ReplyTo string            // Channel-specific reply target (chat_id, conn_id)
 	Meta    map[string]string // Channel-specific metadata (message_id, username, etc.)
 

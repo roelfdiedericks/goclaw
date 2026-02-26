@@ -51,11 +51,21 @@ func (e *LLMEditor) createMenu() *forms.MenuListResult {
 	summarizationModels := len(e.cfg.Summarization.Models)
 	embeddingModels := len(e.cfg.Embeddings.Models)
 
+	purposeLabel := func(name string, count int) string {
+		if count == 0 {
+			return fmt.Sprintf("%s (uses agent chain)", name)
+		}
+		return fmt.Sprintf("%s (%d models)", name, count)
+	}
+
 	items := []forms.MenuItem{
 		{Label: fmt.Sprintf("Providers (%d configured)", providerCount), OnSelect: e.showProviderList},
 		{Label: fmt.Sprintf("Agent (%d models)", agentModels), OnSelect: func() { e.editPurpose("agent", &e.cfg.Agent) }},
 		{Label: fmt.Sprintf("Summarization (%d models)", summarizationModels), OnSelect: func() { e.editPurpose("summarization", &e.cfg.Summarization) }},
 		{Label: fmt.Sprintf("Embeddings (%d models)", embeddingModels), OnSelect: func() { e.editPurpose("embeddings", &e.cfg.Embeddings) }},
+		{Label: purposeLabel("Heartbeat", len(e.cfg.Heartbeat.Models)), OnSelect: func() { e.editPurpose("heartbeat", &e.cfg.Heartbeat) }},
+		{Label: purposeLabel("Cron", len(e.cfg.Cron.Models)), OnSelect: func() { e.editPurpose("cron", &e.cfg.Cron) }},
+		{Label: purposeLabel("Hass", len(e.cfg.Hass.Models)), OnSelect: func() { e.editPurpose("hass", &e.cfg.Hass) }},
 		{Label: "System Prompt", OnSelect: e.editSystemPrompt},
 		{Label: "Extended Thinking", OnSelect: e.editThinking},
 	}
@@ -471,7 +481,7 @@ func (e *LLMEditor) finishAddProvider(name string, cfg *llm.LLMProviderConfig) {
 func (e *LLMEditor) editPurpose(name string, cfg *llm.LLMPurposeConfig) {
 	L_info("llm editor: editing purpose", "name", name)
 
-	if name == "agent" || name == "summarization" {
+	if name != "embeddings" {
 		e.showModelChain(name, cfg)
 		return
 	}
