@@ -477,10 +477,10 @@ func (g *Gateway) resolveMediaContent(messages []types.Message, provider llm.Pro
 			continue
 		}
 
-		L_debug("resolveMediaContent: message has content blocks",
-			"role", msg.Role,
-			"blockCount", len(msg.ContentBlocks),
-		)
+	L_trace("resolveMediaContent: message has content blocks",
+		"role", msg.Role,
+		"blockCount", len(msg.ContentBlocks),
+	)
 
 		// Check if this message type supports images
 		canHaveImages := false
