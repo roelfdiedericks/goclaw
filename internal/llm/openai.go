@@ -714,14 +714,22 @@ func (p *OpenAIProvider) StreamMessage(
 
 	// Build request first so we can estimate tokens from full JSON
 	configuredMax := p.MaxTokens()
+	isReasoningModel := p.metadataProvider != "" && metadata.Get().SupportsReasoning(p.metadataProvider, p.model)
+
 	req := openai.ChatCompletionRequest{
-		Model:     p.model,
-		MaxTokens: configuredMax,
-		Messages:  openaiMessages,
-		Stream:    true,
+		Model:    p.model,
+		Messages: openaiMessages,
+		Stream:   true,
 		StreamOptions: &openai.StreamOptions{
 			IncludeUsage: true, // Get token counts in stream
 		},
+	}
+
+	// Reasoning models (o-series, GPT-5+) require MaxCompletionTokens; MaxTokens is rejected
+	if isReasoningModel {
+		req.MaxCompletionTokens = configuredMax
+	} else {
+		req.MaxTokens = configuredMax
 	}
 
 	// Add tools if any
@@ -752,7 +760,11 @@ func (p *OpenAIProvider) StreamMessage(
 			"capped", maxTokens,
 			"contextWindow", contextWindow,
 			"estimatedInput", estimatedInput)
-		req.MaxTokens = maxTokens
+		if isReasoningModel {
+			req.MaxCompletionTokens = maxTokens
+		} else {
+			req.MaxTokens = maxTokens
+		}
 	}
 
 	// Check if we have a cached output limit for this model
@@ -764,7 +776,11 @@ func (p *OpenAIProvider) StreamMessage(
 				"requested", maxTokens,
 				"limit", limit)
 			maxTokens = limit
-			req.MaxTokens = maxTokens
+			if isReasoningModel {
+				req.MaxCompletionTokens = maxTokens
+			} else {
+				req.MaxTokens = maxTokens
+			}
 		}
 	}
 

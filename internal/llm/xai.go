@@ -281,11 +281,12 @@ func (p *XAIProvider) WithModel(model string) Provider {
 	normalizedModel = strings.TrimPrefix(normalizedModel, "xai/")
 	normalizedModel = strings.ReplaceAll(normalizedModel, "grok-4.1", "grok-4-1")
 	return &XAIProvider{
-		name:         p.name,
-		config:       p.config,
-		model:        normalizedModel,
-		maxTokens:    p.maxTokens,
-		metricPrefix: fmt.Sprintf("llm/%s/%s/%s", p.Type(), p.Name(), normalizedModel),
+		name:             p.name,
+		config:           p.config,
+		model:            normalizedModel,
+		maxTokens:        p.maxTokens,
+		metadataProvider: p.metadataProvider,
+		metricPrefix:     fmt.Sprintf("llm/%s/%s/%s", p.Type(), p.Name(), normalizedModel),
 		// client is shared - no need to recreate
 		client:   p.client,
 		clientMu: sync.Mutex{},
@@ -300,6 +301,7 @@ func (p *XAIProvider) WithMaxTokens(maxTokens int) Provider {
 		config:           p.config,
 		model:            p.model,
 		maxTokens:        maxTokens,
+		metadataProvider: p.metadataProvider,
 		metricPrefix:     p.metricPrefix,
 		client:           p.client,
 		clientMu:         sync.Mutex{},
