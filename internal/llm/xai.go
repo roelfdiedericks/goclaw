@@ -600,7 +600,7 @@ func (p *XAIProvider) LoadSessionState(state map[string]any) {
 		p.lastMessageCount = 0
 	}
 
-	L_debug("xai: loaded session state",
+	L_trace("xai: loaded session state",
 		"responseID", p.responseID != "",
 		"lastMessageCount", p.lastMessageCount,
 	)
@@ -618,7 +618,7 @@ func (p *XAIProvider) SaveSessionState() map[string]any {
 		"lastMessageCount": p.lastMessageCount,
 	}
 
-	L_debug("xai: saving session state",
+	L_trace("xai: saving session state",
 		"responseID", p.responseID != "",
 		"lastMessageCount", p.lastMessageCount,
 	)
