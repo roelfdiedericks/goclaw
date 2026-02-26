@@ -74,3 +74,25 @@ type GhostwritingConfig struct {
 	// TypingDelayMs is the delay before delivering the message (default: 500)
 	TypingDelayMs int `json:"typingDelayMs"`
 }
+
+// SafetyConfig configures emergency stop / panic phrase behavior
+type SafetyConfig struct {
+	PanicPhrases []string `json:"panicPhrases"` // Words that trigger emergency stop (default: ["STOP"])
+	PanicEnabled *bool    `json:"panicEnabled"` // Whether panic phrase detection is active (default: true)
+}
+
+// IsPanicEnabled returns whether panic phrase detection is enabled (default: true)
+func (c *SafetyConfig) IsPanicEnabled() bool {
+	if c.PanicEnabled != nil {
+		return *c.PanicEnabled
+	}
+	return true
+}
+
+// GetPanicPhrases returns configured panic phrases with fallback default
+func (c *SafetyConfig) GetPanicPhrases() []string {
+	if len(c.PanicPhrases) > 0 {
+		return c.PanicPhrases
+	}
+	return []string{"STOP"}
+}

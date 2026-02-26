@@ -41,6 +41,12 @@ func registerBuiltins(m *Manager) {
 	})
 
 	m.Register(&Command{
+		Name:        "/stop",
+		Description: "Stop all running agent tasks",
+		Handler:     handleStop,
+	})
+
+	m.Register(&Command{
 		Name:        "/help",
 		Description: "Show this help",
 		Handler:     handleHelp,
@@ -228,6 +234,30 @@ func handleClear(ctx context.Context, args *CommandArgs) *CommandResult {
 	return &CommandResult{
 		Text:     "Session cleared.",
 		Markdown: "Session cleared.",
+	}
+}
+
+// handleStop cancels all running agent sessions for the calling user
+func handleStop(ctx context.Context, args *CommandArgs) *CommandResult {
+	cancelled, err := args.Provider.StopAllUserSessions(args.UserID)
+	if err != nil {
+		return &CommandResult{
+			Text:     fmt.Sprintf("Stop failed: %s", err),
+			Markdown: fmt.Sprintf("Stop failed: `%s`", err),
+			Error:    err,
+		}
+	}
+
+	if cancelled == 0 {
+		return &CommandResult{
+			Text:     "Nothing running.",
+			Markdown: "Nothing running.",
+		}
+	}
+
+	return &CommandResult{
+		Text:     "Stopping all tasks.",
+		Markdown: "Stopping all tasks.",
 	}
 }
 

@@ -672,6 +672,24 @@ func (m *Manager) CleanOrphanedToolMessages(ctx context.Context, sessionKey stri
 	return totalDeleted, nil
 }
 
+// CancelAllForUser cancels all running sessions belonging to the given user.
+// Returns the number of sessions that were cancelled.
+func (m *Manager) CancelAllForUser(userID string) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	cancelled := 0
+	for _, s := range m.sessions {
+		u := s.GetUser()
+		if u != nil && u.ID == userID && s.IsRunning() {
+			s.Cancel()
+			cancelled++
+			L_debug("session: cancelled for user", "session", s.ID, "user", userID)
+		}
+	}
+	return cancelled
+}
+
 // Count returns the number of active sessions
 func (m *Manager) Count() int {
 	m.mu.RLock()

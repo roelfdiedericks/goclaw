@@ -255,7 +255,7 @@ func (b *Bot) handleCommand(c tele.Context, u *user.User) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 
-		result := mgr.Execute(ctx, text, sessionKey)
+		result := mgr.Execute(ctx, text, sessionKey, u.ID)
 
 		if msg != nil {
 			c.Bot().Edit(msg, FormatMessage(result.Markdown), &tele.SendOptions{ParseMode: tele.ModeHTML}) //nolint:errcheck // fire-and-forget telegram edit
@@ -269,7 +269,7 @@ func (b *Bot) handleCommand(c tele.Context, u *user.User) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	result := mgr.Execute(ctx, text, sessionKey)
+	result := mgr.Execute(ctx, text, sessionKey, u.ID)
 
 	// Telegram has a 4096 char limit, truncate if needed
 	msg := FormatMessage(result.Markdown)
@@ -311,6 +311,15 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	}
 
 	logging.L_info("telegram: authenticated message", "user", u.Name, "role", u.Role, "userID", userID)
+
+	// Check for panic phrase (emergency stop) before anything else
+	if commands.IsPanicPhrase(c.Text()) {
+		cancelled, _ := b.gateway.StopAllUserSessions(u.ID)
+		if cancelled > 0 {
+			return c.Send("Stopping all tasks.")
+		}
+		return c.Send("Nothing running.")
+	}
 
 	// Check if this is a command - route to global command manager
 	if commands.IsCommand(c.Text()) {

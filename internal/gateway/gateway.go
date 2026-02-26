@@ -22,13 +22,13 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
-	"github.com/roelfdiedericks/goclaw/internal/metrics"
-	"github.com/roelfdiedericks/goclaw/internal/tokens"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
+	"github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/stt"
+	"github.com/roelfdiedericks/goclaw/internal/tokens"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 	"github.com/roelfdiedericks/goclaw/internal/user"
@@ -360,6 +360,10 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 
 	// Initialize command handler
 	g.commandHandler = commands.NewHandler(g)
+	g.commandHandler.GetManager().SetPanicConfig(
+		cfg.Safety.GetPanicPhrases(),
+		cfg.Safety.IsPanicEnabled(),
+	)
 	L_debug("command handler initialized")
 
 	// Initialize skill manager (skills are config - load early)
@@ -1634,11 +1638,15 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	ctx = context.WithValue(ctx, ContextKeyChannel, req.Source)
 	ctx = context.WithValue(ctx, ContextKeyChatID, req.ChatID)
 
-	// Create cancellable context for supervision interrupt support
+	// Create cancellable context for emergency stop / supervision interrupt
 	agentCtx, agentCancel := context.WithCancel(ctx)
 	defer agentCancel()
 
-	// Store cancel function if supervised (for interrupt support)
+	// Store cancel on session so /stop and panic phrase can reach it
+	sess.SetCancelFunc(agentCancel)
+	defer sess.ClearCancelFunc()
+
+	// Also store on supervision if supervised (keeps existing interrupt behavior)
 	if supervision := sess.GetSupervision(); supervision != nil {
 		supervision.SetCancelFunc(agentCancel)
 		defer supervision.ClearCancelFunc()
@@ -1649,6 +1657,15 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 	// Agent loop - keep going until no more tool use
 	for {
+		// Check for cancellation (emergency stop, /stop command, panic phrase)
+		select {
+		case <-agentCtx.Done():
+			L_info("agent: cancelled", "session", sessionKey)
+			sendEvent(EventAgentEnd{RunID: runID, FinalText: ""})
+			return nil
+		default:
+		}
+
 		// Check for supervision interrupt request
 		if supervision := sess.GetSupervision(); supervision != nil && supervision.HasInterruptRequest() {
 			L_info("supervision: interrupt requested, stopping generation", "session", sessionKey)
@@ -1918,7 +1935,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			if resolvedRole, err := g.users.ResolveUserRole(req.User); err == nil {
 				transcriptScope = resolvedRole.GetTranscriptScope()
 			}
-			toolCtx := tools.WithSessionContext(ctx, &tools.SessionContext{
+			toolCtx := tools.WithSessionContext(agentCtx, &tools.SessionContext{
 				Channel:         req.Source,
 				ChatID:          req.ChatID,
 				OwnerChatID:     ownerChatID,
@@ -1988,6 +2005,16 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					}
 				}
 			}
+
+			// Check for cancellation before next loop iteration (skip queued tool calls)
+			select {
+			case <-agentCtx.Done():
+				L_info("agent: cancelled after tool execution", "session", sessionKey, "tool", response.ToolName)
+				sendEvent(EventAgentEnd{RunID: runID, FinalText: ""})
+				return nil
+			default:
+			}
+
 			continue
 		}
 
@@ -2604,6 +2631,15 @@ func (g *Gateway) ResetSession(sessionID string) error {
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
 	return nil
+}
+
+// StopAllUserSessions cancels all running agent sessions for a user.
+func (g *Gateway) StopAllUserSessions(userID string) (int, error) {
+	cancelled := g.sessions.CancelAllForUser(userID)
+	if cancelled > 0 {
+		L_info("gateway: emergency stop", "user", userID, "cancelled", cancelled)
+	}
+	return cancelled, nil
 }
 
 // CleanOrphanedToolMessages deletes orphaned tool_use/tool_result messages from a session

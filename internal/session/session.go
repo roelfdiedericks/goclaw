@@ -2,6 +2,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 	"time"
@@ -56,6 +57,10 @@ type Session struct {
 
 	// Supervision - allows owner to monitor, guide, and ghostwrite in session
 	Supervision *SupervisionState `json:"-"`
+
+	// Cancellation — allows emergency stop of active agent runs
+	cancelMu   sync.Mutex
+	cancelFunc context.CancelFunc
 
 	mu sync.RWMutex
 }
@@ -462,6 +467,37 @@ func (s *Session) IsLLMEnabled() bool {
 		return true // No supervision = LLM always enabled
 	}
 	return s.Supervision.IsLLMEnabled()
+}
+
+// SetCancelFunc stores the cancel function for the current agent run.
+func (s *Session) SetCancelFunc(cancel context.CancelFunc) {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	s.cancelFunc = cancel
+}
+
+// ClearCancelFunc removes the cancel function after a run completes.
+func (s *Session) ClearCancelFunc() {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	s.cancelFunc = nil
+}
+
+// Cancel cancels the current agent run if one is active.
+func (s *Session) Cancel() {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	if s.cancelFunc != nil {
+		s.cancelFunc()
+		s.cancelFunc = nil
+	}
+}
+
+// IsRunning returns true if an agent run is currently active.
+func (s *Session) IsRunning() bool {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	return s.cancelFunc != nil
 }
 
 // generate a simple message ID using timestamp

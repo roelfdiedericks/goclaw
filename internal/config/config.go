@@ -160,8 +160,9 @@ type Config struct {
 	Skills        skills.SkillsConfig         `json:"skills"`
 	Cron          cron.CronConfig             `json:"cron"`
 	Supervision   gwtypes.SupervisionConfig   `json:"supervision"`
-	Roles         user.RolesConfig            `json:"roles"` // Role-based access control
-	Auth          auth.AuthConfig             `json:"auth"`  // Role elevation authentication
+	Roles         user.RolesConfig            `json:"roles"`  // Role-based access control
+	Auth          auth.AuthConfig             `json:"auth"`   // Role elevation authentication
+	Safety        gwtypes.SafetyConfig        `json:"safety"` // Emergency stop / panic phrase config
 }
 
 // Load reads configuration from goclaw.json.

@@ -24,6 +24,7 @@ type CommandHandler func(ctx context.Context, args *CommandArgs) *CommandResult
 // CommandArgs contains the arguments passed to a command handler
 type CommandArgs struct {
 	SessionKey string          // Session identifier
+	UserID     string          // ID of the user who invoked the command
 	Provider   SessionProvider // Access to session/gateway functionality
 	RawArgs    string          // Everything after the command name
 	Usage      string          // Copy of Command.Usage for error messages
@@ -31,9 +32,11 @@ type CommandArgs struct {
 
 // Manager is the global command registry
 type Manager struct {
-	mu       sync.RWMutex
-	commands map[string]*Command // keyed by name (lowercase)
-	provider SessionProvider
+	mu           sync.RWMutex
+	commands     map[string]*Command // keyed by name (lowercase)
+	provider     SessionProvider
+	panicPhrases []string // uppercase panic phrases (e.g., ["STOP"])
+	panicEnabled bool     // whether panic phrase detection is active
 }
 
 var (
@@ -108,7 +111,7 @@ func (m *Manager) List() []*Command {
 }
 
 // Execute runs a command by name
-func (m *Manager) Execute(ctx context.Context, cmdStr string, sessionKey string) *CommandResult {
+func (m *Manager) Execute(ctx context.Context, cmdStr string, sessionKey string, userID string) *CommandResult {
 	// Parse command name and args
 	cmdStr = strings.TrimSpace(cmdStr)
 	parts := strings.SplitN(cmdStr, " ", 2)
@@ -128,6 +131,7 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string, sessionKey string)
 
 	args := &CommandArgs{
 		SessionKey: sessionKey,
+		UserID:     userID,
 		Provider:   m.provider,
 		RawArgs:    rawArgs,
 		Usage:      cmd.Usage,
@@ -136,7 +140,55 @@ func (m *Manager) Execute(ctx context.Context, cmdStr string, sessionKey string)
 	return cmd.Handler(ctx, args)
 }
 
+// SetPanicConfig configures panic phrase detection.
+// Called at startup after config is loaded.
+func (m *Manager) SetPanicConfig(phrases []string, enabled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.panicPhrases = make([]string, len(phrases))
+	for i, p := range phrases {
+		m.panicPhrases[i] = strings.ToUpper(strings.TrimSpace(p))
+	}
+	m.panicEnabled = enabled
+}
+
 // IsCommand checks if text is a command
 func IsCommand(text string) bool {
 	return strings.HasPrefix(strings.TrimSpace(text), "/")
+}
+
+// IsPanicPhrase returns true if the text is one or more repetitions of a
+// configured panic phrase. E.g., "stop", "STOP STOP STOP" match "STOP".
+func IsPanicPhrase(text string) bool {
+	if globalManager == nil {
+		return false
+	}
+	globalManager.mu.RLock()
+	enabled := globalManager.panicEnabled
+	phrases := globalManager.panicPhrases
+	globalManager.mu.RUnlock()
+
+	if !enabled || len(phrases) == 0 {
+		return false
+	}
+
+	text = strings.TrimSpace(strings.ToUpper(text))
+	if text == "" {
+		return false
+	}
+
+	words := strings.Fields(text)
+	for _, phrase := range phrases {
+		allMatch := true
+		for _, w := range words {
+			if w != phrase {
+				allMatch = false
+				break
+			}
+		}
+		if allMatch {
+			return true
+		}
+	}
+	return false
 }

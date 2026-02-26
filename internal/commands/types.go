@@ -18,6 +18,9 @@ type SessionProvider interface {
 	GetSkillsListForCommand() *SkillsListResult
 	TriggerHeartbeat(ctx context.Context) error
 
+	// Emergency stop
+	StopAllUserSessions(userID string) (int, error)
+
 	// HASS commands
 	GetHassInfo() *HassInfo
 	SetHassDebug(enabled bool)

@@ -203,8 +203,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
+			if m.streaming {
+				m.gateway.StopAllUserSessions(m.user.ID) //nolint:errcheck
+				return m, nil
+			}
 			m.cancel()
 			return m, tea.Quit
+
+		case "esc":
+			if m.streaming {
+				m.gateway.StopAllUserSessions(m.user.ID) //nolint:errcheck
+				return m, nil
+			}
 
 		case "tab":
 			// Toggle focus between panels (only in normal layout)
@@ -240,6 +250,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Send message
 				text := strings.TrimSpace(m.input.Value())
 				if text != "" {
+					// Check for panic phrase (emergency stop)
+					if commands.IsPanicPhrase(text) {
+						m.input.Reset()
+						cancelled, _ := m.gateway.StopAllUserSessions(m.user.ID)
+						var msg string
+						if cancelled > 0 {
+							msg = "Stopping all tasks."
+						} else {
+							msg = "Nothing running."
+						}
+						m.chatLines = append(m.chatLines, helpStyle.Render(msg), "")
+						m.chatViewport.SetContent(m.getChatContent())
+						m.chatViewport.GotoBottom()
+						return m, nil
+					}
+
 					// Handle commands
 					if strings.HasPrefix(text, "/") {
 						return m.handleCommand(text)
@@ -470,7 +496,7 @@ func (m Model) View() string {
 		if !m.streaming {
 			inputView = inputPromptStyle.Render("> ") + m.input.View()
 		} else {
-			inputView = inputPromptStyle.Render("⏳ Thinking...")
+			inputView = inputPromptStyle.Render("⏳ Thinking... [Ctrl+C to stop]")
 		}
 
 		chatPanel := chatBorder.
@@ -599,14 +625,14 @@ func (m Model) handleCommand(cmd string) (tea.Model, tea.Cmd) {
 		return m, func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
-			result := mgr.Execute(ctx, cmdLower, sessionKey)
+			result := mgr.Execute(ctx, cmdLower, sessionKey, m.user.ID)
 			return compactResultMsg{result: result.Text}
 		}
 	}
 
 	// Special handling for /clear (resets display)
 	if cmdLower == "/clear" || cmdLower == "/reset" {
-		result := mgr.Execute(m.ctx, cmdLower, sessionKey)
+		result := mgr.Execute(m.ctx, cmdLower, sessionKey, m.user.ID)
 		m.chatLines = []string{assistantStyle.Render(result.Text), ""}
 		m.currentLine = ""
 		m.chatViewport.SetContent(m.getChatContent())
@@ -616,7 +642,7 @@ func (m Model) handleCommand(cmd string) (tea.Model, tea.Cmd) {
 	// Standard command execution
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	result := mgr.Execute(ctx, cmdLower, sessionKey)
+	result := mgr.Execute(ctx, cmdLower, sessionKey, m.user.ID)
 
 	// Display result
 	for _, line := range strings.Split(result.Text, "\n") {
@@ -662,7 +688,7 @@ func (m *Model) finishCurrentLine() {
 func (m Model) renderStatusBar() string {
 	var status string
 	if m.streaming {
-		status = "⏳ Thinking..."
+		status = "⏳ Thinking... [Ctrl+C to stop]"
 	} else {
 		status = "✅ Ready"
 	}

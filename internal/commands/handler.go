@@ -18,8 +18,8 @@ func NewHandler(provider SessionProvider) *Handler {
 }
 
 // Execute runs a command and returns the result
-func (h *Handler) Execute(ctx context.Context, cmd string, sessionKey string) *CommandResult {
-	return h.manager.Execute(ctx, cmd, sessionKey)
+func (h *Handler) Execute(ctx context.Context, cmd string, sessionKey string, userID string) *CommandResult {
+	return h.manager.Execute(ctx, cmd, sessionKey, userID)
 }
 
 // GetManager returns the underlying manager

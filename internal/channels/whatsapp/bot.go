@@ -446,6 +446,20 @@ func (b *Bot) handleMessage(evt *events.Message) {
 		return
 	}
 
+	// Check for panic phrase (emergency stop) before commands
+	if commands.IsPanicPhrase(text) {
+		cancelled, _ := b.gateway.StopAllUserSessions(u.ID)
+		chatJID := evt.Info.Chat
+		var msg string
+		if cancelled > 0 {
+			msg = "Stopping all tasks."
+		} else {
+			msg = "Nothing running."
+		}
+		b.client.SendMessage(b.ctx, chatJID, &waE2E.Message{Conversation: proto.String(msg)}) //nolint:errcheck
+		return
+	}
+
 	// Check for commands
 	if commands.IsCommand(text) {
 		b.handleCommand(u, evt, text)
@@ -502,7 +516,7 @@ func (b *Bot) handleCommand(u *user.User, evt *events.Message, text string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	result := mgr.Execute(ctx, text, sessionKey)
+	result := mgr.Execute(ctx, text, sessionKey, u.ID)
 	formatted := FormatMessage(result.Markdown)
 
 	chatJID := evt.Info.Chat

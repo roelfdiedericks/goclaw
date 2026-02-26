@@ -186,6 +186,24 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	logging.L_info("http: message received", "user", u.ID, "session", sessionID[:8]+"...", "length", len(req.Message), "images", len(contentBlocks))
 
+	// Check for panic phrase (emergency stop) before anything else
+	if commands.IsPanicPhrase(req.Message) {
+		var msg string
+		if s.channel.gateway != nil {
+			cancelled, _ := s.channel.gateway.StopAllUserSessions(u.ID)
+			if cancelled > 0 {
+				msg = "Stopping all tasks."
+			} else {
+				msg = "Nothing running."
+			}
+		} else {
+			msg = "Nothing running."
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": msg}) //nolint:errcheck
+		return
+	}
+
 	// Handle /thinking command locally (channel-specific preference)
 	if strings.HasPrefix(strings.TrimSpace(req.Message), "/thinking") {
 		s.handleThinkingCommand(w, sessionID, req.Message)
@@ -199,7 +217,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		// Parse command name (first word)
 		cmdName := strings.Fields(trimmedMsg)[0]
 		if cmd := cmdMgr.Get(cmdName); cmd != nil {
-			s.handleBuiltinCommand(w, r.Context(), sessionID, trimmedMsg, cmd)
+			s.handleBuiltinCommand(w, r.Context(), sessionID, u.ID, trimmedMsg, cmd)
 			return
 		}
 	}
@@ -321,7 +339,7 @@ func (s *Server) handleThinkingCommand(w http.ResponseWriter, sessionID string, 
 }
 
 // handleBuiltinCommand handles built-in slash commands (/status, /compact, /clear, etc.)
-func (s *Server) handleBuiltinCommand(w http.ResponseWriter, ctx context.Context, sessionID string, message string, cmd *commands.Command) {
+func (s *Server) handleBuiltinCommand(w http.ResponseWriter, ctx context.Context, sessionID string, userID string, message string, cmd *commands.Command) {
 	sess := s.channel.GetSession(sessionID)
 	if sess == nil {
 		http.Error(w, "Session not found", http.StatusInternalServerError)
@@ -342,7 +360,7 @@ func (s *Server) handleBuiltinCommand(w http.ResponseWriter, ctx context.Context
 
 	// Execute command via manager (which has the provider wired up)
 	mgr := commands.GetManager()
-	result := mgr.Execute(ctx, message, sessionID)
+	result := mgr.Execute(ctx, message, sessionID, userID)
 
 	// Determine message to show
 	responseText := result.Text
