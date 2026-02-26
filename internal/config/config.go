@@ -660,8 +660,12 @@ func mergeSessionSelective(dst, src *session.SessionConfig, rawMap map[string]in
 	if src.InheritPath != "" {
 		dst.InheritPath = src.InheritPath
 	}
-	// Inherit is a bool, tricky - only set if explicitly in JSON
-	// We can't easily detect this without more work, so skip for now
+	if _, ok := rawMap["inherit"]; ok {
+		dst.Inherit = src.Inherit
+	}
+	if src.InheritFrom != "" {
+		dst.InheritFrom = src.InheritFrom
+	}
 
 	// Sub-structs - only merge if present in JSON
 	if _, ok := rawMap["summarization"]; ok {
