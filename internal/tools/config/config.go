@@ -4,11 +4,10 @@ package config
 
 // ToolsConfig contains tool-specific settings
 type ToolsConfig struct {
-	Web        WebToolsConfig         `json:"web"`
-	Browser    BrowserToolsConfig     `json:"browser"`
-	Exec       ExecToolsConfig        `json:"exec"`
-	Bubblewrap BubblewrapGlobalConfig `json:"bubblewrap"`
-	XAIImagine XAIImagineConfig       `json:"xaiImagine"`
+	Web        WebToolsConfig     `json:"web"`
+	Browser    BrowserToolsConfig `json:"browser"`
+	Exec       ExecToolsConfig    `json:"exec"`
+	XAIImagine XAIImagineConfig   `json:"xaiImagine"`
 }
 
 // WebToolsConfig contains web tool settings
@@ -57,11 +56,6 @@ type ExecBubblewrapConfig struct {
 	ExtraEnv     map[string]string `json:"extraEnv"`     // Additional environment variables
 	AllowNetwork bool              `json:"allowNetwork"` // Allow network access (default: true)
 	ClearEnv     bool              `json:"clearEnv"`     // Clear environment before setting defaults (default: true)
-}
-
-// BubblewrapGlobalConfig contains global bubblewrap settings
-type BubblewrapGlobalConfig struct {
-	Path string `json:"path"` // Custom path to bwrap binary (empty = search PATH)
 }
 
 // XAIImagineConfig contains xAI image generation tool settings

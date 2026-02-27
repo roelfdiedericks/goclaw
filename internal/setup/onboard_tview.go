@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
@@ -15,6 +16,27 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
+
+// enableFormMouseScroll adds mouse scroll support to a tview.Form
+// Converts scroll events to Tab/BackTab for field navigation
+func enableFormMouseScroll(form *tview.Form, w *forms.Wizard) {
+	app := w.App().App()
+	form.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		switch action {
+		case tview.MouseScrollUp:
+			go func() {
+				app.QueueEvent(tcell.NewEventKey(tcell.KeyBacktab, 0, tcell.ModNone))
+			}()
+			return 0, nil
+		case tview.MouseScrollDown:
+			go func() {
+				app.QueueEvent(tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone))
+			}()
+			return 0, nil
+		}
+		return action, event
+	})
+}
 
 // WizardData holds all configuration values being edited across wizard steps
 type WizardData struct {
@@ -58,6 +80,11 @@ type WizardData struct {
 	ExecBubblewrap    bool
 	BrowserBubblewrap bool
 
+	// Skills Installation
+	SkillsAllowEmbedded bool
+	SkillsAllowClawHub  bool
+	SkillsAllowLocal    bool
+
 	// LLM
 	LLMProviderID   string
 	LLMProviderName string
@@ -71,11 +98,14 @@ type WizardData struct {
 // NewWizardData creates a new WizardData with defaults
 func NewWizardData() *WizardData {
 	return &WizardData{
-		UserRole:          "owner",
-		HTTPEnabled:       true,
-		HTTPListen:        "127.0.0.1:1337",
-		ExecBubblewrap:    true,
-		BrowserBubblewrap: true,
+		UserRole:            "owner",
+		HTTPEnabled:         true,
+		HTTPListen:          "127.0.0.1:1337",
+		ExecBubblewrap:      true,
+		BrowserBubblewrap:   true,
+		SkillsAllowEmbedded: true,
+		SkillsAllowClawHub:  false,
+		SkillsAllowLocal:    false,
 	}
 }
 
@@ -315,6 +345,7 @@ or click [yellow]Next[white] to walk through all settings step by step.`, data.C
 				// Add Editor button in content
 				form := tview.NewForm()
 				form.SetBorder(false)
+				enableFormMouseScroll(form, w)
 				form.AddButton("Open Editor", func() {
 					w.SetData("goToEditor", true)
 					w.App().Stop()
@@ -361,6 +392,7 @@ func stepOpenClawDetect(data *WizardData) forms.WizardStep {
 		Content: func(w *forms.Wizard) tview.Primitive {
 			form := tview.NewForm()
 			form.SetBorder(false)
+			enableFormMouseScroll(form, w)
 
 			form.AddTextView("", fmt.Sprintf(`Found existing OpenClaw installation at ~/.openclaw/
 
@@ -396,6 +428,7 @@ func stepWorkspace(data *WizardData) forms.WizardStep {
 		Content: func(w *forms.Wizard) tview.Primitive {
 			form := tview.NewForm()
 			form.SetBorder(false)
+			enableFormMouseScroll(form, w)
 
 			// Default workspace path
 			if data.WorkspacePath == "" {
@@ -427,6 +460,7 @@ func stepUserSetup(data *WizardData) forms.WizardStep {
 		Content: func(w *forms.Wizard) tview.Primitive {
 			form := tview.NewForm()
 			form.SetBorder(false)
+			enableFormMouseScroll(form, w)
 
 			form.AddInputField("Your Name", data.UserDisplayName, 40, nil, func(text string) {
 				data.UserDisplayName = text
@@ -478,6 +512,7 @@ func stepTelegram(data *WizardData) forms.WizardStep {
 		Content: func(w *forms.Wizard) tview.Primitive {
 			form := tview.NewForm()
 			form.SetBorder(false)
+			enableFormMouseScroll(form, w)
 
 			form.AddCheckbox("Enable Telegram Bot", data.TelegramEnabled, func(checked bool) {
 				data.TelegramEnabled = checked
@@ -507,6 +542,7 @@ func stepWhatsApp(data *WizardData) forms.WizardStep {
 		Content: func(w *forms.Wizard) tview.Primitive {
 			form := tview.NewForm()
 			form.SetBorder(false)
+			enableFormMouseScroll(form, w)
 
 			form.AddCheckbox("Enable WhatsApp Channel", data.WhatsAppEnabled, func(checked bool) {
 				data.WhatsAppEnabled = checked
@@ -543,10 +579,12 @@ func stepHTTP(data *WizardData) forms.WizardStep {
 			buttons := tview.NewForm()
 			buttons.SetBorder(false)
 			buttons.SetButtonsAlign(tview.AlignLeft)
+			enableFormMouseScroll(buttons, w)
 
 			// Input form (separate so buttons don't mix with input)
 			inputForm := tview.NewForm()
 			inputForm.SetBorder(false)
+			enableFormMouseScroll(inputForm, w)
 
 			// Add input field first so we have the reference
 			inputForm.AddInputField("Listen Address", data.HTTPListen, 30, nil, func(text string) {
@@ -619,6 +657,7 @@ func stepBrowser(data *WizardData) forms.WizardStep { //nolint:unused
 		Content: func(w *forms.Wizard) tview.Primitive {
 			form := tview.NewForm()
 			form.SetBorder(false)
+			enableFormMouseScroll(form, w)
 
 			form.AddCheckbox("Set up browser after wizard completes", data.BrowserSetup, func(checked bool) {
 				data.BrowserSetup = checked
@@ -648,6 +687,7 @@ The exec and browser tools will run without kernel sandboxing.`)
 
 			form := tview.NewForm()
 			form.SetBorder(false)
+			enableFormMouseScroll(form, w)
 
 			form.AddCheckbox("Enable exec sandboxing", data.ExecBubblewrap, func(checked bool) {
 				if !checked {
@@ -671,10 +711,35 @@ The exec and browser tools will run without kernel sandboxing.`)
 				data.BrowserBubblewrap = checked
 			})
 
+			// Skills installation sources
+			form.AddTextView("", "\n─── Skill Installation Sources ───", 50, 2, false, false)
+
+			form.AddCheckbox("Allow embedded skills", data.SkillsAllowEmbedded, func(checked bool) {
+				data.SkillsAllowEmbedded = checked
+			})
+
+			form.AddCheckbox("Allow ClawHub (public repository)", data.SkillsAllowClawHub, func(checked bool) {
+				data.SkillsAllowClawHub = checked
+			})
+
+			form.AddCheckbox("Allow local paths (⚠ security risk)", data.SkillsAllowLocal, func(checked bool) {
+				if checked {
+					data.SkillsAllowLocal = false
+					localSkillsConfirmModal(w, form, func() {
+						data.SkillsAllowLocal = true
+					})
+					return
+				}
+				data.SkillsAllowLocal = checked
+			})
+
 			return formWithHeader(`[cyan]Sandboxing[white] restricts tools to only access files within your workspace,
 preventing accidental or malicious access to system files.
 
-[green]Highly recommended.[white] Disabling gives the agent unrestricted filesystem access.`, 5, form)
+[green]Highly recommended.[white] Disabling gives the agent unrestricted filesystem access.
+
+[yellow]Skill Installation Sources[white] control where the agent can install skills from.
+Embedded skills are bundled with GoClaw. ClawHub is a public skill repository.`, 7, form)
 		},
 	}
 }
@@ -696,6 +761,27 @@ func sandboxConfirmModal(w *forms.Wizard, form *tview.Form, checkboxIndex int, o
 				}
 				if checkbox, ok := cb.(*tview.Checkbox); ok {
 					checkbox.SetChecked(false)
+				}
+			}
+		},
+	)
+}
+
+// localSkillsConfirmModal warns about the security risks of enabling local path skills.
+func localSkillsConfirmModal(w *forms.Wizard, form *tview.Form, onConfirm func()) {
+	w.App().ShowModal(
+		"⚠ SECURITY WARNING ⚠\n\n"+
+			"Enabling local path skills allows installing from any filesystem path.\n\n"+
+			"A malicious script could create a fake skill directory and trick\n"+
+			"the agent into installing it.\n\n"+
+			"Only enable if you understand the risks.\n\nContinue?",
+		[]string{"No", "Yes"},
+		func(buttonIndex int, buttonLabel string) {
+			if buttonLabel == "Yes" {
+				onConfirm()
+				cb := form.GetFormItemByLabel("Allow local paths (⚠ security risk)")
+				if checkbox, ok := cb.(*tview.Checkbox); ok {
+					checkbox.SetChecked(true)
 				}
 			}
 		},
@@ -818,6 +904,7 @@ func buildLLMConfigForm(data *WizardData, w *forms.Wizard) tview.Primitive {
 	// Form
 	form := tview.NewForm()
 	form.SetBorder(false)
+	enableFormMouseScroll(form, w)
 
 	if isLocal {
 		form.AddInputField("URL", data.LLMBaseURL, 50, nil, func(text string) {
@@ -1111,6 +1198,11 @@ func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
 
 	deepSet(cfg, "tools.exec.bubblewrap.enabled", data.ExecBubblewrap)
 	deepSet(cfg, "tools.browser.bubblewrap.enabled", data.BrowserBubblewrap)
+
+	// Skills installation sources
+	deepSet(cfg, "skills.install.allowEmbedded", data.SkillsAllowEmbedded)
+	deepSet(cfg, "skills.install.allowClawHub", data.SkillsAllowClawHub)
+	deepSet(cfg, "skills.install.allowLocal", data.SkillsAllowLocal)
 
 	// LLM provider
 	if !data.LLMSkipped && data.LLMProviderID != "" {

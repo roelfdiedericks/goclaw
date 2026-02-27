@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/memory"
 	"github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 	"github.com/roelfdiedericks/goclaw/internal/security"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
@@ -383,8 +385,6 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 
 		skillMgrCfg := skills.ManagerConfig{
 			Enabled:       cfg.Skills.Enabled,
-			BundledDir:    cfg.Skills.BundledDir,
-			ManagedDir:    cfg.Skills.ManagedDir,
 			WorkspaceDir:  cfg.Skills.WorkspaceDir,
 			ExtraDirs:     cfg.Skills.ExtraDirs,
 			WatchEnabled:  cfg.Skills.Watch,
@@ -395,13 +395,6 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 		// Set default workspace skills dir if not overridden
 		if skillMgrCfg.WorkspaceDir == "" {
 			skillMgrCfg.WorkspaceDir = filepath.Join(cfg.Gateway.WorkingDir, "skills")
-		}
-
-		// Set default managed skills dir based on workspace location
-		// If running side-by-side with OpenClaw, use ~/.openclaw/skills
-		// Otherwise use ~/.goclaw/skills
-		if skillMgrCfg.ManagedDir == "" {
-			skillMgrCfg.ManagedDir, _ = paths.ContextualDataPath("skills", cfg.Gateway.WorkingDir)
 		}
 
 		skillMgr, err := skills.NewManager(skillMgrCfg)
@@ -420,6 +413,13 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 					"eligible", stats.EligibleSkills,
 					"flagged", stats.FlaggedSkills,
 					"watchEnabled", cfg.Skills.Watch)
+			}
+
+			// Register extraDirs as protected in sandbox registry
+			for _, dir := range cfg.Skills.ExtraDirs {
+				if err := sandbox.RegisterProtectedDir(dir); err != nil {
+					L_warn("sandbox: failed to register extraDir as protected", "dir", dir, "error", err)
+				}
 			}
 		}
 	} else {
@@ -651,12 +651,13 @@ func (g *Gateway) GetSkillsPrompt() string {
 	return g.skillManager.FormatPrompt()
 }
 
-// GetSkillsPromptForUser returns the formatted skills section filtered by user's role
-func (g *Gateway) GetSkillsPromptForUser(u *user.User) string {
+// GetSkillsPromptForUser returns the formatted skills section filtered by user's role.
+// hasSkillsTool indicates whether the user has access to the skills management tool.
+func (g *Gateway) GetSkillsPromptForUser(u *user.User, hasSkillsTool bool) string {
 	if g.skillManager == nil {
 		return ""
 	}
-	return g.skillManager.FormatPromptForUser(u, g.users.GetRolesConfig())
+	return g.skillManager.FormatPromptForUser(u, g.users.GetRolesConfig(), hasSkillsTool)
 }
 
 // GetSkillsStatusSection returns the skills section for /status output
@@ -685,10 +686,18 @@ func (g *Gateway) GetSkillsListForCommand() *commands.SkillsListResult {
 		}
 	}
 
+	// Count ineligible (not eligible, not flagged)
+	ineligibleCount := 0
+	for _, s := range allSkills {
+		if !s.Eligible {
+			ineligibleCount++
+		}
+	}
+
 	result := &commands.SkillsListResult{
 		Total:       len(allSkills),
 		Eligible:    len(eligibleSkills) - whitelistedCount, // Don't double-count whitelisted
-		Ineligible:  len(allSkills) - len(eligibleSkills) - len(flaggedSkills),
+		Ineligible:  ineligibleCount,
 		Flagged:     len(flaggedSkills),
 		Whitelisted: whitelistedCount,
 		Skills:      make([]commands.SkillInfo, 0, len(allSkills)),
@@ -718,25 +727,23 @@ func (g *Gateway) GetSkillsListForCommand() *commands.SkillsListResult {
 		}
 
 		if s.Whitelisted {
-			// Manually enabled despite audit flags
 			info.Status = "whitelisted"
 			if len(s.AuditFlags) > 0 {
 				info.Reason = s.AuditFlags[0].Pattern
 			}
-		} else if flaggedSet[s.Name] {
-			info.Status = "flagged"
-			if len(s.AuditFlags) > 0 {
-				info.Reason = s.AuditFlags[0].Pattern
-			}
-		} else if eligibleSet[s.Name] {
-			info.Status = "ready"
-		} else {
+		} else if !s.Eligible {
 			info.Status = "ineligible"
-			// Get reason for ineligibility
-			missing := s.GetMissingRequirements(skills.EligibilityContext{})
+			missing := s.GetMissingRequirements(skills.EligibilityContext{OS: runtime.GOOS})
 			if len(missing) > 0 {
 				info.Reason = missing[0]
 			}
+		} else if len(s.AuditFlags) > 0 && !s.Enabled {
+			info.Status = "flagged"
+			info.Reason = s.AuditFlags[0].Pattern
+		} else if s.Eligible && s.Enabled {
+			info.Status = "ready"
+		} else {
+			info.Status = "disabled"
 		}
 
 		result.Skills = append(result.Skills, info)
@@ -1550,6 +1557,11 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	// Set user on session so CancelAllForUser can find it for emergency stop
 	sess.SetUser(req.User)
 
+	// Resolve and store user's role permissions on the session
+	if resolvedRole, err := g.users.ResolveUserRole(req.User); err == nil {
+		sess.SetResolvedRole(resolvedRole)
+	}
+
 	// Create provider state accessor for stateful providers (e.g., xAI)
 	stateAccessor := &providerStateAccessor{
 		sessionKey: sessionKey,
@@ -1609,16 +1621,17 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		workspaceFiles = g.promptCache.GetWorkspaceFiles()
 	}
 
-	// Get skills prompt (filtered by user's role)
-	skillsPrompt := g.GetSkillsPromptForUser(req.User)
+	// Get skills prompt (filtered by user's role, with skills tool awareness)
+	hasSkillsTool := sess.HasToolAccess("skills")
+	skillsPrompt := g.GetSkillsPromptForUser(req.User, hasSkillsTool)
 
-	// Determine memory access and role prompts from resolved role
+	// Determine memory access and role prompts from resolved role (reuse session's cached role)
 	includeMemory := true
 	var roleSystemPrompt, roleSystemPromptFile string
-	if resolvedRole, err := g.users.ResolveUserRole(req.User); err == nil {
-		includeMemory = resolvedRole.HasMemoryAccess()
-		roleSystemPrompt = resolvedRole.SystemPrompt
-		roleSystemPromptFile = resolvedRole.SystemPromptFile
+	if cachedRole := sess.ResolvedRole; cachedRole != nil {
+		includeMemory = cachedRole.HasMemoryAccess()
+		roleSystemPrompt = cachedRole.SystemPrompt
+		roleSystemPromptFile = cachedRole.SystemPromptFile
 	}
 
 	systemPrompt := gcontext.BuildSystemPrompt(gcontext.PromptParams{

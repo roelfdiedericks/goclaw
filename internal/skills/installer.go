@@ -182,6 +182,75 @@ func (i *Installer) installDownload(ctx context.Context, spec InstallSpec) (*Ins
 	}, nil
 }
 
+// InstallSkillFiles installs a skill by extracting its files from a source to the destination directory.
+// It validates the skill exists, extracts it, and runs the auditor.
+func (i *Installer) InstallSkillFiles(ctx context.Context, skillName string, source SourceType, destDir string, auditor *Auditor) (*SkillInstallResult, error) {
+	// Get the appropriate fetcher
+	fetcher, err := GetFetcher(source, "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get fetcher: %w", err)
+	}
+
+	// Check skill exists in source
+	if !fetcher.Exists(skillName) {
+		return &SkillInstallResult{
+			Success:   false,
+			SkillName: skillName,
+			Source:    source,
+			Message:   fmt.Sprintf("skill not found in %s", source),
+		}, nil
+	}
+
+	// Extract to destination
+	if err := fetcher.FetchTo(skillName, destDir); err != nil {
+		return &SkillInstallResult{
+			Success:   false,
+			SkillName: skillName,
+			Source:    source,
+			Message:   fmt.Sprintf("failed to extract skill: %s", err),
+		}, nil
+	}
+
+	// Parse the installed skill to audit it
+	skillPath := destDir + "/" + skillName + "/SKILL.md"
+	skill, err := ParseSkillFile(skillPath, SourceWorkspace)
+	if err != nil {
+		return &SkillInstallResult{
+			Success:   true,
+			SkillName: skillName,
+			Source:    source,
+			Message:   fmt.Sprintf("installed but failed to parse for audit: %s", err),
+		}, nil
+	}
+
+	// Audit the skill
+	var warnings []AuditWarning
+	if auditor != nil && auditor.AuditAndFlag(skill) {
+		warnings = skill.AuditFlags
+	}
+
+	return &SkillInstallResult{
+		Success:   true,
+		SkillName: skillName,
+		Source:    source,
+		Message:   fmt.Sprintf("installed %s from %s", skillName, source),
+		Warnings:  warnings,
+		Flagged:   len(warnings) > 0,
+	}, nil
+}
+
+// SkillInstallResult contains the result of a skill file installation
+type SkillInstallResult struct {
+	Success             bool           `json:"success"`
+	SkillName           string         `json:"skillName"`
+	Source              SourceType     `json:"source"`
+	Message             string         `json:"message"`
+	Warnings            []AuditWarning `json:"warnings,omitempty"`
+	Flagged             bool           `json:"flagged,omitempty"`
+	Eligible            bool           `json:"eligible"`
+	MissingRequirements []string       `json:"missingRequirements,omitempty"`
+}
+
 // CanInstall checks if a specific install kind is supported on this system.
 func CanInstall(kind string) (bool, string) {
 	switch kind {

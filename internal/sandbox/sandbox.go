@@ -31,8 +31,10 @@ var deniedFiles = []string{
 	".gitconfig",
 }
 
-// Write-protected directories - agent can read but not write to these
-var writeProtectedDirs = []string{
+// defaultWriteProtectedDirs are the base directories protected by default.
+// These are registered via InitRegistry at startup.
+// Additional directories (like extraDirs) can be registered dynamically.
+var defaultWriteProtectedDirs = []string{
 	"skills",
 	"media",
 }
@@ -233,6 +235,7 @@ func AtomicWriteFile(path string, data []byte, defaultPerm os.FileMode) error {
 
 // ValidateWritePath validates a path for write operations.
 // In addition to standard path validation, it blocks writes to protected directories.
+// Uses the centralized registry for protected paths.
 func ValidateWritePath(inputPath, workingDir, workspaceRoot string) (string, error) {
 	resolved, err := ValidatePath(inputPath, workingDir, workspaceRoot)
 	if err != nil {
@@ -242,7 +245,14 @@ func ValidateWritePath(inputPath, workingDir, workspaceRoot string) (string, err
 	rootResolved := filepath.Clean(workspaceRoot)
 	relative, _ := filepath.Rel(rootResolved, resolved)
 
-	for _, dir := range writeProtectedDirs {
+	// Check against registry first
+	if IsPathProtected(relative) {
+		L_warn("sandbox: write to protected directory blocked", "path", inputPath, "relative", relative)
+		return "", fmt.Errorf("write denied: path is in a protected directory")
+	}
+
+	// Fallback to default list (in case registry not initialized)
+	for _, dir := range defaultWriteProtectedDirs {
 		if strings.HasPrefix(relative, dir+string(filepath.Separator)) || relative == dir {
 			L_warn("sandbox: write to protected directory blocked", "path", inputPath, "dir", dir)
 			return "", fmt.Errorf("write denied: %s/ is read-only", dir)
@@ -250,6 +260,17 @@ func ValidateWritePath(inputPath, workingDir, workspaceRoot string) (string, err
 	}
 
 	return resolved, nil
+}
+
+// RegisterDefaultProtectedDirs registers the default protected directories.
+// Should be called after InitRegistry.
+func RegisterDefaultProtectedDirs() error {
+	for _, dir := range defaultWriteProtectedDirs {
+		if err := RegisterProtectedDir(dir); err != nil {
+			return fmt.Errorf("failed to register %s: %w", dir, err)
+		}
+	}
+	return nil
 }
 
 // WriteFileValidated validates the path for writes, then writes atomically.

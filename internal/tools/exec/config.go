@@ -10,10 +10,9 @@ import (
 
 // ExecConfig holds configuration for the exec tool.
 type ExecConfig struct {
-	Enabled        bool             `json:"enabled"`
-	Timeout        int              `json:"timeout"`
-	BubblewrapPath string           `json:"bubblewrapPath"`
-	Bubblewrap     BubblewrapConfig `json:"bubblewrap"`
+	Enabled    bool             `json:"enabled"`
+	Timeout    int              `json:"timeout"`
+	Bubblewrap BubblewrapConfig `json:"bubblewrap"`
 }
 
 const configPath = "tools.exec"
@@ -28,7 +27,6 @@ func ConfigFormDef() forms.FormDef {
 				Fields: []forms.Field{
 					{Name: "Enabled", Title: "Enable Tool", Type: forms.Toggle},
 					{Name: "Timeout", Title: "Timeout (seconds)", Type: forms.Number, Default: 1800},
-					{Name: "BubblewrapPath", Title: "Bubblewrap Path", Type: forms.Text, Desc: "Path to bwrap binary (optional)"},
 				},
 			},
 			{

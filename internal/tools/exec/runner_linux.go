@@ -7,7 +7,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/roelfdiedericks/goclaw/internal/bwrap"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox/bwrap"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 

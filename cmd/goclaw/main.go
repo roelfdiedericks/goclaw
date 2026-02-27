@@ -23,7 +23,8 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/auth"
 	"github.com/roelfdiedericks/goclaw/internal/browser"
 	"github.com/roelfdiedericks/goclaw/internal/bus"
-	"github.com/roelfdiedericks/goclaw/internal/bwrap"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox/bwrap"
 	"github.com/roelfdiedericks/goclaw/internal/channels"
 	goclawhttp "github.com/roelfdiedericks/goclaw/internal/channels/http"
 	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
@@ -1824,7 +1825,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 			// Bubblewrap sandboxing
 			Workspace:         cfg.Gateway.WorkingDir,
 			BubblewrapEnabled: cfg.Tools.Browser.Bubblewrap.Enabled,
-			BubblewrapPath:    cfg.Tools.Bubblewrap.Path,
+			BubblewrapPath:    cfg.Sandbox.Bubblewrap.Path,
 			BubblewrapGPU:     cfg.Tools.Browser.Bubblewrap.GPU,
 			ExtraRoBind:       cfg.Tools.Browser.Bubblewrap.ExtraRoBind,
 			ExtraBind:         cfg.Tools.Browser.Bubblewrap.ExtraBind,
@@ -1853,7 +1854,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 			cfg.Tools.Exec.Bubblewrap.Enabled = false
 			cfg.Tools.Browser.Bubblewrap.Enabled = false
 			sandboxDisabledReason = "not Linux"
-		} else if !bwrap.IsAvailable(cfg.Tools.Bubblewrap.Path) {
+		} else if !bwrap.IsAvailable(cfg.Sandbox.Bubblewrap.Path) {
 			L_warn("sandbox: bwrap not found, disabling sandboxing",
 				"execEnabled", execBwrapEnabled,
 				"browserEnabled", browserBwrapEnabled)
@@ -1864,6 +1865,28 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 			L_info("sandbox: bubblewrap available",
 				"execEnabled", cfg.Tools.Exec.Bubblewrap.Enabled,
 				"browserEnabled", cfg.Tools.Browser.Bubblewrap.Enabled)
+		}
+	}
+
+	// Initialize sandbox registry
+	if err := sandbox.InitRegistry(cfg.Gateway.WorkingDir); err != nil {
+		L_error("sandbox: failed to initialize registry", "error", err)
+	} else {
+		if err := sandbox.RegisterDefaultProtectedDirs(); err != nil {
+			L_warn("sandbox: failed to register default protected dirs", "error", err)
+		}
+
+		// Register sandbox volumes if bwrap is enabled
+		if cfg.Tools.Exec.Bubblewrap.Enabled || cfg.Tools.Browser.Bubblewrap.Enabled {
+			volumes := cfg.Sandbox.Bubblewrap.Volumes
+			if len(volumes) == 0 {
+				volumes = sandbox.DefaultVolumes()
+			}
+			for _, vol := range volumes {
+				if err := sandbox.RegisterVolume(vol); err != nil {
+					L_warn("sandbox: failed to register volume", "volume", vol, "error", err)
+				}
+			}
 		}
 	}
 
@@ -2216,7 +2239,7 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 	execRunner := exec.NewRunner(exec.RunnerConfig{
 		WorkingDir:     cfg.Gateway.WorkingDir,
 		Timeout:        execTimeout,
-		BubblewrapPath: cfg.Tools.Bubblewrap.Path,
+		BubblewrapPath: cfg.Sandbox.Bubblewrap.Path,
 		Bubblewrap: exec.BubblewrapConfig{
 			Enabled:      cfg.Tools.Exec.Bubblewrap.Enabled,
 			ExtraRoBind:  cfg.Tools.Exec.Bubblewrap.ExtraRoBind,

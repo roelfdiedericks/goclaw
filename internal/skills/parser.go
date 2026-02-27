@@ -81,6 +81,67 @@ func ParseSkillFile(path string, source Source) (*Skill, error) {
 	return skill, nil
 }
 
+// ParseSkillContent parses skill metadata from content string.
+// Used for embedded skills where we have the content but no file path.
+func ParseSkillContent(content string, name string, source Source) (*Skill, error) {
+	contentBytes := []byte(content)
+
+	// Calculate SHA for change detection
+	hash := sha256.Sum256(contentBytes)
+	contentSHA := hex.EncodeToString(hash[:])
+
+	// Try to extract frontmatter
+	frontmatter, _, err := extractFrontmatter(contentBytes)
+	if err != nil {
+		// No frontmatter - create basic skill
+		return &Skill{
+			Name:       name,
+			Source:     source,
+			Content:    content,
+			ContentSHA: contentSHA,
+			Enabled:    true,
+			LoadedAt:   time.Now(),
+		}, nil
+	}
+
+	// Try standard YAML parsing first
+	var fm Frontmatter
+	yamlErr := yaml.Unmarshal(frontmatter, &fm)
+
+	if yamlErr != nil {
+		// If YAML fails, use manual parsing
+		fm, err = parseSimpleFrontmatter(frontmatter)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse frontmatter: %w (yaml error: %v)", err, yamlErr)
+		}
+	}
+
+	// Parse metadata if present
+	var metadata *OpenClawMetadata
+	if fm.Metadata != nil {
+		metadata, _ = parseMetadata(fm.Metadata)
+	}
+
+	// Use frontmatter name if available, otherwise use provided name
+	skillName := fm.Name
+	if skillName == "" {
+		skillName = name
+	}
+
+	skill := &Skill{
+		Name:        skillName,
+		Description: fm.Description,
+		Source:      source,
+		Content:     content,
+		ContentSHA:  contentSHA,
+		Metadata:    metadata,
+		Enabled:     true,
+		LoadedAt:    time.Now(),
+	}
+
+	return skill, nil
+}
+
 // extractFrontmatter extracts YAML frontmatter from content.
 // Returns frontmatter bytes, remaining content, and error.
 func extractFrontmatter(content []byte) ([]byte, []byte, error) {

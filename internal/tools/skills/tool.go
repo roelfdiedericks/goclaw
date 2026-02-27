@@ -14,7 +14,8 @@ import (
 
 // Tool provides agent access to the skills registry
 type Tool struct {
-	manager *skillspkg.Manager
+	manager    *skillspkg.Manager
+	installCfg skillspkg.SkillInstallConfig
 }
 
 // NewTool creates a new skills tool
@@ -22,12 +23,17 @@ func NewTool(manager *skillspkg.Manager) *Tool {
 	return &Tool{manager: manager}
 }
 
+// SetInstallConfig sets the installation configuration for the tool
+func (t *Tool) SetInstallConfig(cfg skillspkg.SkillInstallConfig) {
+	t.installCfg = cfg
+}
+
 func (t *Tool) Name() string {
 	return "skills"
 }
 
 func (t *Tool) Description() string {
-	return "Query the skills registry. List available skills, check eligibility, get details and install hints. Use this instead of manually reading SKILL.md files."
+	return "Manage skills: list installed, search catalog, get info, check eligibility, and install. Works on both installed skills AND embedded catalog. Note: embedded/remote skills are not filesystem-accessible - use this tool instead of reading or grepping skill files."
 }
 
 func (t *Tool) Schema() map[string]interface{} {
@@ -36,12 +42,21 @@ func (t *Tool) Schema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{"list", "info", "check"},
-				"description": "Action to perform: 'list' all skills, 'info' for details on one skill, 'check' why a skill is ineligible",
+				"enum":        []string{"list", "info", "check", "install", "search", "sources", "reload"},
+				"description": "Action to perform: 'list' installed skills, 'info' details, 'check' eligibility, 'install' from source, 'search' available, 'sources' list repos, 'reload' rescan directories",
 			},
 			"skill": map[string]interface{}{
 				"type":        "string",
-				"description": "Skill name (required for 'info' and 'check' actions)",
+				"description": "Skill name (required for 'info', 'check', and 'install' actions)",
+			},
+			"query": map[string]interface{}{
+				"type":        "string",
+				"description": "Search query for 'search' action (optional, empty lists all)",
+			},
+			"source": map[string]interface{}{
+				"type":        "string",
+				"enum":        []string{"embedded", "clawhub", "local"},
+				"description": "Source to install from (required for 'install' action, default: 'embedded')",
 			},
 			"filter": map[string]interface{}{
 				"type":        "string",
@@ -61,6 +76,8 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	var params struct {
 		Action  string `json:"action"`
 		Skill   string `json:"skill"`
+		Query   string `json:"query"`
+		Source  string `json:"source"`
 		Filter  string `json:"filter"`
 		Verbose bool   `json:"verbose"`
 	}
@@ -91,8 +108,19 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 			return nil, fmt.Errorf("skill name required for 'check' action")
 		}
 		result, err = t.executeCheck(params.Skill)
+	case "install":
+		if params.Skill == "" {
+			return nil, fmt.Errorf("skill name required for 'install' action")
+		}
+		result, err = t.executeInstall(ctx, params.Skill, params.Source)
+	case "search":
+		result, err = t.executeSearch(params.Query)
+	case "sources":
+		result, err = t.executeSources()
+	case "reload":
+		result, err = t.executeReload()
 	default:
-		return nil, fmt.Errorf("unknown action: %s (valid: list, info, check)", params.Action)
+		return nil, fmt.Errorf("unknown action: %s (valid: list, info, check, install, search, sources, reload)", params.Action)
 	}
 
 	if err != nil {
@@ -103,22 +131,10 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 
 func (t *Tool) executeList(filter string, verbose bool) (string, error) {
 	allSkills := t.manager.GetAllSkills()
-	eligibleSkills := t.manager.GetEligibleSkills(nil, nil)
-	flaggedSkills := t.manager.GetFlaggedSkills()
-
-	eligibleSet := make(map[string]bool)
-	for _, s := range eligibleSkills {
-		eligibleSet[s.Name] = true
-	}
-	flaggedSet := make(map[string]bool)
-	for _, s := range flaggedSkills {
-		flaggedSet[s.Name] = true
-	}
 
 	var eligibleCount, ineligibleCount, flaggedCount, whitelistedCount int
 	for _, s := range allSkills {
-		status := t.getStatus(s, eligibleSet, flaggedSet)
-		switch status {
+		switch t.deriveStatus(s) {
 		case "eligible":
 			eligibleCount++
 		case "ineligible":
@@ -132,7 +148,7 @@ func (t *Tool) executeList(filter string, verbose bool) (string, error) {
 
 	var filtered []*skillspkg.Skill
 	for _, s := range allSkills {
-		status := t.getStatus(s, eligibleSet, flaggedSet)
+		status := t.deriveStatus(s)
 		switch filter {
 		case "eligible":
 			if status == "eligible" || status == "whitelisted" {
@@ -215,7 +231,7 @@ func (t *Tool) executeList(filter string, verbose bool) (string, error) {
 	}
 
 	for _, s := range filtered {
-		status := t.getStatus(s, eligibleSet, flaggedSet)
+		status := t.deriveStatus(s)
 		entry := skillEntry{
 			Name:        s.Name,
 			Description: s.Description,
@@ -271,9 +287,27 @@ func (t *Tool) executeList(filter string, verbose bool) (string, error) {
 
 func (t *Tool) executeInfo(skillName string) (string, error) {
 	skill := t.manager.GetSkill(skillName)
+	fromEmbedded := false
+
+	// If not installed, check embedded catalog
 	if skill == nil {
-		L_warn("skills tool: skill not found", "skill", skillName)
-		return "", fmt.Errorf("skill not found: %s", skillName)
+		if skillspkg.SkillExistsInCatalog(skillName) {
+			content, err := skillspkg.GetEmbeddedSkillContent(skillName)
+			if err != nil {
+				L_warn("skills tool: failed to get embedded content", "skill", skillName, "error", err)
+				return "", fmt.Errorf("skill not found: %s", skillName)
+			}
+			skill, err = skillspkg.ParseSkillContent(content, skillName, skillspkg.SourceBundled)
+			if err != nil {
+				L_warn("skills tool: failed to parse embedded skill", "skill", skillName, "error", err)
+				return "", fmt.Errorf("skill not found: %s", skillName)
+			}
+			fromEmbedded = true
+			L_debug("skills tool: loaded from embedded catalog", "skill", skillName)
+		} else {
+			L_warn("skills tool: skill not found", "skill", skillName)
+			return "", fmt.Errorf("skill not found: %s", skillName)
+		}
 	}
 
 	eligCtx := skillspkg.EligibilityContext{
@@ -283,17 +317,12 @@ func (t *Tool) executeInfo(skillName string) (string, error) {
 	missing := skill.GetMissingRequirements(eligCtx)
 	installOpts := skill.GetInstallOptions()
 
-	eligibleSkills := t.manager.GetEligibleSkills(nil, nil)
-	flaggedSkills := t.manager.GetFlaggedSkills()
-	eligibleSet := make(map[string]bool)
-	for _, s := range eligibleSkills {
-		eligibleSet[s.Name] = true
+	var status string
+	if fromEmbedded {
+		status = "available"
+	} else {
+		status = t.deriveStatus(skill)
 	}
-	flaggedSet := make(map[string]bool)
-	for _, s := range flaggedSkills {
-		flaggedSet[s.Name] = true
-	}
-	status := t.getStatus(skill, eligibleSet, flaggedSet)
 
 	type requiresInfo struct {
 		Bins []string `json:"bins,omitempty"`
@@ -319,7 +348,7 @@ func (t *Tool) executeInfo(skillName string) (string, error) {
 		Emoji       string          `json:"emoji,omitempty"`
 		Description string          `json:"description"`
 		Status      string          `json:"status"`
-		Path        string          `json:"path"`
+		Path        string          `json:"path,omitempty"`
 		Source      string          `json:"source"`
 		Requires    *requiresInfo   `json:"requires,omitempty"`
 		Missing     []string        `json:"missing,omitempty"`
@@ -476,17 +505,192 @@ func (t *Tool) executeCheck(skillName string) (string, error) {
 	return string(result), nil
 }
 
-func (t *Tool) getStatus(skill *skillspkg.Skill, eligibleSet, flaggedSet map[string]bool) string {
+func (t *Tool) executeInstall(ctx context.Context, skillName, sourceStr string) (string, error) {
+	// Default to embedded if not specified
+	if sourceStr == "" {
+		sourceStr = "embedded"
+	}
+
+	source := skillspkg.SourceType(sourceStr)
+
+	// Validate source type
+	switch source {
+	case skillspkg.SourceTypeEmbedded, skillspkg.SourceTypeClawHub, skillspkg.SourceTypeLocal:
+		// Valid
+	default:
+		return "", fmt.Errorf("invalid source: %s (valid: embedded, clawhub, local)", sourceStr)
+	}
+
+	L_info("skills tool: installing", "skill", skillName, "source", source)
+
+	result, err := t.manager.InstallSkill(ctx, skillName, source, t.installCfg)
+	if err != nil {
+		return "", err
+	}
+
+	type installResponse struct {
+		Success   bool     `json:"success"`
+		SkillName string   `json:"skill_name"`
+		Source    string   `json:"source"`
+		Message   string   `json:"message"`
+		Flagged   bool     `json:"flagged,omitempty"`
+		Warnings  []string `json:"warnings,omitempty"`
+	}
+
+	resp := installResponse{
+		Success:   result.Success,
+		SkillName: result.SkillName,
+		Source:    string(result.Source),
+		Message:   result.Message,
+		Flagged:   result.Flagged,
+	}
+
+	// Convert AuditWarning to strings for output
+	for _, w := range result.Warnings {
+		resp.Warnings = append(resp.Warnings, fmt.Sprintf("[%s] %s: %s (line %d)", w.Severity, w.Pattern, w.Match, w.Line))
+	}
+
+	output, err := json.MarshalIndent(resp, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal response: %w", err)
+	}
+
+	return string(output), nil
+}
+
+func (t *Tool) executeSearch(query string) (string, error) {
+	L_info("skills tool: search", "query", query)
+
+	result, err := t.manager.SearchSkills(query, t.installCfg)
+	if err != nil {
+		return "", err
+	}
+
+	type searchResponse struct {
+		Query   string                            `json:"query"`
+		Results map[string][]skillspkg.SkillMatch `json:"results"`
+		Total   int                               `json:"total"`
+		Hints   []string                          `json:"hints,omitempty"`
+	}
+
+	resp := searchResponse{
+		Query:   result.Query,
+		Results: make(map[string][]skillspkg.SkillMatch),
+		Hints:   result.Hints,
+	}
+
+	// Convert SourceType keys to strings
+	total := 0
+	for source, matches := range result.Results {
+		resp.Results[string(source)] = matches
+		total += len(matches)
+	}
+	resp.Total = total
+
+	output, err := json.MarshalIndent(resp, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal response: %w", err)
+	}
+
+	return string(output), nil
+}
+
+func (t *Tool) executeSources() (string, error) {
+	L_info("skills tool: listing sources")
+
+	sources := t.manager.GetSources(t.installCfg)
+
+	type sourceEntry struct {
+		Type        string `json:"type"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Enabled     bool   `json:"enabled"`
+	}
+
+	type sourcesResponse struct {
+		Sources []sourceEntry `json:"sources"`
+		Hints   []string      `json:"hints,omitempty"`
+	}
+
+	resp := sourcesResponse{
+		Sources: make([]sourceEntry, 0, len(sources)),
+	}
+
+	for _, s := range sources {
+		resp.Sources = append(resp.Sources, sourceEntry{
+			Type:        string(s.Type),
+			Name:        s.Name,
+			Description: s.Description,
+			Enabled:     s.Enabled,
+		})
+
+		// Add hints for disabled sources
+		if !s.Enabled {
+			switch s.Type {
+			case skillspkg.SourceTypeClawHub:
+				resp.Hints = append(resp.Hints, "ClawHub is disabled. Enable in config to access public skill repository.")
+			case skillspkg.SourceTypeLocal:
+				resp.Hints = append(resp.Hints, "Local path installation is disabled (security risk). Enable only if necessary.")
+			}
+		}
+	}
+
+	output, err := json.MarshalIndent(resp, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal response: %w", err)
+	}
+
+	return string(output), nil
+}
+
+func (t *Tool) executeReload() (string, error) {
+	L_info("skills tool: reloading")
+
+	if err := t.manager.Reload(); err != nil {
+		return "", fmt.Errorf("reload failed: %w", err)
+	}
+
+	stats := t.manager.GetStats()
+
+	type reloadResponse struct {
+		Success  bool   `json:"success"`
+		Message  string `json:"message"`
+		Total    int    `json:"total"`
+		Eligible int    `json:"eligible"`
+		Flagged  int    `json:"flagged"`
+	}
+
+	resp := reloadResponse{
+		Success:  true,
+		Message:  "Skills reloaded successfully",
+		Total:    stats.TotalSkills,
+		Eligible: stats.EligibleSkills,
+		Flagged:  stats.FlaggedSkills,
+	}
+
+	output, err := json.MarshalIndent(resp, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal response: %w", err)
+	}
+
+	return string(output), nil
+}
+
+// deriveStatus returns the status string for a skill based on its flags.
+func (t *Tool) deriveStatus(skill *skillspkg.Skill) string {
 	if skill.Whitelisted {
 		return "whitelisted"
 	}
-	if flaggedSet[skill.Name] {
+	if !skill.Eligible {
+		return "ineligible"
+	}
+	if len(skill.AuditFlags) > 0 && !skill.Enabled {
 		return "flagged"
 	}
-	if eligibleSet[skill.Name] {
+	if skill.Eligible && skill.Enabled {
 		return "eligible"
 	}
-	return "ineligible"
+	return "disabled"
 }
 
 func (t *Tool) getReasons(skill *skillspkg.Skill, ctx skillspkg.EligibilityContext) []string {

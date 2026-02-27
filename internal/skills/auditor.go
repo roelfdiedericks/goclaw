@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 )
 
 // Auditor scans skill content for security concerns.
@@ -13,9 +15,26 @@ type Auditor struct {
 
 type auditPattern struct {
 	name     string
-	severity string // "info", "warn", "critical"
+	severity string // "info", "warn", "critical" - display metadata only
 	regex    *regexp.Regexp
 	desc     string
+	isSafe   func(match string) bool // optional: returns true if match is safe (don't flag)
+}
+
+// volumePathSafe returns true if the matched path is within a registered sandbox volume.
+func volumePathSafe(match string) bool {
+	return sandbox.IsRegisteredVolume(match)
+}
+
+// credentialInVolumeSafe returns true if the matched credentials reference
+// appears alongside a path that's within a registered sandbox volume.
+func credentialInVolumeSafe(match string) bool {
+	homeDotDirs := regexp.MustCompile(`~/\.\w+/`)
+	found := homeDotDirs.FindString(match)
+	if found != "" {
+		return sandbox.IsRegisteredVolume(found)
+	}
+	return false
 }
 
 // NewAuditor creates a new security auditor with default patterns.
@@ -32,7 +51,14 @@ func NewAuditor() *Auditor {
 			{
 				name:     "credentials_file",
 				severity: "warn",
-				regex:    regexp.MustCompile(`(?i)\.credentials|credentials\.json|\.secrets`),
+				regex:    regexp.MustCompile(`(?i)~/\.\w+/.*(?:\.credentials|credentials\.json|\.secrets)`),
+				desc:     "References credentials file in home directory",
+				isSafe:   credentialInVolumeSafe,
+			},
+			{
+				name:     "credentials_file_bare",
+				severity: "warn",
+				regex:    regexp.MustCompile(`(?i)(?:^|[^~/\.\w])(?:\.credentials|\.secrets)(?:\s|$|")`),
 				desc:     "References credentials file",
 			},
 			{
@@ -52,6 +78,7 @@ func NewAuditor() *Auditor {
 				severity: "info",
 				regex:    regexp.MustCompile(`~/\.config/.*(?:token|secret|key|password)`),
 				desc:     "References potentially sensitive config",
+				isSafe:   volumePathSafe,
 			},
 
 			// Dangerous command patterns
@@ -96,12 +123,20 @@ func NewAuditor() *Auditor {
 				desc:     "Long base64-encoded content",
 			},
 
-			// Outside workspace access (exclude common shell profiles like ~/.zshrc, ~/.bashrc)
+			// Outside workspace access - system paths (always flag)
 			{
-				name:     "outside_workspace",
+				name:     "outside_workspace_system",
 				severity: "warn",
-				regex:    regexp.MustCompile(`~/\.config/|/etc/|/home/\w+/|/Users/\w+/`),
-				desc:     "References paths outside workspace",
+				regex:    regexp.MustCompile(`/etc/|/home/\w+/|/Users/\w+/`),
+				desc:     "References system paths outside workspace",
+			},
+			// Outside workspace access - home dot-dirs (safe if sandbox volume)
+			{
+				name:     "outside_workspace_home",
+				severity: "warn",
+				regex:    regexp.MustCompile(`~/\.\w+/`),
+				desc:     "References home directory paths outside workspace",
+				isSafe:   volumePathSafe,
 			},
 		},
 	}
@@ -121,15 +156,18 @@ func (a *Auditor) AuditSkill(skill *Skill) *AuditResult {
 		for _, pattern := range a.patterns {
 			if pattern.regex.MatchString(line) {
 				match := pattern.regex.FindString(line)
+
+				if pattern.isSafe != nil && pattern.isSafe(match) {
+					continue
+				}
+
 				warning := AuditWarning{
 					Severity: pattern.severity,
 					Pattern:  pattern.name,
 					Match:    truncateMatch(match, 50),
-					Line:     lineNum + 1, // 1-indexed
+					Line:     lineNum + 1,
 				}
 				result.Warnings = append(result.Warnings, warning)
-
-				// Flag if any warning found
 				result.Flagged = true
 			}
 		}
@@ -181,7 +219,6 @@ func (a *Auditor) FormatStatusLine(skill *Skill) string {
 		return skill.Name
 	}
 
-	// Collect unique patterns
 	patterns := make([]string, 0, len(skill.AuditFlags))
 	seen := make(map[string]bool)
 	for _, w := range skill.AuditFlags {

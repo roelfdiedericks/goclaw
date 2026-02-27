@@ -7,9 +7,10 @@ import (
 )
 
 // FormatSkillsPrompt generates the skills section for the system prompt.
+// hasSkillsTool indicates whether the user has access to the skills management tool.
 // Returns empty string if no skills are eligible.
-func FormatSkillsPrompt(skills []*Skill) string {
-	if len(skills) == 0 {
+func FormatSkillsPrompt(skills []*Skill, hasSkillsTool bool) string {
+	if len(skills) == 0 && !hasSkillsTool {
 		return ""
 	}
 
@@ -24,15 +25,26 @@ func FormatSkillsPrompt(skills []*Skill) string {
 	sb.WriteString("NEVER just announce or mention a skill without actually reading and following it. ")
 	sb.WriteString("Only use skills listed below.\n\n")
 
-	// Skills list
-	sb.WriteString("<available_skills description=\"Skills the agent can use. Use the Read tool with the provided absolute path to fetch full contents.\">\n")
+	if len(skills) > 0 {
+		// Skills list
+		sb.WriteString("<available_skills description=\"Skills the agent can use. Use the Read tool with the provided absolute path to fetch full contents.\">\n")
 
-	for _, skill := range skills {
-		sb.WriteString(formatSkillXML(skill))
-		sb.WriteString("\n")
+		for _, skill := range skills {
+			sb.WriteString(formatSkillXML(skill))
+			sb.WriteString("\n")
+		}
+
+		sb.WriteString("</available_skills>\n\n")
 	}
 
-	sb.WriteString("</available_skills>\n")
+	// Skills tool guidance
+	if hasSkillsTool {
+		sb.WriteString("To discover and install additional skills, use the skills tool (action='search' to find, action='info' to preview, action='install' to add). ")
+		sb.WriteString("Embedded and remote skills are not accessible via the filesystem - use the skills tool to inspect them.\n")
+	} else {
+		sb.WriteString("You cannot install or manage additional skills. Only the skills listed above are available.\n")
+	}
+
 	sb.WriteString("</agent_skills>")
 
 	return sb.String()

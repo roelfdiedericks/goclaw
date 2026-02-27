@@ -52,8 +52,9 @@ type Session struct {
 	agentName   string // Agent's display name (set via SetAgentName)
 
 	// User & Role Elevation
-	User       *user.User `json:"-"` // Current user (may be elevated during session)
-	ElevatedAt time.Time  `json:"-"` // When role elevation occurred (zero if not elevated)
+	User         *user.User         `json:"-"` // Current user (may be elevated during session)
+	ResolvedRole *user.ResolvedRole `json:"-"` // Resolved permissions for current user/role
+	ElevatedAt   time.Time          `json:"-"` // When role elevation occurred (zero if not elevated)
 
 	// Supervision - allows owner to monitor, guide, and ghostwrite in session
 	Supervision *SupervisionState `json:"-"`
@@ -121,6 +122,25 @@ func (s *Session) GetUser() *user.User {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.User
+}
+
+// SetResolvedRole stores the resolved role permissions for this session.
+// Should be called when the session's user is established or elevated.
+func (s *Session) SetResolvedRole(role *user.ResolvedRole) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ResolvedRole = role
+}
+
+// HasToolAccess checks if the current session's resolved role permits a tool.
+// Returns true if no role is set (permissive default).
+func (s *Session) HasToolAccess(toolName string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.ResolvedRole == nil {
+		return true
+	}
+	return s.ResolvedRole.CanUseTool(toolName)
 }
 
 // ElevateUser updates the session's user with authenticated identity.

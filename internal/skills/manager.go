@@ -3,14 +3,12 @@ package skills
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
@@ -22,8 +20,6 @@ type Manager struct {
 	watcher   *Watcher
 
 	// Configuration
-	bundledDir   string
-	managedDir   string
 	workspaceDir string
 	extraDirs    []string
 	configKeys   map[string]bool
@@ -31,8 +27,7 @@ type Manager struct {
 
 	// State
 	mu             sync.RWMutex
-	flaggedSkills  []*Skill // Skills disabled due to security warnings
-	startupWarning string   // Warning message to show on session start
+	startupWarning string // Warning message to show on session start
 
 	// Event subscriptions
 	configEventSub bus.SubscriptionID
@@ -41,10 +36,8 @@ type Manager struct {
 // ManagerConfig contains configuration for the skill manager.
 type ManagerConfig struct {
 	Enabled       bool
-	BundledDir    string   // GoClaw bundled skills (default: <exe_dir>/skills)
-	ManagedDir    string   // User-installed skills (gateway: ~/.openclaw/skills or ~/.goclaw/skills based on workspace)
 	WorkspaceDir  string   // Workspace skills (default: <workspace>/skills)
-	ExtraDirs     []string // Additional directories
+	ExtraDirs     []string // Additional directories (power user feature)
 	WatchEnabled  bool
 	WatchDebounce int                          // ms
 	ConfigKeys    map[string]bool              // Available config keys for eligibility
@@ -55,33 +48,11 @@ type ManagerConfig struct {
 func NewManager(cfg ManagerConfig) (*Manager, error) {
 	L_debug("skills: creating manager")
 
-	// Resolve default paths
-	bundledDir := cfg.BundledDir
-	if bundledDir == "" {
-		// Default to skills/ relative to executable
-		exe, err := os.Executable()
-		if err == nil {
-			bundledDir = filepath.Join(filepath.Dir(exe), "skills")
-		}
-	}
-
-	managedDir := cfg.ManagedDir
-	if managedDir == "" {
-		p, err := paths.DataPath("skills")
-		if err == nil {
-			managedDir = p
-		}
-	}
-
 	L_debug("skills: directories configured",
-		"bundled", bundledDir,
-		"managed", managedDir,
 		"workspace", cfg.WorkspaceDir,
 		"extraDirs", cfg.ExtraDirs)
 
 	m := &Manager{
-		bundledDir:   bundledDir,
-		managedDir:   managedDir,
 		workspaceDir: cfg.WorkspaceDir,
 		extraDirs:    cfg.ExtraDirs,
 		configKeys:   cfg.ConfigKeys,
@@ -91,7 +62,7 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	}
 
 	// Create loader
-	m.loader = NewLoader(bundledDir, managedDir, cfg.WorkspaceDir, cfg.ExtraDirs)
+	m.loader = NewLoader(cfg.WorkspaceDir, cfg.ExtraDirs)
 
 	// Set up watcher if enabled
 	if cfg.WatchEnabled {
@@ -178,12 +149,6 @@ func (m *Manager) onConfigApplied(e bus.Event) {
 	L_info("skills: config changed, reloading", "enabled", cfg.Enabled)
 
 	// Update directories if they changed
-	if cfg.BundledDir != "" {
-		m.bundledDir = cfg.BundledDir
-	}
-	if cfg.ManagedDir != "" {
-		m.managedDir = cfg.ManagedDir
-	}
 	if cfg.WorkspaceDir != "" {
 		m.workspaceDir = cfg.WorkspaceDir
 	}
@@ -226,21 +191,18 @@ func (m *Manager) handleReload(cmd bus.Command) bus.CommandResult {
 	}
 }
 
-// Reload reloads all skills from disk.
+// Reload reloads all skills from disk, checks eligibility, and audits each skill.
+// All skills remain in the registry with their status flags set.
+// Only eligible+enabled skills are injected into agent prompts.
 func (m *Manager) Reload() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Load skills
 	skills, err := m.loader.LoadAll()
 	if err != nil {
 		return err
 	}
 
-	// Clear previous state
-	m.flaggedSkills = nil
-
-	// Check eligibility and audit each skill
 	ctx := EligibilityContext{
 		OS:         runtime.GOOS,
 		ConfigKeys: m.configKeys,
@@ -248,9 +210,9 @@ func (m *Manager) Reload() error {
 
 	eligibleCount := 0
 	ineligibleCount := 0
+	flaggedCount := 0
 
 	for _, skill := range skills {
-		// Check per-skill config
 		var skillCfg *SkillEntryConfig
 		if cfg, ok := m.skillConfigs[skill.Name]; ok {
 			skillCfg = cfg
@@ -259,49 +221,45 @@ func (m *Manager) Reload() error {
 			ctx.SkillConfig = nil
 		}
 
-		// Check eligibility
+		// Check eligibility (sets skill.Eligible)
 		skill.IsEligible(ctx)
 
-		if skill.Eligible {
-			eligibleCount++
-			// Audit for security concerns (only if eligible)
-			if m.auditor.AuditAndFlag(skill) {
-				// Skill was flagged - check if whitelisted in config
-				if skillCfg != nil && skillCfg.Enabled {
-					skill.Enabled = true
-					skill.Whitelisted = true
-					L_info("skills: whitelisted flagged skill", "skill", skill.Name)
-				} else {
-					m.flaggedSkills = append(m.flaggedSkills, skill)
-				}
-			}
-		} else {
-			ineligibleCount++
-			// Log why the skill is ineligible
+		if !skill.Eligible {
+			skill.Enabled = false
 			missing := skill.GetMissingRequirements(ctx)
 			reason := "unknown"
 			if len(missing) > 0 {
 				reason = missing[0]
-				if len(missing) > 1 {
-					reason += fmt.Sprintf(" (+%d more)", len(missing)-1)
-				}
-			} else if !skill.Enabled {
-				reason = "disabled"
-			} else if skill.Metadata == nil {
-				reason = "no metadata (should be eligible?)"
 			}
-			L_trace("skills: ineligible", "skill", skill.Name, "reason", reason)
+			L_debug("skills: ineligible", "skill", skill.Name, "reason", reason)
+			ineligibleCount++
+			continue
+		}
+
+		// Audit for security concerns
+		if m.auditor.AuditAndFlag(skill) {
+			if skillCfg != nil && skillCfg.Enabled {
+				skill.Enabled = true
+				skill.Whitelisted = true
+				L_info("skills: whitelisted flagged skill", "skill", skill.Name)
+			} else {
+				skill.Enabled = false
+				L_debug("skills: flagged", "skill", skill.Name)
+				flaggedCount++
+			}
+		}
+
+		if skill.Eligible && skill.Enabled {
+			eligibleCount++
 		}
 	}
 
-	// Log summary of ineligible skills at INFO only if there are some
-	if ineligibleCount > 0 {
-		L_info("skills: eligibility check",
-			"eligible", eligibleCount,
-			"ineligible", ineligibleCount)
-	}
+	L_info("skills: reload complete",
+		"total", len(skills),
+		"eligible", eligibleCount,
+		"ineligible", ineligibleCount,
+		"flagged", flaggedCount)
 
-	// Generate startup warning if there are flagged skills
 	m.generateStartupWarning()
 
 	return nil
@@ -316,14 +274,15 @@ func (m *Manager) onSkillsChanged() {
 
 // generateStartupWarning creates a warning message for flagged skills.
 func (m *Manager) generateStartupWarning() {
-	if len(m.flaggedSkills) == 0 {
+	flagged := m.getFlaggedSkillsLocked()
+	if len(flagged) == 0 {
 		m.startupWarning = ""
 		return
 	}
 
 	var msg string
-	if len(m.flaggedSkills) == 1 {
-		skill := m.flaggedSkills[0]
+	if len(flagged) == 1 {
+		skill := flagged[0]
 		result := &AuditResult{
 			Skill:    skill.Name,
 			Warnings: skill.AuditFlags,
@@ -331,8 +290,8 @@ func (m *Manager) generateStartupWarning() {
 		}
 		msg = m.auditor.FormatWarnings(result)
 	} else {
-		msg = fmt.Sprintf("Security Warning: %d skills have been flagged and disabled.\n\n", len(m.flaggedSkills))
-		for _, skill := range m.flaggedSkills {
+		msg = fmt.Sprintf("Security Warning: %d skills have been flagged and disabled.\n\n", len(flagged))
+		for _, skill := range flagged {
 			msg += m.auditor.FormatStatusLine(skill) + "\n"
 		}
 		msg += "\nTo enable: add to goclaw.json skills.entries.<name>.enabled = true"
@@ -419,27 +378,36 @@ func (m *Manager) GetStartupWarning() string {
 }
 
 // GetFlaggedSkills returns skills that were disabled due to security concerns.
+// Computed on the fly from the loaded skills.
 func (m *Manager) GetFlaggedSkills() []*Skill {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.getFlaggedSkillsLocked()
+}
 
-	// Return a copy
-	result := make([]*Skill, len(m.flaggedSkills))
-	copy(result, m.flaggedSkills)
-	return result
+// getFlaggedSkillsLocked returns flagged skills (caller must hold lock).
+func (m *Manager) getFlaggedSkillsLocked() []*Skill {
+	var flagged []*Skill
+	for _, skill := range m.loader.GetAllSkills() {
+		if len(skill.AuditFlags) > 0 && !skill.Whitelisted {
+			flagged = append(flagged, skill)
+		}
+	}
+	return flagged
 }
 
 // FormatPrompt generates the skills section for the system prompt.
 // This version returns all eligible skills (no user filtering).
 func (m *Manager) FormatPrompt() string {
 	skills := m.GetEligibleSkills(nil, nil)
-	return FormatSkillsPrompt(skills)
+	return FormatSkillsPrompt(skills, true)
 }
 
 // FormatPromptForUser generates the skills section filtered by user's role.
-func (m *Manager) FormatPromptForUser(u *user.User, rolesConfig user.RolesConfig) string {
+// hasSkillsTool indicates whether the user has access to the skills management tool.
+func (m *Manager) FormatPromptForUser(u *user.User, rolesConfig user.RolesConfig, hasSkillsTool bool) string {
 	skills := m.GetEligibleSkills(u, rolesConfig)
-	return FormatSkillsPrompt(skills)
+	return FormatSkillsPrompt(skills, hasSkillsTool)
 }
 
 // Install attempts to install a skill's dependencies.
@@ -479,12 +447,203 @@ func (m *Manager) FormatStatusSection() string {
 
 	result := fmt.Sprintf("Skills: %d total, %d eligible", stats.TotalSkills, stats.EligibleSkills)
 
-	if stats.FlaggedSkills > 0 {
-		result += fmt.Sprintf("\nFlagged Skills: %d", stats.FlaggedSkills)
-		for _, skill := range m.flaggedSkills {
+	flagged := m.getFlaggedSkillsLocked()
+	if len(flagged) > 0 {
+		result += fmt.Sprintf("\nFlagged Skills: %d", len(flagged))
+		for _, skill := range flagged {
 			result += fmt.Sprintf("\n  - %s", m.auditor.FormatStatusLine(skill))
 		}
 	}
 
 	return result
+}
+
+// InstallSkill installs a skill from a source to the workspace skills directory.
+func (m *Manager) InstallSkill(ctx context.Context, skillName string, source SourceType, installCfg SkillInstallConfig) (*SkillInstallResult, error) {
+	// Validate source is allowed
+	switch source {
+	case SourceTypeEmbedded:
+		if !installCfg.IsEmbeddedAllowed() {
+			return nil, fmt.Errorf("embedded source is not enabled in configuration")
+		}
+	case SourceTypeClawHub:
+		if !installCfg.AllowClawHub {
+			return nil, fmt.Errorf("ClawHub source is not enabled in configuration")
+		}
+	case SourceTypeLocal:
+		if !installCfg.AllowLocal {
+			return nil, fmt.Errorf("local source is not enabled in configuration (security risk)")
+		}
+	default:
+		return nil, fmt.Errorf("unknown source type: %s", source)
+	}
+
+	// Check if already installed
+	if existing := m.GetSkill(skillName); existing != nil && existing.Source == SourceWorkspace {
+		return &SkillInstallResult{
+			Success:   false,
+			SkillName: skillName,
+			Source:    source,
+			Message:   "skill already installed in workspace",
+		}, nil
+	}
+
+	// Install to workspace skills directory
+	destDir := m.workspaceDir
+	if destDir == "" {
+		return nil, fmt.Errorf("workspace skills directory not configured")
+	}
+
+	result, err := m.installer.InstallSkillFiles(ctx, skillName, source, destDir, m.auditor)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reload skills if successful and check eligibility
+	if result.Success {
+		if err := m.Reload(); err != nil {
+			L_warn("skills: reload after install failed", "error", err)
+		}
+
+		// Check post-install eligibility
+		if installed := m.GetSkill(skillName); installed != nil {
+			result.Eligible = installed.Eligible && installed.Enabled
+			if !installed.Eligible {
+				ctx := EligibilityContext{
+					OS:         runtime.GOOS,
+					ConfigKeys: m.configKeys,
+				}
+				result.MissingRequirements = installed.GetMissingRequirements(ctx)
+				result.Message = fmt.Sprintf("installed %s from %s (ineligible: missing requirements)", skillName, source)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// SearchSkills searches for skills in enabled sources.
+// Searches both skill names and descriptions for matches.
+func (m *Manager) SearchSkills(query string, installCfg SkillInstallConfig) (*SearchResult, error) {
+	result := &SearchResult{
+		Query:   query,
+		Results: make(map[SourceType][]SkillMatch),
+		Hints:   []string{},
+	}
+
+	// Search embedded catalog
+	if installCfg.IsEmbeddedAllowed() {
+		embedded, err := ListEmbedded()
+		if err == nil {
+			var matches []SkillMatch
+			for _, name := range embedded {
+				// Get skill content and parse it
+				content, err := GetEmbeddedSkillContent(name)
+				if err != nil {
+					L_debug("search: failed to get content", "skill", name, "error", err)
+					continue
+				}
+
+				skill, err := ParseSkillContent(content, name, SourceBundled)
+				if err != nil {
+					L_debug("search: failed to parse", "skill", name, "error", err)
+					continue
+				}
+
+				// Check if query matches name or description
+				matched, where := matchesQuery(skill.Name, skill.Description, query)
+				if matched {
+					emoji := ""
+					if skill.Metadata != nil {
+						emoji = skill.Metadata.Emoji
+					}
+					matches = append(matches, SkillMatch{
+						Name:        name,
+						Emoji:       emoji,
+						Description: skill.Description,
+						MatchedIn:   where,
+					})
+				}
+			}
+			if len(matches) > 0 {
+				result.Results[SourceTypeEmbedded] = matches
+			}
+		}
+	} else {
+		result.Hints = append(result.Hints, "Embedded skills are disabled in configuration")
+	}
+
+	// ClawHub search (stub for now)
+	if installCfg.AllowClawHub {
+		// TODO: Implement ClawHub API search
+		result.Hints = append(result.Hints, "ClawHub search not yet implemented")
+	} else {
+		result.Hints = append(result.Hints, "ClawHub is disabled - enable to search public skill repository")
+	}
+
+	return result, nil
+}
+
+// GetSources returns the available skill sources and their status.
+func (m *Manager) GetSources(installCfg SkillInstallConfig) []SourceInfo {
+	sources := []SourceInfo{
+		{
+			Type:        SourceTypeEmbedded,
+			Name:        "Embedded Catalog",
+			Description: "Skills bundled with GoClaw",
+			Enabled:     installCfg.IsEmbeddedAllowed(),
+		},
+		{
+			Type:        SourceTypeClawHub,
+			Name:        "ClawHub",
+			Description: "Public skill repository at clawhub.ai",
+			Enabled:     installCfg.AllowClawHub,
+		},
+		{
+			Type:        SourceTypeLocal,
+			Name:        "Local Path",
+			Description: "Install from local filesystem (security risk)",
+			Enabled:     installCfg.AllowLocal,
+		},
+	}
+	return sources
+}
+
+// matchesQuery checks if query matches name or description (case-insensitive).
+// Returns (matched, where) - where is "name", "description", or "" if no match.
+func matchesQuery(name, description, query string) (bool, string) {
+	if query == "" {
+		return true, ""
+	}
+
+	queryLower := strings.ToLower(query)
+	nameLower := strings.ToLower(name)
+	descLower := strings.ToLower(description)
+
+	// Check name first (higher priority)
+	if strings.Contains(nameLower, queryLower) {
+		return true, "name"
+	}
+
+	// Check description
+	if strings.Contains(descLower, queryLower) {
+		return true, "description"
+	}
+
+	return false, ""
+}
+
+// SearchResult contains the results of a skill search.
+type SearchResult struct {
+	Query   string                      `json:"query"`
+	Results map[SourceType][]SkillMatch `json:"results"`
+	Hints   []string                    `json:"hints,omitempty"`
+}
+
+// SourceInfo describes a skill installation source.
+type SourceInfo struct {
+	Type        SourceType `json:"type"`
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Enabled     bool       `json:"enabled"`
 }

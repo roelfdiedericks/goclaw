@@ -2,7 +2,9 @@
 
 package bwrap
 
-import "path/filepath"
+import (
+	"github.com/roelfdiedericks/goclaw/internal/sandbox"
+)
 
 // ExecSandbox creates a pre-configured builder for the exec tool.
 // Sets up standard system binds, isolated /tmp, /proc, and safe defaults.
@@ -32,10 +34,20 @@ func ExecSandbox(workspace, home string, allowNetwork, clearEnv bool) *Builder {
 	b.Bind(workspace)
 	b.Chdir(workspace)
 
-	// User's ~/.local is writable (for pip install --user, etc.)
-	localDir := filepath.Join(home, ".local")
-	if pathExists(localDir) {
-		b.Bind(localDir)
+	// Write-protected directories (from centralized registry)
+	// Later ro-bind overrides earlier bind for the same path in bubblewrap
+	for _, protectedPath := range sandbox.GetProtectedDirs() {
+		if pathExists(protectedPath) {
+			b.RoBind(protectedPath)
+		}
+	}
+
+	// Sandbox volumes: isolated writable mounts that replace real host directories.
+	// Each volume's Source (under ~/.goclaw/sandbox/) is mounted at MountPoint (e.g., ~/.local).
+	for _, vol := range sandbox.GetVolumes() {
+		if pathExists(vol.Source) {
+			b.BindTo(vol.Source, vol.MountPoint)
+		}
 	}
 
 	// Network

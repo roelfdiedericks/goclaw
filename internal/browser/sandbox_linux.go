@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/roelfdiedericks/goclaw/internal/bwrap"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox/bwrap"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 )

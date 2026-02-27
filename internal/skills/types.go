@@ -108,6 +108,14 @@ type InstallResult struct {
 	Error   error
 }
 
+// SkillMatch represents a skill search result with metadata
+type SkillMatch struct {
+	Name        string `json:"name"`
+	Emoji       string `json:"emoji,omitempty"`
+	Description string `json:"description,omitempty"`
+	MatchedIn   string `json:"matchedIn,omitempty"` // "name" or "description"
+}
+
 // ManagerStats provides statistics about loaded skills
 type ManagerStats struct {
 	TotalSkills    int

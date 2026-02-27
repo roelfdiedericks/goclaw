@@ -20,6 +20,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/stt"
@@ -162,8 +163,9 @@ type Config struct {
 	Supervision   gwtypes.SupervisionConfig   `json:"supervision"`
 	Roles         user.RolesConfig            `json:"roles"`    // Role-based access control
 	Auth          auth.AuthConfig             `json:"auth"`     // Role elevation authentication
-	Safety        gwtypes.SafetyConfig        `json:"safety"`   // Emergency stop / panic phrase config
-	Security      gwtypes.SecurityConfig      `json:"security"` // Security policies (tool restrictions per purpose)
+	Sandbox       sandbox.Config               `json:"sandbox"`   // Sandbox and bubblewrap configuration
+	Safety        gwtypes.SafetyConfig        `json:"safety"`    // Emergency stop / panic phrase config
+	Security      gwtypes.SecurityConfig      `json:"security"`  // Security policies (tool restrictions per purpose)
 }
 
 // Load reads configuration from goclaw.json.
@@ -275,8 +277,10 @@ func Load() (*LoadResult, error) {
 					ClearEnv:     true, // Clear env by default for security
 				},
 			},
-			Bubblewrap: toolsconfig.BubblewrapGlobalConfig{
-				Path: "", // Empty = search PATH
+			},
+		Sandbox: sandbox.Config{
+			Bubblewrap: sandbox.BubblewrapConfig{
+				Volumes: sandbox.DefaultVolumes(),
 			},
 		},
 		Session: session.SessionConfig{

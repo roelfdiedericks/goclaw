@@ -9,13 +9,29 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
+// SkillInstallConfig configures skill installation sources
+type SkillInstallConfig struct {
+	AllowEmbedded *bool `json:"allowEmbedded,omitempty"` // Allow installing from embedded catalog (default: true)
+	AllowClawHub  bool  `json:"allowClawHub"`            // Allow installing from ClawHub repository (default: false)
+	AllowLocal    bool  `json:"allowLocal"`              // Allow installing from local paths (default: false, security risk)
+}
+
+// IsEmbeddedAllowed returns true if embedded installation is allowed (defaults to true)
+func (c SkillInstallConfig) IsEmbeddedAllowed() bool {
+	if c.AllowEmbedded == nil {
+		return true // Default to enabled
+	}
+	return *c.AllowEmbedded
+}
+
 // SkillsConfig configures the skills system
 type SkillsConfig struct {
 	Enabled       bool                        `json:"enabled"`
-	BundledDir    string                      `json:"bundledDir"`      // Override bundled skills path
-	ManagedDir    string                      `json:"managedDir"`      // Override managed skills path
+	BundledDir    string                      `json:"bundledDir"`      // Override bundled skills path (deprecated)
+	ManagedDir    string                      `json:"managedDir"`      // Override managed skills path (deprecated)
 	WorkspaceDir  string                      `json:"workspaceDir"`    // Override workspace skills path
 	ExtraDirs     []string                    `json:"extraDirs"`       // Additional skill directories
+	Install       SkillInstallConfig          `json:"install"`         // Installation source configuration
 	Watch         bool                        `json:"watch"`           // Watch for file changes
 	WatchDebounce int                         `json:"watchDebounceMs"` // Debounce interval in ms
 	Entries       map[string]SkillEntryConfig `json:"entries"`         // Per-skill configuration

@@ -138,7 +138,7 @@ ifndef GOVULNCHECK
 endif
 	govulncheck ./...
 
-# Update bundled skills from upstream OpenClaw repo
+# Update embedded skills catalog from upstream OpenClaw repo
 skills-update:
 	@echo "Fetching skills from upstream..."
 	@rm -rf $(SKILLS_TMP)
@@ -149,10 +149,10 @@ skills-update:
 	@cd $(SKILLS_TMP) && git remote add origin $(OPENCLAW_REPO)
 	@cd $(SKILLS_TMP) && git fetch --quiet --depth 1 origin main
 	@cd $(SKILLS_TMP) && git checkout --quiet main
-	@rm -rf skills
-	@mv $(SKILLS_TMP)/skills skills
+	@rm -rf internal/skills/catalog
+	@mv $(SKILLS_TMP)/skills internal/skills/catalog
 	@rm -rf $(SKILLS_TMP)
-	@echo "Skills updated from upstream"
+	@echo "Skills catalog updated from upstream (internal/skills/catalog/)"
 
 # Check for differences without modifying local skills
 skills-check:
@@ -165,7 +165,7 @@ skills-check:
 	@cd $(SKILLS_TMP) && git remote add origin $(OPENCLAW_REPO)
 	@cd $(SKILLS_TMP) && git fetch --quiet --depth 1 origin main
 	@cd $(SKILLS_TMP) && git checkout --quiet main
-	@diff -rq skills $(SKILLS_TMP)/skills 2>/dev/null || echo "Differences found"
+	@diff -rq internal/skills/catalog $(SKILLS_TMP)/skills 2>/dev/null || echo "Differences found"
 	@rm -rf $(SKILLS_TMP)
 
 # =============================================================================

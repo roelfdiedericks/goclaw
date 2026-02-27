@@ -16,6 +16,7 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/stt"
@@ -53,6 +54,7 @@ func (e *EditorTview) Run() error {
 	httpconfig.RegisterCommands()
 	session.RegisterCommands()
 	skills.RegisterCommands()
+	sandbox.RegisterCommands()
 	cron.RegisterCommands()
 	auth.RegisterCommands()
 	gateway.RegisterCommands()
@@ -123,6 +125,7 @@ func (e *EditorTview) createMenu() *forms.MenuListResult {
 		{IsSeparator: true, Label: "System"},
 		{Label: "Media Storage", OnSelect: e.editMedia},
 		{Label: "TUI Settings", OnSelect: e.editTUI},
+		{Label: "Sandbox", OnSelect: e.editSandbox},
 		{Label: "Auth Settings", OnSelect: e.editAuth},
 		{Label: "Users", OnSelect: func() {
 			e.chainUserEditor = true
@@ -427,6 +430,32 @@ func (e *EditorTview) editAuth() {
 	}
 
 	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Auth Settings"})
+	e.app.SetFormContent(content)
+}
+
+// editSandbox opens the sandbox configuration form
+func (e *EditorTview) editSandbox() {
+	L_info("editor: opening sandbox config")
+
+	sandboxCfg := e.cfg.Sandbox
+	formDef := sandbox.ConfigFormDef()
+
+	content, err := forms.BuildFormContent(formDef, &sandboxCfg, "sandbox", func(result forms.TviewResult) {
+		if result == forms.ResultAccepted {
+			e.cfg.Sandbox = sandboxCfg
+			e.dirty = true
+			L_info("editor: sandbox config updated")
+		} else {
+			L_info("editor: sandbox config cancelled")
+		}
+		e.showMainMenu()
+	}, e.app.App())
+	if err != nil {
+		L_error("editor: sandbox form error", "error", err)
+		return
+	}
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Sandbox"})
 	e.app.SetFormContent(content)
 }
 

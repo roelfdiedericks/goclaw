@@ -17,12 +17,12 @@ type skillsData struct {
 	cache  map[string]skillCacheEntry
 }
 
-// Loader discovers and loads skills from multiple directories.
+// Loader discovers and loads skills from configured directories.
+// Note: bundledDir and managedDir have been removed. Skills are now installed
+// from the embedded catalog to the workspace skills directory.
 type Loader struct {
-	bundledDir   string   // GoClaw bundled skills directory
-	managedDir   string   // User-installed skills (resolved by gateway based on workspace)
 	workspaceDir string   // Current workspace skills
-	extraDirs    []string // Additional directories from config
+	extraDirs    []string // Additional directories from config (power user feature)
 
 	data atomic.Pointer[skillsData]
 }
@@ -33,10 +33,10 @@ type skillCacheEntry struct {
 }
 
 // NewLoader creates a new skill loader.
-func NewLoader(bundledDir, managedDir, workspaceDir string, extraDirs []string) *Loader {
+// workspaceDir is the primary skills directory (typically ~/.openclaw/workspace/skills).
+// extraDirs are additional directories specified in config (advanced use).
+func NewLoader(workspaceDir string, extraDirs []string) *Loader {
 	l := &Loader{
-		bundledDir:   bundledDir,
-		managedDir:   managedDir,
 		workspaceDir: workspaceDir,
 		extraDirs:    extraDirs,
 	}
@@ -49,12 +49,9 @@ func NewLoader(bundledDir, managedDir, workspaceDir string, extraDirs []string) 
 }
 
 // LoadAll loads skills from all configured directories.
-// Higher precedence sources override lower ones:
-// extraDirs < bundled < managed < workspace
+// Precedence: extraDirs (lowest) < workspace (highest)
 func (l *Loader) LoadAll() ([]*Skill, error) {
-	L_debug("skills: loading from all directories",
-		"bundled", l.bundledDir,
-		"managed", l.managedDir,
+	L_debug("skills: loading from directories",
 		"workspace", l.workspaceDir,
 		"extraDirs", len(l.extraDirs))
 
@@ -83,22 +80,6 @@ func (l *Loader) LoadAll() ([]*Skill, error) {
 			path   string
 			source Source
 		}{dir, SourceExtra})
-	}
-
-	// Then bundled
-	if l.bundledDir != "" {
-		sources = append(sources, struct {
-			path   string
-			source Source
-		}{l.bundledDir, SourceBundled})
-	}
-
-	// Then managed
-	if l.managedDir != "" {
-		sources = append(sources, struct {
-			path   string
-			source Source
-		}{l.managedDir, SourceManaged})
 	}
 
 	// Workspace has highest precedence
@@ -139,9 +120,8 @@ func (l *Loader) LoadAll() ([]*Skill, error) {
 	L_info("skills: loaded",
 		"total", len(newSkills),
 		"failed", totalFailed,
-		"bundled", bySource[SourceBundled],
-		"managed", bySource[SourceManaged],
-		"workspace", bySource[SourceWorkspace])
+		"workspace", bySource[SourceWorkspace],
+		"extra", bySource[SourceExtra])
 
 	// Build result slice
 	skills := make([]*Skill, 0, len(newSkills))
@@ -277,6 +257,27 @@ func (l *Loader) GetSkill(name string) *Skill {
 	return data.skills[name]
 }
 
+// RemoveSkill removes a skill from the loaded skills map.
+// Used to discard ineligible or flagged skills at startup.
+func (l *Loader) RemoveSkill(name string) {
+	data := l.data.Load()
+	if _, exists := data.skills[name]; !exists {
+		return
+	}
+
+	newSkills := make(map[string]*Skill)
+	for k, v := range data.skills {
+		if k != name {
+			newSkills[k] = v
+		}
+	}
+
+	l.data.Store(&skillsData{
+		skills: newSkills,
+		cache:  data.cache,
+	})
+}
+
 // GetEligibleSkills returns skills that are eligible for the current environment.
 func (l *Loader) GetEligibleSkills(ctx EligibilityContext) []*Skill {
 	data := l.data.Load()
@@ -353,14 +354,8 @@ func (l *Loader) InvalidateCache(path string) {
 
 // WatchedDirs returns all directories being watched for changes.
 func (l *Loader) WatchedDirs() []string {
-	dirs := make([]string, 0, len(l.extraDirs)+3)
+	dirs := make([]string, 0, len(l.extraDirs)+1)
 	dirs = append(dirs, l.extraDirs...)
-	if l.bundledDir != "" {
-		dirs = append(dirs, l.bundledDir)
-	}
-	if l.managedDir != "" {
-		dirs = append(dirs, l.managedDir)
-	}
 	if l.workspaceDir != "" {
 		dirs = append(dirs, l.workspaceDir)
 	}
