@@ -1775,6 +1775,14 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	cfg := loadResult.Config
 	L_debug("config loaded", "path", loadResult.SourcePath)
 
+	// Change process working directory to workspace
+	// This ensures agent's view matches reality for any code using os.Getwd()
+	if err := os.Chdir(cfg.Gateway.WorkingDir); err != nil {
+		L_warn("failed to chdir to workspace", "dir", cfg.Gateway.WorkingDir, "error", err)
+	} else {
+		L_debug("changed working directory", "dir", cfg.Gateway.WorkingDir)
+	}
+
 	// Load users from users.json (new format)
 	usersConfig, err := user.LoadUsers()
 	if err != nil {
