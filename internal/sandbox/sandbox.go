@@ -13,12 +13,9 @@ import (
 )
 
 // Unicode spaces that should be normalized to regular space
-// Matches OpenClaw's UNICODE_SPACES pattern
 var unicodeSpaces = regexp.MustCompile(`[\x{00A0}\x{2000}-\x{200A}\x{202F}\x{205F}\x{3000}]`)
 
-// Denied files - these are blocked even within the sandbox.
-// Protects sensitive config that might exist in a development workspace.
-// Its not super useful, but reasonable and cheap to do.
+// Denied files - blocked even within the sandbox.
 var deniedFiles = []string{
 	"users.json",
 	"goclaw.json",
@@ -32,20 +29,17 @@ var deniedFiles = []string{
 }
 
 // defaultWriteProtectedDirs are the base directories protected by default.
-// These are registered via InitRegistry at startup.
-// Additional directories (like extraDirs) can be registered dynamically.
 var defaultWriteProtectedDirs = []string{
 	"skills",
 	"media",
 }
 
-// normalizeUnicodeSpaces replaces unicode space characters with regular spaces
 func normalizeUnicodeSpaces(s string) string {
 	return unicodeSpaces.ReplaceAllString(s, " ")
 }
 
-// expandPath handles ~ expansion and unicode normalization
-func expandPath(filePath string) string {
+// expandSandboxPath handles ~ expansion and unicode normalization for file tool paths.
+func expandSandboxPath(filePath string) string {
 	normalized := normalizeUnicodeSpaces(filePath)
 
 	if normalized == "~" {
@@ -60,22 +54,10 @@ func expandPath(filePath string) string {
 }
 
 // ValidatePath validates that a path is within the workspace root and contains no symlinks.
-// Returns the resolved absolute path if valid.
-//
-// Parameters:
-//   - inputPath: the path provided by the agent (can be relative or absolute)
-//   - workingDir: the current working directory for relative path resolution
-//   - workspaceRoot: the root directory that paths must stay within
-//
-// Security checks (matching OpenClaw sandbox-paths.ts):
-//  1. Unicode space normalization
-//  2. Path must resolve within workspaceRoot (no .. escapes)
-//  3. No symlinks in path that could escape sandbox
-func ValidatePath(inputPath, workingDir, workspaceRoot string) (string, error) {
-	// Normalize and expand the input path
-	expanded := expandPath(inputPath)
+// workspaceRoot is taken from the manager.
+func (m *Manager) ValidatePath(inputPath, workingDir string) (string, error) {
+	expanded := expandSandboxPath(inputPath)
 
-	// Resolve to absolute path
 	var resolved string
 	if filepath.IsAbs(expanded) {
 		resolved = filepath.Clean(expanded)
@@ -83,16 +65,13 @@ func ValidatePath(inputPath, workingDir, workspaceRoot string) (string, error) {
 		resolved = filepath.Clean(filepath.Join(workingDir, expanded))
 	}
 
-	// Ensure workspace root is absolute and clean
-	rootResolved := filepath.Clean(workspaceRoot)
+	rootResolved := filepath.Clean(m.workspaceRoot)
 
-	// Check if resolved path is within workspace root
 	relative, err := filepath.Rel(rootResolved, resolved)
 	if err != nil {
 		return "", fmt.Errorf("failed to compute relative path: %w", err)
 	}
 
-	// If relative path starts with ".." or is absolute, it escapes the sandbox
 	if relative == "" {
 		// Path is exactly the root - allowed
 	} else if strings.HasPrefix(relative, "..") || filepath.IsAbs(relative) {
@@ -100,14 +79,12 @@ func ValidatePath(inputPath, workingDir, workspaceRoot string) (string, error) {
 		return "", fmt.Errorf("path escapes sandbox root (%s): %s", shortPath(rootResolved), inputPath)
 	}
 
-	// Check for symlinks in path (only for relative portion within workspace)
 	if relative != "" && relative != "." {
 		if err := assertNoSymlink(relative, rootResolved); err != nil {
 			return "", err
 		}
 	}
 
-	// Check against denied files list
 	filename := filepath.Base(resolved)
 	for _, denied := range deniedFiles {
 		if filename == denied {
@@ -120,8 +97,6 @@ func ValidatePath(inputPath, workingDir, workspaceRoot string) (string, error) {
 	return resolved, nil
 }
 
-// assertNoSymlink walks each component of the relative path and checks for symlinks.
-// This prevents symlink attacks where a symlink points outside the sandbox.
 func assertNoSymlink(relative, root string) error {
 	parts := strings.Split(relative, string(filepath.Separator))
 	current := root
@@ -135,7 +110,6 @@ func assertNoSymlink(relative, root string) error {
 		info, err := os.Lstat(current)
 		if err != nil {
 			if os.IsNotExist(err) {
-				// Path doesn't exist yet - that's fine for write operations
 				return nil
 			}
 			return fmt.Errorf("failed to stat path component: %w", err)
@@ -151,9 +125,8 @@ func assertNoSymlink(relative, root string) error {
 }
 
 // ReadFile validates the path and reads the file contents.
-// This is a convenience wrapper that combines validation and reading.
-func ReadFile(inputPath, workingDir, workspaceRoot string) ([]byte, error) {
-	resolved, err := ValidatePath(inputPath, workingDir, workspaceRoot)
+func (m *Manager) ReadFile(inputPath, workingDir string) ([]byte, error) {
+	resolved, err := m.ValidatePath(inputPath, workingDir)
 	if err != nil {
 		return nil, err
 	}
@@ -167,35 +140,28 @@ func ReadFile(inputPath, workingDir, workspaceRoot string) ([]byte, error) {
 }
 
 // AtomicWriteFile writes data to a file atomically (write to temp, then rename).
-// It preserves the original file's permissions if the file exists.
-// If the file doesn't exist, it uses defaultPerm (or 0644 if 0).
-func AtomicWriteFile(path string, data []byte, defaultPerm os.FileMode) error {
-	// Determine permissions to use
+func (m *Manager) AtomicWriteFile(path string, data []byte, defaultPerm os.FileMode) error {
 	perm := defaultPerm
 	if perm == 0 {
 		perm = 0600
 	}
 
-	// Try to preserve existing file permissions
 	if info, err := os.Stat(path); err == nil {
 		perm = info.Mode().Perm()
 		L_trace("sandbox: preserving file permissions", "path", path, "perm", perm)
 	}
 
-	// Ensure parent directory exists
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	// Create temp file in same directory (required for atomic rename)
 	tmpFile, err := os.CreateTemp(dir, ".goclaw-*.tmp")
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
 	tmpPath := tmpFile.Name()
 
-	// Ensure cleanup on failure
 	success := false
 	defer func() {
 		if !success {
@@ -203,13 +169,11 @@ func AtomicWriteFile(path string, data []byte, defaultPerm os.FileMode) error {
 		}
 	}()
 
-	// Write data to temp file
 	if _, err := tmpFile.Write(data); err != nil {
 		tmpFile.Close()
 		return fmt.Errorf("failed to write temp file: %w", err)
 	}
 
-	// Sync to disk
 	if err := tmpFile.Sync(); err != nil {
 		tmpFile.Close()
 		return fmt.Errorf("failed to sync temp file: %w", err)
@@ -219,12 +183,10 @@ func AtomicWriteFile(path string, data []byte, defaultPerm os.FileMode) error {
 		return fmt.Errorf("failed to close temp file: %w", err)
 	}
 
-	// Set permissions on temp file
 	if err := os.Chmod(tmpPath, perm); err != nil {
 		return fmt.Errorf("failed to set permissions: %w", err)
 	}
 
-	// Atomic rename
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("atomic rename failed: %w", err)
 	}
@@ -234,57 +196,34 @@ func AtomicWriteFile(path string, data []byte, defaultPerm os.FileMode) error {
 }
 
 // ValidateWritePath validates a path for write operations.
-// In addition to standard path validation, it blocks writes to protected directories.
-// Uses the centralized registry for protected paths.
-func ValidateWritePath(inputPath, workingDir, workspaceRoot string) (string, error) {
-	resolved, err := ValidatePath(inputPath, workingDir, workspaceRoot)
+// Blocks writes to protected directories.
+func (m *Manager) ValidateWritePath(inputPath, workingDir string) (string, error) {
+	resolved, err := m.ValidatePath(inputPath, workingDir)
 	if err != nil {
 		return "", err
 	}
 
-	rootResolved := filepath.Clean(workspaceRoot)
+	rootResolved := filepath.Clean(m.workspaceRoot)
 	relative, _ := filepath.Rel(rootResolved, resolved)
 
-	// Check against registry first
-	if IsPathProtected(relative) {
+	if m.IsPathProtected(relative) {
 		L_warn("sandbox: write to protected directory blocked", "path", inputPath, "relative", relative)
 		return "", fmt.Errorf("write denied: path is in a protected directory")
-	}
-
-	// Fallback to default list (in case registry not initialized)
-	for _, dir := range defaultWriteProtectedDirs {
-		if strings.HasPrefix(relative, dir+string(filepath.Separator)) || relative == dir {
-			L_warn("sandbox: write to protected directory blocked", "path", inputPath, "dir", dir)
-			return "", fmt.Errorf("write denied: %s/ is read-only", dir)
-		}
 	}
 
 	return resolved, nil
 }
 
-// RegisterDefaultProtectedDirs registers the default protected directories.
-// Should be called after InitRegistry.
-func RegisterDefaultProtectedDirs() error {
-	for _, dir := range defaultWriteProtectedDirs {
-		if err := RegisterProtectedDir(dir); err != nil {
-			return fmt.Errorf("failed to register %s: %w", dir, err)
-		}
-	}
-	return nil
-}
-
 // WriteFileValidated validates the path for writes, then writes atomically.
-// Combines path validation with atomic write for convenience.
-func WriteFileValidated(inputPath, workingDir, workspaceRoot string, data []byte, defaultPerm os.FileMode) error {
-	resolved, err := ValidateWritePath(inputPath, workingDir, workspaceRoot)
+func (m *Manager) WriteFileValidated(inputPath, workingDir string, data []byte, defaultPerm os.FileMode) error {
+	resolved, err := m.ValidateWritePath(inputPath, workingDir)
 	if err != nil {
 		return err
 	}
 
-	return AtomicWriteFile(resolved, data, defaultPerm)
+	return m.AtomicWriteFile(resolved, data, defaultPerm)
 }
 
-// shortPath shortens a path by replacing home directory with ~
 func shortPath(value string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {

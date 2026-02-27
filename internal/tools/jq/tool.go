@@ -158,7 +158,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 // readFile reads a JSON file, respecting sandbox settings
 func (t *Tool) readFile(path string, sandboxed bool) ([]byte, error) {
 	if sandboxed {
-		return sandbox.ReadFile(path, t.workingDir, t.workingDir)
+		return sandbox.GetManager().ReadFile(path, t.workingDir)
 	}
 
 	expandedPath := expandPath(path)

@@ -50,7 +50,7 @@ func BrowserSandbox(workspace, browserProfile, home string, gpu bool) *Builder {
 
 	// Environment - clearenv MUST come before any setenv calls
 	b.ClearEnv()
-	b.DefaultEnv(home)
+	b.DefaultEnv(home, "")
 
 	// Display access (X11 or Wayland) - after clearenv so DISPLAY is preserved
 	b.Display()

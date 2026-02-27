@@ -261,22 +261,23 @@ func (b *Builder) Dbus() *Builder {
 
 // DefaultEnv sets minimal required environment variables (PATH, TERM, LANG, USER).
 // Should be called after ClearEnv().
-func (b *Builder) DefaultEnv(home string) *Builder {
-	// Preserve user's PATH so binaries in ~/.local/bin etc. are found
-	if hostPath := os.Getenv("PATH"); hostPath != "" {
-		b.SetEnv("PATH", hostPath)
+// path is the complete PATH string to use (built by caller, e.g., sandbox manager).
+// If path is empty, falls back to basic system PATH.
+func (b *Builder) DefaultEnv(home string, path string) *Builder {
+	if path == "" {
+		path = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 	}
+
+	b.SetEnv("PATH", path)
 	b.SetEnv("HOME", home)
 	b.SetEnv("TERM", "xterm")
 
-	// Preserve LANG from host or use default
 	if lang := os.Getenv("LANG"); lang != "" {
 		b.SetEnv("LANG", lang)
 	} else {
 		b.SetEnv("LANG", "C.UTF-8")
 	}
 
-	// Preserve USER from host
 	if user := os.Getenv("USER"); user != "" {
 		b.SetEnv("USER", user)
 	}

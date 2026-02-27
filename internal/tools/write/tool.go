@@ -78,7 +78,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	var err error
 	if sandboxed {
 		// Validate path and write atomically (sandbox validation + atomic write)
-		err = sandbox.WriteFileValidated(params.Path, t.workingDir, t.workspaceRoot, []byte(params.Content), 0600)
+		err = sandbox.GetManager().WriteFileValidated(params.Path, t.workingDir, []byte(params.Content), 0600)
 	} else {
 		// No sandbox: resolve relative paths from workingDir, allow any absolute path
 		resolved := params.Path

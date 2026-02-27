@@ -84,7 +84,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 
 	if sandboxed {
 		// Validate path and read file (sandbox validation)
-		content, err = sandbox.ReadFile(params.Path, t.workingDir, t.workspaceRoot)
+		content, err = sandbox.GetManager().ReadFile(params.Path, t.workingDir)
 		// Resolve path for image reference
 		resolvedPath = params.Path
 		if !filepath.IsAbs(resolvedPath) {

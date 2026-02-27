@@ -8,14 +8,9 @@ import (
 
 // ExecSandbox creates a pre-configured builder for the exec tool.
 // Sets up standard system binds, isolated /tmp, /proc, and safe defaults.
-//
-// Parameters:
-//   - workspace: the workspace directory (writable)
-//   - home: the home directory to expose inside sandbox
-//   - allowNetwork: whether to share network with host
-//   - clearEnv: whether to clear environment variables
 func ExecSandbox(workspace, home string, allowNetwork, clearEnv bool) *Builder {
 	b := New()
+	mgr := sandbox.GetManager()
 
 	// Core system binds
 	b.SystemBinds()
@@ -30,23 +25,26 @@ func ExecSandbox(workspace, home string, allowNetwork, clearEnv bool) *Builder {
 	b.Dev()
 	b.UnsharePID()
 
-	// Workspace is writable
-	b.Bind(workspace)
-	b.Chdir(workspace)
-
-	// Write-protected directories (from centralized registry)
-	// Later ro-bind overrides earlier bind for the same path in bubblewrap
-	for _, protectedPath := range sandbox.GetProtectedDirs() {
-		if pathExists(protectedPath) {
-			b.RoBind(protectedPath)
+	// Sandbox home isolation: mount broad home replacement first,
+	// then overlay specific directories on top (bwrap last-mount-wins).
+	if sandboxHome := mgr.GetHomeDir(); sandboxHome != "" {
+		b.BindTo(sandboxHome, home)
+	} else {
+		for _, vol := range mgr.GetVolumes() {
+			if pathExists(vol.Source) {
+				b.BindTo(vol.Source, vol.MountPoint)
+			}
 		}
 	}
 
-	// Sandbox volumes: isolated writable mounts that replace real host directories.
-	// Each volume's Source (under ~/.goclaw/sandbox/) is mounted at MountPoint (e.g., ~/.local).
-	for _, vol := range sandbox.GetVolumes() {
-		if pathExists(vol.Source) {
-			b.BindTo(vol.Source, vol.MountPoint)
+	// Workspace is writable (overlays on top of home bind)
+	b.Bind(workspace)
+	b.Chdir(workspace)
+
+	// Write-protected directories overlay on top of everything
+	for _, protectedPath := range mgr.GetProtectedDirs() {
+		if pathExists(protectedPath) {
+			b.RoBind(protectedPath)
 		}
 	}
 
@@ -60,7 +58,7 @@ func ExecSandbox(workspace, home string, allowNetwork, clearEnv bool) *Builder {
 	// Environment
 	if clearEnv {
 		b.ClearEnv()
-		b.DefaultEnv(home)
+		b.DefaultEnv(home, mgr.BuildSandboxPATH(home))
 	}
 
 	// Kill sandbox if GoClaw dies

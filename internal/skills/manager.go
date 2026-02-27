@@ -20,10 +20,11 @@ type Manager struct {
 	watcher   *Watcher
 
 	// Configuration
-	workspaceDir string
-	extraDirs    []string
-	configKeys   map[string]bool
-	skillConfigs map[string]*SkillEntryConfig
+	workspaceDir   string
+	extraDirs      []string
+	configKeys     map[string]bool
+	skillConfigs   map[string]*SkillEntryConfig
+	sandboxBinDirs []string
 
 	// State
 	mu             sync.RWMutex
@@ -35,13 +36,14 @@ type Manager struct {
 
 // ManagerConfig contains configuration for the skill manager.
 type ManagerConfig struct {
-	Enabled       bool
-	WorkspaceDir  string   // Workspace skills (default: <workspace>/skills)
-	ExtraDirs     []string // Additional directories (power user feature)
-	WatchEnabled  bool
-	WatchDebounce int                          // ms
-	ConfigKeys    map[string]bool              // Available config keys for eligibility
-	SkillConfigs  map[string]*SkillEntryConfig // Per-skill configuration
+	Enabled        bool
+	WorkspaceDir   string   // Workspace skills (default: <workspace>/skills)
+	ExtraDirs      []string // Additional directories (power user feature)
+	WatchEnabled   bool
+	WatchDebounce  int                          // ms
+	ConfigKeys     map[string]bool              // Available config keys for eligibility
+	SkillConfigs   map[string]*SkillEntryConfig // Per-skill configuration
+	SandboxBinDirs []string                     // Extra binary search dirs from sandbox manager
 }
 
 // NewManager creates a new skill manager.
@@ -53,12 +55,13 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 		"extraDirs", cfg.ExtraDirs)
 
 	m := &Manager{
-		workspaceDir: cfg.WorkspaceDir,
-		extraDirs:    cfg.ExtraDirs,
-		configKeys:   cfg.ConfigKeys,
-		skillConfigs: cfg.SkillConfigs,
-		auditor:      NewAuditor(),
-		installer:    NewInstaller(""),
+		workspaceDir:   cfg.WorkspaceDir,
+		extraDirs:      cfg.ExtraDirs,
+		configKeys:     cfg.ConfigKeys,
+		skillConfigs:   cfg.SkillConfigs,
+		sandboxBinDirs: cfg.SandboxBinDirs,
+		auditor:        NewAuditor(),
+		installer:      NewInstaller(""),
 	}
 
 	// Create loader
@@ -204,8 +207,9 @@ func (m *Manager) Reload() error {
 	}
 
 	ctx := EligibilityContext{
-		OS:         runtime.GOOS,
-		ConfigKeys: m.configKeys,
+		OS:           runtime.GOOS,
+		ConfigKeys:   m.configKeys,
+		ExtraBinDirs: m.sandboxBinDirs,
 	}
 
 	eligibleCount := 0
@@ -308,8 +312,9 @@ func (m *Manager) GetEligibleSkills(u *user.User, rolesConfig user.RolesConfig) 
 	defer m.mu.RUnlock()
 
 	ctx := EligibilityContext{
-		OS:         runtime.GOOS,
-		ConfigKeys: m.configKeys,
+		OS:           runtime.GOOS,
+		ConfigKeys:   m.configKeys,
+		ExtraBinDirs: m.sandboxBinDirs,
 	}
 
 	var eligible []*Skill
@@ -510,8 +515,9 @@ func (m *Manager) InstallSkill(ctx context.Context, skillName string, source Sou
 			result.Eligible = installed.Eligible && installed.Enabled
 			if !installed.Eligible {
 				ctx := EligibilityContext{
-					OS:         runtime.GOOS,
-					ConfigKeys: m.configKeys,
+					OS:           runtime.GOOS,
+					ConfigKeys:   m.configKeys,
+					ExtraBinDirs: m.sandboxBinDirs,
 				}
 				result.MissingRequirements = installed.GetMissingRequirements(ctx)
 				result.Message = fmt.Sprintf("installed %s from %s (ineligible: missing requirements)", skillName, source)

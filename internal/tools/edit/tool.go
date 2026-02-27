@@ -94,14 +94,14 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 
 	if sandboxed {
 		// Validate path for write (sandbox check + write-protection)
-		resolved, err = sandbox.ValidateWritePath(params.Path, t.workingDir, t.workspaceRoot)
+		resolved, err = sandbox.GetManager().ValidateWritePath(params.Path, t.workingDir)
 		if err != nil {
 			L_warn("edit tool: path validation failed", "path", params.Path, "error", err)
 			return nil, err
 		}
 
 		// Read file using sandbox-validated path
-		content, err = sandbox.ReadFile(params.Path, t.workingDir, t.workspaceRoot)
+		content, err = sandbox.GetManager().ReadFile(params.Path, t.workingDir)
 	} else {
 		// No sandbox: resolve relative paths from workingDir, allow any absolute path
 		resolved = params.Path
@@ -133,7 +133,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 
 	// Write back atomically (preserves permissions)
 	if sandboxed {
-		err = sandbox.AtomicWriteFile(resolved, []byte(newText), 0600)
+		err = sandbox.GetManager().AtomicWriteFile(resolved, []byte(newText), 0600)
 	} else {
 		err = os.WriteFile(resolved, []byte(newText), 0600)
 	}

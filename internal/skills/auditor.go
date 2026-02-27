@@ -23,7 +23,7 @@ type auditPattern struct {
 
 // volumePathSafe returns true if the matched path is within a registered sandbox volume.
 func volumePathSafe(match string) bool {
-	return sandbox.IsRegisteredVolume(match)
+	return sandbox.GetManager().IsRegisteredVolume(match)
 }
 
 // credentialInVolumeSafe returns true if the matched credentials reference
@@ -32,7 +32,7 @@ func credentialInVolumeSafe(match string) bool {
 	homeDotDirs := regexp.MustCompile(`~/\.\w+/`)
 	found := homeDotDirs.FindString(match)
 	if found != "" {
-		return sandbox.IsRegisteredVolume(found)
+		return sandbox.GetManager().IsRegisteredVolume(found)
 	}
 	return false
 }

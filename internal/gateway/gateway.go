@@ -384,12 +384,13 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 		}
 
 		skillMgrCfg := skills.ManagerConfig{
-			Enabled:       cfg.Skills.Enabled,
-			WorkspaceDir:  cfg.Skills.WorkspaceDir,
-			ExtraDirs:     cfg.Skills.ExtraDirs,
-			WatchEnabled:  cfg.Skills.Watch,
-			WatchDebounce: cfg.Skills.WatchDebounce,
-			SkillConfigs:  skillConfigs,
+			Enabled:        cfg.Skills.Enabled,
+			WorkspaceDir:   cfg.Skills.WorkspaceDir,
+			ExtraDirs:      cfg.Skills.ExtraDirs,
+			WatchEnabled:   cfg.Skills.Watch,
+			WatchDebounce:  cfg.Skills.WatchDebounce,
+			SkillConfigs:   skillConfigs,
+			SandboxBinDirs: sandbox.GetManager().GetBinSearchDirs(),
 		}
 
 		// Set default workspace skills dir if not overridden
@@ -415,9 +416,9 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 					"watchEnabled", cfg.Skills.Watch)
 			}
 
-			// Register extraDirs as protected in sandbox registry
+			// Register extraDirs as protected in sandbox manager
 			for _, dir := range cfg.Skills.ExtraDirs {
-				if err := sandbox.RegisterProtectedDir(dir); err != nil {
+				if err := sandbox.GetManager().RegisterProtectedDir(dir); err != nil {
 					L_warn("sandbox: failed to register extraDir as protected", "dir", dir, "error", err)
 				}
 			}

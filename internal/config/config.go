@@ -280,6 +280,7 @@ func Load() (*LoadResult, error) {
 			},
 		Sandbox: sandbox.Config{
 			Bubblewrap: sandbox.BubblewrapConfig{
+				Mode:    sandbox.ModeHome,
 				Volumes: sandbox.DefaultVolumes(),
 			},
 		},

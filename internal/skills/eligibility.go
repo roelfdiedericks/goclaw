@@ -3,6 +3,7 @@ package skills
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 )
 
@@ -70,7 +71,7 @@ func checkOS(allowedOS []string, currentOS string) bool {
 func checkRequirements(req *SkillRequirements, ctx EligibilityContext) bool {
 	// Check all required binaries exist
 	for _, bin := range req.Bins {
-		if !binaryExists(bin) {
+		if !binaryExists(bin, ctx.ExtraBinDirs) {
 			return false
 		}
 	}
@@ -79,7 +80,7 @@ func checkRequirements(req *SkillRequirements, ctx EligibilityContext) bool {
 	if len(req.AnyBins) > 0 {
 		found := false
 		for _, bin := range req.AnyBins {
-			if binaryExists(bin) {
+			if binaryExists(bin, ctx.ExtraBinDirs) {
 				found = true
 				break
 			}
@@ -108,10 +109,20 @@ func checkRequirements(req *SkillRequirements, ctx EligibilityContext) bool {
 	return true
 }
 
-// binaryExists checks if a binary is available in PATH.
-func binaryExists(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
+// binaryExists checks if a binary is available in PATH or extra bin directories.
+func binaryExists(name string, extraBinDirs []string) bool {
+	if _, err := exec.LookPath(name); err == nil {
+		return true
+	}
+
+	for _, dir := range extraBinDirs {
+		binPath := filepath.Join(dir, name)
+		if info, err := os.Stat(binPath); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+
+	return false
 }
 
 // GetMissingRequirements returns a list of unmet requirements.
@@ -149,7 +160,7 @@ func (s *Skill) GetMissingRequirements(ctx EligibilityContext) []string {
 
 	// Check binaries
 	for _, bin := range req.Bins {
-		if !binaryExists(bin) {
+		if !binaryExists(bin, ctx.ExtraBinDirs) {
 			missing = append(missing, "binary: "+bin)
 		}
 	}
@@ -158,7 +169,7 @@ func (s *Skill) GetMissingRequirements(ctx EligibilityContext) []string {
 	if len(req.AnyBins) > 0 {
 		found := false
 		for _, bin := range req.AnyBins {
-			if binaryExists(bin) {
+			if binaryExists(bin, ctx.ExtraBinDirs) {
 				found = true
 				break
 			}

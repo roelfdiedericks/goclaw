@@ -1868,27 +1868,8 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		}
 	}
 
-	// Initialize sandbox registry
-	if err := sandbox.InitRegistry(cfg.Gateway.WorkingDir); err != nil {
-		L_error("sandbox: failed to initialize registry", "error", err)
-	} else {
-		if err := sandbox.RegisterDefaultProtectedDirs(); err != nil {
-			L_warn("sandbox: failed to register default protected dirs", "error", err)
-		}
-
-		// Register sandbox volumes if bwrap is enabled
-		if cfg.Tools.Exec.Bubblewrap.Enabled || cfg.Tools.Browser.Bubblewrap.Enabled {
-			volumes := cfg.Sandbox.Bubblewrap.Volumes
-			if len(volumes) == 0 {
-				volumes = sandbox.DefaultVolumes()
-			}
-			for _, vol := range volumes {
-				if err := sandbox.RegisterVolume(vol); err != nil {
-					L_warn("sandbox: failed to register volume", "volume", vol, "error", err)
-				}
-			}
-		}
-	}
+	// Initialize sandbox manager singleton
+	sandbox.InitManager(cfg.Sandbox, cfg.Gateway.WorkingDir)
 
 	// Create tool registry (tools registered after gateway is ready)
 	toolsReg := tools.NewRegistry()
