@@ -1547,6 +1547,9 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		sess = g.sessions.Get(sessionKey)
 	}
 
+	// Set user on session so CancelAllForUser can find it for emergency stop
+	sess.SetUser(req.User)
+
 	// Create provider state accessor for stateful providers (e.g., xAI)
 	stateAccessor := &providerStateAccessor{
 		sessionKey: sessionKey,
