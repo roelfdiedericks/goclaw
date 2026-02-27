@@ -120,3 +120,15 @@ func NewSubscription(id string) Subscription {
 		CreatedAt:       time.Now(),
 	}
 }
+
+// SubscriptionUpdates contains optional fields for updating a subscription.
+// Pointer fields: nil = not specified (keep current), non-nil = set to this value.
+type SubscriptionUpdates struct {
+	Prompt   *string // nil = no change, "" = clear, "x" = set
+	Prefix   *string
+	Debounce *int
+	Interval *int
+	Full     *bool
+	Wake     *bool
+	Enabled  *bool
+}

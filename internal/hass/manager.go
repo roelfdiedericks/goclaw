@@ -220,6 +220,50 @@ func (m *Manager) DisableSubscription(id string) error {
 	return nil
 }
 
+// UpdateSubscription modifies subscription parameters. Only non-nil fields are updated.
+func (m *Manager) UpdateSubscription(id string, updates SubscriptionUpdates) (*Subscription, error) {
+	m.mu.Lock()
+	sub, exists := m.subscriptions[id]
+	if !exists {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("subscription not found: %s", id)
+	}
+
+	// Apply updates - only change fields that are explicitly set
+	if updates.Prompt != nil {
+		sub.Prompt = *updates.Prompt
+	}
+	if updates.Prefix != nil {
+		sub.Prefix = *updates.Prefix
+	}
+	if updates.Debounce != nil {
+		sub.DebounceSeconds = *updates.Debounce
+	}
+	if updates.Interval != nil {
+		sub.IntervalSeconds = *updates.Interval
+	}
+	if updates.Full != nil {
+		sub.Full = *updates.Full
+	}
+	if updates.Wake != nil {
+		sub.Wake = *updates.Wake
+	}
+	if updates.Enabled != nil {
+		sub.Enabled = *updates.Enabled
+	}
+
+	// Copy for return before releasing lock
+	result := *sub
+	m.mu.Unlock()
+
+	if err := m.saveSubscriptions(); err != nil {
+		L_error("hass: failed to save subscriptions", "error", err)
+	}
+
+	L_info("hass: subscription updated", "id", id)
+	return &result, nil
+}
+
 // IsConnected returns whether the WebSocket is currently connected.
 func (m *Manager) IsConnected() bool {
 	m.mu.RLock()

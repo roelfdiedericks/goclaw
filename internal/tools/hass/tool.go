@@ -28,7 +28,7 @@ type Tool struct {
 // hassInput defines the input schema for the hass tool.
 type hassInput struct {
 	// Common fields
-	Action string `json:"action"` // state, states, call, camera, services, history, devices, areas, entities, subscribe, unsubscribe, enable, disable, subscriptions
+	Action string `json:"action"` // state, states, call, camera, services, history, devices, areas, entities, subscribe, unsubscribe, update, enable, disable, subscriptions
 
 	// Entity/service fields
 	Entity  string          `json:"entity,omitempty"`  // entity_id
@@ -51,13 +51,14 @@ type hassInput struct {
 	// Subscription fields
 	Pattern        string `json:"pattern,omitempty"`         // glob pattern for subscribe (e.g., binary_sensor.*)
 	Regex          string `json:"regex,omitempty"`           // regex pattern for subscribe (e.g., ^person\.)
-	Debounce       int    `json:"debounce,omitempty"`        // debounce seconds (default: 5), same state suppression
-	Interval       int    `json:"interval,omitempty"`        // interval seconds (default: 0 = disabled), per-entity rate limit
+	Debounce       *int   `json:"debounce,omitempty"`        // debounce seconds (default: 5), same state suppression
+	Interval       *int   `json:"interval,omitempty"`        // interval seconds (default: 0 = disabled), per-entity rate limit
 	Prefix         string `json:"prefix,omitempty"`          // custom prefix for injected messages
 	Prompt         string `json:"prompt,omitempty"`          // instructions for agent when event fires
-	Full           bool   `json:"full,omitempty"`            // include full state object (default: false = brief)
+	Full           *bool  `json:"full,omitempty"`            // include full state object (default: false = brief)
 	Wake           *bool  `json:"wake,omitempty"`            // trigger immediate agent invocation (default: true)
-	SubscriptionID string `json:"subscription_id,omitempty"` // subscription ID for unsubscribe
+	Enabled        *bool  `json:"enabled,omitempty"`         // enable/disable subscription (for update action)
+	SubscriptionID string `json:"subscription_id,omitempty"` // subscription ID for unsubscribe/update
 }
 
 // NewTool creates a new Home Assistant tool.
@@ -103,6 +104,7 @@ Registry Actions (WebSocket):
 Subscription Actions:
 - subscribe: Subscribe to state_changed events (pattern OR regex, optional debounce/interval/prompt/prefix/full/wake)
 - unsubscribe: Cancel a subscription (requires subscription_id)
+- update: Modify subscription parameters (requires subscription_id, optional prompt/debounce/interval/prefix/full/wake/enabled)
 - enable: Enable a disabled subscription (requires subscription_id)
 - disable: Disable a subscription without removing it (requires subscription_id)
 - subscriptions: List all subscriptions with enabled/disabled status
@@ -133,7 +135,7 @@ func (t *Tool) Schema() map[string]any {
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"state", "states", "call", "camera", "services", "history", "devices", "areas", "entities", "subscribe", "unsubscribe", "enable", "disable", "subscriptions"},
+				"enum":        []string{"state", "states", "call", "camera", "services", "history", "devices", "areas", "entities", "subscribe", "unsubscribe", "update", "enable", "disable", "subscriptions"},
 				"description": "The action to perform",
 			},
 			"entity": map[string]any{
@@ -216,9 +218,13 @@ func (t *Tool) Schema() map[string]any {
 				"type":        "boolean",
 				"description": "Trigger immediate heartbeat on event (default: true)",
 			},
+			"enabled": map[string]any{
+				"type":        "boolean",
+				"description": "Enable/disable subscription (for update action)",
+			},
 			"subscription_id": map[string]any{
 				"type":        "string",
-				"description": "Subscription ID for unsubscribe action",
+				"description": "Subscription ID for unsubscribe/update action",
 			},
 		},
 		"required": []string{"action"},
@@ -280,6 +286,12 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		return types.TextResult(strResult), nil
 	case "unsubscribe":
 		strResult, err = t.unsubscribe(ctx, in)
+		if err != nil {
+			return nil, err
+		}
+		return types.TextResult(strResult), nil
+	case "update":
+		strResult, err = t.updateSubscription(ctx, in)
 		if err != nil {
 			return nil, err
 		}
@@ -762,16 +774,20 @@ func (t *Tool) subscribe(ctx context.Context, in hassInput) (string, error) {
 	sub.Regex = in.Regex
 	sub.Prefix = in.Prefix
 	sub.Prompt = in.Prompt
-	sub.Full = in.Full
 
-	// Set debounce (default 5)
-	if in.Debounce > 0 {
-		sub.DebounceSeconds = in.Debounce
+	// Set full (default false in NewSubscription)
+	if in.Full != nil {
+		sub.Full = *in.Full
+	}
+
+	// Set debounce (default 5 in NewSubscription)
+	if in.Debounce != nil && *in.Debounce > 0 {
+		sub.DebounceSeconds = *in.Debounce
 	}
 
 	// Set interval (default 0 = disabled)
-	if in.Interval > 0 {
-		sub.IntervalSeconds = in.Interval
+	if in.Interval != nil && *in.Interval > 0 {
+		sub.IntervalSeconds = *in.Interval
 	}
 
 	// Set wake (default true)
@@ -871,6 +887,49 @@ func (t *Tool) disableSubscription(ctx context.Context, in hassInput) (string, e
 		"status":  "disabled",
 		"id":      in.SubscriptionID,
 		"enabled": false,
+	}
+	jsonResult, _ := json.Marshal(result)
+	return string(jsonResult), nil
+}
+
+// updateSubscription modifies subscription parameters.
+func (t *Tool) updateSubscription(ctx context.Context, in hassInput) (string, error) {
+	if t.manager == nil {
+		return t.errorResult("error", "subscription manager not configured")
+	}
+
+	if in.SubscriptionID == "" {
+		return t.errorResult("error", "subscription_id is required for update")
+	}
+
+	// Build updates struct - only set fields that were provided
+	updates := hasspkg.SubscriptionUpdates{}
+
+	// String fields: check if non-empty (empty string clears the field)
+	if in.Prompt != "" {
+		updates.Prompt = &in.Prompt
+	}
+	if in.Prefix != "" {
+		updates.Prefix = &in.Prefix
+	}
+
+	// Pointer fields from input: pass through directly
+	updates.Debounce = in.Debounce
+	updates.Interval = in.Interval
+	updates.Full = in.Full
+	updates.Wake = in.Wake
+	updates.Enabled = in.Enabled
+
+	sub, err := t.manager.UpdateSubscription(in.SubscriptionID, updates)
+	if err != nil {
+		return t.errorResult("error", err.Error())
+	}
+
+	L_info("hass: subscription updated", "id", in.SubscriptionID)
+
+	result := map[string]any{
+		"status":       "updated",
+		"subscription": sub,
 	}
 	jsonResult, _ := json.Marshal(result)
 	return string(jsonResult), nil
