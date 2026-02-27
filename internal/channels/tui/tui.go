@@ -251,16 +251,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				text := strings.TrimSpace(m.input.Value())
 				if text != "" {
 					// Check for panic phrase (emergency stop)
+					// Always attempt cancel and confirm - avoids race conditions where session just finished
 					if commands.IsPanicPhrase(text) {
 						m.input.Reset()
-						cancelled, _ := m.gateway.StopAllUserSessions(m.user.ID)
-						var msg string
-						if cancelled > 0 {
-							msg = "Stopping all tasks."
-						} else {
-							msg = "Nothing running."
-						}
-						m.chatLines = append(m.chatLines, helpStyle.Render(msg), "")
+						m.gateway.StopAllUserSessions(m.user.ID)
+						m.chatLines = append(m.chatLines, helpStyle.Render("Stopping all tasks."), "")
 						m.chatViewport.SetContent(m.getChatContent())
 						m.chatViewport.GotoBottom()
 						return m, nil

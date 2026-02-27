@@ -447,16 +447,11 @@ func (b *Bot) handleMessage(evt *events.Message) {
 	}
 
 	// Check for panic phrase (emergency stop) before commands
+	// Always attempt cancel and confirm - avoids race conditions where session just finished
 	if commands.IsPanicPhrase(text) {
-		cancelled, _ := b.gateway.StopAllUserSessions(u.ID)
+		b.gateway.StopAllUserSessions(u.ID)
 		chatJID := evt.Info.Chat
-		var msg string
-		if cancelled > 0 {
-			msg = "Stopping all tasks."
-		} else {
-			msg = "Nothing running."
-		}
-		b.client.SendMessage(b.ctx, chatJID, &waE2E.Message{Conversation: proto.String(msg)}) //nolint:errcheck
+		b.client.SendMessage(b.ctx, chatJID, &waE2E.Message{Conversation: proto.String("Stopping all tasks.")}) //nolint:errcheck
 		return
 	}
 

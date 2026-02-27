@@ -187,20 +187,13 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	logging.L_info("http: message received", "user", u.ID, "session", sessionID[:8]+"...", "length", len(req.Message), "images", len(contentBlocks))
 
 	// Check for panic phrase (emergency stop) before anything else
+	// Always attempt cancel and confirm - avoids race conditions where session just finished
 	if commands.IsPanicPhrase(req.Message) {
-		var msg string
 		if s.channel.gateway != nil {
-			cancelled, _ := s.channel.gateway.StopAllUserSessions(u.ID)
-			if cancelled > 0 {
-				msg = "Stopping all tasks."
-			} else {
-				msg = "Nothing running."
-			}
-		} else {
-			msg = "Nothing running."
+			s.channel.gateway.StopAllUserSessions(u.ID)
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": msg}) //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Stopping all tasks."}) //nolint:errcheck
 		return
 	}
 

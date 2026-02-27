@@ -313,12 +313,10 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	logging.L_info("telegram: authenticated message", "user", u.Name, "role", u.Role, "userID", userID)
 
 	// Check for panic phrase (emergency stop) before anything else
+	// Always attempt cancel and confirm - avoids race conditions where session just finished
 	if commands.IsPanicPhrase(c.Text()) {
-		cancelled, _ := b.gateway.StopAllUserSessions(u.ID)
-		if cancelled > 0 {
-			return c.Send("Stopping all tasks.")
-		}
-		return c.Send("Nothing running.")
+		b.gateway.StopAllUserSessions(u.ID)
+		return c.Send("Stopping all tasks.")
 	}
 
 	// Check if this is a command - route to global command manager

@@ -60,7 +60,7 @@ func NewOaiNextProvider(name string, cfg LLMProviderConfig) (*OaiNextProvider, e
 		config:           cfg,
 		model:            "",
 		maxTokens:        cfg.MaxTokens,
-		metadataProvider: metadata.Get().ResolveProvider(cfg.Subtype, cfg.Driver, cfg.BaseURL),
+		metadataProvider: "openai", // Hard-coded: oai-next is OpenAI Responses API
 	}, nil
 }
 
