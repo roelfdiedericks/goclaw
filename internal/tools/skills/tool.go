@@ -288,26 +288,35 @@ func (t *Tool) executeList(filter string, verbose bool) (string, error) {
 func (t *Tool) executeInfo(skillName string) (string, error) {
 	skill := t.manager.GetSkill(skillName)
 	fromEmbedded := false
+	var skillContent string
 
-	// If not installed, check embedded catalog
-	if skill == nil {
-		if skillspkg.SkillExistsInCatalog(skillName) {
-			content, err := skillspkg.GetEmbeddedSkillContent(skillName)
-			if err != nil {
-				L_warn("skills tool: failed to get embedded content", "skill", skillName, "error", err)
-				return "", fmt.Errorf("skill not found: %s", skillName)
-			}
+	// Always prefer repository (embedded catalog) for content
+	if skillspkg.SkillExistsInCatalog(skillName) {
+		content, err := skillspkg.GetEmbeddedSkillContent(skillName)
+		if err != nil {
+			L_warn("skills tool: failed to get embedded content", "skill", skillName, "error", err)
+		} else {
+			skillContent = content
+			L_debug("skills tool: using catalog content", "skill", skillName, "length", len(content))
+		}
+
+		// If not installed, also load skill metadata from catalog
+		if skill == nil {
 			skill, err = skillspkg.ParseSkillContent(content, skillName, skillspkg.SourceBundled)
 			if err != nil {
 				L_warn("skills tool: failed to parse embedded skill", "skill", skillName, "error", err)
 				return "", fmt.Errorf("skill not found: %s", skillName)
 			}
 			fromEmbedded = true
-			L_debug("skills tool: loaded from embedded catalog", "skill", skillName)
-		} else {
-			L_warn("skills tool: skill not found", "skill", skillName)
-			return "", fmt.Errorf("skill not found: %s", skillName)
 		}
+	} else if skill == nil {
+		// Not in catalog and not installed
+		L_warn("skills tool: skill not found", "skill", skillName)
+		return "", fmt.Errorf("skill not found: %s", skillName)
+	} else {
+		// Not in catalog but installed (workspace-only skill)
+		skillContent = skill.Content
+		L_debug("skills tool: using installed content", "skill", skillName, "length", len(skillContent))
 	}
 
 	eligCtx := skillspkg.EligibilityContext{
@@ -360,6 +369,7 @@ func (t *Tool) executeInfo(skillName string) (string, error) {
 		Missing     []string        `json:"missing,omitempty"`
 		Install     []installOption `json:"install,omitempty"`
 		AuditFlags  []auditFlag     `json:"audit_flags,omitempty"`
+		Content     string          `json:"content,omitempty"`
 	}
 
 	resp := infoResponse{
@@ -369,6 +379,7 @@ func (t *Tool) executeInfo(skillName string) (string, error) {
 		Path:        skill.Location,
 		Source:      string(skill.Source),
 		Missing:     missing,
+		Content:     skillContent,
 	}
 
 	if skill.Metadata != nil {

@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
 const (
@@ -185,6 +187,71 @@ func (s *MediaStore) Save(data []byte, subdir, ext string) (absPath string, relP
 	return absPath, relPath, nil
 }
 
+// UploadContext provides context for user-uploaded media.
+// This allows the media store to organize uploads by channel/user/mediatype
+// and enables future features like database tracking.
+type UploadContext struct {
+	Channel       string     // Source channel: "telegram", "discord", "http"
+	User          *user.User // User from registry (nil for anonymous)
+	ChannelUserID string     // Channel-specific user ID (e.g., Telegram numeric ID)
+	ChatID        string     // Session/chat identifier
+	MediaType     string     // Media type: "image", "voice", "document", etc.
+	Caption       string     // Optional caption for metadata
+}
+
+// sanitizeFilename removes unsafe characters from a string for use in filenames
+var unsafeFilenameChars = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
+
+func sanitizeFilename(s string) string {
+	if s == "" {
+		return "unknown"
+	}
+	safe := unsafeFilenameChars.ReplaceAllString(s, "_")
+	if safe == "" || safe == "_" {
+		return "unknown"
+	}
+	if len(safe) > 32 {
+		safe = safe[:32]
+	}
+	return safe
+}
+
+// SaveUpload stores user-uploaded media with rich context.
+// Directory structure: uploads/{channel}/{username}/{mediatype}/{filename}
+// Files in uploads/ are excluded from TTL cleanup (permanent storage).
+// Returns absPath, relPath (for MEDIA: references), and error.
+func (s *MediaStore) SaveUpload(data []byte, ext string, ctx UploadContext) (absPath, relPath string, err error) {
+	// Determine username for path
+	username := "anonymous"
+	if ctx.User != nil && ctx.User.Name != "" {
+		username = sanitizeFilename(ctx.User.Name)
+	} else if ctx.ChannelUserID != "" {
+		username = sanitizeFilename(ctx.ChannelUserID)
+	}
+
+	// Determine channel and media type
+	channel := ctx.Channel
+	if channel == "" {
+		channel = "unknown"
+	}
+	mediaType := ctx.MediaType
+	if mediaType == "" {
+		mediaType = "other"
+	}
+
+	// Build subdir: uploads/telegram/roelf/image
+	subdir := filepath.Join("uploads", channel, username, mediaType)
+
+	logging.L_debug("media: saving user upload",
+		"channel", ctx.Channel,
+		"user", username,
+		"mediaType", mediaType,
+		"chatID", ctx.ChatID,
+	)
+
+	return s.Save(data, subdir, ext)
+}
+
 // SaveFile copies a file from srcPath to the media store.
 // Returns the absolute path and a relative path suitable for MEDIA: output.
 func (s *MediaStore) SaveFile(srcPath, subdir string) (absPath string, relPath string, err error) {
@@ -225,17 +292,24 @@ func (s *MediaStore) BaseDir() string {
 
 // cleanOld removes files older than TTL from the media directory.
 // It walks all subdirectories and removes expired files.
+// The uploads/ directory is excluded from cleanup (permanent storage).
 func (s *MediaStore) cleanOld() error {
 	now := time.Now()
 	cutoff := now.Add(-s.ttl)
 	removedCount := 0
+	uploadsDir := filepath.Join(s.baseDir, "uploads")
 
 	err := filepath.Walk(s.baseDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // Skip files with errors
 		}
 
-		// Skip directories
+		// Skip the uploads directory entirely (permanent storage)
+		if info.IsDir() && path == uploadsDir {
+			return filepath.SkipDir
+		}
+
+		// Skip other directories
 		if info.IsDir() {
 			return nil
 		}

@@ -409,12 +409,43 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		"dimensions", fmt.Sprintf("%dx%d", imageData.Width, imageData.Height),
 	)
 
+	// Save to media store for permanent reference
+	var savedPath string
+	if store := b.gateway.MediaStore(); store != nil {
+		uploadCtx := media.UploadContext{
+			Channel:       "telegram",
+			User:          u,
+			ChannelUserID: userID,
+			ChatID:        fmt.Sprintf("%d", chatID),
+			MediaType:     "image",
+			Caption:       c.Message().Caption,
+		}
+		absPath, _, err := store.SaveUpload(imageData.Data, ".jpg", uploadCtx)
+		if err != nil {
+			logging.L_warn("telegram: failed to save uploaded photo", "error", err)
+		} else {
+			savedPath = absPath
+			logging.L_debug("telegram: photo saved to media store", "path", absPath)
+		}
+	}
+
 	// Create image content block
 	imageBlock := types.ContentBlock{
 		Type:     "image",
 		Data:     imageData.Base64(),
 		MimeType: imageData.MimeType,
 		Source:   "telegram",
+		FilePath: savedPath,
+	}
+
+	// Build content blocks - image first, then path info if saved
+	contentBlocks := []types.ContentBlock{imageBlock}
+	if savedPath != "" {
+		pathBlock := types.ContentBlock{
+			Type: "text",
+			Text: fmt.Sprintf("[Image saved to: %s]", savedPath),
+		}
+		contentBlocks = append(contentBlocks, pathBlock)
 	}
 
 	// Get caption (if any) as the text message
@@ -433,7 +464,7 @@ func (b *Bot) handlePhoto(c tele.Context) error {
 		ChatID:         fmt.Sprintf("%d", chatID),
 		IsGroup:        isGroup,
 		UserMsg:        caption,
-		ContentBlocks:  []types.ContentBlock{imageBlock},
+		ContentBlocks:  contentBlocks,
 		EnableThinking: prefs.ShowThinking,  // Extended thinking based on chat preference
 		ThinkingLevel:  prefs.ThinkingLevel, // Thinking intensity level
 		OnMediaToSend: func(path, caption string) error {

@@ -39,24 +39,49 @@ func normalizeUnicodeSpaces(s string) string {
 }
 
 // expandSandboxPath handles ~ expansion and unicode normalization for file tool paths.
-func expandSandboxPath(filePath string) string {
+// In "home" mode:
+//   - ~ expands to the sandbox home directory
+//   - Absolute paths under the real home are rewritten to the sandbox home
+func expandSandboxPath(filePath string, sandboxHomeDir string) string {
 	normalized := normalizeUnicodeSpaces(filePath)
 
+	// Get real home for comparison
+	realHome, _ := os.UserHomeDir()
+
+	// Determine target home directory
+	targetHome := sandboxHomeDir
+	if targetHome == "" {
+		targetHome = realHome
+	}
+
+	// Handle ~ and ~/
 	if normalized == "~" {
-		home, _ := os.UserHomeDir()
-		return home
+		return targetHome
 	}
 	if strings.HasPrefix(normalized, "~/") {
-		home, _ := os.UserHomeDir()
-		return home + normalized[1:]
+		return targetHome + normalized[1:]
 	}
+
+	// In home mode, rewrite absolute paths under real home to sandbox home
+	if sandboxHomeDir != "" && realHome != "" {
+		if normalized == realHome {
+			return sandboxHomeDir
+		}
+		if strings.HasPrefix(normalized, realHome+"/") {
+			rewritten := sandboxHomeDir + normalized[len(realHome):]
+			L_debug("sandbox: rewriting home path", "original", normalized, "rewritten", rewritten)
+			return rewritten
+		}
+	}
+
 	return normalized
 }
 
-// ValidatePath validates that a path is within the workspace root and contains no symlinks.
-// workspaceRoot is taken from the manager.
+// ValidatePath validates that a path is within allowed roots and contains no symlinks.
+// In "home" mode, ~ paths are expanded to the sandbox home directory and validated against it.
+// Workspace paths are validated against the workspace root.
 func (m *Manager) ValidatePath(inputPath, workingDir string) (string, error) {
-	expanded := expandSandboxPath(inputPath)
+	expanded := expandSandboxPath(inputPath, m.homeDir)
 
 	var resolved string
 	if filepath.IsAbs(expanded) {
@@ -65,22 +90,34 @@ func (m *Manager) ValidatePath(inputPath, workingDir string) (string, error) {
 		resolved = filepath.Clean(filepath.Join(workingDir, expanded))
 	}
 
-	rootResolved := filepath.Clean(m.workspaceRoot)
-
-	relative, err := filepath.Rel(rootResolved, resolved)
-	if err != nil {
-		return "", fmt.Errorf("failed to compute relative path: %w", err)
+	// Determine which root to validate against
+	// In home mode, paths under homeDir are valid; paths under workspaceRoot are also valid
+	workspaceResolved := filepath.Clean(m.workspaceRoot)
+	homeResolved := ""
+	if m.homeDir != "" {
+		homeResolved = filepath.Clean(m.homeDir)
 	}
 
-	if relative == "" {
-		// Path is exactly the root - allowed
-	} else if strings.HasPrefix(relative, "..") || filepath.IsAbs(relative) {
-		L_warn("sandbox: path escapes workspace", "path", inputPath, "resolved", resolved, "root", rootResolved)
-		return "", fmt.Errorf("path escapes sandbox root (%s): %s", shortPath(rootResolved), inputPath)
+	// Try validating against workspace root first
+	relative, err := filepath.Rel(workspaceResolved, resolved)
+	rootUsed := workspaceResolved
+	if err != nil || strings.HasPrefix(relative, "..") || filepath.IsAbs(relative) {
+		// Not under workspace - try home dir if available
+		if homeResolved != "" {
+			relative, err = filepath.Rel(homeResolved, resolved)
+			rootUsed = homeResolved
+			if err != nil || strings.HasPrefix(relative, "..") || filepath.IsAbs(relative) {
+				L_warn("sandbox: path escapes allowed roots", "path", inputPath, "resolved", resolved, "workspace", workspaceResolved, "home", homeResolved)
+				return "", fmt.Errorf("path escapes sandbox root: %s", inputPath)
+			}
+		} else {
+			L_warn("sandbox: path escapes workspace", "path", inputPath, "resolved", resolved, "root", workspaceResolved)
+			return "", fmt.Errorf("path escapes sandbox root (%s): %s", m.shortPath(workspaceResolved), inputPath)
+		}
 	}
 
 	if relative != "" && relative != "." {
-		if err := assertNoSymlink(relative, rootResolved); err != nil {
+		if err := assertNoSymlink(relative, rootUsed); err != nil {
 			return "", err
 		}
 	}
@@ -224,7 +261,18 @@ func (m *Manager) WriteFileValidated(inputPath, workingDir string, data []byte, 
 	return m.AtomicWriteFile(resolved, data, defaultPerm)
 }
 
-func shortPath(value string) string {
+// shortPath shortens a path for display by replacing the home directory with ~.
+// In home mode, also handles the sandbox home directory.
+func (m *Manager) shortPath(value string) string {
+	// Try sandbox home first (if in home mode)
+	if m.homeDir != "" {
+		sandboxHome := filepath.Clean(m.homeDir)
+		if strings.HasPrefix(value, sandboxHome) {
+			return "~" + value[len(sandboxHome):]
+		}
+	}
+
+	// Fall back to real home
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return value
