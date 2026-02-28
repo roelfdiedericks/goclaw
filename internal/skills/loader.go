@@ -3,7 +3,6 @@ package skills
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -298,6 +297,7 @@ func (l *Loader) GetEligibleSkills(ctx EligibilityContext) []*Skill {
 }
 
 // GetStats returns statistics about loaded skills.
+// Uses the already-computed Eligible field rather than re-evaluating.
 func (l *Loader) GetStats() ManagerStats {
 	data := l.data.Load()
 
@@ -306,11 +306,9 @@ func (l *Loader) GetStats() ManagerStats {
 		BySource:    make(map[Source]int),
 	}
 
-	ctx := EligibilityContext{OS: runtime.GOOS}
-
 	for _, skill := range data.skills {
 		stats.BySource[skill.Source]++
-		if skill.IsEligible(ctx) {
+		if skill.Eligible && skill.Enabled {
 			stats.EligibleSkills++
 		}
 		if len(skill.AuditFlags) > 0 {

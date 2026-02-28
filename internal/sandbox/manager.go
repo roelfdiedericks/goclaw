@@ -305,6 +305,7 @@ func UserBinDirs() []string {
 		"go/bin",
 		".cargo/bin",
 		".bun/bin",
+		"pip-tools/bin",
 	}
 }
 

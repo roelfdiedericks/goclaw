@@ -271,7 +271,7 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 	var compactionID string
 	if m.store != nil {
 		storedComp := &StoredCompaction{
-			ID:                GenerateRecordID(),
+			ID:                GenerateMessageID(),
 			Timestamp:         time.Now(),
 			Summary:           summary,
 			FirstKeptEntryID:  firstKeptID,

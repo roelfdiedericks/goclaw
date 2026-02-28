@@ -165,28 +165,31 @@ func (s *Session) IsElevated() bool {
 	return !s.ElevatedAt.IsZero()
 }
 
-// AddUserMessage adds a user message to the session
-func (s *Session) AddUserMessage(content, source string) {
+// AddUserMessage adds a user message to the session and returns the message ID
+func (s *Session) AddUserMessage(content, source string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	id := GenerateMessageID()
 	s.Messages = append(s.Messages, Message{
-		ID:        generateMessageID(),
+		ID:        id,
 		Role:      "user",
 		Content:   content,
 		Source:    source,
 		Timestamp: time.Now(),
 	})
 	s.UpdatedAt = time.Now()
+	return id
 }
 
-// AddUserMessageWithImages adds a user message with image attachments to the session
-func (s *Session) AddUserMessageWithContent(content, source string, blocks []ContentBlock) {
+// AddUserMessageWithContent adds a user message with content blocks to the session and returns the message ID
+func (s *Session) AddUserMessageWithContent(content, source string, blocks []ContentBlock) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	id := GenerateMessageID()
 	s.Messages = append(s.Messages, Message{
-		ID:            generateMessageID(),
+		ID:            id,
 		Role:          "user",
 		Content:       content,
 		ContentBlocks: blocks,
@@ -194,44 +197,50 @@ func (s *Session) AddUserMessageWithContent(content, source string, blocks []Con
 		Timestamp:     time.Now(),
 	})
 	s.UpdatedAt = time.Now()
+	return id
 }
 
-// AddAssistantMessage adds an assistant message to the session
-func (s *Session) AddAssistantMessage(content string) {
+// AddAssistantMessage adds an assistant message to the session and returns the message ID
+func (s *Session) AddAssistantMessage(content string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	id := GenerateMessageID()
 	s.Messages = append(s.Messages, Message{
-		ID:        generateMessageID(),
+		ID:        id,
 		Role:      "assistant",
 		Content:   content,
 		Timestamp: time.Now(),
 	})
 	s.UpdatedAt = time.Now()
+	return id
 }
 
-// AddSystemMessage adds a system message to the session (for wake events, etc.)
-func (s *Session) AddSystemMessage(content string) {
+// AddSystemMessage adds a system message to the session and returns the message ID
+func (s *Session) AddSystemMessage(content string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	id := GenerateMessageID()
 	s.Messages = append(s.Messages, Message{
-		ID:        generateMessageID(),
+		ID:        id,
 		Role:      "system",
 		Content:   content,
 		Source:    "wake",
 		Timestamp: time.Now(),
 	})
 	s.UpdatedAt = time.Now()
+	return id
 }
 
-// AddSupervisionUserMessage adds a user message with supervision metadata (for guidance)
-func (s *Session) AddSupervisionUserMessage(content, source, supervisor, interventionType string) {
+// AddSupervisionUserMessage adds a user message with supervision metadata and returns the message ID
+func (s *Session) AddSupervisionUserMessage(content, source, supervisor, interventionType string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	id := GenerateMessageID()
 	s.Messages = append(s.Messages, Message{
-		ID:               generateMessageID(),
+		ID:               id,
 		Role:             "user",
 		Content:          content,
 		Source:           source,
@@ -240,15 +249,17 @@ func (s *Session) AddSupervisionUserMessage(content, source, supervisor, interve
 		InterventionType: interventionType,
 	})
 	s.UpdatedAt = time.Now()
+	return id
 }
 
-// AddSupervisionAssistantMessage adds an assistant message with supervision metadata (for ghostwriting)
-func (s *Session) AddSupervisionAssistantMessage(content, supervisor, interventionType string) {
+// AddSupervisionAssistantMessage adds an assistant message with supervision metadata and returns the message ID
+func (s *Session) AddSupervisionAssistantMessage(content, supervisor, interventionType string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	id := GenerateMessageID()
 	s.Messages = append(s.Messages, Message{
-		ID:               generateMessageID(),
+		ID:               id,
 		Role:             "assistant",
 		Content:          content,
 		Timestamp:        time.Now(),
@@ -256,15 +267,17 @@ func (s *Session) AddSupervisionAssistantMessage(content, supervisor, interventi
 		InterventionType: interventionType,
 	})
 	s.UpdatedAt = time.Now()
+	return id
 }
 
-// AddToolUse adds a tool use message to the session
-func (s *Session) AddToolUse(toolUseID, toolName string, input json.RawMessage, thinking string) {
+// AddToolUse adds a tool use message to the session and returns the message ID
+func (s *Session) AddToolUse(toolUseID, toolName string, input json.RawMessage, thinking string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	id := GenerateMessageID()
 	s.Messages = append(s.Messages, Message{
-		ID:        generateMessageID(),
+		ID:        id,
 		Role:      "tool_use",
 		ToolUseID: toolUseID,
 		ToolName:  toolName,
@@ -273,15 +286,17 @@ func (s *Session) AddToolUse(toolUseID, toolName string, input json.RawMessage, 
 		Timestamp: time.Now(),
 	})
 	s.UpdatedAt = time.Now()
+	return id
 }
 
-// AddToolResult adds a tool result message to the session
-func (s *Session) AddToolResult(toolUseID, result string, contentBlocks []ContentBlock) {
+// AddToolResult adds a tool result message to the session and returns the message ID
+func (s *Session) AddToolResult(toolUseID, result string, contentBlocks []ContentBlock) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	id := GenerateMessageID()
 	s.Messages = append(s.Messages, Message{
-		ID:            generateMessageID(),
+		ID:            id,
 		Role:          "tool_result",
 		ToolUseID:     toolUseID,
 		Content:       result,
@@ -289,6 +304,7 @@ func (s *Session) AddToolResult(toolUseID, result string, contentBlocks []Conten
 		Timestamp:     time.Now(),
 	})
 	s.UpdatedAt = time.Now()
+	return id
 }
 
 // GetMessages returns a copy of all messages
@@ -518,9 +534,4 @@ func (s *Session) IsRunning() bool {
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
 	return s.cancelFunc != nil
-}
-
-// generate a simple message ID using timestamp
-func generateMessageID() string {
-	return time.Now().Format("20060102150405.000000")
 }

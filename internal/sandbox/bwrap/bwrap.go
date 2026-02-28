@@ -36,7 +36,7 @@ func (b *Builder) BwrapPath(path string) *Builder {
 }
 
 // SystemBinds adds read-only binds for system directories (/usr, /lib, /bin, /sbin).
-// Automatically handles /lib64 if it exists.
+// Automatically handles /lib64 and /lib/x86_64-linux-gnu if they exist.
 func (b *Builder) SystemBinds() *Builder {
 	paths := []string{"/usr", "/lib", "/bin", "/sbin"}
 	for _, p := range paths {
@@ -47,6 +47,10 @@ func (b *Builder) SystemBinds() *Builder {
 	// /lib64 for 64-bit systems
 	if pathExists("/lib64") {
 		b.args = append(b.args, "--ro-bind", "/lib64", "/lib64")
+	}
+	// /lib/x86_64-linux-gnu for Debian/Ubuntu multiarch
+	if pathExists("/lib/x86_64-linux-gnu") {
+		b.args = append(b.args, "--ro-bind", "/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu")
 	}
 	return b
 }
@@ -65,6 +69,10 @@ func (b *Builder) EtcBinds() *Builder {
 		if pathExists(f) {
 			b.args = append(b.args, "--ro-bind", f, f)
 		}
+	}
+	// /etc/alternatives for Debian/Ubuntu alternatives system
+	if pathExists("/etc/alternatives") {
+		b.args = append(b.args, "--ro-bind", "/etc/alternatives", "/etc/alternatives")
 	}
 	return b
 }

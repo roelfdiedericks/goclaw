@@ -1185,12 +1185,12 @@ func (g *Gateway) ProcessMessage(ctx context.Context, msg *types.InboundMessage,
 	// Add message to session if Text is non-empty
 	addedMessage := false
 	if msg.Text != "" {
-		sess.AddUserMessage(msg.Text, msg.Source)
+		msgID := sess.AddUserMessage(msg.Text, msg.Source)
 		addedMessage = true
 		L_debug("gateway: ProcessMessage added user message", "session", sessionKey, "source", msg.Source, "textLen", len(msg.Text))
 
 		// Persist the message
-		g.persistMessage(ctx, sessionKey, "user", msg.Text, msg.Source, "", "", nil, "", "", "", "")
+		g.persistMessage(ctx, msgID, sessionKey, "user", msg.Text, msg.Source, "", "", nil, "", "", "", "")
 	}
 
 	// Build AgentRequest
@@ -1597,10 +1597,11 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	// Add user message with content blocks if any (skip if already added by supervision)
 	if !req.SkipAddMessage {
 		L_debug("RunAgent: adding user message", "session", sessionKey, "source", req.Source, "msgLen", len(req.UserMsg))
+		var userMsgID string
 		if len(req.ContentBlocks) > 0 {
-			sess.AddUserMessageWithContent(req.UserMsg, req.Source, req.ContentBlocks)
+			userMsgID = sess.AddUserMessageWithContent(req.UserMsg, req.Source, req.ContentBlocks)
 		} else {
-			sess.AddUserMessage(req.UserMsg, req.Source)
+			userMsgID = sess.AddUserMessage(req.UserMsg, req.Source)
 		}
 
 		// Send user message to supervision if active
@@ -1610,7 +1611,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 		// Persist user message to SQLite (skip for heartbeat - ephemeral)
 		if !req.IsHeartbeat {
-			g.persistMessage(ctx, sessionKey, "user", req.UserMsg, req.Source, "", "", nil, "", "", "", "")
+			g.persistMessage(ctx, userMsgID, sessionKey, "user", req.UserMsg, req.Source, "", "", nil, "", "", "", "")
 		}
 	} else {
 		L_debug("RunAgent: skipping message add (already in session)", "session", sessionKey, "source", req.Source)
@@ -1981,23 +1982,23 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			// Check permissions
 			if !req.User.CanUseTool(response.ToolName) {
 				result := fmt.Sprintf("Permission denied: %s cannot use tool %s", req.User.Name, response.ToolName)
-				sendEvent(EventToolEnd{
-					RunID:    runID,
-					ToolName: response.ToolName,
-					ToolID:   response.ToolUseID,
-					Result:   result,
-					Error:    "permission_denied",
-				})
-				sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
-				sess.AddToolResult(response.ToolUseID, result, nil)
-				if !req.IsHeartbeat {
-					g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
-					g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, "", "", "", "")
-				}
-				continue
+			sendEvent(EventToolEnd{
+				RunID:    runID,
+				ToolName: response.ToolName,
+				ToolID:   response.ToolUseID,
+				Result:   result,
+				Error:    "permission_denied",
+			})
+			toolUseID := sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
+			toolResultID := sess.AddToolResult(response.ToolUseID, result, nil)
+			if !req.IsHeartbeat {
+				g.persistMessage(ctx, toolUseID, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
+				g.persistMessage(ctx, toolResultID, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, "", "", "", "")
 			}
+			continue
+		}
 
-			// Runtime safety net: deny tools restricted by purpose
+		// Runtime safety net: deny tools restricted by purpose
 			if g.isToolDeniedForPurpose(response.ToolName, purpose) {
 				L_warn("gateway: tool denied for purpose", "tool", response.ToolName, "purpose", purpose)
 				result := fmt.Sprintf("Permission denied: tool %s is not available for purpose %q", response.ToolName, purpose)
@@ -2008,11 +2009,11 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					Result:   result,
 					Error:    "purpose_denied",
 				})
-				sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
-				sess.AddToolResult(response.ToolUseID, result, nil)
+				toolUseID := sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
+				toolResultID := sess.AddToolResult(response.ToolUseID, result, nil)
 				if !req.IsHeartbeat {
-					g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
-					g.persistMessage(ctx, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, "", "", "", "")
+					g.persistMessage(ctx, toolUseID, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
+					g.persistMessage(ctx, toolResultID, sessionKey, "tool_result", result, req.Source, response.ToolUseID, "", nil, "", "", "", "")
 				}
 				continue
 			}
@@ -2091,8 +2092,8 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			})
 
 			// Add to session and continue loop
-			sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
-			sess.AddToolResult(response.ToolUseID, resultText, toolResult.Content)
+			toolUseID := sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
+			toolResultID := sess.AddToolResult(response.ToolUseID, resultText, toolResult.Content)
 
 			// Debug: log ContentBlocks being stored
 			if len(toolResult.Content) > 0 {
@@ -2109,13 +2110,13 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			}
 			// Persist tool use and result to SQLite (skip for heartbeat - ephemeral)
 			if !req.IsHeartbeat {
-				g.persistMessage(ctx, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
-				g.persistMessage(ctx, sessionKey, "tool_result", resultText, req.Source, response.ToolUseID, "", nil, errStr, "", "", "")
+				g.persistMessage(ctx, toolUseID, sessionKey, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
+				g.persistMessage(ctx, toolResultID, sessionKey, "tool_result", resultText, req.Source, response.ToolUseID, "", nil, errStr, "", "", "")
 
 				// Persist sent message content as a first-class assistant message for transcript searchability
 				if errStr == "" && response.ToolName == "message" {
 					if sentText := extractMessageToolText(response.ToolInput); sentText != "" {
-						g.persistMessage(ctx, sessionKey, "assistant", sentText, "message_tool", "", "", nil, "", "", "", "")
+						g.persistMessage(ctx, "", sessionKey, "assistant", sentText, "message_tool", "", "", nil, "", "", "", "")
 						L_debug("gateway: persisted message tool send as assistant message", "session", sessionKey, "contentLen", len(sentText))
 					}
 				}
@@ -2135,10 +2136,10 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 		// No tool use - we're done
 		finalText = response.Text
-		sess.AddAssistantMessage(finalText)
+		assistantMsgID := sess.AddAssistantMessage(finalText)
 		// Persist assistant message (skip for heartbeat - ephemeral)
 		if !req.IsHeartbeat {
-			g.persistMessage(ctx, sessionKey, "assistant", finalText, "", "", "", nil, "", "", "", "")
+			g.persistMessage(ctx, assistantMsgID, sessionKey, "assistant", finalText, "", "", "", nil, "", "", "", "")
 		}
 		break
 	}
@@ -2610,11 +2611,11 @@ func (g *Gateway) InjectMessage(ctx context.Context, sessionKey, message string,
 		// Add message as user message with prefix and supervision metadata
 		prefix := g.config.Supervision.Guidance.Prefix
 		prefixedMessage := prefix + message
-		sess.AddSupervisionUserMessage(prefixedMessage, "guidance", supervisorName, "guidance")
+		guidanceMsgID := sess.AddSupervisionUserMessage(prefixedMessage, "guidance", supervisorName, "guidance")
 		L_debug("gateway: added guidance to session", "session", sessionKey, "prefixedLen", len(prefixedMessage))
 
 		// Persist with supervision metadata
-		g.persistMessage(ctx, sessionKey, "user", prefixedMessage, "guidance", "", "", nil, "", "", supervisorName, "guidance")
+		g.persistMessage(ctx, guidanceMsgID, sessionKey, "user", prefixedMessage, "guidance", "", "", nil, "", "", supervisorName, "guidance")
 
 		// Send to supervision stream so supervisor sees the guidance they sent
 		if supervision := sess.GetSupervision(); supervision != nil {
@@ -2692,11 +2693,11 @@ func (g *Gateway) InjectMessage(ctx context.Context, sessionKey, message string,
 		// GHOSTWRITE: Add message to session, deliver directly to channels
 
 		// Add message as assistant message with supervision metadata
-		sess.AddSupervisionAssistantMessage(message, supervisorName, "ghostwrite")
+		ghostwriteMsgID := sess.AddSupervisionAssistantMessage(message, supervisorName, "ghostwrite")
 		L_debug("gateway: added ghostwrite to session", "session", sessionKey, "messageLen", len(message))
 
 		// Persist with supervision metadata
-		g.persistMessage(ctx, sessionKey, "assistant", message, "ghostwrite", "", "", nil, "", "", supervisorName, "ghostwrite")
+		g.persistMessage(ctx, ghostwriteMsgID, sessionKey, "assistant", message, "ghostwrite", "", "", nil, "", "", supervisorName, "ghostwrite")
 
 		// Send to supervision stream so supervisor sees the ghostwrite they sent
 		if supervision := sess.GetSupervision(); supervision != nil {
@@ -2868,15 +2869,20 @@ func (g *Gateway) SessionDB() *sql.DB {
 	return nil
 }
 
-// persistMessage writes a message to SQLite storage for audit trail
-func (g *Gateway) persistMessage(ctx context.Context, sessionKey, role, content, source, toolCallID, toolName string, toolInput []byte, toolError, thinking, supervisor, interventionType string) {
+// persistMessage writes a message to SQLite storage for audit trail.
+// If msgID is empty, generates a new ID (for transcript-only entries without session Add*).
+func (g *Gateway) persistMessage(ctx context.Context, msgID, sessionKey, role, content, source, toolCallID, toolName string, toolInput []byte, toolError, thinking, supervisor, interventionType string) {
 	store := g.sessions.GetStore()
 	if store == nil {
 		return // No store configured
 	}
 
+	if msgID == "" {
+		msgID = session.GenerateMessageID()
+	}
+
 	msg := &session.StoredMessage{
-		ID:               session.GenerateRecordID(),
+		ID:               msgID,
 		SessionKey:       sessionKey,
 		Timestamp:        time.Now(),
 		Role:             role,

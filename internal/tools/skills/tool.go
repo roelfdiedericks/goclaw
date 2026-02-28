@@ -331,10 +331,16 @@ func (t *Tool) executeInfo(skillName string) (string, error) {
 	}
 
 	type installOption struct {
-		ID      string `json:"id"`
-		Kind    string `json:"kind"`
-		Label   string `json:"label,omitempty"`
-		Command string `json:"command,omitempty"`
+		ID      string   `json:"id,omitempty"`
+		Kind    string   `json:"kind"`
+		Label   string   `json:"label,omitempty"`
+		Command string   `json:"command,omitempty"`
+		Bins    []string `json:"bins,omitempty"`
+		OS      []string `json:"os,omitempty"`
+		Formula string   `json:"formula,omitempty"`
+		Module  string   `json:"module,omitempty"`
+		Package string   `json:"package,omitempty"`
+		URL     string   `json:"url,omitempty"`
 	}
 
 	type auditFlag struct {
@@ -385,19 +391,41 @@ func (t *Tool) executeInfo(skillName string) (string, error) {
 
 	for _, opt := range installOpts {
 		io := installOption{
-			ID:    opt.ID,
-			Kind:  opt.Kind,
-			Label: opt.Label,
+			ID:      opt.ID,
+			Kind:    opt.Kind,
+			Label:   opt.Label,
+			Bins:    opt.Bins,
+			OS:      opt.OS,
+			Formula: opt.Formula,
+			Module:  opt.Module,
+			Package: opt.Package,
+			URL:     opt.URL,
 		}
 		switch opt.Kind {
 		case "brew":
 			io.Command = fmt.Sprintf("brew install %s", opt.Formula)
 		case "go":
-			io.Command = fmt.Sprintf("go install %s@latest", opt.Module)
+			module := opt.Module
+			if !strings.Contains(module, "@") {
+				module += "@latest"
+			}
+			io.Command = fmt.Sprintf("go install %s", module)
 		case "uv":
 			io.Command = fmt.Sprintf("uv tool install %s", opt.Package)
 		case "cargo":
 			io.Command = fmt.Sprintf("cargo install %s", opt.Package)
+		case "node", "npm":
+			io.Command = fmt.Sprintf("npm install -g %s", opt.Package)
+		case "pnpm":
+			io.Command = fmt.Sprintf("pnpm add -g %s", opt.Package)
+		case "yarn":
+			io.Command = fmt.Sprintf("yarn global add %s", opt.Package)
+		case "bun":
+			io.Command = fmt.Sprintf("bun add -g %s", opt.Package)
+		case "download":
+			if opt.URL != "" {
+				io.Command = fmt.Sprintf("curl -LO %s", opt.URL)
+			}
 		}
 		resp.Install = append(resp.Install, io)
 	}
@@ -528,13 +556,32 @@ func (t *Tool) executeInstall(ctx context.Context, skillName, sourceStr string) 
 		return "", err
 	}
 
+	type installHint struct {
+		Kind    string `json:"kind"`
+		Command string `json:"command,omitempty"`
+		Package string `json:"package,omitempty"`
+		Formula string `json:"formula,omitempty"`
+		Module  string `json:"module,omitempty"`
+		URL     string `json:"url,omitempty"`
+	}
+
+	type missingInfo struct {
+		Bins []string `json:"bins,omitempty"`
+		Env  []string `json:"env,omitempty"`
+	}
+
 	type installResponse struct {
-		Success   bool     `json:"success"`
-		SkillName string   `json:"skill_name"`
-		Source    string   `json:"source"`
-		Message   string   `json:"message"`
-		Flagged   bool     `json:"flagged,omitempty"`
-		Warnings  []string `json:"warnings,omitempty"`
+		Success      bool           `json:"success"`
+		SkillName    string         `json:"skill_name"`
+		Source       string         `json:"source"`
+		Message      string         `json:"message"`
+		Path         string         `json:"path,omitempty"`
+		Eligible     bool           `json:"eligible"`
+		Missing      *missingInfo   `json:"missing,omitempty"`
+		InstallHints []installHint  `json:"install_hints,omitempty"`
+		Hint         string         `json:"hint,omitempty"`
+		Flagged      bool           `json:"flagged,omitempty"`
+		Warnings     []string       `json:"warnings,omitempty"`
 	}
 
 	resp := installResponse{
@@ -543,6 +590,72 @@ func (t *Tool) executeInstall(ctx context.Context, skillName, sourceStr string) 
 		Source:    string(result.Source),
 		Message:   result.Message,
 		Flagged:   result.Flagged,
+		Eligible:  result.Eligible,
+	}
+
+	// Get the installed skill to provide path and install hints
+	if result.Success {
+		if skill := t.manager.GetSkill(skillName); skill != nil {
+			resp.Path = skill.Location
+
+			// Parse missing requirements into bins/env
+			if len(result.MissingRequirements) > 0 {
+				missing := &missingInfo{}
+				for _, m := range result.MissingRequirements {
+					if strings.HasPrefix(m, "binary: ") {
+						missing.Bins = append(missing.Bins, strings.TrimPrefix(m, "binary: "))
+					} else if strings.HasPrefix(m, "env: ") {
+						missing.Env = append(missing.Env, strings.TrimPrefix(m, "env: "))
+					}
+				}
+				if len(missing.Bins) > 0 || len(missing.Env) > 0 {
+					resp.Missing = missing
+				}
+			}
+
+			// Generate install hints from skill metadata
+			for _, opt := range skill.GetInstallOptions() {
+				hint := installHint{
+					Kind:    opt.Kind,
+					Package: opt.Package,
+					Formula: opt.Formula,
+					Module:  opt.Module,
+					URL:     opt.URL,
+				}
+				switch opt.Kind {
+				case "brew":
+					hint.Command = fmt.Sprintf("brew install %s", opt.Formula)
+				case "go":
+					module := opt.Module
+					if !strings.Contains(module, "@") {
+						module += "@latest"
+					}
+					hint.Command = fmt.Sprintf("go install %s", module)
+				case "uv":
+					hint.Command = fmt.Sprintf("uv tool install %s", opt.Package)
+				case "cargo":
+					hint.Command = fmt.Sprintf("cargo install %s", opt.Package)
+				case "node", "npm":
+					hint.Command = fmt.Sprintf("npm install -g %s", opt.Package)
+				case "pnpm":
+					hint.Command = fmt.Sprintf("pnpm add -g %s", opt.Package)
+				case "yarn":
+					hint.Command = fmt.Sprintf("yarn global add %s", opt.Package)
+				case "bun":
+					hint.Command = fmt.Sprintf("bun add -g %s", opt.Package)
+				case "download":
+					if opt.URL != "" {
+						hint.Command = fmt.Sprintf("curl -LO %s", opt.URL)
+					}
+				}
+				resp.InstallHints = append(resp.InstallHints, hint)
+			}
+
+			// Always include hint pointing to the SKILL.md for full documentation
+			if resp.Path != "" {
+				resp.Hint = fmt.Sprintf("Read %s for setup instructions, authentication, configuration, and usage examples", resp.Path)
+			}
+		}
 	}
 
 	// Convert AuditWarning to strings for output

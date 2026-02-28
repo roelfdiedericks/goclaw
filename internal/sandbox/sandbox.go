@@ -31,7 +31,7 @@ var deniedFiles = []string{
 // defaultWriteProtectedDirs are the base directories protected by default.
 var defaultWriteProtectedDirs = []string{
 	"skills",
-	"media",
+	//"media",
 }
 
 func normalizeUnicodeSpaces(s string) string {

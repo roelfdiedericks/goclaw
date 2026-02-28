@@ -153,7 +153,7 @@ func (g *CheckpointGenerator) Generate(ctx context.Context, sess *Session, sessi
 	// Write to store
 	if g.store != nil && g.sessionKey != "" {
 		storedCP := &StoredCheckpoint{
-			ID:                       GenerateRecordID(),
+			ID:                       GenerateMessageID(),
 			Timestamp:                time.Now(),
 			Summary:                  checkpoint.Summary,
 			Topics:                   checkpoint.Topics,

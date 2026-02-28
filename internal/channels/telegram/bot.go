@@ -679,31 +679,32 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 			toolsActive = false
 			logging.L_debug("telegram: tool ended", "tool", e.ToolName, "hasError", e.Error != "")
 
-			// Show tool result if thinking mode is on
-			if prefs.ShowThinking {
-				status := "✓"
-				duration := ""
-				if e.DurationMs > 0 {
-					duration = fmt.Sprintf(" (%dms)", e.DurationMs)
-				}
-				if e.Error != "" {
-					status = "✗"
-				}
-
-				result := e.Result
-				if e.Error != "" {
-					result = e.Error
-				}
-				if len(result) > 1024 {
-					result = result[:1024] + "..."
-				}
-
-				toolMsg := fmt.Sprintf("%s Completed%s", status, duration)
-				if result != "" {
-					toolMsg += fmt.Sprintf("\n<code>%s</code>", escapeHTML(result))
-				}
-				_, _ = b.bot.Send(c.Chat(), toolMsg, &tele.SendOptions{ParseMode: tele.ModeHTML})
-			}
+			// Tool results suppressed - too noisy
+			// TODO: make this a preference
+			// if prefs.ShowThinking {
+			// 	status := "✓"
+			// 	duration := ""
+			// 	if e.DurationMs > 0 {
+			// 		duration = fmt.Sprintf(" (%dms)", e.DurationMs)
+			// 	}
+			// 	if e.Error != "" {
+			// 		status = "✗"
+			// 	}
+			//
+			// 	result := e.Result
+			// 	if e.Error != "" {
+			// 		result = e.Error
+			// 	}
+			// 	if len(result) > 1024 {
+			// 		result = result[:1024] + "..."
+			// 	}
+			//
+			// 	toolMsg := fmt.Sprintf("%s Completed%s", status, duration)
+			// 	if result != "" {
+			// 		toolMsg += fmt.Sprintf("\n<code>%s</code>", escapeHTML(result))
+			// 	}
+			// 	_, _ = b.bot.Send(c.Chat(), toolMsg, &tele.SendOptions{ParseMode: tele.ModeHTML})
+			// }
 
 		case gateway.EventThinkingDelta:
 			// Accumulate thinking deltas if thinking mode is on

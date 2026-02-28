@@ -262,7 +262,7 @@ func (w *JSONLWriter) WriteMessageRecord(sessionFile string, parentID *string, m
 	record := &MessageRecord{
 		BaseRecord: BaseRecord{
 			Type:      RecordTypeMessage,
-			ID:        GenerateRecordID(),
+			ID:        GenerateMessageID(),
 			ParentID:  parentID,
 			Timestamp: time.Now(),
 		},
@@ -280,7 +280,7 @@ func (w *JSONLWriter) WriteMessageRecord(sessionFile string, parentID *string, m
 func (w *JSONLWriter) WriteCompactionRecord(sessionFile string, parentID *string, compaction *CompactionRecord) error {
 	compaction.BaseRecord = BaseRecord{
 		Type:      RecordTypeCompaction,
-		ID:        GenerateRecordID(),
+		ID:        GenerateMessageID(),
 		ParentID:  parentID,
 		Timestamp: time.Now(),
 	}
@@ -292,7 +292,7 @@ func (w *JSONLWriter) WriteCheckpointRecord(sessionFile string, parentID *string
 	record := &CheckpointRecord{
 		BaseRecord: BaseRecord{
 			Type:      RecordTypeCheckpoint,
-			ID:        GenerateRecordID(),
+			ID:        GenerateMessageID(),
 			ParentID:  parentID,
 			Timestamp: time.Now(),
 		},

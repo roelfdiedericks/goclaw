@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
 // IsEligible checks if a skill meets all runtime requirements.
@@ -111,17 +113,24 @@ func checkRequirements(req *SkillRequirements, ctx EligibilityContext) bool {
 
 // binaryExists checks if a binary is available in PATH or extra bin directories.
 func binaryExists(name string, extraBinDirs []string) bool {
-	if _, err := exec.LookPath(name); err == nil {
+	L_trace("eligibility: checking binary", "name", name, "extraBinDirs", extraBinDirs)
+
+	if path, err := exec.LookPath(name); err == nil {
+		L_trace("eligibility: found in PATH", "name", name, "path", path)
 		return true
 	}
 
 	for _, dir := range extraBinDirs {
 		binPath := filepath.Join(dir, name)
 		if info, err := os.Stat(binPath); err == nil && !info.IsDir() {
+			L_trace("eligibility: found in extraBinDir", "name", name, "path", binPath)
 			return true
+		} else {
+			L_trace("eligibility: not found", "name", name, "path", binPath, "error", err)
 		}
 	}
 
+	L_trace("eligibility: binary not found anywhere", "name", name)
 	return false
 }
 

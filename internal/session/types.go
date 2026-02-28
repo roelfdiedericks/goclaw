@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"time"
 )
 
@@ -189,9 +190,15 @@ func (r *BaseRecord) GetID() string           { return r.ID }
 func (r *BaseRecord) GetParentID() *string    { return r.ParentID }
 func (r *BaseRecord) GetTimestamp() time.Time { return r.Timestamp }
 
-// GenerateRecordID creates a unique record ID with timestamp prefix
-func GenerateRecordID() string {
-	return fmt.Sprintf("%d_%08x", time.Now().UnixMilli(), time.Now().UnixNano()&0xFFFFFFFF)
+// idCounter provides uniqueness for IDs generated within the same millisecond
+var idCounter uint32
+
+// GenerateMessageID creates a unique, sortable ID for messages and records.
+// Format: UnixMilli_counter (e.g., "1772237645628_000001")
+func GenerateMessageID() string {
+	ms := time.Now().UnixMilli()
+	seq := atomic.AddUint32(&idCounter, 1) % 1000000
+	return fmt.Sprintf("%d_%06d", ms, seq)
 }
 
 // ParseRecord parses a JSON line into the appropriate record type
