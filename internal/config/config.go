@@ -19,6 +19,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
+	"github.com/roelfdiedericks/goclaw/internal/memorygraph"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 	"github.com/roelfdiedericks/goclaw/internal/session"
@@ -154,6 +155,7 @@ type Config struct {
 	Channels      ChannelsConfig              `json:"channels"` // All channel configs (telegram, http, tui)
 	Session       session.SessionConfig       `json:"session"`
 	Memory        memory.MemorySearchConfig   `json:"memory"`
+	MemoryGraph   memorygraph.Config          `json:"memoryGraph"`
 	Transcript    transcript.TranscriptConfig `json:"transcript"`
 	PromptCache   gwtypes.PromptCacheConfig   `json:"promptCache"`
 	Media         media.MediaConfig           `json:"media"`
@@ -350,6 +352,7 @@ func Load() (*LoadResult, error) {
 			},
 			Paths: []string{}, // Only memory/ and MEMORY.md by default
 		},
+		MemoryGraph: memorygraph.DefaultConfig(),
 		Transcript: transcript.TranscriptConfig{
 			Enabled:                true,
 			IndexIntervalSeconds:   30,
@@ -603,6 +606,11 @@ func mergeConfigSelective(dst, src *Config, rawMap map[string]interface{}) error
 	}
 	if _, ok := rawMap["memory"]; ok {
 		if err := mergo.Merge(&dst.Memory, src.Memory, mergo.WithOverride); err != nil {
+			return err
+		}
+	}
+	if _, ok := rawMap["memoryGraph"]; ok {
+		if err := mergo.Merge(&dst.MemoryGraph, src.MemoryGraph, mergo.WithOverride); err != nil {
 			return err
 		}
 	}

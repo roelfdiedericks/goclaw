@@ -55,6 +55,7 @@ import (
 	toolhass "github.com/roelfdiedericks/goclaw/internal/tools/hass"
 	"github.com/roelfdiedericks/goclaw/internal/tools/jq"
 	"github.com/roelfdiedericks/goclaw/internal/tools/memoryget"
+	toolmemorygraph "github.com/roelfdiedericks/goclaw/internal/tools/memorygraph"
 	"github.com/roelfdiedericks/goclaw/internal/tools/memorysearch"
 	toolmessage "github.com/roelfdiedericks/goclaw/internal/tools/message"
 	"github.com/roelfdiedericks/goclaw/internal/tools/read"
@@ -66,6 +67,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/tools/websearch"
 	"github.com/roelfdiedericks/goclaw/internal/tools/write"
 	"github.com/roelfdiedericks/goclaw/internal/tools/xaiimagine"
+	"github.com/roelfdiedericks/goclaw/internal/memorygraph"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
 	"github.com/roelfdiedericks/goclaw/internal/update"
 	"github.com/roelfdiedericks/goclaw/internal/user"
@@ -121,6 +123,7 @@ type CLI struct {
 	Whatsapp   WhatsAppCmd   `cmd:"" help:"Manage WhatsApp connection"`
 	Browser    BrowserCmd    `cmd:"" help:"Manage browser (download, profiles, setup)"`
 	Embeddings EmbeddingsCmd `cmd:"" help:"Manage embeddings (status, rebuild)"`
+	Graph      GraphCmd      `cmd:"" help:"Memory graph operations (ingest, search, bulletin, stats)"`
 	Setup      SetupCmd      `cmd:"" help:"Interactive setup wizard"`
 	Onboard    OnboardCmd    `cmd:"" help:"Run onboarding wizard"`
 	Cfg        ConfigCmd     `cmd:"config" help:"View configuration"`
@@ -1452,6 +1455,55 @@ func (e *EmbeddingsRebuildCmd) Run(ctx *Context) error {
 	return runEmbeddingsRebuild(e.BatchSize)
 }
 
+// GraphCmd manages memory graph operations
+type GraphCmd struct {
+	Ingest   GraphIngestCmd   `cmd:"" help:"Ingest content into memory graph"`
+	Bulletin GraphBulletinCmd `cmd:"" help:"Generate memory bulletins"`
+	Search   GraphSearchCmd   `cmd:"" help:"Search the memory graph"`
+	Stats    GraphStatsCmd    `cmd:"" default:"withargs" help:"Show memory graph statistics"`
+}
+
+// GraphIngestCmd ingests content into the memory graph
+type GraphIngestCmd struct {
+	Source string `help:"Source to ingest: markdown, transcript, or all" default:"all" enum:"markdown,transcript,all"`
+	User   string `help:"Username to ingest for (defaults to owner)"`
+	MaxAge int    `help:"Maximum age in days for transcript ingestion (0 = no limit)" default:"0"`
+}
+
+func (g *GraphIngestCmd) Run(ctx *Context) error {
+	return runGraphIngest(g.Source, g.User, g.MaxAge)
+}
+
+// GraphBulletinCmd generates memory bulletins
+type GraphBulletinCmd struct {
+	Type  string `arg:"" help:"Bulletin type: memory or context" enum:"memory,context"`
+	User  string `help:"Username (defaults to owner)"`
+	Words int    `help:"Target word count for memory bulletin (0 = no limit)" default:"500"`
+	Raw   bool   `help:"Show raw structured data without LLM synthesis"`
+}
+
+func (g *GraphBulletinCmd) Run(ctx *Context) error {
+	return runGraphBulletin(g.Type, g.User, g.Words, g.Raw)
+}
+
+// GraphSearchCmd searches the memory graph
+type GraphSearchCmd struct {
+	Query string `arg:"" help:"Search query"`
+	User  string `help:"Username (defaults to owner)"`
+	Limit int    `help:"Maximum results" default:"10"`
+}
+
+func (g *GraphSearchCmd) Run(ctx *Context) error {
+	return runGraphSearch(g.Query, g.User, g.Limit)
+}
+
+// GraphStatsCmd shows memory graph statistics
+type GraphStatsCmd struct{}
+
+func (g *GraphStatsCmd) Run(ctx *Context) error {
+	return runGraphStats()
+}
+
 // WhatsAppCmd manages WhatsApp connection
 type WhatsAppCmd struct {
 	Link   WhatsAppLinkCmd   `cmd:"link" help:"Pair with WhatsApp via QR code"`
@@ -1677,6 +1729,271 @@ func openMemoryDB(cfg *config.Config) (*sql.DB, error) {
 		}
 	}
 	return sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+}
+
+// runGraphIngest ingests content into the memory graph
+func runGraphIngest(source, username string, maxAgeDays int) error {
+	loadResult, err := config.Load()
+	if err != nil {
+		return err
+	}
+	cfg := loadResult.Config
+
+	// Get owner username if not specified
+	if username == "" {
+		users, err := user.LoadUsers()
+		if err != nil {
+			return fmt.Errorf("load users: %w", err)
+		}
+		username = users.GetOwner()
+		if username == "" {
+			return fmt.Errorf("no owner user found and --user not specified")
+		}
+	}
+
+	// Initialize memory graph manager
+	mgr, err := memorygraph.NewManager(cfg.MemoryGraph)
+	if err != nil {
+		return fmt.Errorf("init memory graph: %w", err)
+	}
+	if mgr == nil {
+		return fmt.Errorf("memory graph is disabled in configuration")
+	}
+	defer mgr.Close()
+
+	// Initialize LLM registry for extraction
+	registry, err := buildLLMRegistry(cfg)
+	if err != nil {
+		return fmt.Errorf("create LLM registry: %w", err)
+	}
+	llm.SetGlobalRegistry(registry)
+
+	// Get summarizer provider for extraction
+	provider, err := registry.GetProvider("summarization")
+	if err != nil {
+		return fmt.Errorf("get summarization provider: %w", err)
+	}
+
+	ctx := context.Background()
+
+	// Ingest markdown if requested
+	if source == "markdown" || source == "all" {
+		fmt.Printf("Ingesting markdown files for user: %s\n", username)
+		mdIngester := memorygraph.NewMarkdownIngester(cfg.Gateway.WorkingDir, cfg.MemoryGraph.Ingestion)
+		report, err := memorygraph.Ingest(ctx, mgr, provider, mdIngester, username)
+		if err != nil {
+			return fmt.Errorf("markdown ingestion failed: %w", err)
+		}
+		fmt.Printf("  Scanned: %d, Skipped: %d, Extracted: %d, Errors: %d (%.2fs)\n",
+			report.Scanned, report.Skipped, report.Extracted, report.Errors, report.Duration.Seconds())
+	}
+
+	// Ingest transcripts if requested
+	if source == "transcript" || source == "all" {
+		batchSize := cfg.MemoryGraph.Ingestion.TranscriptBatchSize
+		if batchSize < 1 {
+			batchSize = 25 // Default
+		}
+
+		sessionsDB, err := openSessionsDB(cfg)
+		if err != nil {
+			return fmt.Errorf("open sessions DB: %w", err)
+		}
+		defer sessionsDB.Close()
+
+		// Calculate minimum timestamp if maxAge specified (timestamps are in seconds)
+		var minTimestamp int64
+		if maxAgeDays > 0 {
+			minTimestamp = time.Now().AddDate(0, 0, -maxAgeDays).Unix()
+		}
+
+		// Count total chunks for progress display (with age filter)
+		var totalChunks int
+		var countQuery string
+		var countArgs []interface{}
+		if minTimestamp > 0 {
+			countQuery = "SELECT COUNT(*) FROM transcript_chunks WHERE (user_id = ? OR user_id = '' OR user_id IS NULL) AND timestamp_start >= ?"
+			countArgs = []interface{}{username, minTimestamp}
+		} else {
+			countQuery = "SELECT COUNT(*) FROM transcript_chunks WHERE user_id = ? OR user_id = '' OR user_id IS NULL"
+			countArgs = []interface{}{username}
+		}
+		row := sessionsDB.QueryRow(countQuery, countArgs...)
+		if err := row.Scan(&totalChunks); err != nil {
+			totalChunks = 0 // Unknown
+		}
+
+		expectedBatches := (totalChunks + batchSize - 1) / batchSize
+		fmt.Printf("Ingesting transcript chunks for user: %s\n", username)
+		if maxAgeDays > 0 {
+			fmt.Printf("  Max age: %d days, ", maxAgeDays)
+		}
+		fmt.Printf("Total chunks: %d, batch size: %d, expected batches: %d\n", totalChunks, batchSize, expectedBatches)
+
+		txIngester := memorygraph.NewTranscriptIngesterWithAge(sessionsDB, username, minTimestamp)
+		report, err := memorygraph.IngestWithBatchingAndTotal(ctx, mgr, provider, txIngester, username, batchSize, totalChunks)
+		if err != nil {
+			return fmt.Errorf("transcript ingestion failed: %w", err)
+		}
+		fmt.Printf("  Scanned: %d, Skipped: %d, Extracted: %d, Errors: %d (%.2fs)\n",
+			report.Scanned, report.Skipped, report.Extracted, report.Errors, report.Duration.Seconds())
+	}
+
+	fmt.Println("Ingestion complete.")
+	return nil
+}
+
+// runGraphBulletin generates a memory bulletin
+func runGraphBulletin(bulletinType, username string, wordLimit int, raw bool) error {
+	loadResult, err := config.Load()
+	if err != nil {
+		return err
+	}
+	cfg := loadResult.Config
+
+	// Get owner username if not specified
+	if username == "" {
+		users, err := user.LoadUsers()
+		if err != nil {
+			return fmt.Errorf("load users: %w", err)
+		}
+		username = users.GetOwner()
+		if username == "" {
+			return fmt.Errorf("no owner user found and --user not specified")
+		}
+	}
+
+	// Initialize memory graph manager
+	mgr, err := memorygraph.NewManager(cfg.MemoryGraph)
+	if err != nil {
+		return fmt.Errorf("init memory graph: %w", err)
+	}
+	if mgr == nil {
+		return fmt.Errorf("memory graph is disabled in configuration")
+	}
+	defer mgr.Close()
+
+	ctx := context.Background()
+
+	switch bulletinType {
+	case "memory":
+		// For memory bulletin, try to get an LLM provider for synthesis (unless --raw)
+		var provider llm.Provider
+		if !raw {
+			registry, err := buildLLMRegistry(cfg)
+			if err == nil {
+				llm.SetGlobalRegistry(registry)
+				provider, _ = registry.GetProvider("summarization")
+			}
+		}
+
+		bulletin, err := memorygraph.BuildMemoryBulletin(ctx, mgr, provider, username, wordLimit)
+		if err != nil {
+			return fmt.Errorf("build memory bulletin: %w", err)
+		}
+		fmt.Println(bulletin)
+
+	case "context":
+		bulletin, err := memorygraph.BuildContextBulletin(mgr, username)
+		if err != nil {
+			return fmt.Errorf("build context bulletin: %w", err)
+		}
+		fmt.Println(bulletin)
+
+	default:
+		return fmt.Errorf("unknown bulletin type: %s", bulletinType)
+	}
+
+	return nil
+}
+
+// runGraphSearch searches the memory graph
+func runGraphSearch(query, username string, limit int) error {
+	loadResult, err := config.Load()
+	if err != nil {
+		return err
+	}
+	cfg := loadResult.Config
+
+	// Get owner username if not specified
+	if username == "" {
+		users, err := user.LoadUsers()
+		if err != nil {
+			return fmt.Errorf("load users: %w", err)
+		}
+		username = users.GetOwner()
+		if username == "" {
+			return fmt.Errorf("no owner user found and --user not specified")
+		}
+	}
+
+	// Initialize memory graph manager
+	mgr, err := memorygraph.NewManager(cfg.MemoryGraph)
+	if err != nil {
+		return fmt.Errorf("init memory graph: %w", err)
+	}
+	if mgr == nil {
+		return fmt.Errorf("memory graph is disabled in configuration")
+	}
+	defer mgr.Close()
+
+	// Initialize LLM for semantic search
+	registry, err := buildLLMRegistry(cfg)
+	if err == nil {
+		llm.SetGlobalRegistry(registry)
+	}
+
+	ctx := context.Background()
+	results, err := mgr.Search(ctx, memorygraph.SearchOptions{
+		Query:      query,
+		Username:   username,
+		MaxResults: limit,
+	})
+	if err != nil {
+		return fmt.Errorf("search failed: %w", err)
+	}
+
+	if len(results) == 0 {
+		fmt.Println("No results found.")
+		return nil
+	}
+
+	fmt.Printf("Found %d results:\n\n", len(results))
+	for i, r := range results {
+		fmt.Printf("%d. [%s] (score: %.2f, importance: %.0f%%)\n", i+1, r.Memory.Type, r.Score, r.Memory.Importance*100)
+		fmt.Printf("   %s\n", r.Memory.Content)
+		fmt.Printf("   ID: %s | Created: %s\n\n", r.Memory.UUID, r.Memory.CreatedAt.Format("2006-01-02 15:04"))
+	}
+
+	return nil
+}
+
+// runGraphStats shows memory graph statistics
+func runGraphStats() error {
+	loadResult, err := config.Load()
+	if err != nil {
+		return err
+	}
+	cfg := loadResult.Config
+
+	// Initialize memory graph manager
+	mgr, err := memorygraph.NewManager(cfg.MemoryGraph)
+	if err != nil {
+		return fmt.Errorf("init memory graph: %w", err)
+	}
+	if mgr == nil {
+		fmt.Println("Memory graph is disabled in configuration")
+		return nil
+	}
+	defer mgr.Close()
+
+	summary, err := memorygraph.BuildStatsSummary(mgr)
+	if err != nil {
+		return fmt.Errorf("build stats: %w", err)
+	}
+
+	fmt.Println(summary)
+	return nil
 }
 
 // SetupCmd is the interactive setup wizard
@@ -2270,6 +2587,13 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 	if memMgr := gw.MemoryManager(); memMgr != nil {
 		reg.Register(memorysearch.NewTool(memMgr))
 		reg.Register(memoryget.NewTool(memMgr))
+	}
+
+	// Memory graph tools
+	if mgraphMgr := gw.MemoryGraphManager(); mgraphMgr != nil {
+		reg.Register(toolmemorygraph.NewSearchTool())
+		reg.Register(toolmemorygraph.NewStoreTool())
+		reg.Register(toolmemorygraph.NewQueryTool())
 	}
 
 	// Skills tool
