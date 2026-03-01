@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -53,21 +52,21 @@ func HashContent(content string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// Ingest processes items from a source and extracts memories
-// For transcript sources, use IngestWithBatching for better efficiency
-func Ingest(ctx context.Context, mgr *Manager, provider llm.Provider, source IngestionSource, username string) (*IngestReport, error) {
-	return IngestWithBatching(ctx, mgr, provider, source, username, 1)
+// Ingest processes items from a source and extracts memories.
+// For transcript sources, use IngestWithBatching for better efficiency.
+func Ingest(ctx context.Context, mgr *Manager, source IngestionSource, username string) (*IngestReport, error) {
+	return IngestWithBatching(ctx, mgr, source, username, 1)
 }
 
-// IngestWithBatching processes items with configurable batch size
-// batchSize > 1 combines multiple items into a single LLM call (useful for transcripts)
-// totalItems is optional (pass 0 if unknown) - used for progress display
-func IngestWithBatching(ctx context.Context, mgr *Manager, provider llm.Provider, source IngestionSource, username string, batchSize int) (*IngestReport, error) {
-	return IngestWithBatchingAndTotal(ctx, mgr, provider, source, username, batchSize, 0)
+// IngestWithBatching processes items with configurable batch size.
+// batchSize > 1 combines multiple items into a single extraction call.
+func IngestWithBatching(ctx context.Context, mgr *Manager, source IngestionSource, username string, batchSize int) (*IngestReport, error) {
+	return IngestWithBatchingAndTotal(ctx, mgr, source, username, batchSize, 0)
 }
 
-// IngestWithBatchingAndTotal processes items with configurable batch size and known total
-func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, provider llm.Provider, source IngestionSource, username string, batchSize, totalItems int) (*IngestReport, error) {
+// IngestWithBatchingAndTotal processes items with configurable batch size and known total.
+// Uses the recall-first ExtractionLoop for better quality extraction with associations.
+func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, source IngestionSource, username string, batchSize, totalItems int) (*IngestReport, error) {
 	if batchSize < 1 {
 		batchSize = 1
 	}
@@ -77,9 +76,11 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, provider llm.
 		SourceType: source.Type(),
 	}
 
-	// Create extractor with the LLM provider
-	extractor := NewExtractor(mgr)
-	extractor.SetProvider(provider)
+	// Create extraction loop (uses summarization provider internally)
+	loop, err := NewExtractionLoop(mgr)
+	if err != nil {
+		return nil, fmt.Errorf("create extraction loop: %w", err)
+	}
 
 	// Start scanning
 	items, err := source.Scan(ctx)
@@ -109,8 +110,8 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, provider llm.
 			sourcePaths = append(sourcePaths, item.SourcePath)
 		}
 
-		// Extract memories from combined batch
-		ec := ExtractionContext{
+		// Extract memories using the recall-first loop
+		ec := LoopExtractionInput{
 			Username:     username,
 			Conversation: combinedContent,
 			SourceFile:   fmt.Sprintf("batch of %d chunks", len(batch)),
@@ -127,7 +128,7 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, provider llm.
 			}
 		}
 
-		result, err := extractor.Extract(ctx, ec)
+		result, err := loop.Run(ctx, ec)
 		if err != nil {
 			L_warn("memorygraph: batch extraction failed", "paths", sourcePaths, "error", err)
 			report.Errors += len(batch)
@@ -135,12 +136,12 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, provider llm.
 			return nil // Continue with next batch
 		}
 
-		memoryCount := len(result.Memories)
+		memoryCount := result.MemoriesSaved
 		report.Extracted += memoryCount
 
 		// Update ingestion state for each item in batch
 		memoriesPerItem := memoryCount / len(batch)
-		if memoriesPerItem < 1 {
+		if memoriesPerItem < 1 && memoryCount > 0 {
 			memoriesPerItem = 1
 		}
 
@@ -167,8 +168,8 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, provider llm.
 			"progress", progressStr,
 			"batch", batchNum,
 			"chunks", len(batch),
-			"memories", memoryCount,
-			"skipped", result.Skipped)
+			"recalls", result.Recalls,
+			"memories", memoryCount)
 		batch = nil
 		return nil
 	}
@@ -195,9 +196,9 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, provider llm.
 			continue
 		}
 
-		// For batch size 1, process immediately (original behavior)
+		// For batch size 1, process immediately
 		if batchSize == 1 {
-			ec := ExtractionContext{
+			ec := LoopExtractionInput{
 				Username:     username,
 				Conversation: item.Content,
 				SourceFile:   item.SourcePath,
@@ -213,14 +214,14 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, provider llm.
 				}
 			}
 
-			result, err := extractor.Extract(ctx, ec)
+			result, err := loop.Run(ctx, ec)
 			if err != nil {
 				L_warn("memorygraph: extraction failed", "path", item.SourcePath, "error", err)
 				report.Errors++
 				continue
 			}
 
-			memoryCount := len(result.Memories)
+			memoryCount := result.MemoriesSaved
 			report.Extracted += memoryCount
 
 			if err := setIngestionState(mgr.db, &IngestionState{
@@ -233,7 +234,7 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, provider llm.
 				L_warn("memorygraph: failed to update ingestion state", "path", item.SourcePath, "error", err)
 			}
 
-			L_info("memorygraph: ingested", "path", item.SourcePath, "memories", memoryCount, "skipped", result.Skipped)
+			L_info("memorygraph: ingested", "path", item.SourcePath, "recalls", result.Recalls, "memories", memoryCount)
 			continue
 		}
 

@@ -8,7 +8,7 @@ import (
 )
 
 // Current schema version
-const schemaVersion = 2
+const schemaVersion = 1
 
 // Migration represents a database migration
 type Migration struct {
@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS memories (
     username TEXT,
     channel TEXT,
     chat_id TEXT,
+    emotion TEXT,
     forgotten INTEGER NOT NULL DEFAULT 0,
     embedding BLOB,
     embedding_model TEXT
@@ -54,6 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_forgotten ON memories(forgotten);
 CREATE INDEX IF NOT EXISTS idx_memories_next_trigger ON memories(next_trigger_at) WHERE next_trigger_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memories_emotion ON memories(emotion) WHERE emotion IS NOT NULL;
 
 -- Full-text search virtual table
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
@@ -161,21 +163,10 @@ CREATE TABLE IF NOT EXISTS prediction_metadata (
     FOREIGN KEY (routine_uuid) REFERENCES memories(uuid) ON DELETE SET NULL
 );
 
--- Schema version tracking
-CREATE TABLE IF NOT EXISTS schema_version (
-    version INTEGER PRIMARY KEY
-);
-
-INSERT INTO schema_version (version) VALUES (1);
-`,
-	},
-	{
-		Version: 2,
-		Up: `
 -- Ingestion state tracking for deduplication
 CREATE TABLE IF NOT EXISTS ingestion_state (
-    source_type TEXT NOT NULL,      -- "markdown" or "transcript"
-    source_path TEXT NOT NULL,      -- file path or chunk ID
+    source_type TEXT NOT NULL,      -- "markdown", "transcript", or "live"
+    source_path TEXT NOT NULL,      -- file path, chunk ID, or message ID
     content_hash TEXT NOT NULL,     -- SHA256 of content
     ingested_at TEXT NOT NULL,
     memory_count INTEGER NOT NULL,  -- memories created from this source
@@ -184,7 +175,12 @@ CREATE TABLE IF NOT EXISTS ingestion_state (
 
 CREATE INDEX IF NOT EXISTS idx_ingestion_type ON ingestion_state(source_type);
 
-INSERT OR REPLACE INTO schema_version (version) VALUES (2);
+-- Schema version tracking
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY
+);
+
+INSERT INTO schema_version (version) VALUES (1);
 `,
 	},
 }

@@ -31,6 +31,10 @@ type Manager struct {
 	// Background maintenance
 	maintenanceTicker *time.Ticker
 	maintenanceDone   chan struct{}
+
+	// Live extraction
+	sessionsDB    *sql.DB        // Reference to sessions.db (set via SetSessionsDB)
+	liveExtractor *LiveExtractor // Background live extraction
 }
 
 var (
@@ -297,6 +301,37 @@ func (m *Manager) GetPendingTriggers(before time.Time) ([]*Memory, error) {
 		Execute(m.db)
 }
 
+// SetSessionsDB sets the sessions database reference for live extraction.
+// Called from main.go after both managers are created.
+func (m *Manager) SetSessionsDB(db *sql.DB) {
+	m.mu.Lock()
+	m.sessionsDB = db
+	m.mu.Unlock()
+}
+
+// Start begins all background processes (maintenance + live extraction).
+func (m *Manager) Start(ctx context.Context) {
+	m.StartMaintenance(ctx)
+
+	// Create and start live extractor if enabled AND sessions DB is available
+	if m.config.LiveExtraction.Enabled && m.sessionsDB != nil {
+		m.liveExtractor = NewLiveExtractor(m, m.sessionsDB, m.config.LiveExtraction)
+		m.liveExtractor.Start()
+		L_info("memorygraph: live extraction started",
+			"interval", m.config.LiveExtraction.IntervalSeconds)
+	} else if m.config.LiveExtraction.Enabled {
+		L_warn("memorygraph: live extraction enabled but no sessions DB available")
+	}
+}
+
+// Stop stops background processes (called before Close).
+func (m *Manager) Stop() {
+	if m.liveExtractor != nil {
+		m.liveExtractor.Stop()
+		m.liveExtractor = nil
+	}
+}
+
 // StartMaintenance starts the background maintenance routine
 func (m *Manager) StartMaintenance(ctx context.Context) {
 	if !m.config.Maintenance.Enabled {
@@ -355,6 +390,12 @@ func (m *Manager) Close() error {
 		return nil
 	}
 	m.closed = true
+
+	// Stop live extractor
+	if m.liveExtractor != nil {
+		m.liveExtractor.Stop()
+		m.liveExtractor = nil
+	}
 
 	// Stop maintenance
 	if m.maintenanceTicker != nil {

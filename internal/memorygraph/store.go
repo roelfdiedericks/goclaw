@@ -69,14 +69,14 @@ func (s *Store) CreateMemory(m *Memory) error {
 			uuid, content, memory_type, importance, confidence,
 			created_at, updated_at, last_accessed_at, access_count,
 			next_trigger_at, source, source_session, source_message,
-			username, channel, chat_id, forgotten, embedding, embedding_model
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			username, channel, chat_id, emotion, forgotten, embedding, embedding_model
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		m.UUID, m.Content, m.Type, m.Importance, m.Confidence,
 		m.CreatedAt.Format(time.RFC3339), m.UpdatedAt.Format(time.RFC3339),
 		m.LastAccessedAt.Format(time.RFC3339), m.AccessCount,
 		nextTrigger, m.Source, m.SourceSession, m.SourceMessage,
-		m.Username, m.Channel, m.ChatID, boolToInt(m.Forgotten),
+		m.Username, m.Channel, m.ChatID, m.Emotion, boolToInt(m.Forgotten),
 		embeddingBlob, m.EmbeddingModel,
 	)
 	if err != nil {
@@ -99,7 +99,7 @@ func (s *Store) GetMemory(uuid string) (*Memory, error) {
 		SELECT id, uuid, content, memory_type, importance, confidence,
 			created_at, updated_at, last_accessed_at, access_count,
 			next_trigger_at, source, source_session, source_message,
-			username, channel, chat_id, forgotten, embedding, embedding_model
+			username, channel, chat_id, emotion, forgotten, embedding, embedding_model
 		FROM memories WHERE uuid = ?
 	`, uuid)
 
@@ -112,7 +112,7 @@ func (s *Store) GetMemoryByID(id int64) (*Memory, error) {
 		SELECT id, uuid, content, memory_type, importance, confidence,
 			created_at, updated_at, last_accessed_at, access_count,
 			next_trigger_at, source, source_session, source_message,
-			username, channel, chat_id, forgotten, embedding, embedding_model
+			username, channel, chat_id, emotion, forgotten, embedding, embedding_model
 		FROM memories WHERE id = ?
 	`, id)
 
@@ -139,14 +139,14 @@ func (s *Store) UpdateMemory(m *Memory) error {
 			content = ?, memory_type = ?, importance = ?, confidence = ?,
 			updated_at = ?, last_accessed_at = ?, access_count = ?,
 			next_trigger_at = ?, source = ?, source_session = ?, source_message = ?,
-			username = ?, channel = ?, chat_id = ?, forgotten = ?,
+			username = ?, channel = ?, chat_id = ?, emotion = ?, forgotten = ?,
 			embedding = ?, embedding_model = ?
 		WHERE uuid = ?
 	`,
 		m.Content, m.Type, m.Importance, m.Confidence,
 		m.UpdatedAt.Format(time.RFC3339), m.LastAccessedAt.Format(time.RFC3339),
 		m.AccessCount, nextTrigger, m.Source, m.SourceSession, m.SourceMessage,
-		m.Username, m.Channel, m.ChatID, boolToInt(m.Forgotten),
+		m.Username, m.Channel, m.ChatID, m.Emotion, boolToInt(m.Forgotten),
 		embeddingBlob, m.EmbeddingModel,
 		m.UUID,
 	)
@@ -553,7 +553,7 @@ type scannable interface {
 func scanMemory(row scannable) (*Memory, error) {
 	m := &Memory{}
 	var createdAt, updatedAt, lastAccessedAt string
-	var nextTriggerAt, source, sourceSession, sourceMessage, username, channel, chatID sql.NullString
+	var nextTriggerAt, source, sourceSession, sourceMessage, username, channel, chatID, emotion sql.NullString
 	var embeddingBlob []byte
 	var embeddingModel sql.NullString
 	var forgotten int
@@ -562,7 +562,7 @@ func scanMemory(row scannable) (*Memory, error) {
 		&m.ID, &m.UUID, &m.Content, &m.Type, &m.Importance, &m.Confidence,
 		&createdAt, &updatedAt, &lastAccessedAt, &m.AccessCount,
 		&nextTriggerAt, &source, &sourceSession, &sourceMessage,
-		&username, &channel, &chatID, &forgotten, &embeddingBlob, &embeddingModel,
+		&username, &channel, &chatID, &emotion, &forgotten, &embeddingBlob, &embeddingModel,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -586,6 +586,7 @@ func scanMemory(row scannable) (*Memory, error) {
 	m.Username = username.String
 	m.Channel = channel.String
 	m.ChatID = chatID.String
+	m.Emotion = emotion.String
 	m.Forgotten = intToBool(forgotten)
 	m.EmbeddingModel = embeddingModel.String
 

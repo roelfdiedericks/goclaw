@@ -1761,18 +1761,12 @@ func runGraphIngest(source, username string, maxAgeDays int) error {
 	}
 	defer mgr.Close()
 
-	// Initialize LLM registry for extraction
+	// Initialize LLM registry - ExtractionLoop uses GetProvider("summarization") internally
 	registry, err := buildLLMRegistry(cfg)
 	if err != nil {
 		return fmt.Errorf("create LLM registry: %w", err)
 	}
 	llm.SetGlobalRegistry(registry)
-
-	// Get summarizer provider for extraction
-	provider, err := registry.GetProvider("summarization")
-	if err != nil {
-		return fmt.Errorf("get summarization provider: %w", err)
-	}
 
 	ctx := context.Background()
 
@@ -1780,7 +1774,7 @@ func runGraphIngest(source, username string, maxAgeDays int) error {
 	if source == "markdown" || source == "all" {
 		fmt.Printf("Ingesting markdown files for user: %s\n", username)
 		mdIngester := memorygraph.NewMarkdownIngester(cfg.Gateway.WorkingDir, cfg.MemoryGraph.Ingestion)
-		report, err := memorygraph.Ingest(ctx, mgr, provider, mdIngester, username)
+		report, err := memorygraph.Ingest(ctx, mgr, mdIngester, username)
 		if err != nil {
 			return fmt.Errorf("markdown ingestion failed: %w", err)
 		}
@@ -1831,7 +1825,7 @@ func runGraphIngest(source, username string, maxAgeDays int) error {
 		fmt.Printf("Total chunks: %d, batch size: %d, expected batches: %d\n", totalChunks, batchSize, expectedBatches)
 
 		txIngester := memorygraph.NewTranscriptIngesterWithAge(sessionsDB, username, minTimestamp)
-		report, err := memorygraph.IngestWithBatchingAndTotal(ctx, mgr, provider, txIngester, username, batchSize, totalChunks)
+		report, err := memorygraph.IngestWithBatchingAndTotal(ctx, mgr, txIngester, username, batchSize, totalChunks)
 		if err != nil {
 			return fmt.Errorf("transcript ingestion failed: %w", err)
 		}
@@ -2231,6 +2225,11 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	// Start gateway background tasks (compaction retry, etc.)
 	gw.Start(runCtx)
 
+	// Start memory graph background tasks (maintenance + live extraction)
+	if mgraphMgr := gw.MemoryGraphManager(); mgraphMgr != nil {
+		mgraphMgr.Start(runCtx)
+	}
+
 	// Handle signals
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -2245,6 +2244,10 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		// Stop transcript manager BEFORE gateway shutdown (uses gateway's SQLite DB)
 		if transcriptMgr != nil {
 			transcriptMgr.Stop()
+		}
+		// Stop memory graph background processes
+		if mgraphMgr := gw.MemoryGraphManager(); mgraphMgr != nil {
+			mgraphMgr.Stop()
 		}
 		metrics.GetInstance().Close() //nolint:errcheck // shutdown cleanup
 		gw.Shutdown()
@@ -2591,9 +2594,16 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 
 	// Memory graph tools
 	if mgraphMgr := gw.MemoryGraphManager(); mgraphMgr != nil {
+		// Connect to sessions.db for live extraction
+		if sessDB := gw.SessionDB(); sessDB != nil {
+			mgraphMgr.SetSessionsDB(sessDB)
+		}
+		// Register tools (new recall-first versions)
+		reg.Register(memorygraph.NewRecallTool(mgraphMgr))
+		reg.Register(memorygraph.NewQueryTool(mgraphMgr))
+		reg.Register(memorygraph.NewStoreTool(mgraphMgr))
+		// Keep search tool for backwards compatibility
 		reg.Register(toolmemorygraph.NewSearchTool())
-		reg.Register(toolmemorygraph.NewStoreTool())
-		reg.Register(toolmemorygraph.NewQueryTool())
 	}
 
 	// Skills tool

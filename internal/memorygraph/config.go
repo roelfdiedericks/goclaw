@@ -2,11 +2,21 @@ package memorygraph
 
 // Config configures the memory graph system
 type Config struct {
-	Enabled     bool              `json:"enabled"`     // Enable memory graph
-	DBPath      string            `json:"dbPath"`      // Database path (default: ~/.goclaw/memory_graph.db)
-	Search      SearchConfig      `json:"search"`      // Search configuration
-	Maintenance MaintenanceConfig `json:"maintenance"` // Maintenance configuration
-	Ingestion   IngestionConfig   `json:"ingestion"`   // Ingestion configuration
+	Enabled        bool                  `json:"enabled"`        // Enable memory graph
+	DBPath         string                `json:"dbPath"`         // Database path (default: ~/.goclaw/memory_graph.db)
+	Search         SearchConfig          `json:"search"`         // Search configuration
+	Maintenance    MaintenanceConfig     `json:"maintenance"`    // Maintenance configuration
+	Ingestion      IngestionConfig       `json:"ingestion"`      // Ingestion configuration
+	LiveExtraction LiveExtractionConfig  `json:"liveExtraction"` // Live extraction configuration
+}
+
+// LiveExtractionConfig configures automatic memory extraction from conversations
+type LiveExtractionConfig struct {
+	Enabled         bool `json:"enabled"`         // Enable live extraction
+	IntervalSeconds int  `json:"intervalSeconds"` // Check interval (default: 120)
+	MinMessages     int  `json:"minMessages"`     // Minimum messages before extraction (default: 5)
+	MaxTurns        int  `json:"maxTurns"`        // Max extraction loop turns (default: 10)
+	BatchSize       int  `json:"batchSize"`       // Max messages per batch (default: 50)
 }
 
 // IngestionConfig configures what content to ingest
@@ -102,6 +112,13 @@ func DefaultConfig() Config {
 			},
 			// Batch 25 transcript chunks per LLM call (reduces calls significantly)
 			TranscriptBatchSize: 25,
+		},
+		LiveExtraction: LiveExtractionConfig{
+			Enabled:         false, // Disabled by default
+			IntervalSeconds: 120,   // Every 2 minutes
+			MinMessages:     5,     // Only extract if 5+ new messages
+			MaxTurns:        10,    // Safety limit
+			BatchSize:       50,    // Max messages per extraction
 		},
 	}
 }
