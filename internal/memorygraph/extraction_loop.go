@@ -46,6 +46,7 @@ type LoopExtractionInput struct {
 type LoopExtractionResult struct {
 	MemoriesSaved int
 	Recalls       int
+	Skips         int
 	Summary       string
 	Error         error
 }
@@ -78,10 +79,11 @@ func NewExtractionLoop(mgr *Manager) (*ExtractionLoop, error) {
 		return nil, err
 	}
 
-	// Create tool registry with just recall + store
+	// Create tool registry with recall, store, and skip
 	toolReg := tools.NewRegistry()
 	toolReg.Register(NewRecallTool(mgr))
 	toolReg.Register(NewStoreTool(mgr))
+	toolReg.Register(NewSkipTool())
 
 	return &ExtractionLoop{
 		manager:  mgr,
@@ -109,6 +111,10 @@ func (e *ExtractionLoop) Run(ctx context.Context, ec LoopExtractionInput) (*Loop
 	// Disable server-side tools - extraction uses only our recall/store tools
 	opts := &llm.StreamOptions{DisableServerTools: true}
 
+	// Track consecutive empty recalls to detect loops
+	consecutiveEmptyRecalls := 0
+	const maxEmptyRecalls = 10 // After 10 empty recalls, nudge the model
+
 	for turn := 0; turn < e.maxTurns; turn++ {
 		// Collect response (non-streaming for extraction)
 		var responseText string
@@ -123,6 +129,11 @@ func (e *ExtractionLoop) Run(ctx context.Context, ec LoopExtractionInput) (*Loop
 		if err != nil {
 			result.Error = err
 			return result, err
+		}
+
+		// Log any text output (may contain [DECISION] lines for debugging)
+		if responseText != "" {
+			L_debug("extraction: llm text output", "turn", turn, "text", responseText)
 		}
 
 		// Check if response has tool use
@@ -143,17 +154,8 @@ func (e *ExtractionLoop) Run(ctx context.Context, ec LoopExtractionInput) (*Loop
 			break
 		}
 
-		// Get all tool calls (use ToolCalls if available, otherwise single call)
+		// Get all tool calls from response
 		toolCalls := response.ToolCalls
-		if len(toolCalls) == 0 && response.ToolName != "" {
-			// Fallback for providers that don't populate ToolCalls
-			toolCalls = []llm.ToolCallInfo{{
-				ID:    response.ToolUseID,
-				Name:  response.ToolName,
-				Input: response.ToolInput,
-			}}
-		}
-
 		L_debug("extraction: processing tool calls", "count", len(toolCalls))
 
 		// Execute ALL tool calls and collect results
@@ -176,18 +178,33 @@ func (e *ExtractionLoop) Run(ctx context.Context, ec LoopExtractionInput) (*Loop
 				L_debug("extraction: tool result", "tool", tc.Name, "resultLen", len(resultText))
 			}
 
+			// Track stats and detect recall loops
+			if tc.Name == "memory_graph_recall" {
+				result.Recalls++
+				// Check if recall returned no results
+				if resultText == "No memories found." {
+					consecutiveEmptyRecalls++
+					if consecutiveEmptyRecalls >= maxEmptyRecalls {
+						// Nudge the model to stop recalling and start storing
+						resultText = "No memories found. STOP RECALLING. Call memory_graph_store() or memory_graph_skip() NOW. Do not output text - call the tool."
+						L_warn("extraction: recall loop detected, nudging model", "consecutiveEmpty", consecutiveEmptyRecalls)
+					}
+				} else {
+					consecutiveEmptyRecalls = 0 // Reset on successful recall
+				}
+			} else if tc.Name == "memory_graph_store" && err == nil {
+				result.MemoriesSaved++
+				consecutiveEmptyRecalls = 0 // Reset when storing
+			} else if tc.Name == "memory_graph_skip" {
+				result.Skips++
+				consecutiveEmptyRecalls = 0 // Reset when skipping
+			}
+
 			executions = append(executions, toolExecution{
 				call:   tc,
 				result: resultText,
 				err:    err,
 			})
-
-			// Track stats
-			if tc.Name == "memory_graph_recall" {
-				result.Recalls++
-			} else if tc.Name == "memory_graph_store" && err == nil {
-				result.MemoriesSaved++
-			}
 		}
 
 		// Add all tool call messages followed by all tool result messages
@@ -211,6 +228,7 @@ func (e *ExtractionLoop) Run(ctx context.Context, ec LoopExtractionInput) (*Loop
 	L_debug("extraction loop completed",
 		"recalls", result.Recalls,
 		"saved", result.MemoriesSaved,
+		"skips", result.Skips,
 		"turns", len(messages)/2,
 	)
 

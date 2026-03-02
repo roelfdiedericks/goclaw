@@ -1236,7 +1236,14 @@ func (g *Gateway) ProcessMessage(ctx context.Context, msg *types.InboundMessage,
 		L_debug("gateway: ProcessMessage added user message", "session", sessionKey, "source", msg.Source, "textLen", len(msg.Text))
 
 		// Persist the message
-		g.persistMessage(ctx, msgID, sessionKey, msg.User.ID, "user", msg.Text, msg.Source, "", "", nil, "", "", "", "")
+		g.persistMessage(ctx, PersistMessageParams{
+			MsgID:      msgID,
+			SessionKey: sessionKey,
+			UserID:     msg.User.ID,
+			Role:       "user",
+			Content:    msg.Text,
+			Source:     msg.Source,
+		})
 	}
 
 	// Build AgentRequest
@@ -1667,7 +1674,14 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 		// Persist user message to SQLite (skip for heartbeat - ephemeral)
 		if !req.IsHeartbeat {
-			g.persistMessage(ctx, userMsgID, sessionKey, userID, "user", req.UserMsg, req.Source, "", "", nil, "", "", "", "")
+			g.persistMessage(ctx, PersistMessageParams{
+				MsgID:      userMsgID,
+				SessionKey: sessionKey,
+				UserID:     userID,
+				Role:       "user",
+				Content:    req.UserMsg,
+				Source:     req.Source,
+			})
 		}
 	} else {
 		L_debug("RunAgent: skipping message add (already in session)", "session", sessionKey, "source", req.Source)
@@ -2033,160 +2047,236 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			sendEvent(EventThinking{RunID: runID, Content: response.Thinking})
 		}
 
-		// Handle tool use
+		// Handle tool use - process ALL tool calls from this response
 		if response.HasToolUse() {
-			// Check permissions
-			if !req.User.CanUseTool(response.ToolName) {
-				result := fmt.Sprintf("Permission denied: %s cannot use tool %s", req.User.Name, response.ToolName)
-			sendEvent(EventToolEnd{
-				RunID:    runID,
-				ToolName: response.ToolName,
-				ToolID:   response.ToolUseID,
-				Result:   result,
-				Error:    "permission_denied",
-			})
-			toolUseID := sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
-			toolResultID := sess.AddToolResult(response.ToolUseID, result, nil)
-			if !req.IsHeartbeat {
-				g.persistMessage(ctx, toolUseID, sessionKey, userID, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
-				g.persistMessage(ctx, toolResultID, sessionKey, userID, "tool_result", result, req.Source, response.ToolUseID, "", nil, "", "", "", "")
-			}
-			continue
-		}
+			// Generate a single responseGroupID for all tools in this batch
+			responseGroupID := session.GenerateResponseGroupID()
 
-		// Runtime safety net: deny tools restricted by purpose
-			if g.isToolDeniedForPurpose(response.ToolName, purpose) {
-				L_warn("gateway: tool denied for purpose", "tool", response.ToolName, "purpose", purpose)
-				result := fmt.Sprintf("Permission denied: tool %s is not available for purpose %q", response.ToolName, purpose)
-				sendEvent(EventToolEnd{
-					RunID:    runID,
-					ToolName: response.ToolName,
-					ToolID:   response.ToolUseID,
-					Result:   result,
-					Error:    "purpose_denied",
-				})
-				toolUseID := sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
-				toolResultID := sess.AddToolResult(response.ToolUseID, result, nil)
-				if !req.IsHeartbeat {
-					g.persistMessage(ctx, toolUseID, sessionKey, userID, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
-					g.persistMessage(ctx, toolResultID, sessionKey, userID, "tool_result", result, req.Source, response.ToolUseID, "", nil, "", "", "", "")
-				}
-				continue
-			}
-
-			sendEvent(EventToolStart{
-				RunID:    runID,
-				ToolName: response.ToolName,
-				ToolID:   response.ToolUseID,
-				Input:    response.ToolInput,
-			})
-
-			// Execute tool with session context
-			toolStartTime := time.Now()
+			// Prepare session context once (reused for all tools in batch)
 			ownerChatID := ""
 			if owner := g.users.Owner(); owner != nil {
 				ownerChatID = owner.TelegramID
 			}
-			// Get transcript scope from resolved role
 			transcriptScope := "own" // Default to restrictive
 			if resolvedRole, err := g.users.ResolveUserRole(req.User); err == nil {
 				transcriptScope = resolvedRole.GetTranscriptScope()
 			}
-			toolCtx := tools.WithSessionContext(agentCtx, &tools.SessionContext{
-				Channel:         req.Source,
-				ChatID:          req.ChatID,
-				OwnerChatID:     ownerChatID,
-				User:            req.User,
-				TranscriptScope: transcriptScope,
-				Session:         sess,
-			})
-			toolResult, err := g.tools.Execute(toolCtx, response.ToolName, response.ToolInput)
-			toolDuration := time.Since(toolStartTime)
 
-			errStr := ""
-			if err != nil {
-				errStr = err.Error()
-				toolResult = types.ErrorResult(err.Error())
-			}
-
-			// Get text content for downstream processing
-			resultText := toolResult.GetText()
-
-			// Wrap external content with security boundaries
-			if toolResult.ExternalContent {
-				wrapped, spoofed := security.WrapExternalContent(resultText, toolResult.ExternalSource, response.ToolName)
-				if spoofed {
-					L_warn("security: marker spoofing detected, content blocked",
-						"tool", response.ToolName, "source", toolResult.ExternalSource)
-					g.SendStatusMessage(ctx, req.User,
-						"⚠️ Security: Marker spoofing attack detected in content from "+response.ToolName+". Content discarded.")
-				} else {
-					L_debug("gateway: wrapped external content",
-						"tool", response.ToolName, "source", toolResult.ExternalSource)
+			// Execute ALL tool calls sequentially
+			for _, tc := range response.ToolCalls {
+				// Check for cancellation BEFORE each tool
+				select {
+				case <-agentCtx.Done():
+					L_info("agent: cancelled before tool execution", "session", sessionKey, "tool", tc.Name)
+					sendEvent(EventAgentEnd{RunID: runID, FinalText: ""})
+					return nil
+				default:
 				}
-				resultText = wrapped
-			}
 
-			// Check for media in tool output
-			if req.OnMediaToSend != nil {
-				parseResult := media.SplitMediaFromOutput(resultText)
-				resultText = parseResult.Text
-				for _, mediaPath := range parseResult.MediaURLs {
-					if mediaErr := req.OnMediaToSend(mediaPath, ""); mediaErr != nil {
-						L_warn("failed to send media", "path", mediaPath, "error", mediaErr)
+				// Check permissions for this tool
+				if !req.User.CanUseTool(tc.Name) {
+					result := fmt.Sprintf("Permission denied: %s cannot use tool %s", req.User.Name, tc.Name)
+					sendEvent(EventToolEnd{
+						RunID:    runID,
+						ToolName: tc.Name,
+						ToolID:   tc.ID,
+						Result:   result,
+						Error:    "permission_denied",
+					})
+					toolUseID := sess.AddToolUse(tc.ID, tc.Name, tc.Input, response.Thinking, responseGroupID)
+					toolResultID := sess.AddToolResult(tc.ID, result, nil, responseGroupID)
+					if !req.IsHeartbeat {
+						g.persistMessage(ctx, PersistMessageParams{
+							MsgID:           toolUseID,
+							SessionKey:      sessionKey,
+							UserID:          userID,
+							Role:            "tool_use",
+							Source:          req.Source,
+							ToolCallID:      tc.ID,
+							ToolName:        tc.Name,
+							ToolInput:       tc.Input,
+							Thinking:        response.Thinking,
+							ResponseGroupID: responseGroupID,
+						})
+						g.persistMessage(ctx, PersistMessageParams{
+							MsgID:           toolResultID,
+							SessionKey:      sessionKey,
+							UserID:          userID,
+							Role:            "tool_result",
+							Content:         result,
+							Source:          req.Source,
+							ToolCallID:      tc.ID,
+							ResponseGroupID: responseGroupID,
+						})
+					}
+					continue // Continue to next tool in batch
+				}
+
+				// Runtime safety net: deny tools restricted by purpose
+				if g.isToolDeniedForPurpose(tc.Name, purpose) {
+					L_warn("gateway: tool denied for purpose", "tool", tc.Name, "purpose", purpose)
+					result := fmt.Sprintf("Permission denied: tool %s is not available for purpose %q", tc.Name, purpose)
+					sendEvent(EventToolEnd{
+						RunID:    runID,
+						ToolName: tc.Name,
+						ToolID:   tc.ID,
+						Result:   result,
+						Error:    "purpose_denied",
+					})
+					toolUseID := sess.AddToolUse(tc.ID, tc.Name, tc.Input, response.Thinking, responseGroupID)
+					toolResultID := sess.AddToolResult(tc.ID, result, nil, responseGroupID)
+					if !req.IsHeartbeat {
+						g.persistMessage(ctx, PersistMessageParams{
+							MsgID:           toolUseID,
+							SessionKey:      sessionKey,
+							UserID:          userID,
+							Role:            "tool_use",
+							Source:          req.Source,
+							ToolCallID:      tc.ID,
+							ToolName:        tc.Name,
+							ToolInput:       tc.Input,
+							Thinking:        response.Thinking,
+							ResponseGroupID: responseGroupID,
+						})
+						g.persistMessage(ctx, PersistMessageParams{
+							MsgID:           toolResultID,
+							SessionKey:      sessionKey,
+							UserID:          userID,
+							Role:            "tool_result",
+							Content:         result,
+							Source:          req.Source,
+							ToolCallID:      tc.ID,
+							ResponseGroupID: responseGroupID,
+						})
+					}
+					continue // Continue to next tool in batch
+				}
+
+				sendEvent(EventToolStart{
+					RunID:    runID,
+					ToolName: tc.Name,
+					ToolID:   tc.ID,
+					Input:    tc.Input,
+				})
+
+				// Execute tool with session context
+				toolStartTime := time.Now()
+				toolCtx := tools.WithSessionContext(agentCtx, &tools.SessionContext{
+					Channel:         req.Source,
+					ChatID:          req.ChatID,
+					OwnerChatID:     ownerChatID,
+					User:            req.User,
+					TranscriptScope: transcriptScope,
+					Session:         sess,
+				})
+				toolResult, err := g.tools.Execute(toolCtx, tc.Name, tc.Input)
+				toolDuration := time.Since(toolStartTime)
+
+				errStr := ""
+				if err != nil {
+					errStr = err.Error()
+					toolResult = types.ErrorResult(err.Error())
+				}
+
+				// Get text content for downstream processing
+				resultText := toolResult.GetText()
+
+				// Wrap external content with security boundaries
+				if toolResult.ExternalContent {
+					wrapped, spoofed := security.WrapExternalContent(resultText, toolResult.ExternalSource, tc.Name)
+					if spoofed {
+						L_warn("security: marker spoofing detected, content blocked",
+							"tool", tc.Name, "source", toolResult.ExternalSource)
+						g.SendStatusMessage(ctx, req.User,
+							"⚠️ Security: Marker spoofing attack detected in content from "+tc.Name+". Content discarded.")
+					} else {
+						L_debug("gateway: wrapped external content",
+							"tool", tc.Name, "source", toolResult.ExternalSource)
+					}
+					resultText = wrapped
+				}
+
+				// Check for media in tool output
+				if req.OnMediaToSend != nil {
+					parseResult := media.SplitMediaFromOutput(resultText)
+					resultText = parseResult.Text
+					for _, mediaPath := range parseResult.MediaURLs {
+						if mediaErr := req.OnMediaToSend(mediaPath, ""); mediaErr != nil {
+							L_warn("failed to send media", "path", mediaPath, "error", mediaErr)
+						}
+					}
+				}
+
+				sendEvent(EventToolEnd{
+					RunID:      runID,
+					ToolName:   tc.Name,
+					ToolID:     tc.ID,
+					Result:     resultText,
+					Error:      errStr,
+					DurationMs: toolDuration.Milliseconds(),
+				})
+
+				// Add to session
+				toolUseID := sess.AddToolUse(tc.ID, tc.Name, tc.Input, response.Thinking, responseGroupID)
+				toolResultID := sess.AddToolResult(tc.ID, resultText, toolResult.Content, responseGroupID)
+
+				// Debug: log ContentBlocks being stored
+				if len(toolResult.Content) > 0 {
+					for i, block := range toolResult.Content {
+						L_debug("tool result content block",
+							"tool", tc.Name,
+							"blockIndex", i,
+							"type", block.Type,
+							"hasFilePath", block.FilePath != "",
+							"hasData", block.Data != "",
+							"mimeType", block.MimeType,
+						)
+					}
+				}
+
+				// Persist tool use and result to SQLite (skip for heartbeat - ephemeral)
+				if !req.IsHeartbeat {
+					g.persistMessage(ctx, PersistMessageParams{
+						MsgID:           toolUseID,
+						SessionKey:      sessionKey,
+						UserID:          userID,
+						Role:            "tool_use",
+						Source:          req.Source,
+						ToolCallID:      tc.ID,
+						ToolName:        tc.Name,
+						ToolInput:       tc.Input,
+						Thinking:        response.Thinking,
+						ResponseGroupID: responseGroupID,
+					})
+					g.persistMessage(ctx, PersistMessageParams{
+						MsgID:           toolResultID,
+						SessionKey:      sessionKey,
+						UserID:          userID,
+						Role:            "tool_result",
+						Content:         resultText,
+						Source:          req.Source,
+						ToolCallID:      tc.ID,
+						ToolError:       errStr,
+						ResponseGroupID: responseGroupID,
+					})
+
+					// Persist sent message content as a first-class assistant message for transcript searchability
+					// Check EACH tool in batch for "message" tool
+					if errStr == "" && tc.Name == "message" {
+						if sentText := extractMessageToolText(tc.Input); sentText != "" {
+							g.persistMessage(ctx, PersistMessageParams{
+								SessionKey: sessionKey,
+								UserID:     userID,
+								Role:       "assistant",
+								Content:    sentText,
+								Source:     "message_tool",
+							})
+							L_debug("gateway: persisted message tool send as assistant message", "session", sessionKey, "contentLen", len(sentText))
+						}
 					}
 				}
 			}
-
-			sendEvent(EventToolEnd{
-				RunID:      runID,
-				ToolName:   response.ToolName,
-				ToolID:     response.ToolUseID,
-				Result:     resultText,
-				Error:      errStr,
-				DurationMs: toolDuration.Milliseconds(),
-			})
-
-			// Add to session and continue loop
-			toolUseID := sess.AddToolUse(response.ToolUseID, response.ToolName, response.ToolInput, response.Thinking)
-			toolResultID := sess.AddToolResult(response.ToolUseID, resultText, toolResult.Content)
-
-			// Debug: log ContentBlocks being stored
-			if len(toolResult.Content) > 0 {
-				for i, block := range toolResult.Content {
-					L_debug("tool result content block",
-						"tool", response.ToolName,
-						"blockIndex", i,
-						"type", block.Type,
-						"hasFilePath", block.FilePath != "",
-						"hasData", block.Data != "",
-						"mimeType", block.MimeType,
-					)
-				}
-			}
-			// Persist tool use and result to SQLite (skip for heartbeat - ephemeral)
-			if !req.IsHeartbeat {
-				g.persistMessage(ctx, toolUseID, sessionKey, userID, "tool_use", "", req.Source, response.ToolUseID, response.ToolName, response.ToolInput, "", response.Thinking, "", "")
-				g.persistMessage(ctx, toolResultID, sessionKey, userID, "tool_result", resultText, req.Source, response.ToolUseID, "", nil, errStr, "", "", "")
-
-				// Persist sent message content as a first-class assistant message for transcript searchability
-				if errStr == "" && response.ToolName == "message" {
-					if sentText := extractMessageToolText(response.ToolInput); sentText != "" {
-						g.persistMessage(ctx, "", sessionKey, userID, "assistant", sentText, "message_tool", "", "", nil, "", "", "", "")
-						L_debug("gateway: persisted message tool send as assistant message", "session", sessionKey, "contentLen", len(sentText))
-					}
-				}
-			}
-
-			// Check for cancellation before next loop iteration (skip queued tool calls)
-			select {
-			case <-agentCtx.Done():
-				L_info("agent: cancelled after tool execution", "session", sessionKey, "tool", response.ToolName)
-				sendEvent(EventAgentEnd{RunID: runID, FinalText: ""})
-				return nil
-			default:
-			}
-
+			// All tools in batch executed, continue to next LLM call
 			continue
 		}
 
@@ -2195,7 +2285,13 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		assistantMsgID := sess.AddAssistantMessage(finalText)
 		// Persist assistant message (skip for heartbeat - ephemeral)
 		if !req.IsHeartbeat {
-			g.persistMessage(ctx, assistantMsgID, sessionKey, userID, "assistant", finalText, "", "", "", nil, "", "", "", "")
+			g.persistMessage(ctx, PersistMessageParams{
+				MsgID:      assistantMsgID,
+				SessionKey: sessionKey,
+				UserID:     userID,
+				Role:       "assistant",
+				Content:    finalText,
+			})
 		}
 		break
 	}
@@ -2671,7 +2767,16 @@ func (g *Gateway) InjectMessage(ctx context.Context, sessionKey, message string,
 		L_debug("gateway: added guidance to session", "session", sessionKey, "prefixedLen", len(prefixedMessage))
 
 		// Persist with supervision metadata
-		g.persistMessage(ctx, guidanceMsgID, sessionKey, u.ID, "user", prefixedMessage, "guidance", "", "", nil, "", "", supervisorName, "guidance")
+		g.persistMessage(ctx, PersistMessageParams{
+			MsgID:            guidanceMsgID,
+			SessionKey:       sessionKey,
+			UserID:           u.ID,
+			Role:             "user",
+			Content:          prefixedMessage,
+			Source:           "guidance",
+			Supervisor:       supervisorName,
+			InterventionType: "guidance",
+		})
 
 		// Send to supervision stream so supervisor sees the guidance they sent
 		if supervision := sess.GetSupervision(); supervision != nil {
@@ -2753,7 +2858,16 @@ func (g *Gateway) InjectMessage(ctx context.Context, sessionKey, message string,
 		L_debug("gateway: added ghostwrite to session", "session", sessionKey, "messageLen", len(message))
 
 		// Persist with supervision metadata
-		g.persistMessage(ctx, ghostwriteMsgID, sessionKey, u.ID, "assistant", message, "ghostwrite", "", "", nil, "", "", supervisorName, "ghostwrite")
+		g.persistMessage(ctx, PersistMessageParams{
+			MsgID:            ghostwriteMsgID,
+			SessionKey:       sessionKey,
+			UserID:           u.ID,
+			Role:             "assistant",
+			Content:          message,
+			Source:           "ghostwrite",
+			Supervisor:       supervisorName,
+			InterventionType: "ghostwrite",
+		})
 
 		// Send to supervision stream so supervisor sees the ghostwrite they sent
 		if supervision := sess.GetSupervision(); supervision != nil {
@@ -2925,47 +3039,67 @@ func (g *Gateway) SessionDB() *sql.DB {
 	return nil
 }
 
+// PersistMessageParams contains parameters for persisting a message to SQLite.
+type PersistMessageParams struct {
+	MsgID            string // Message ID (empty = auto-generate)
+	SessionKey       string
+	UserID           string
+	Role             string // "user", "assistant", "tool_use", "tool_result"
+	Content          string
+	Source           string
+	ToolCallID       string
+	ToolName         string
+	ToolInput        []byte
+	ToolError        string
+	Thinking         string
+	Supervisor       string
+	InterventionType string
+	ResponseGroupID  string // Groups tool calls from same LLM response
+}
+
 // persistMessage writes a message to SQLite storage for audit trail.
-// If msgID is empty, generates a new ID (for transcript-only entries without session Add*).
-func (g *Gateway) persistMessage(ctx context.Context, msgID, sessionKey, userID, role, content, source, toolCallID, toolName string, toolInput []byte, toolError, thinking, supervisor, interventionType string) {
+// If MsgID is empty, generates a new ID (for transcript-only entries without session Add*).
+func (g *Gateway) persistMessage(ctx context.Context, p PersistMessageParams) {
 	store := g.sessions.GetStore()
 	if store == nil {
 		return // No store configured
 	}
 
+	msgID := p.MsgID
 	if msgID == "" {
 		msgID = session.GenerateMessageID()
 	}
 
 	msg := &session.StoredMessage{
 		ID:               msgID,
-		SessionKey:       sessionKey,
+		SessionKey:       p.SessionKey,
 		Timestamp:        time.Now(),
-		Role:             role,
-		Content:          content,
-		Source:           source,
-		UserID:           userID,
-		ToolCallID:       toolCallID,
-		ToolName:         toolName,
-		ToolInput:        toolInput,
-		Thinking:         thinking,
-		Supervisor:       supervisor,
-		InterventionType: interventionType,
+		Role:             p.Role,
+		Content:          p.Content,
+		Source:           p.Source,
+		UserID:           p.UserID,
+		ToolCallID:       p.ToolCallID,
+		ToolName:         p.ToolName,
+		ToolInput:        p.ToolInput,
+		Thinking:         p.Thinking,
+		Supervisor:       p.Supervisor,
+		InterventionType: p.InterventionType,
+		ResponseGroupID:  p.ResponseGroupID,
 	}
 
 	// For tool_result, store the result in ToolResult field and mark errors
-	if role == "tool_result" {
-		msg.ToolResult = content // Store actual result
-		msg.Content = ""         // Keep content empty for tool results
-		if toolError != "" {
+	if p.Role == "tool_result" {
+		msg.ToolResult = p.Content // Store actual result
+		msg.Content = ""           // Keep content empty for tool results
+		if p.ToolError != "" {
 			msg.ToolIsError = true
 		}
 	}
 
-	if err := store.AppendMessage(ctx, sessionKey, msg); err != nil {
-		L_warn("failed to persist message to SQLite", "role", role, "error", err)
+	if err := store.AppendMessage(ctx, p.SessionKey, msg); err != nil {
+		L_warn("failed to persist message to SQLite", "role", p.Role, "error", err)
 	} else {
-		L_trace("message persisted to SQLite", "role", role, "toolName", toolName, "supervisor", supervisor)
+		L_trace("message persisted to SQLite", "role", p.Role, "toolName", p.ToolName, "supervisor", p.Supervisor)
 	}
 }
 

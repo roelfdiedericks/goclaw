@@ -21,6 +21,9 @@ type Message struct {
 	ToolInput     json.RawMessage `json:"toolInput,omitempty"` // for tool_use
 	Thinking      string          `json:"thinking,omitempty"`  // Reasoning/thinking content (Kimi, Deepseek, etc.)
 
+	// Tool grouping for multi-tool call responses
+	ResponseGroupID string `json:"responseGroupId,omitempty"` // Groups tool calls from same LLM response
+
 	// Supervision metadata (for guidance/ghostwriting interventions)
 	Supervisor       string `json:"supervisor,omitempty"`       // Username/ID of supervisor who intervened
 	InterventionType string `json:"interventionType,omitempty"` // "guidance" or "ghostwrite"

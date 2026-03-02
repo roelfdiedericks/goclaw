@@ -61,11 +61,8 @@ type ToolCallInfo struct {
 
 // Response represents the LLM response
 type Response struct {
-	Text       string // accumulated text response
-	ToolUseID  string // if tool use requested (first/only tool call - for backward compat)
-	ToolName   string
-	ToolInput  json.RawMessage
-	ToolCalls  []ToolCallInfo // All tool calls (when model returns multiple)
+	Text       string         // accumulated text response
+	ToolCalls  []ToolCallInfo // All tool calls from this response
 	StopReason string         // "end_turn", "tool_use", etc.
 	Thinking   string         // reasoning/thinking content (Kimi, Deepseek, etc.)
 
@@ -76,9 +73,9 @@ type Response struct {
 	ReasoningTokens     int // tokens used for reasoning/thinking (xAI, OpenAI o-series)
 }
 
-// HasToolUse returns true if the response contains a tool use request
+// HasToolUse returns true if the response contains tool use requests
 func (r *Response) HasToolUse() bool {
-	return r.ToolName != "" || len(r.ToolCalls) > 0
+	return len(r.ToolCalls) > 0
 }
 
 // Note: AnthropicProvider does not yet fully implement Provider interface.
@@ -536,18 +533,16 @@ func (c *AnthropicProvider) StreamMessage(
 	}
 
 	// Check for tool use and thinking in the response
-	var toolCallCount int
 	for _, block := range message.Content {
 		switch variant := block.AsAny().(type) {
 		case anthropic.ToolUseBlock:
-			toolCallCount++
-			if response.ToolUseID == "" {
-				response.ToolUseID = variant.ID
-				response.ToolName = variant.Name
-				inputBytes, _ := json.Marshal(variant.Input)
-				response.ToolInput = inputBytes
-				L_info("llm: tool use", "tool", variant.Name, "id", variant.ID)
-			}
+			inputBytes, _ := json.Marshal(variant.Input)
+			response.ToolCalls = append(response.ToolCalls, ToolCallInfo{
+				ID:    variant.ID,
+				Name:  variant.Name,
+				Input: inputBytes,
+			})
+			L_debug("llm: tool use", "tool", variant.Name, "id", variant.ID)
 		case anthropic.ThinkingBlock:
 			if variant.Thinking != "" {
 				response.Thinking = variant.Thinking
@@ -555,8 +550,9 @@ func (c *AnthropicProvider) StreamMessage(
 			}
 		}
 	}
-	if toolCallCount > 1 {
-		L_warn("llm: multiple tool calls returned, processing first only", "total", toolCallCount, "processing", response.ToolName)
+	if len(response.ToolCalls) > 0 {
+		response.StopReason = "tool_use"
+		L_info("llm: tool calls detected", "count", len(response.ToolCalls))
 	}
 
 	// If we accumulated thinking from deltas but didn't get a final block, use that
@@ -612,8 +608,8 @@ func (c *AnthropicProvider) StreamMessage(
 		}
 
 		// Tool use tracking
-		if response.ToolName != "" {
-			MetricOutcome(c.metricPrefix, "tool_requested", response.ToolName)
+		for _, tc := range response.ToolCalls {
+			MetricOutcome(c.metricPrefix, "tool_requested", tc.Name)
 		}
 
 		// Context window metrics (contextWindow/usagePercent calculated above)

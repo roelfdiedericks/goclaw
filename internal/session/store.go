@@ -103,11 +103,12 @@ type StoredMessage struct {
 	Content string // Text content
 
 	// For tool interactions (nullable)
-	ToolCallID  string // tool_use ID or tool_result's referenced ID
-	ToolName    string // Tool name (for tool_use)
-	ToolInput   []byte // JSON input (for tool_use)
-	ToolResult  string // Result text (for tool_result)
-	ToolIsError bool   // Whether tool result is an error
+	ToolCallID      string // tool_use ID or tool_result's referenced ID
+	ToolName        string // Tool name (for tool_use)
+	ToolInput       []byte // JSON input (for tool_use)
+	ToolResult      string // Result text (for tool_result)
+	ToolIsError     bool   // Whether tool result is an error
+	ResponseGroupID string // Groups tool calls from same LLM response (for multi-tool batches)
 
 	// Reasoning/thinking content (Kimi, Deepseek, Claude, etc.)
 	Thinking string

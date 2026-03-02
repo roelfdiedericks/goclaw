@@ -869,10 +869,9 @@ func (p *XAIProvider) processStream(
 		textBuilder      strings.Builder
 		reasoningBuilder strings.Builder
 		responseID       string
-		finishReason         xai.FinishReason
-		usage                xai.Usage
-		toolCall             *xai.ToolCallInfo
-		clientToolCallCount  int
+		finishReason     xai.FinishReason
+		usage            xai.Usage
+		clientToolCalls  []*xai.ToolCallInfo // All client tool calls
 	)
 
 	for {
@@ -935,17 +934,14 @@ func (p *XAIProvider) processStream(
 				continue
 			}
 
-			// Client-side: capture first one for GoClaw to execute
-			if toolCall == nil && clientToolNames[name] {
+			// Client-side: capture ALL for GoClaw to execute
+			if clientToolNames[name] {
 				L_debug("xai: client tool call received",
 					"name", name,
 					"id", tc.ID,
 				)
-				toolCall = tc
-				clientToolCallCount++
-			} else if clientToolNames[name] {
-				clientToolCallCount++
-			} else if toolCall == nil {
+				clientToolCalls = append(clientToolCalls, tc)
+			} else {
 				L_debug("xai: ignoring non-client tool call",
 					"name", name,
 					"id", tc.ID,
@@ -986,23 +982,28 @@ func (p *XAIProvider) processStream(
 		resp.StopReason = "end_turn"
 	}
 
-	// Extract tool call info if present
-	if toolCall != nil && toolCall.Function != nil {
-		resp.ToolUseID = toolCall.ID
-		toolName := toolCall.Function.Name
+	// Extract tool call info - populate ToolCalls slice for ALL client tools
+	for _, tc := range clientToolCalls {
+		if tc.Function == nil {
+			continue
+		}
+		toolName := tc.Function.Name
 		if strings.HasPrefix(toolName, clientToolPrefix) {
 			toolName = strings.TrimPrefix(toolName, clientToolPrefix)
 			L_debug("xai: stripped prefix from tool call",
-				"prefixed", toolCall.Function.Name,
+				"prefixed", tc.Function.Name,
 				"canonical", toolName,
 			)
 		}
-		resp.ToolName = toolName
-		resp.ToolInput = json.RawMessage(toolCall.Function.Arguments)
+		resp.ToolCalls = append(resp.ToolCalls, ToolCallInfo{
+			ID:    tc.ID,
+			Name:  toolName,
+			Input: json.RawMessage(tc.Function.Arguments),
+		})
+	}
+	if len(resp.ToolCalls) > 0 {
 		resp.StopReason = "tool_use"
-		if clientToolCallCount > 1 {
-			L_warn("llm: multiple tool calls returned, processing first only", "total", clientToolCallCount, "processing", toolName)
-		}
+		L_info("llm: tool calls detected", "provider", p.name, "count", len(resp.ToolCalls))
 	}
 
 	L_debug("xai: stream complete",
@@ -1014,14 +1015,8 @@ func (p *XAIProvider) processStream(
 		"outputTokens", resp.OutputTokens,
 		"cacheReadTokens", resp.CacheReadTokens,
 		"reasoningTokens", resp.ReasoningTokens,
+		"toolCalls", len(resp.ToolCalls),
 	)
-	if toolCall != nil {
-		L_debug("xai: tool call",
-			"tool", resp.ToolName,
-			"id", resp.ToolUseID,
-			"argsLen", len(toolCall.Function.Arguments),
-		)
-	}
 
 	// Record metrics
 	if p.metricPrefix != "" {

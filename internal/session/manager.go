@@ -260,13 +260,14 @@ func mergeMessagesByTimestamp(openclawMsgs []Message, goclawMsgs []StoredMessage
 		seen[key] = true
 
 		msg := Message{
-			ID:        sm.ID,
-			Role:      sm.Role,
-			Content:   content, // Use resolved content (handles tool_result)
-			Source:    sm.Source,
-			Timestamp: sm.Timestamp,
-			ToolUseID: sm.ToolCallID,
-			ToolName:  sm.ToolName,
+			ID:              sm.ID,
+			Role:            sm.Role,
+			Content:         content, // Use resolved content (handles tool_result)
+			Source:          sm.Source,
+			Timestamp:       sm.Timestamp,
+			ToolUseID:       sm.ToolCallID,
+			ToolName:        sm.ToolName,
+			ResponseGroupID: sm.ResponseGroupID,
 		}
 		if sm.ToolInput != nil {
 			msg.ToolInput = sm.ToolInput
@@ -426,14 +427,15 @@ func storedToMessages(stored []StoredMessage) []Message {
 	msgs := make([]Message, len(stored))
 	for i, sm := range stored {
 		msgs[i] = Message{
-			ID:        sm.ID,
-			Role:      sm.Role,
-			Content:   sm.Content,
-			Source:    sm.Source,
-			Timestamp: sm.Timestamp,
-			ToolUseID: sm.ToolCallID,
-			ToolName:  sm.ToolName,
-			Thinking:  sm.Thinking,
+			ID:              sm.ID,
+			Role:            sm.Role,
+			Content:         sm.Content,
+			Source:          sm.Source,
+			Timestamp:       sm.Timestamp,
+			ToolUseID:       sm.ToolCallID,
+			ToolName:        sm.ToolName,
+			Thinking:        sm.Thinking,
+			ResponseGroupID: sm.ResponseGroupID,
 		}
 		if sm.ToolInput != nil {
 			msgs[i].ToolInput = sm.ToolInput

@@ -655,8 +655,7 @@ func (p *OaiNextProvider) processEvents(
 		reasoningBuilder strings.Builder
 		responseID       string
 		usage            *oaiUsage
-		toolCall         *oaiOutputItem // first client tool call
-		clientToolCount  int
+		clientToolCalls  []*oaiOutputItem // All client tool calls
 	)
 
 	for {
@@ -701,7 +700,7 @@ func (p *OaiNextProvider) processEvents(
 
 		case oaiEventOutputItemDone:
 			if event.Item != nil {
-				p.handleOutputItemDone(event.Item, opts, clientToolNames, &toolCall, &clientToolCount)
+				p.handleOutputItemDone(event.Item, opts, clientToolNames, &clientToolCalls)
 			}
 
 		case oaiEventResponseDone, oaiEventResponseCompleted:
@@ -755,20 +754,21 @@ done:
 		}
 	}
 
-	// Extract tool call
-	if toolCall != nil {
-		toolName := toolCall.Name
+	// Extract tool calls - populate ToolCalls slice for ALL client tools
+	for _, tc := range clientToolCalls {
+		toolName := tc.Name
 		if strings.HasPrefix(toolName, clientToolPrefix) {
 			toolName = strings.TrimPrefix(toolName, clientToolPrefix)
 		}
-		resp.ToolUseID = toolCall.CallID
-		resp.ToolName = toolName
-		resp.ToolInput = json.RawMessage(toolCall.Arguments)
+		resp.ToolCalls = append(resp.ToolCalls, ToolCallInfo{
+			ID:    tc.CallID,
+			Name:  toolName,
+			Input: json.RawMessage(tc.Arguments),
+		})
+	}
+	if len(resp.ToolCalls) > 0 {
 		resp.StopReason = "tool_use"
-		if clientToolCount > 1 {
-			L_warn("oai-next: multiple tool calls, processing first only",
-				"total", clientToolCount, "processing", toolName)
-		}
+		L_info("llm: tool calls detected", "provider", p.name, "count", len(resp.ToolCalls))
 	} else {
 		resp.StopReason = "end_turn"
 	}
@@ -790,16 +790,12 @@ func (p *OaiNextProvider) handleOutputItemDone(
 	item *oaiOutputItem,
 	opts *StreamOptions,
 	clientToolNames map[string]bool,
-	toolCall **oaiOutputItem,
-	clientToolCount *int,
+	clientToolCalls *[]*oaiOutputItem,
 ) {
 	switch item.Type {
 	case oaiItemTypeFunctionCall:
 		if clientToolNames[item.Name] {
-			if *toolCall == nil {
-				*toolCall = item
-			}
-			*clientToolCount++
+			*clientToolCalls = append(*clientToolCalls, item)
 			L_debug("oai-next: client tool call",
 				"name", item.Name, "callID", item.CallID)
 		} else {

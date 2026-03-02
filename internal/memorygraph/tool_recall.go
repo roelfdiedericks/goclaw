@@ -187,9 +187,14 @@ func (t *RecallTool) Execute(ctx context.Context, input json.RawMessage) (*types
 		return types.ErrorResult(fmt.Sprintf("search failed: %v", err)), nil
 	}
 
-	// Touch accessed memories
+	// Touch accessed memories and log what was recalled
 	for _, r := range results {
 		_ = t.manager.TouchMemory(r.Memory.UUID)
+		L_debug("memory_graph_recall: result",
+			"id", r.Memory.UUID,
+			"type", r.Memory.Type,
+			"content", truncateStr(r.Memory.Content, 60),
+		)
 	}
 
 	// Format output for LLM

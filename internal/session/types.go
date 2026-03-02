@@ -201,6 +201,13 @@ func GenerateMessageID() string {
 	return fmt.Sprintf("%d_%06d", ms, seq)
 }
 
+// GenerateResponseGroupID creates a unique, sortable ID for grouping tool calls
+// from a single LLM response. Uses same format as message IDs for consistency.
+// Wrapped in helper to allow format changes without touching call sites.
+func GenerateResponseGroupID() string {
+	return GenerateMessageID()
+}
+
 // ParseRecord parses a JSON line into the appropriate record type
 func ParseRecord(data []byte) (Record, error) {
 	// First, parse just the type field

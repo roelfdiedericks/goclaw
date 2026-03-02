@@ -505,12 +505,13 @@ func (m *CompactionManager) retryPendingSummary(ctx context.Context) {
 	sessionMessages := make([]Message, len(messages))
 	for i, sm := range messages {
 		sessionMessages[i] = Message{
-			ID:        sm.ID,
-			Role:      sm.Role,
-			Content:   sm.Content,
-			ToolName:  sm.ToolName,
-			ToolInput: sm.ToolInput,
-			Timestamp: sm.Timestamp,
+			ID:              sm.ID,
+			Role:            sm.Role,
+			Content:         sm.Content,
+			ToolName:        sm.ToolName,
+			ToolInput:       sm.ToolInput,
+			Timestamp:       sm.Timestamp,
+			ResponseGroupID: sm.ResponseGroupID,
 		}
 	}
 

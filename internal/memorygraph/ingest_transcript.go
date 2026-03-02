@@ -112,7 +112,7 @@ func (t *TranscriptIngester) Scan(ctx context.Context) (<-chan IngestItem, error
 			select {
 			case ch <- item:
 				count++
-				L_debug("memorygraph: found transcript chunk", "id", id, "session", sessionKey)
+				L_trace("memorygraph: found transcript chunk", "id", id, "session", sessionKey)
 			case <-ctx.Done():
 				return
 			}

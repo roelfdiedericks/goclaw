@@ -271,37 +271,39 @@ func (s *Session) AddSupervisionAssistantMessage(content, supervisor, interventi
 }
 
 // AddToolUse adds a tool use message to the session and returns the message ID
-func (s *Session) AddToolUse(toolUseID, toolName string, input json.RawMessage, thinking string) string {
+func (s *Session) AddToolUse(toolUseID, toolName string, input json.RawMessage, thinking, responseGroupID string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	id := GenerateMessageID()
 	s.Messages = append(s.Messages, Message{
-		ID:        id,
-		Role:      "tool_use",
-		ToolUseID: toolUseID,
-		ToolName:  toolName,
-		ToolInput: input,
-		Thinking:  thinking,
-		Timestamp: time.Now(),
+		ID:              id,
+		Role:            "tool_use",
+		ToolUseID:       toolUseID,
+		ToolName:        toolName,
+		ToolInput:       input,
+		Thinking:        thinking,
+		ResponseGroupID: responseGroupID,
+		Timestamp:       time.Now(),
 	})
 	s.UpdatedAt = time.Now()
 	return id
 }
 
 // AddToolResult adds a tool result message to the session and returns the message ID
-func (s *Session) AddToolResult(toolUseID, result string, contentBlocks []ContentBlock) string {
+func (s *Session) AddToolResult(toolUseID, result string, contentBlocks []ContentBlock, responseGroupID string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	id := GenerateMessageID()
 	s.Messages = append(s.Messages, Message{
-		ID:            id,
-		Role:          "tool_result",
-		ToolUseID:     toolUseID,
-		Content:       result,
-		ContentBlocks: contentBlocks,
-		Timestamp:     time.Now(),
+		ID:              id,
+		Role:            "tool_result",
+		ToolUseID:       toolUseID,
+		Content:         result,
+		ContentBlocks:   contentBlocks,
+		ResponseGroupID: responseGroupID,
+		Timestamp:       time.Now(),
 	})
 	s.UpdatedAt = time.Now()
 	return id

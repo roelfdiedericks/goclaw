@@ -177,7 +177,8 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, source Ingest
 			"batch", batchNum,
 			"chunks", len(batch),
 			"recalls", result.Recalls,
-			"memories", memoryCount)
+			"stores", memoryCount,
+			"skips", result.Skips)
 		batch = nil
 		return nil
 	}
@@ -199,7 +200,7 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, source Ingest
 		}
 
 		if state != nil && state.ContentHash == item.ContentHash {
-			L_debug("memorygraph: skipping unchanged", "path", item.SourcePath)
+			L_trace("memorygraph: skipping unchanged", "path", item.SourcePath)
 			report.Skipped++
 			continue
 		}

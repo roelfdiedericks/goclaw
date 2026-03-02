@@ -61,6 +61,10 @@ func (t *StoreTool) Schema() map[string]any {
 				"type":        "string",
 				"description": "When this happened (ISO date '2026-02-27' or RFC3339). Defaults to conversation time.",
 			},
+			"reasoning": map[string]any{
+				"type":        "string",
+				"description": "Brief explanation of why this memory is worth storing (required for debugging)",
+			},
 			"associations": map[string]any{
 				"type": "array",
 				"items": map[string]any{
@@ -81,7 +85,7 @@ func (t *StoreTool) Schema() map[string]any {
 				"description": "Links to existing memories",
 			},
 		},
-		"required": []string{"content", "memory_type"},
+		"required": []string{"content", "memory_type", "reasoning"},
 	}
 }
 
@@ -89,6 +93,7 @@ func (t *StoreTool) Schema() map[string]any {
 type StoreParams struct {
 	Content      string             `json:"content"`
 	MemoryType   string             `json:"memory_type"`
+	Reasoning    string             `json:"reasoning"`
 	Importance   *float32           `json:"importance,omitempty"`
 	Confidence   *float32           `json:"confidence,omitempty"`
 	Emotion      string             `json:"emotion,omitempty"`
@@ -122,6 +127,13 @@ func (t *StoreTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 	if u, ok := ctx.Value(ContextKeyUsername).(string); ok {
 		username = u
 	}
+
+	// Log the store decision with content and reasoning for visibility
+	L_info("memory_graph_store: storing",
+		"type", params.MemoryType,
+		"content", truncateStr(params.Content, 80),
+		"reasoning", params.Reasoning,
+	)
 
 	L_debug("memory_graph_store: executing",
 		"type", params.MemoryType,
