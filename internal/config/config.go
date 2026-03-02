@@ -237,6 +237,9 @@ func Load() (*LoadResult, error) {
 			Embeddings: llm.LLMPurposeConfig{
 				Models: []string{}, // Empty = disabled
 			},
+			MemoryExtraction: llm.LLMPurposeConfig{
+				Models: []string{}, // Empty = fallback to summarization then agent
+			},
 			Thinking: llm.ThinkingConfig{
 				BudgetTokens: 10000, // Default budget for extended thinking
 			},

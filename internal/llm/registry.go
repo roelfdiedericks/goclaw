@@ -79,17 +79,21 @@ var purposeCapabilities = map[string]purposeCapReq{
 		required: []string{"tool_use"},
 		warnOnly: []string{"vision"},
 	},
+	"memory_extraction": {
+		required: []string{"tool_use"},
+	},
 }
 
 // RegistryConfig is the configuration for the LLM registry
 type RegistryConfig struct {
-	Providers     map[string]LLMProviderConfig `json:"providers"`
-	Agent         LLMPurposeConfig             `json:"agent"`
-	Summarization LLMPurposeConfig             `json:"summarization"`
-	Embeddings    LLMPurposeConfig             `json:"embeddings"`
-	Heartbeat     LLMPurposeConfig             `json:"heartbeat,omitempty"`
-	Cron          LLMPurposeConfig             `json:"cron,omitempty"`
-	Hass          LLMPurposeConfig             `json:"hass,omitempty"`
+	Providers        map[string]LLMProviderConfig `json:"providers"`
+	Agent            LLMPurposeConfig             `json:"agent"`
+	Summarization    LLMPurposeConfig             `json:"summarization"`
+	Embeddings       LLMPurposeConfig             `json:"embeddings"`
+	Heartbeat        LLMPurposeConfig             `json:"heartbeat,omitempty"`
+	Cron             LLMPurposeConfig             `json:"cron,omitempty"`
+	Hass             LLMPurposeConfig             `json:"hass,omitempty"`
+	MemoryExtraction LLMPurposeConfig             `json:"memoryExtraction,omitempty"`
 }
 
 // NewRegistry creates a new provider registry from configuration
@@ -97,12 +101,13 @@ func NewRegistry(cfg RegistryConfig) (*Registry, error) {
 	r := &Registry{
 		providers: make(map[string]providerInstance),
 		purposes: map[string]LLMPurposeConfig{
-			"agent":         cfg.Agent,
-			"summarization": cfg.Summarization,
-			"embeddings":    cfg.Embeddings,
-			"heartbeat":     cfg.Heartbeat,
-			"cron":          cfg.Cron,
-			"hass":          cfg.Hass,
+			"agent":              cfg.Agent,
+			"summarization":      cfg.Summarization,
+			"embeddings":         cfg.Embeddings,
+			"heartbeat":          cfg.Heartbeat,
+			"cron":               cfg.Cron,
+			"hass":               cfg.Hass,
+			"memory_extraction":  cfg.MemoryExtraction,
 		},
 		cooldowns: make(map[string]*providerCooldown),
 	}
@@ -115,7 +120,7 @@ func NewRegistry(cfg RegistryConfig) (*Registry, error) {
 	}
 
 	// Validate models for all purposes (skip empty chains — they fall back to agent)
-	for _, purpose := range []string{"agent", "summarization", "embeddings", "heartbeat", "cron", "hass"} {
+	for _, purpose := range []string{"agent", "summarization", "embeddings", "heartbeat", "cron", "hass", "memory_extraction"} {
 		if len(r.purposes[purpose].Models) == 0 {
 			continue
 		}

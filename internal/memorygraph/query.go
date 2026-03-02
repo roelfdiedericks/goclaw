@@ -9,29 +9,31 @@ import (
 
 // QueryOptions represents a query builder for memories
 type QueryOptions struct {
-	types           []Type
-	username        string
-	channel         string
-	minImportance   *float32
-	maxImportance   *float32
-	minConfidence   *float32
-	maxConfidence   *float32
-	sinceCreated    *time.Time
-	untilCreated    *time.Time
-	sinceAccessed   *time.Time
-	untilAccessed   *time.Time
+	types            []Type
+	username         string
+	channel          string
+	minImportance    *float32
+	maxImportance    *float32
+	minConfidence    *float32
+	maxConfidence    *float32
+	sinceCreated     *time.Time
+	untilCreated     *time.Time
+	sinceOccurred    *time.Time
+	untilOccurred    *time.Time
+	sinceAccessed    *time.Time
+	untilAccessed    *time.Time
 	includeForgotten bool
 	hasTriggerBefore *time.Time
-	orderBy         string
-	orderDesc       bool
-	limit           int
-	offset          int
+	orderBy          string
+	orderDesc        bool
+	limit            int
+	offset           int
 }
 
 // Query creates a new query builder
 func Query() *QueryOptions {
 	return &QueryOptions{
-		orderBy:   "created_at",
+		orderBy:   "occurred_at",
 		orderDesc: true,
 		limit:     100,
 	}
@@ -85,9 +87,21 @@ func (q *QueryOptions) SinceCreated(t time.Time) *QueryOptions {
 	return q
 }
 
-// UntilCreated filters by created_at <= time
+// UntilCreated filters by created_at <= time (audit only)
 func (q *QueryOptions) UntilCreated(t time.Time) *QueryOptions {
 	q.untilCreated = &t
+	return q
+}
+
+// SinceOccurred filters by occurred_at >= time
+func (q *QueryOptions) SinceOccurred(t time.Time) *QueryOptions {
+	q.sinceOccurred = &t
+	return q
+}
+
+// UntilOccurred filters by occurred_at <= time
+func (q *QueryOptions) UntilOccurred(t time.Time) *QueryOptions {
+	q.untilOccurred = &t
 	return q
 }
 
@@ -115,9 +129,10 @@ func (q *QueryOptions) HasTriggerBefore(t time.Time) *QueryOptions {
 	return q
 }
 
-// OrderBy sets the order field (created_at, updated_at, importance, access_count)
+// OrderBy sets the order field (occurred_at, created_at, updated_at, importance, access_count)
 func (q *QueryOptions) OrderBy(field string) *QueryOptions {
 	validFields := map[string]bool{
+		"occurred_at":      true,
 		"created_at":       true,
 		"updated_at":       true,
 		"last_accessed_at": true,
@@ -169,7 +184,7 @@ func (q *QueryOptions) Build() (string, []interface{}) {
 		SELECT id, uuid, content, memory_type, importance, confidence,
 			created_at, updated_at, last_accessed_at, access_count,
 			next_trigger_at, source, source_session, source_message,
-			username, channel, chat_id, forgotten, embedding, embedding_model
+			username, channel, chat_id, emotion, occurred_at, forgotten, embedding, embedding_model
 		FROM memories
 	`
 
@@ -215,7 +230,15 @@ func (q *QueryOptions) Build() (string, []interface{}) {
 		args = append(args, *q.maxConfidence)
 	}
 
-	// Time filters
+	// Time filters - occurred_at (primary), created_at (audit)
+	if q.sinceOccurred != nil {
+		conditions = append(conditions, "occurred_at >= ?")
+		args = append(args, q.sinceOccurred.Unix())
+	}
+	if q.untilOccurred != nil {
+		conditions = append(conditions, "occurred_at <= ?")
+		args = append(args, q.untilOccurred.Unix())
+	}
 	if q.sinceCreated != nil {
 		conditions = append(conditions, "created_at >= ?")
 		args = append(args, q.sinceCreated.Format(time.RFC3339))

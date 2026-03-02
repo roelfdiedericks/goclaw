@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS memories (
     channel TEXT,
     chat_id TEXT,
     emotion TEXT,
+    occurred_at INTEGER NOT NULL,
     forgotten INTEGER NOT NULL DEFAULT 0,
     embedding BLOB,
     embedding_model TEXT
@@ -55,6 +56,7 @@ CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_forgotten ON memories(forgotten);
 CREATE INDEX IF NOT EXISTS idx_memories_next_trigger ON memories(next_trigger_at) WHERE next_trigger_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memories_occurred ON memories(occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_emotion ON memories(emotion) WHERE emotion IS NOT NULL;
 
 -- Full-text search virtual table

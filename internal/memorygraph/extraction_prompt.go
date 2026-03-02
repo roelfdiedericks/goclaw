@@ -25,10 +25,11 @@ Parameters:
 - importance (optional): 0.0-1.0, uses type default if omitted
 - emotion (optional): User's emotional state: frustrated, excited, stressed, relieved, etc.
 - source (optional): "user stated", "inferred", "observed"
+- occurred_at (optional): When this happened (ISO date like "2026-02-27"). Use the conversation date to calculate dates for relative references ("yesterday", "last week"). Defaults to conversation timestamp if not specified.
 - associations (optional): Array of {target_id, relation_type} to link to recalled memories
   - relation_type: "updates", "contradicts", "related_to", "part_of", "caused_by", "result_of"
 
-Example: memory_graph_store(content="User was promoted to senior engineer", memory_type="event", emotion="excited", associations=[{target_id: "01HQ1234", relation_type: "updates"}])
+Example: memory_graph_store(content="User was promoted to senior engineer", memory_type="event", emotion="excited", occurred_at="2026-02-26", associations=[{target_id: "01HQ1234", relation_type: "updates"}])
 
 ## Process
 1. **Recall first.** ALWAYS search for related memories before saving.

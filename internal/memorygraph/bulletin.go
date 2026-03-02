@@ -41,7 +41,7 @@ func BuildMemoryBulletin(ctx context.Context, mgr *Manager, provider llm.Provide
 	// Recent memories (last 10)
 	recent, err := Query().
 		Username(username).
-		OrderBy("created_at").
+		OrderBy("occurred_at").
 		Descending().
 		Limit(10).
 		Execute(mgr.DB())
@@ -57,7 +57,7 @@ func BuildMemoryBulletin(ctx context.Context, mgr *Manager, provider llm.Provide
 	decisions, err := Query().
 		Username(username).
 		Types(TypeDecision).
-		OrderBy("created_at").
+		OrderBy("occurred_at").
 		Descending().
 		Limit(5).
 		Execute(mgr.DB())
@@ -118,7 +118,7 @@ func BuildMemoryBulletin(ctx context.Context, mgr *Manager, provider llm.Provide
 	}
 
 	if len(sections) == 0 {
-		return "No memories found for this user.", nil
+		return fmt.Sprintf("No memories found for user %q.", username), nil
 	}
 
 	// If no LLM provider, return the raw structured data
@@ -232,8 +232,8 @@ func BuildContextBulletin(mgr *Manager, username string) (string, error) {
 	anomalies, err := Query().
 		Username(username).
 		Types(TypeAnomaly).
-		SinceCreated(yesterday).
-		OrderBy("created_at").
+		SinceOccurred(yesterday).
+		OrderBy("occurred_at").
 		Descending().
 		Limit(5).
 		Execute(mgr.DB())

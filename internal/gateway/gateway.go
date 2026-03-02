@@ -1144,6 +1144,33 @@ func (g *Gateway) InjectSystemEvent(ctx context.Context, text string) error {
 	return err
 }
 
+// PersistDeliveredMessage saves a delivered message to the primary session for transcript indexing.
+// Used by cron and heartbeat to persist messages that were sent to channels.
+func (g *Gateway) PersistDeliveredMessage(ctx context.Context, content, source string) error {
+	store := g.sessions.GetStore()
+	if store == nil {
+		return nil
+	}
+
+	msg := &session.StoredMessage{
+		ID:         session.GenerateMessageID(),
+		SessionKey: session.PrimarySession,
+		Timestamp:  time.Now(),
+		Role:       "assistant",
+		Content:    content,
+		Source:     source,
+		UserID:     g.GetOwnerUserID(),
+	}
+
+	if err := store.AppendMessage(ctx, session.PrimarySession, msg); err != nil {
+		L_warn("gateway: failed to persist delivered message", "error", err)
+		return err
+	}
+
+	L_debug("gateway: persisted delivered message", "source", source, "contentLen", len(content))
+	return nil
+}
+
 // ProcessMessage is the unified entry point for agent processing.
 //
 // Parameters:

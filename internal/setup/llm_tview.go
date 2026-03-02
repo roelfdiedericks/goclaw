@@ -60,6 +60,18 @@ func (e *LLMEditor) createMenu() *forms.MenuListResult {
 		return fmt.Sprintf("%s (%d models)", name, count)
 	}
 
+	// Memory Extraction has custom fallback: memory_extraction -> summarization -> agent
+	memExtLabel := func() string {
+		count := len(e.cfg.MemoryExtraction.Models)
+		if count > 0 {
+			return fmt.Sprintf("Memory Extraction (%d models)", count)
+		}
+		if len(e.cfg.Summarization.Models) > 0 {
+			return "Memory Extraction (uses summarization)"
+		}
+		return "Memory Extraction (uses agent chain)"
+	}
+
 	items := []forms.MenuItem{
 		{Label: fmt.Sprintf("Providers (%d configured)", providerCount), OnSelect: e.showProviderList},
 		{Label: fmt.Sprintf("Agent (%d models)", agentModels), OnSelect: func() { e.editPurpose("agent", &e.cfg.Agent) }},
@@ -68,6 +80,7 @@ func (e *LLMEditor) createMenu() *forms.MenuListResult {
 		{Label: purposeLabel("Heartbeat", len(e.cfg.Heartbeat.Models)), OnSelect: func() { e.editPurpose("heartbeat", &e.cfg.Heartbeat) }},
 		{Label: purposeLabel("Cron", len(e.cfg.Cron.Models)), OnSelect: func() { e.editPurpose("cron", &e.cfg.Cron) }},
 		{Label: purposeLabel("Hass", len(e.cfg.Hass.Models)), OnSelect: func() { e.editPurpose("hass", &e.cfg.Hass) }},
+		{Label: memExtLabel(), OnSelect: func() { e.editPurpose("memory_extraction", &e.cfg.MemoryExtraction) }},
 		{Label: "System Prompt", OnSelect: e.editSystemPrompt},
 		{Label: "Extended Thinking", OnSelect: e.editThinking},
 	}

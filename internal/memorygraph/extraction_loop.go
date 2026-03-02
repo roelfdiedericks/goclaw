@@ -3,6 +3,7 @@ package memorygraph
 import (
 	"context"
 	"fmt"
+	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
@@ -13,7 +14,10 @@ import (
 // Context keys for tool execution
 type contextKey string
 
-const ContextKeyUsername contextKey = "username"
+const (
+	ContextKeyUsername         contextKey = "username"
+	ContextKeyDefaultTimestamp contextKey = "defaultTimestamp"
+)
 
 // ExtractionLoop is a mini agentic loop for memory extraction.
 // It uses the recall-first pattern: check existing memories before saving.
@@ -27,13 +31,14 @@ type ExtractionLoop struct {
 // LoopExtractionInput contains input for the extraction loop.
 // Named differently from ExtractionContext in extraction.go to avoid conflict.
 type LoopExtractionInput struct {
-	Username     string   // From message.UserID
-	Channel      string   // From message source
-	SessionKey   string   // Session identifier
-	Conversation string   // Formatted conversation text for LLM
-	MessageIDs   []string // IDs of messages being extracted
-	SourceType   string   // "live" or source type for bulk
-	SourceFile   string   // For bulk ingestion only
+	Username         string    // From message.UserID
+	Channel          string    // From message source
+	SessionKey       string    // Session identifier
+	Conversation     string    // Formatted conversation text for LLM
+	MessageIDs       []string  // IDs of messages being extracted
+	SourceType       string    // "live" or source type for bulk
+	SourceFile       string    // For bulk ingestion only
+	ConversationTime time.Time // When this conversation happened (for occurred_at default)
 }
 
 // LoopExtractionResult contains the output of an extraction loop run.
@@ -45,17 +50,32 @@ type LoopExtractionResult struct {
 	Error         error
 }
 
-// NewExtractionLoop creates a new extraction loop.
-// Uses the summarization provider (cheap, fast model).
-func NewExtractionLoop(mgr *Manager) (*ExtractionLoop, error) {
+// getExtractionProvider returns an LLM provider for memory extraction.
+// Tries memory_extraction -> summarization -> agent in order.
+func getExtractionProvider() (llm.Provider, error) {
 	registry := llm.GetRegistry()
 	if registry == nil {
 		return nil, fmt.Errorf("no LLM registry available")
 	}
 
-	provider, err := registry.GetProvider("summarization")
+	for _, purpose := range []string{"memory_extraction", "summarization", "agent"} {
+		provider, err := registry.GetProvider(purpose)
+		if err == nil {
+			L_debug("extraction: using provider", "purpose", purpose, "model", provider.Model())
+			return provider, nil
+		}
+		L_debug("extraction: purpose unavailable", "purpose", purpose, "error", err)
+	}
+
+	return nil, fmt.Errorf("no provider available for extraction")
+}
+
+// NewExtractionLoop creates a new extraction loop.
+// Uses the memory_extraction provider (falls back to summarization, then agent).
+func NewExtractionLoop(mgr *Manager) (*ExtractionLoop, error) {
+	provider, err := getExtractionProvider()
 	if err != nil {
-		return nil, fmt.Errorf("no summarization provider: %w", err)
+		return nil, err
 	}
 
 	// Create tool registry with just recall + store
@@ -73,8 +93,11 @@ func NewExtractionLoop(mgr *Manager) (*ExtractionLoop, error) {
 
 // Run executes the extraction loop on the given context.
 func (e *ExtractionLoop) Run(ctx context.Context, ec LoopExtractionInput) (*LoopExtractionResult, error) {
-	// Inject username into context for tools
+	// Inject username and default timestamp into context for tools
 	ctx = context.WithValue(ctx, ContextKeyUsername, ec.Username)
+	if !ec.ConversationTime.IsZero() {
+		ctx = context.WithValue(ctx, ContextKeyDefaultTimestamp, ec.ConversationTime)
+	}
 
 	messages := []types.Message{
 		{Role: "user", Content: buildLoopUserPrompt(ec)},
@@ -82,6 +105,9 @@ func (e *ExtractionLoop) Run(ctx context.Context, ec LoopExtractionInput) (*Loop
 	toolDefs := e.toolReg.Definitions()
 
 	result := &LoopExtractionResult{}
+
+	// Disable server-side tools - extraction uses only our recall/store tools
+	opts := &llm.StreamOptions{DisableServerTools: true}
 
 	for turn := 0; turn < e.maxTurns; turn++ {
 		// Collect response (non-streaming for extraction)
@@ -92,7 +118,7 @@ func (e *ExtractionLoop) Run(ctx context.Context, ec LoopExtractionInput) (*Loop
 			toolDefs,
 			loopSystemPrompt,
 			func(delta string) { responseText += delta },
-			nil,
+			opts,
 		)
 		if err != nil {
 			result.Error = err
@@ -106,40 +132,80 @@ func (e *ExtractionLoop) Run(ctx context.Context, ec LoopExtractionInput) (*Loop
 			if result.Summary == "" {
 				result.Summary = responseText
 			}
+			// Debug: show what model returned instead of tools
+			if turn == 0 {
+				summaryPreview := result.Summary
+				if len(summaryPreview) > 200 {
+					summaryPreview = summaryPreview[:200] + "..."
+				}
+				L_debug("extraction: model did not use tools", "response", summaryPreview)
+			}
 			break
 		}
 
-		// Execute tool (log errors but continue - extraction is best-effort)
-		toolResult, err := e.toolReg.Execute(ctx, response.ToolName, response.ToolInput)
-		resultText := ""
-		if err != nil {
-			L_warn("extraction tool failed", "tool", response.ToolName, "error", err)
-			resultText = fmt.Sprintf("Error: %v", err)
-		} else {
-			resultText = toolResult.GetText()
+		// Get all tool calls (use ToolCalls if available, otherwise single call)
+		toolCalls := response.ToolCalls
+		if len(toolCalls) == 0 && response.ToolName != "" {
+			// Fallback for providers that don't populate ToolCalls
+			toolCalls = []llm.ToolCallInfo{{
+				ID:    response.ToolUseID,
+				Name:  response.ToolName,
+				Input: response.ToolInput,
+			}}
 		}
 
-		// Track stats
-		if response.ToolName == "memory_graph_recall" {
-			result.Recalls++
-		} else if response.ToolName == "memory_graph_store" && err == nil {
-			result.MemoriesSaved++
+		L_debug("extraction: processing tool calls", "count", len(toolCalls))
+
+		// Execute ALL tool calls and collect results
+		type toolExecution struct {
+			call   llm.ToolCallInfo
+			result string
+			err    error
+		}
+		executions := make([]toolExecution, 0, len(toolCalls))
+
+		for _, tc := range toolCalls {
+			L_debug("extraction: tool call", "tool", tc.Name, "input", string(tc.Input))
+			toolResult, err := e.toolReg.Execute(ctx, tc.Name, tc.Input)
+			resultText := ""
+			if err != nil {
+				L_warn("extraction tool failed", "tool", tc.Name, "error", err)
+				resultText = fmt.Sprintf("Error: %v", err)
+			} else {
+				resultText = toolResult.GetText()
+				L_debug("extraction: tool result", "tool", tc.Name, "resultLen", len(resultText))
+			}
+
+			executions = append(executions, toolExecution{
+				call:   tc,
+				result: resultText,
+				err:    err,
+			})
+
+			// Track stats
+			if tc.Name == "memory_graph_recall" {
+				result.Recalls++
+			} else if tc.Name == "memory_graph_store" && err == nil {
+				result.MemoriesSaved++
+			}
 		}
 
-		// Add to messages for next turn
-		messages = append(messages,
-			types.Message{
+		// Add all tool call messages followed by all tool result messages
+		for _, exec := range executions {
+			messages = append(messages, types.Message{
 				Role:      "assistant",
-				ToolUseID: response.ToolUseID,
-				ToolName:  response.ToolName,
-				ToolInput: response.ToolInput,
-			},
-			types.Message{
+				ToolUseID: exec.call.ID,
+				ToolName:  exec.call.Name,
+				ToolInput: exec.call.Input,
+			})
+		}
+		for _, exec := range executions {
+			messages = append(messages, types.Message{
 				Role:      "user",
-				ToolUseID: response.ToolUseID,
-				Content:   resultText,
-			},
-		)
+				ToolUseID: exec.call.ID,
+				Content:   exec.result,
+			})
+		}
 	}
 
 	L_debug("extraction loop completed",
@@ -160,6 +226,9 @@ func buildLoopUserPrompt(ec LoopExtractionInput) string {
 	}
 	if ec.Channel != "" {
 		prompt += fmt.Sprintf("Channel: %s\n", ec.Channel)
+	}
+	if !ec.ConversationTime.IsZero() {
+		prompt += fmt.Sprintf("Conversation date: %s\n", ec.ConversationTime.Format("2006-01-02 15:04"))
 	}
 	prompt += "\n---\n\n"
 	prompt += ec.Conversation

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/types"
@@ -56,6 +57,10 @@ func (t *StoreTool) Schema() map[string]any {
 				"type":        "string",
 				"description": "Source: 'user stated', 'inferred', 'observed'",
 			},
+			"occurred_at": map[string]any{
+				"type":        "string",
+				"description": "When this happened (ISO date '2026-02-27' or RFC3339). Defaults to conversation time.",
+			},
 			"associations": map[string]any{
 				"type": "array",
 				"items": map[string]any{
@@ -88,6 +93,7 @@ type StoreParams struct {
 	Confidence   *float32           `json:"confidence,omitempty"`
 	Emotion      string             `json:"emotion,omitempty"`
 	Source       string             `json:"source,omitempty"`
+	OccurredAt   string             `json:"occurred_at,omitempty"`
 	Associations []AssociationInput `json:"associations,omitempty"`
 }
 
@@ -143,6 +149,25 @@ func (t *StoreTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 		mem.Confidence = *params.Confidence
 	} else {
 		mem.Confidence = ConfidenceNotApplicable
+	}
+
+	// Set occurred_at - parse from params or use context default
+	if params.OccurredAt != "" {
+		// Try RFC3339 first, then date-only
+		if t, err := time.Parse(time.RFC3339, params.OccurredAt); err == nil {
+			mem.OccurredAt = t
+		} else if t, err := time.Parse("2006-01-02", params.OccurredAt); err == nil {
+			mem.OccurredAt = t
+		} else {
+			L_warn("memory_graph_store: invalid occurred_at format", "value", params.OccurredAt)
+		}
+	}
+	// If still zero, use context default timestamp
+	if mem.OccurredAt.IsZero() {
+		if ts, ok := ctx.Value(ContextKeyDefaultTimestamp).(time.Time); ok {
+			mem.OccurredAt = ts
+		}
+		// CreateMemory will default to time.Now() if still zero
 	}
 
 	// Default source

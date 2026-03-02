@@ -133,7 +133,7 @@ func (t *RecallTool) Execute(ctx context.Context, input json.RawMessage) (*types
 		}
 		switch params.Mode {
 		case "recent":
-			q.OrderBy("created_at")
+			q.OrderBy("occurred_at")
 		case "important":
 			q.OrderBy("importance")
 		case "most_accessed":
@@ -159,7 +159,7 @@ func (t *RecallTool) Execute(ctx context.Context, input json.RawMessage) (*types
 		if params.SortBy != "" {
 			switch params.SortBy {
 			case "recent":
-				q.OrderBy("created_at")
+				q.OrderBy("occurred_at")
 			case "importance":
 				q.OrderBy("importance")
 			case "most_accessed":

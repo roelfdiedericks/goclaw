@@ -216,23 +216,23 @@ func (t *QueryTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 			q.MinConfidence(*params.MinConfidence)
 		}
 		if sinceTime != nil {
-			q.SinceCreated(*sinceTime)
+			q.SinceOccurred(*sinceTime)
 		}
 		if beforeTime != nil {
-			q.UntilCreated(*beforeTime)
+			q.UntilOccurred(*beforeTime)
 		}
 
 		// Sort order
 		switch params.Mode {
 		case "recent":
-			q.OrderBy("created_at")
+			q.OrderBy("occurred_at")
 		case "important":
 			q.OrderBy("importance")
 		default:
 			if params.SortBy != "" {
 				switch params.SortBy {
 				case "recent":
-					q.OrderBy("created_at")
+					q.OrderBy("occurred_at")
 				case "importance":
 					q.OrderBy("importance")
 				case "most_accessed":
@@ -366,11 +366,11 @@ func filterResults(results []SearchResult, params QueryParams, since, before *ti
 			continue
 		}
 
-		// Filter by time
-		if since != nil && m.CreatedAt.Before(*since) {
+		// Filter by time (use occurred_at)
+		if since != nil && m.OccurredAt.Before(*since) {
 			continue
 		}
-		if before != nil && m.CreatedAt.After(*before) {
+		if before != nil && m.OccurredAt.After(*before) {
 			continue
 		}
 

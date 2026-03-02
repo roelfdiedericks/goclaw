@@ -1211,15 +1211,25 @@ func (p *OpenAIProvider) StreamMessage(
 
 	// Process accumulated tool calls
 	if len(toolCalls) > 0 && toolCalls[0].ID != "" {
+		// Populate first tool call for backward compatibility
 		tc := toolCalls[0]
 		response.ToolUseID = tc.ID
 		response.ToolName = tc.Function.Name
 		response.ToolInput = json.RawMessage(tc.Function.Arguments)
 		response.StopReason = "tool_use"
-		L_info("llm: tool use detected", "provider", p.name, "tool", tc.Function.Name, "id", tc.ID)
-		if len(toolCalls) > 1 {
-			L_warn("llm: multiple tool calls returned, processing first only", "total", len(toolCalls), "processing", tc.Function.Name)
+
+		// Populate all tool calls in the new ToolCalls slice
+		for _, tc := range toolCalls {
+			if tc.ID != "" {
+				response.ToolCalls = append(response.ToolCalls, ToolCallInfo{
+					ID:    tc.ID,
+					Name:  tc.Function.Name,
+					Input: json.RawMessage(tc.Function.Arguments),
+				})
+			}
 		}
+
+		L_info("llm: tool use detected", "provider", p.name, "tool", tc.Function.Name, "id", tc.ID, "totalCalls", len(response.ToolCalls))
 	} else if len(toolCalls) > 0 {
 		// Tool calls exist but first one has empty ID - log this edge case
 		L_warn("openai: tool_calls present but first ID empty",

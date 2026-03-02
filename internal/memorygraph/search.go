@@ -371,10 +371,10 @@ func (s *Searcher) graphSearch(ctx context.Context, opts SearchOptions, limit in
 	return scores, rows.Err()
 }
 
-// recencySearch returns recently accessed/created memories
+// recencySearch returns recently occurred/accessed memories
 func (s *Searcher) recencySearch(ctx context.Context, opts SearchOptions, limit int) (map[string]float64, error) {
 	query := `
-		SELECT uuid, created_at, last_accessed_at, importance
+		SELECT uuid, occurred_at, last_accessed_at, importance
 		FROM memories 
 		WHERE forgotten = 0
 	`
@@ -401,8 +401,8 @@ func (s *Searcher) recencySearch(ctx context.Context, opts SearchOptions, limit 
 		args = append(args, opts.MinImportance)
 	}
 
-	// Order by most recent activity (either creation or access)
-	query += ` ORDER BY MAX(created_at, last_accessed_at) DESC LIMIT ?`
+	// Order by most recent activity (either occurred_at or access)
+	query += ` ORDER BY MAX(occurred_at, strftime('%s', last_accessed_at)) DESC LIMIT ?`
 	args = append(args, limit)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -415,20 +415,21 @@ func (s *Searcher) recencySearch(ctx context.Context, opts SearchOptions, limit 
 	scores := make(map[string]float64)
 
 	for rows.Next() {
-		var uuid, createdAt, lastAccessedAt string
+		var uuid, lastAccessedAt string
+		var occurredAtUnix int64
 		var importance float64
 
-		if err := rows.Scan(&uuid, &createdAt, &lastAccessedAt, &importance); err != nil {
+		if err := rows.Scan(&uuid, &occurredAtUnix, &lastAccessedAt, &importance); err != nil {
 			continue
 		}
 
 		// Parse times
-		created, _ := time.Parse(time.RFC3339, createdAt)
+		occurred := time.Unix(occurredAtUnix, 0)
 		accessed, _ := time.Parse(time.RFC3339, lastAccessedAt)
 
-		// Use the more recent of created or accessed
-		mostRecent := created
-		if accessed.After(created) {
+		// Use the more recent of occurred or accessed
+		mostRecent := occurred
+		if accessed.After(occurred) {
 			mostRecent = accessed
 		}
 

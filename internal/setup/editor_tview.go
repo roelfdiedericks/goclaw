@@ -15,6 +15,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
+	"github.com/roelfdiedericks/goclaw/internal/memorygraph"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 	"github.com/roelfdiedericks/goclaw/internal/session"
@@ -119,6 +120,7 @@ func (e *EditorTview) createMenu() *forms.MenuListResult {
 		{Label: "HTTP Server", OnSelect: e.editHTTP},
 		{IsSeparator: true, Label: "Services"},
 		{Label: "Transcript Indexing", OnSelect: e.editTranscript},
+		{Label: "Memory Graph", OnSelect: e.editMemoryGraph},
 		{Label: "Speech-to-Text (STT)", OnSelect: e.editSTT},
 		{Label: "Skills", OnSelect: e.editSkills},
 		{Label: "Cron Jobs", OnSelect: e.editCron},
@@ -191,6 +193,36 @@ func (e *EditorTview) editTranscript() {
 	}
 
 	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Transcripts"})
+	e.app.SetFormContent(content)
+}
+
+// editMemoryGraph opens the memory graph configuration form
+func (e *EditorTview) editMemoryGraph() {
+	L_info("editor: opening memory graph config")
+
+	// Get the memory graph config from main config
+	memgraphCfg := e.cfg.MemoryGraph
+
+	// Get form definition (needs config for nested form initialization)
+	formDef := memorygraph.ConfigFormDef(memgraphCfg)
+
+	// Build inline form content
+	content, err := forms.BuildFormContent(formDef, &memgraphCfg, "memorygraph", func(result forms.TviewResult) {
+		if result == forms.ResultAccepted {
+			e.cfg.MemoryGraph = memgraphCfg
+			e.dirty = true
+			L_info("editor: memory graph config updated")
+		} else {
+			L_info("editor: memory graph config cancelled")
+		}
+		e.showMainMenu()
+	}, e.app.App())
+	if err != nil {
+		L_error("editor: memory graph form error", "error", err)
+		return
+	}
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Memory Graph"})
 	e.app.SetFormContent(content)
 }
 

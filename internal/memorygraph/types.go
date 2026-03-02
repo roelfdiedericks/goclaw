@@ -105,6 +105,7 @@ type Memory struct {
 	Channel        string    `json:"channel,omitempty"`            // Channel name
 	ChatID         string    `json:"chat_id,omitempty"`            // Channel-specific chat ID
 	Emotion        string    `json:"emotion,omitempty"`            // frustrated, excited, stressed, relieved, etc.
+	OccurredAt     time.Time `json:"occurred_at"`                  // When this actually happened (required)
 	Forgotten      bool      `json:"forgotten"`                    // Soft delete flag
 	Embedding      []float32 `json:"-"`                            // Vector embedding
 	EmbeddingModel string    `json:"-"`                            // Model that generated embedding

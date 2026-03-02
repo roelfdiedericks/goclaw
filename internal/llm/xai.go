@@ -400,8 +400,12 @@ func (p *XAIProvider) StreamMessage(
 		}
 	}
 
-	// Add server-side tools (web_search, x_search, etc.)
-	p.addServerTools(req)
+	// Add server-side tools (web_search, x_search, etc.) unless disabled
+	if opts == nil || !opts.DisableServerTools {
+		p.addServerTools(req)
+	} else {
+		L_debug("xai: server tools disabled by caller")
+	}
 
 	// Add client-side tools (GoClaw tools)
 	p.addClientTools(req, toolDefs)

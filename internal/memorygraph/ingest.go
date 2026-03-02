@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -126,6 +127,15 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, source Ingest
 			if sess, ok := batch[0].Metadata["session"]; ok {
 				ec.SessionKey = sess
 			}
+			if ts, ok := batch[0].Metadata["timestamp"]; ok {
+				if tsInt, err := strconv.ParseInt(ts, 10, 64); err == nil && tsInt > 0 {
+					ec.ConversationTime = time.Unix(tsInt, 0)
+				}
+			}
+		}
+		// Default to now if no timestamp
+		if ec.ConversationTime.IsZero() {
+			ec.ConversationTime = time.Now()
 		}
 
 		result, err := loop.Run(ctx, ec)
@@ -140,10 +150,8 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, source Ingest
 		report.Extracted += memoryCount
 
 		// Update ingestion state for each item in batch
+		// Integer division distributes memories across items (may be 0 per item)
 		memoriesPerItem := memoryCount / len(batch)
-		if memoriesPerItem < 1 && memoryCount > 0 {
-			memoriesPerItem = 1
-		}
 
 		for _, item := range batch {
 			if err := setIngestionState(mgr.db, &IngestionState{

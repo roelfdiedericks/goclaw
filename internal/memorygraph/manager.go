@@ -24,9 +24,10 @@ type Manager struct {
 	provider llm.EmbeddingProvider
 	config   Config
 
-	mu          sync.RWMutex
-	closed      bool
-	llmEventSub bus.SubscriptionID
+	mu             sync.RWMutex
+	closed         bool
+	llmEventSub    bus.SubscriptionID
+	configEventSub bus.SubscriptionID
 
 	// Background maintenance
 	maintenanceTicker *time.Ticker
@@ -407,6 +408,9 @@ func (m *Manager) Close() error {
 	if m.llmEventSub != 0 {
 		bus.UnsubscribeEvent(m.llmEventSub)
 	}
+	if m.configEventSub != 0 {
+		bus.UnsubscribeEvent(m.configEventSub)
+	}
 
 	// Clear global instance
 	managerMu.Lock()
@@ -520,4 +524,44 @@ type Stats struct {
 	TotalAssociations int          `json:"total_associations"`
 	WithEmbeddings    int          `json:"with_embeddings"`
 	ByType            map[Type]int `json:"by_type"`
+}
+
+// RegisterOperationalCommands registers manager-specific commands and event subscriptions
+func (m *Manager) RegisterOperationalCommands() {
+	// Subscribe to config changes
+	m.configEventSub = bus.SubscribeEvent("memorygraph.config.applied", m.onConfigApplied)
+
+	L_info("memorygraph: operational commands registered, subscribed to config events")
+}
+
+// UnregisterOperationalCommands removes operational command handlers and event subscriptions
+func (m *Manager) UnregisterOperationalCommands() {
+	if m.configEventSub != 0 {
+		bus.UnsubscribeEvent(m.configEventSub)
+		m.configEventSub = 0
+	}
+}
+
+// onConfigApplied handles the memorygraph.config.applied event by applying new config
+func (m *Manager) onConfigApplied(e bus.Event) {
+	cfg, ok := e.Data.(Config)
+	if !ok {
+		L_error("memorygraph: invalid config event data type", "type", fmt.Sprintf("%T", e.Data))
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Update live extractor config if running
+	if m.liveExtractor != nil {
+		m.liveExtractor.UpdateConfig(cfg.LiveExtraction)
+	}
+
+	m.config = cfg
+	L_info("memorygraph: config applied",
+		"enabled", cfg.Enabled,
+		"liveEnabled", cfg.LiveExtraction.Enabled,
+		"intervalSeconds", cfg.LiveExtraction.IntervalSeconds,
+	)
 }

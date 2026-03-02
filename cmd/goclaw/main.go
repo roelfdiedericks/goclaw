@@ -1628,10 +1628,14 @@ func runEmbeddingsStatus() error {
 // buildLLMRegistry creates an LLM registry from config
 func buildLLMRegistry(cfg *config.Config) (*llm.Registry, error) {
 	regCfg := llm.RegistryConfig{
-		Providers:     cfg.LLM.Providers,
-		Agent:         cfg.LLM.Agent,
-		Summarization: cfg.LLM.Summarization,
-		Embeddings:    cfg.LLM.Embeddings,
+		Providers:        cfg.LLM.Providers,
+		Agent:            cfg.LLM.Agent,
+		Summarization:    cfg.LLM.Summarization,
+		Embeddings:       cfg.LLM.Embeddings,
+		Heartbeat:        cfg.LLM.Heartbeat,
+		Cron:             cfg.LLM.Cron,
+		Hass:             cfg.LLM.Hass,
+		MemoryExtraction: cfg.LLM.MemoryExtraction,
 	}
 	return llm.NewRegistry(regCfg)
 }

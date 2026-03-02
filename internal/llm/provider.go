@@ -174,6 +174,11 @@ type StreamOptions struct {
 	// name, args (JSON), status (pending/completed/failed), errMsg (non-empty when status=failed).
 	// Gateway emits EventToolStart/EventToolEnd.
 	OnServerToolCall func(name, args, status, errMsg string)
+
+	// DisableServerTools prevents the provider from adding server-side tools (e.g., xAI's
+	// web_search, x_search, code_execution). Use this when calling a model that doesn't
+	// support server tools or when you only want client-side tools.
+	DisableServerTools bool
 }
 
 // Note: Response type is currently defined in anthropic.go

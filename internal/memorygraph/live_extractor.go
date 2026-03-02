@@ -77,6 +77,16 @@ func (e *LiveExtractor) TriggerSync() {
 	}
 }
 
+// UpdateConfig updates the live extraction configuration.
+func (e *LiveExtractor) UpdateConfig(cfg LiveExtractionConfig) {
+	e.config = cfg
+	L_debug("live extractor: config updated",
+		"enabled", cfg.Enabled,
+		"intervalSeconds", cfg.IntervalSeconds,
+		"minMessages", cfg.MinMessages,
+	)
+}
+
 func (e *LiveExtractor) loop() {
 	defer e.wg.Done()
 
@@ -174,22 +184,47 @@ func (e *LiveExtractor) getUnextractedConversations(ctx context.Context) []Conve
 		return nil
 	}
 
-	// Query unextracted messages, grouped by session
-	// Skip heartbeat/cron messages (system, not user conversations)
-	query := `
+	// Get excluded sources from config, or use defaults
+	excludeSources := e.config.ExcludeSources
+	if len(excludeSources) == 0 {
+		excludeSources = DefaultExcludeSources()
+	}
+
+	// Get already-extracted message IDs from memory_graph.db (ingestion_state is in that DB, not sessions.db)
+	extractedIDs := make(map[string]bool)
+	extractedRows, err := e.manager.DB().QueryContext(ctx, `SELECT source_path FROM ingestion_state WHERE source_type = 'live'`)
+	if err == nil {
+		defer extractedRows.Close()
+		for extractedRows.Next() {
+			var id string
+			if err := extractedRows.Scan(&id); err == nil {
+				extractedIDs[id] = true
+			}
+		}
+	}
+
+	// Build placeholders for excluded sources
+	placeholders := make([]string, len(excludeSources))
+	args := make([]interface{}, len(excludeSources)+1)
+	for i, src := range excludeSources {
+		placeholders[i] = "?"
+		args[i] = src
+	}
+
+	// Query messages from sessions.db
+	// Skip excluded sources (automated/proactive messages)
+	query := fmt.Sprintf(`
 		SELECT m.id, m.session_key, m.role, m.content, m.user_id, m.source, m.timestamp
 		FROM messages m
 		WHERE m.role IN ('user', 'assistant')
 		  AND m.content != ''
-		  AND (m.source IS NULL OR m.source NOT IN ('heartbeat', 'cron'))
-		  AND m.id NOT IN (
-		      SELECT source_path FROM ingestion_state WHERE source_type = 'live'
-		  )
+		  AND (m.source IS NULL OR m.source NOT IN (%s))
 		ORDER BY m.session_key, m.timestamp
 		LIMIT ?
-	`
+	`, strings.Join(placeholders, ", "))
 
-	rows, err := e.sessionsDB.QueryContext(ctx, query, e.config.BatchSize*10)
+	args[len(excludeSources)] = e.config.BatchSize * 10
+	rows, err := e.sessionsDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		L_warn("live extractor: query failed", "error", err)
 		return nil
@@ -208,6 +243,11 @@ func (e *LiveExtractor) getUnextractedConversations(ctx context.Context) []Conve
 
 		if err := rows.Scan(&m.ID, &m.SessionKey, &m.Role, &m.Content, &userID, &source, &timestamp); err != nil {
 			L_warn("live extractor: scan failed", "error", err)
+			continue
+		}
+
+		// Skip already-extracted messages
+		if extractedIDs[m.ID] {
 			continue
 		}
 

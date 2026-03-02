@@ -52,14 +52,22 @@ type AnthropicProvider struct {
 	dumpOnSuccess bool // Keep dumps even on success (for debugging)
 }
 
+// ToolCallInfo represents a single tool call from the model
+type ToolCallInfo struct {
+	ID    string          // Tool call ID for pairing with results
+	Name  string          // Tool name
+	Input json.RawMessage // Tool arguments as JSON
+}
+
 // Response represents the LLM response
 type Response struct {
 	Text       string // accumulated text response
-	ToolUseID  string // if tool use requested
+	ToolUseID  string // if tool use requested (first/only tool call - for backward compat)
 	ToolName   string
 	ToolInput  json.RawMessage
-	StopReason string // "end_turn", "tool_use", etc.
-	Thinking   string // reasoning/thinking content (Kimi, Deepseek, etc.)
+	ToolCalls  []ToolCallInfo // All tool calls (when model returns multiple)
+	StopReason string         // "end_turn", "tool_use", etc.
+	Thinking   string         // reasoning/thinking content (Kimi, Deepseek, etc.)
 
 	InputTokens         int
 	OutputTokens        int
@@ -70,7 +78,7 @@ type Response struct {
 
 // HasToolUse returns true if the response contains a tool use request
 func (r *Response) HasToolUse() bool {
-	return r.ToolName != ""
+	return r.ToolName != "" || len(r.ToolCalls) > 0
 }
 
 // Note: AnthropicProvider does not yet fully implement Provider interface.

@@ -22,10 +22,11 @@ type LLMConfig struct {
 	Agent         LLMPurposeConfig             `json:"agent"`
 	Summarization LLMPurposeConfig             `json:"summarization"`
 	Embeddings    LLMPurposeConfig             `json:"embeddings"`
-	Heartbeat     LLMPurposeConfig             `json:"heartbeat,omitempty"`
-	Cron          LLMPurposeConfig             `json:"cron,omitempty"`
-	Hass          LLMPurposeConfig             `json:"hass,omitempty"`
-	Thinking      ThinkingConfig               `json:"thinking"`
+	Heartbeat         LLMPurposeConfig             `json:"heartbeat,omitempty"`
+	Cron              LLMPurposeConfig             `json:"cron,omitempty"`
+	Hass              LLMPurposeConfig             `json:"hass,omitempty"`
+	MemoryExtraction  LLMPurposeConfig             `json:"memoryExtraction,omitempty"`
+	Thinking          ThinkingConfig               `json:"thinking"`
 	SystemPrompt  string                       `json:"systemPrompt"`
 }
 
@@ -492,13 +493,14 @@ func handleApply(cmd bus.Command) bus.CommandResult {
 
 	// Convert LLMConfig to RegistryConfig (subset of fields)
 	regCfg := RegistryConfig{
-		Providers:     cfg.Providers,
-		Agent:         cfg.Agent,
-		Summarization: cfg.Summarization,
-		Embeddings:    cfg.Embeddings,
-		Heartbeat:     cfg.Heartbeat,
-		Cron:          cfg.Cron,
-		Hass:          cfg.Hass,
+		Providers:        cfg.Providers,
+		Agent:            cfg.Agent,
+		Summarization:    cfg.Summarization,
+		Embeddings:       cfg.Embeddings,
+		Heartbeat:        cfg.Heartbeat,
+		Cron:             cfg.Cron,
+		Hass:             cfg.Hass,
+		MemoryExtraction: cfg.MemoryExtraction,
 	}
 
 	// Create new registry

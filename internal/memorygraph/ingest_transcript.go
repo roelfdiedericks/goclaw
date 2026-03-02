@@ -3,6 +3,7 @@ package memorygraph
 import (
 	"context"
 	"database/sql"
+	"strconv"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
@@ -103,7 +104,7 @@ func (t *TranscriptIngester) Scan(ctx context.Context) (<-chan IngestItem, error
 				ContentHash: HashContent(content),
 				Metadata: map[string]string{
 					"session":   sessionKey,
-					"timestamp": string(rune(timestampStart)),
+					"timestamp": strconv.FormatInt(timestampStart, 10),
 					"channel":   "transcript",
 				},
 			}

@@ -259,11 +259,11 @@ func (m *Maintainer) mergeDuplicates(ctx context.Context) (int, error) {
 
 	// Get memories with embeddings
 	rows, err := m.db.QueryContext(ctx, `
-		SELECT uuid, content, embedding, importance, access_count, created_at
+		SELECT uuid, content, embedding, importance, access_count, occurred_at
 		FROM memories 
 		WHERE forgotten = 0 
 		AND embedding IS NOT NULL
-		ORDER BY importance DESC, created_at ASC
+		ORDER BY importance DESC, occurred_at ASC
 	`)
 	if err != nil {
 		return 0, err
@@ -276,16 +276,16 @@ func (m *Maintainer) mergeDuplicates(ctx context.Context) (int, error) {
 		embedding   []float32
 		importance  float64
 		accessCount int64
-		createdAt   time.Time
+		occurredAt  time.Time
 	}
 
 	var memories []memoryInfo
 	for rows.Next() {
 		var m memoryInfo
 		var embeddingBlob []byte
-		var createdAt string
+		var occurredAt int64
 
-		if err := rows.Scan(&m.uuid, &m.content, &embeddingBlob, &m.importance, &m.accessCount, &createdAt); err != nil {
+		if err := rows.Scan(&m.uuid, &m.content, &embeddingBlob, &m.importance, &m.accessCount, &occurredAt); err != nil {
 			continue
 		}
 
@@ -293,7 +293,7 @@ func (m *Maintainer) mergeDuplicates(ctx context.Context) (int, error) {
 			continue
 		}
 
-		m.createdAt, _ = time.Parse(time.RFC3339, createdAt)
+		m.occurredAt = time.Unix(occurredAt, 0)
 		memories = append(memories, m)
 	}
 

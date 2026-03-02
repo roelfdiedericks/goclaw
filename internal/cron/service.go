@@ -78,6 +78,7 @@ type GatewayRunner interface {
 	RunAgentForCron(ctx context.Context, req AgentRequest, events chan<- AgentEvent)
 	GetOwnerUserID() string                                   // Returns the owner user ID for cron jobs
 	InjectSystemEvent(ctx context.Context, text string) error // Inject system event into primary session
+	PersistDeliveredMessage(ctx context.Context, content, source string) error
 }
 
 // Channel is the interface for delivery channels.
@@ -803,11 +804,20 @@ func (s *Service) deliverToChannels(ctx context.Context, job *CronJob, content s
 	msg := fmt.Sprintf("**[Cron: %s]**\n\n%s", job.Name, content)
 
 	// Send to all channels
+	delivered := false
 	for name, ch := range channels {
 		if err := ch.Send(ctx, msg); err != nil {
 			L_error("cron: failed to deliver to channel", "job", job.Name, "channel", name, "error", err)
 		} else {
 			L_debug("cron: delivered to channel", "job", job.Name, "channel", name)
+			delivered = true
+		}
+	}
+
+	// Persist delivered content to primary session for memory extraction (raw content, not formatted)
+	if delivered && s.gateway != nil {
+		if err := s.gateway.PersistDeliveredMessage(ctx, content, "delivered"); err != nil {
+			L_warn("cron: failed to persist delivered message", "job", job.Name, "error", err)
 		}
 	}
 }
@@ -961,11 +971,20 @@ func (s *Service) runHeartbeat(ctx context.Context) {
 		channels := s.channelProvider.Channels()
 		if len(channels) > 0 {
 			msg := fmt.Sprintf("**[Heartbeat]**\n\n%s", finalContent)
+			delivered := false
 			for name, ch := range channels {
 				if err := ch.Send(ctx, msg); err != nil {
 					L_error("heartbeat: failed to deliver to channel", "channel", name, "error", err)
 				} else {
 					L_debug("heartbeat: delivered to channel", "channel", name)
+					delivered = true
+				}
+			}
+
+			// Persist delivered content to primary session for memory extraction (raw content, not formatted)
+			if delivered && s.gateway != nil {
+				if err := s.gateway.PersistDeliveredMessage(ctx, finalContent, "delivered"); err != nil {
+					L_warn("heartbeat: failed to persist delivered message", "error", err)
 				}
 			}
 		}
