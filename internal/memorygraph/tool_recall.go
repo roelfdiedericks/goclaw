@@ -95,10 +95,10 @@ func (t *RecallTool) Execute(ctx context.Context, input json.RawMessage) (*types
 		maxResults = 10
 	}
 
-	// Get username from context if available
-	username := ""
-	if u, ok := ctx.Value(ContextKeyUsername).(string); ok {
-		username = u
+	// Get username from context - required for privacy isolation
+	username, err := getUsernameFromContext(ctx)
+	if err != nil {
+		return types.ErrorResult(err.Error()), nil
 	}
 
 	L_debug("memory_graph_recall: executing",
@@ -109,7 +109,6 @@ func (t *RecallTool) Execute(ctx context.Context, input json.RawMessage) (*types
 	)
 
 	var results []SearchResult
-	var err error
 
 	switch params.Mode {
 	case "hybrid":

@@ -583,3 +583,73 @@ func (m *Manager) handleReindex(cmd bus.Command) bus.CommandResult {
 		Message: "Reindex triggered",
 	}
 }
+
+// MessageByID represents a message retrieved by ID
+type MessageByID struct {
+	ID        string
+	SessionKey string
+	Timestamp time.Time
+	Role      string
+	Content   string
+	Source    string
+	UserID    string
+}
+
+// GetMessagesByIDs retrieves messages by their IDs from the session messages table.
+// Used for tracing memory provenance back to original conversation.
+func (m *Manager) GetMessagesByIDs(ctx context.Context, ids []string, userID string, isOwner bool) ([]MessageByID, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	// Build query with placeholders
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, session_key, timestamp, role, content, source, user_id
+		FROM messages
+		WHERE id IN (%s)
+		ORDER BY timestamp ASC
+	`, strings.Join(placeholders, ","))
+
+	rows, err := m.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query messages: %w", err)
+	}
+	defer rows.Close()
+
+	var results []MessageByID
+	for rows.Next() {
+		var msg MessageByID
+		var timestamp int64
+		var source, msgUserID sql.NullString
+
+		if err := rows.Scan(&msg.ID, &msg.SessionKey, &timestamp, &msg.Role, &msg.Content, &source, &msgUserID); err != nil {
+			L_warn("transcript: failed to scan message", "error", err)
+			continue
+		}
+
+		msg.Timestamp = time.UnixMilli(timestamp)
+		msg.Source = source.String
+		msg.UserID = msgUserID.String
+
+		// Access control: only return messages the user can see
+		if !isOwner && msg.UserID != "" && msg.UserID != userID {
+			L_debug("transcript: skipping message (access denied)", "msgID", msg.ID, "msgUser", msg.UserID, "requestUser", userID)
+			continue
+		}
+
+		results = append(results, msg)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate messages: %w", err)
+	}
+
+	return results, nil
+}

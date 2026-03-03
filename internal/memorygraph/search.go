@@ -54,6 +54,13 @@ func (s *Searcher) Search(ctx context.Context, opts SearchOptions) ([]SearchResu
 		opts.MaxResults = 10
 	}
 
+	L_debug("memorygraph: search starting",
+		"query", truncate(opts.Query, 50),
+		"username", opts.Username,
+		"types", opts.Types,
+		"maxResults", opts.MaxResults,
+	)
+
 	// Use larger candidate pool for fusion
 	candidateLimit := opts.MaxResults * 4
 
@@ -67,6 +74,7 @@ func (s *Searcher) Search(ctx context.Context, opts SearchOptions) ([]SearchResu
 			L_warn("memorygraph: vector search failed", "error", err)
 		} else {
 			sources["vector"] = vectorResults
+			L_debug("memorygraph: vector results", "count", len(vectorResults))
 		}
 	}
 
@@ -77,6 +85,7 @@ func (s *Searcher) Search(ctx context.Context, opts SearchOptions) ([]SearchResu
 			L_warn("memorygraph: FTS search failed", "error", err)
 		} else {
 			sources["fts"] = ftsResults
+			L_debug("memorygraph: fts results", "count", len(ftsResults))
 		}
 	}
 
@@ -97,11 +106,13 @@ func (s *Searcher) Search(ctx context.Context, opts SearchOptions) ([]SearchResu
 			L_warn("memorygraph: recency search failed", "error", err)
 		} else {
 			sources["recency"] = recencyResults
+			L_debug("memorygraph: recency results", "count", len(recencyResults))
 		}
 	}
 
 	// 5. Fuse results using RRF
 	fused := s.fuseResults(sources)
+	L_debug("memorygraph: fusion results", "fused", len(fused), "sources", len(sources))
 
 	// 6. Fetch full memories and build results
 	results := make([]SearchResult, 0, len(fused))
@@ -223,6 +234,11 @@ func (s *Searcher) vectorSearch(ctx context.Context, opts SearchOptions, limit i
 func (s *Searcher) ftsSearch(ctx context.Context, opts SearchOptions, limit int) (map[string]float64, error) {
 	// Sanitize query for FTS
 	ftsQuery := sanitizeFTSQuery(opts.Query)
+	L_debug("memorygraph: fts query",
+		"original", truncate(opts.Query, 50),
+		"sanitized", ftsQuery,
+		"username", opts.Username,
+	)
 	if ftsQuery == "" {
 		return make(map[string]float64), nil
 	}

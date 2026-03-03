@@ -17,6 +17,9 @@ type contextKey string
 const (
 	ContextKeyUsername         contextKey = "username"
 	ContextKeyDefaultTimestamp contextKey = "defaultTimestamp"
+	ContextKeyMessageIDs       contextKey = "messageIDs"
+	ContextKeySessionKey       contextKey = "sessionKey"
+	ContextKeyChannel          contextKey = "channel"
 )
 
 // ExtractionLoop is a mini agentic loop for memory extraction.
@@ -79,10 +82,11 @@ func NewExtractionLoop(mgr *Manager) (*ExtractionLoop, error) {
 		return nil, err
 	}
 
-	// Create tool registry with recall, store, and skip
+	// Create tool registry with recall, store, update, and skip
 	toolReg := tools.NewRegistry()
 	toolReg.Register(NewRecallTool(mgr))
 	toolReg.Register(NewStoreTool(mgr))
+	toolReg.Register(NewUpdateTool(mgr))
 	toolReg.Register(NewSkipTool())
 
 	return &ExtractionLoop{
@@ -95,10 +99,19 @@ func NewExtractionLoop(mgr *Manager) (*ExtractionLoop, error) {
 
 // Run executes the extraction loop on the given context.
 func (e *ExtractionLoop) Run(ctx context.Context, ec LoopExtractionInput) (*LoopExtractionResult, error) {
-	// Inject username and default timestamp into context for tools
+	// Inject extraction context into context for tools
 	ctx = context.WithValue(ctx, ContextKeyUsername, ec.Username)
 	if !ec.ConversationTime.IsZero() {
 		ctx = context.WithValue(ctx, ContextKeyDefaultTimestamp, ec.ConversationTime)
+	}
+	if len(ec.MessageIDs) > 0 {
+		ctx = context.WithValue(ctx, ContextKeyMessageIDs, ec.MessageIDs)
+	}
+	if ec.SessionKey != "" {
+		ctx = context.WithValue(ctx, ContextKeySessionKey, ec.SessionKey)
+	}
+	if ec.Channel != "" {
+		ctx = context.WithValue(ctx, ContextKeyChannel, ec.Channel)
 	}
 
 	messages := []types.Message{

@@ -2606,6 +2606,8 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 		reg.Register(memorygraph.NewRecallTool(mgraphMgr))
 		reg.Register(memorygraph.NewQueryTool(mgraphMgr))
 		reg.Register(memorygraph.NewStoreTool(mgraphMgr))
+		reg.Register(memorygraph.NewUpdateTool(mgraphMgr))
+		reg.Register(memorygraph.NewForgetTool(mgraphMgr))
 		// Keep search tool for backwards compatibility
 		reg.Register(toolmemorygraph.NewSearchTool())
 	}

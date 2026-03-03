@@ -86,12 +86,18 @@ func (t *QueryTool) Schema() map[string]any {
 				"enum":        []string{"recent", "importance", "most_accessed"},
 				"description": "Sort order",
 			},
-			"include_associations": map[string]any{
-				"type":        "boolean",
-				"description": "Include association details in results",
-			},
+		"include_associations": map[string]any{
+			"type":        "boolean",
+			"description": "Include association details in results",
 		},
-	}
+		"detail_level": map[string]any{
+			"type":        "string",
+			"enum":        []string{"summary", "standard", "full"},
+			"default":     "standard",
+			"description": "Output detail level: summary (minimal), standard (includes provenance), full (all fields including access stats)",
+		},
+	},
+}
 }
 
 // QueryParams defines input parameters for the full query tool.
@@ -109,6 +115,7 @@ type QueryParams struct {
 	MaxResults          int      `json:"max_results,omitempty"`
 	SortBy              string   `json:"sort_by,omitempty"`
 	IncludeAssociations bool     `json:"include_associations,omitempty"`
+	DetailLevel         string   `json:"detail_level,omitempty"`
 }
 
 func (t *QueryTool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
@@ -142,10 +149,10 @@ func (t *QueryTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 		maxResults = 50
 	}
 
-	// Get username from context if available
-	username := ""
-	if u, ok := ctx.Value(ContextKeyUsername).(string); ok {
-		username = u
+	// Get username from context - required for privacy isolation
+	username, err := getUsernameFromContext(ctx)
+	if err != nil {
+		return types.ErrorResult(err.Error()), nil
 	}
 
 	// Parse time filters
@@ -170,7 +177,6 @@ func (t *QueryTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 	)
 
 	var results []SearchResult
-	var err error
 
 	switch params.Mode {
 	case "hybrid":
@@ -292,12 +298,19 @@ func (t *QueryTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 		}
 	}
 
+	// Default detail level
+	detailLevel := params.DetailLevel
+	if detailLevel == "" {
+		detailLevel = "standard"
+	}
+
 	// Format output for LLM
-	output := formatQueryResults(results, associations)
+	output := formatQueryResults(results, associations, detailLevel)
 
 	L_info("memory_graph_query: completed",
 		"mode", params.Mode,
 		"results", len(results),
+		"detail", detailLevel,
 	)
 
 	return types.TextResult(output), nil
@@ -380,7 +393,7 @@ func filterResults(results []SearchResult, params QueryParams, since, before *ti
 	return filtered
 }
 
-func formatQueryResults(results []SearchResult, associations map[string][]*Association) string {
+func formatQueryResults(results []SearchResult, associations map[string][]*Association, detailLevel string) string {
 	if len(results) == 0 {
 		return "No memories found."
 	}
@@ -390,6 +403,8 @@ func formatQueryResults(results []SearchResult, associations map[string][]*Assoc
 
 	for i, r := range results {
 		m := r.Memory
+
+		// Line 1: Type, ID, importance, relevance score
 		sb.WriteString(fmt.Sprintf("%d. [%s] (id: %s, importance: %.2f",
 			i+1, m.Type, m.UUID, m.Importance))
 
@@ -399,15 +414,80 @@ func formatQueryResults(results []SearchResult, associations map[string][]*Assoc
 		if m.Confidence != ConfidenceNotApplicable {
 			sb.WriteString(fmt.Sprintf(", confidence: %.2f", m.Confidence))
 		}
-		if m.Emotion != "" {
-			sb.WriteString(fmt.Sprintf(", emotion: %s", m.Emotion))
-		}
 		sb.WriteString(")\n")
+
+		// Line 2: Content
 		sb.WriteString(fmt.Sprintf("   %s\n", m.Content))
 
-		// Show associations if available
+		// Standard and Full: provenance and temporal info
+		if detailLevel == "standard" || detailLevel == "full" {
+			// Line 3: Source and message IDs (for tracing)
+			var provenance []string
+			if m.Source != "" {
+				provenance = append(provenance, fmt.Sprintf("source: %s", m.Source))
+			}
+			if m.SourceMessage != "" {
+				provenance = append(provenance, fmt.Sprintf("message: %s", m.SourceMessage))
+			}
+			if m.Channel != "" {
+				provenance = append(provenance, fmt.Sprintf("channel: %s", m.Channel))
+			}
+			if len(provenance) > 0 {
+				sb.WriteString(fmt.Sprintf("   %s\n", strings.Join(provenance, " | ")))
+			}
+
+			// Line 4: Temporal info
+			var temporal []string
+			if !m.OccurredAt.IsZero() {
+				temporal = append(temporal, fmt.Sprintf("occurred: %s", m.OccurredAt.Format("2006-01-02")))
+			}
+			if !m.CreatedAt.IsZero() {
+				temporal = append(temporal, fmt.Sprintf("created: %s", m.CreatedAt.Format("2006-01-02")))
+			}
+			if m.Emotion != "" {
+				temporal = append(temporal, fmt.Sprintf("emotion: %s", m.Emotion))
+			}
+			if len(temporal) > 0 {
+				sb.WriteString(fmt.Sprintf("   %s\n", strings.Join(temporal, " | ")))
+			}
+		}
+
+		// Full only: additional details
+		if detailLevel == "full" {
+			var extra []string
+			if m.SourceSession != "" {
+				extra = append(extra, fmt.Sprintf("session: %s", m.SourceSession))
+			}
+			if m.ChatID != "" {
+				extra = append(extra, fmt.Sprintf("chat: %s", m.ChatID))
+			}
+			if len(extra) > 0 {
+				sb.WriteString(fmt.Sprintf("   %s\n", strings.Join(extra, " | ")))
+			}
+
+			// Access stats
+			var stats []string
+			stats = append(stats, fmt.Sprintf("accessed: %d times", m.AccessCount))
+			if !m.LastAccessedAt.IsZero() {
+				stats = append(stats, fmt.Sprintf("last: %s", m.LastAccessedAt.Format("2006-01-02 15:04")))
+			}
+			if !m.UpdatedAt.IsZero() && m.UpdatedAt != m.CreatedAt {
+				stats = append(stats, fmt.Sprintf("updated: %s", m.UpdatedAt.Format("2006-01-02")))
+			}
+			if m.Forgotten {
+				stats = append(stats, "FORGOTTEN")
+			}
+			sb.WriteString(fmt.Sprintf("   %s\n", strings.Join(stats, " | ")))
+		}
+
+		// Summary only: just emotion inline if present
+		if detailLevel == "summary" && m.Emotion != "" {
+			sb.WriteString(fmt.Sprintf("   emotion: %s\n", m.Emotion))
+		}
+
+		// Show associations if available (all levels)
 		if assocs, ok := associations[m.UUID]; ok && len(assocs) > 0 {
-			sb.WriteString("   Associations:\n")
+			sb.WriteString("   associations:\n")
 			for _, a := range assocs {
 				sb.WriteString(fmt.Sprintf("     → %s: %s\n", a.RelationType, a.TargetID))
 			}

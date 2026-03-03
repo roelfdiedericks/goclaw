@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -122,10 +123,23 @@ func (t *StoreTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 		return types.ErrorResult("memory_type is required"), nil
 	}
 
-	// Get username from context if available
-	username := ""
-	if u, ok := ctx.Value(ContextKeyUsername).(string); ok {
-		username = u
+	// Get username from context - required for privacy isolation
+	username, err := getUsernameFromContext(ctx)
+	if err != nil {
+		return types.ErrorResult(err.Error()), nil
+	}
+
+	// Get additional context from extraction (message IDs, session, channel)
+	var messageIDs []string
+	var sessionKey, channel string
+	if ids, ok := ctx.Value(ContextKeyMessageIDs).([]string); ok {
+		messageIDs = ids
+	}
+	if sk, ok := ctx.Value(ContextKeySessionKey).(string); ok {
+		sessionKey = sk
+	}
+	if ch, ok := ctx.Value(ContextKeyChannel).(string); ok {
+		channel = ch
 	}
 
 	// Log the store decision with content and reasoning for visibility
@@ -142,13 +156,20 @@ func (t *StoreTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 		"username", username,
 	)
 
-	// Build memory
+	// Build memory with provenance
 	mem := &Memory{
-		Content:  params.Content,
-		Type:     Type(params.MemoryType),
-		Username: username,
-		Source:   params.Source,
-		Emotion:  params.Emotion,
+		Content:       params.Content,
+		Type:          Type(params.MemoryType),
+		Username:      username,
+		Source:        params.Source,
+		Emotion:       params.Emotion,
+		SourceSession: sessionKey,
+		Channel:       channel,
+	}
+
+	// Set source message IDs if available (comma-separated)
+	if len(messageIDs) > 0 {
+		mem.SourceMessage = strings.Join(messageIDs, ",")
 	}
 
 	// Set importance (use default if not provided)

@@ -36,8 +36,8 @@ func (t *Tool) Schema() map[string]any {
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"semantic", "recent", "search", "gaps", "stats"},
-				"description": "Action to perform: 'semantic' (natural language search on chunks), 'recent' (last N messages), 'search' (flexible search with matchType: exact/semantic/hybrid), 'gaps' (conversation time gaps), 'stats' (indexing status)",
+				"enum":        []string{"semantic", "recent", "search", "gaps", "stats", "get_messages"},
+				"description": "Action to perform: 'semantic' (natural language search on chunks), 'recent' (last N messages), 'search' (flexible search with matchType: exact/semantic/hybrid), 'gaps' (conversation time gaps), 'stats' (indexing status), 'get_messages' (fetch by message IDs for provenance tracing)",
 			},
 			"query": map[string]any{
 				"type":        "string",
@@ -82,14 +82,19 @@ func (t *Tool) Schema() map[string]any {
 				"enum":        []string{"user", "assistant"},
 				"description": "Filter by message role",
 			},
-			"matchType": map[string]any{
-				"type":        "string",
-				"enum":        []string{"exact", "semantic", "hybrid"},
-				"description": "For 'search' action: 'exact' (substring match on messages), 'semantic' (vector search on chunks), 'hybrid' (both with exact boost, default)",
-			},
+		"matchType": map[string]any{
+			"type":        "string",
+			"enum":        []string{"exact", "semantic", "hybrid"},
+			"description": "For 'search' action: 'exact' (substring match on messages), 'semantic' (vector search on chunks), 'hybrid' (both with exact boost, default)",
 		},
-		"required": []string{"action"},
-	}
+		"message_ids": map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string"},
+			"description": "For 'get_messages' action: array of message IDs to retrieve (from memory source_message field)",
+		},
+	},
+	"required": []string{"action"},
+}
 }
 
 type transcriptInput struct {
@@ -109,6 +114,9 @@ type transcriptInput struct {
 
 	// Search mode
 	MatchType string `json:"matchType"` // "exact", "semantic", "hybrid" (default)
+
+	// For get_messages action
+	MessageIDs []string `json:"message_ids"`
 }
 
 func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
@@ -166,6 +174,8 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		result, err = t.executeGaps(ctx, params, userID, isOwner)
 	case "stats":
 		result, err = t.executeStats(ctx)
+	case "get_messages":
+		result, err = t.executeGetMessages(ctx, params, userID, isOwner)
 	default:
 		return nil, fmt.Errorf("unknown action: %s", params.Action)
 	}
@@ -364,6 +374,54 @@ func (t *Tool) executeGaps(ctx context.Context, params transcriptInput, userID s
 func (t *Tool) executeStats(ctx context.Context) (string, error) {
 	stats := t.manager.Stats()
 	return marshalOutput(stats)
+}
+
+func (t *Tool) executeGetMessages(ctx context.Context, params transcriptInput, userID string, isOwner bool) (string, error) {
+	if len(params.MessageIDs) == 0 {
+		return "", fmt.Errorf("message_ids is required for get_messages action")
+	}
+
+	L_debug("transcript: get_messages",
+		"ids", len(params.MessageIDs),
+		"userID", userID,
+	)
+
+	messages, err := t.manager.GetMessagesByIDs(ctx, params.MessageIDs, userID, isOwner)
+	if err != nil {
+		L_error("transcript: get_messages failed", "error", err)
+		return marshalOutput(map[string]any{
+			"error":    err.Error(),
+			"messages": []any{},
+		})
+	}
+
+	L_info("transcript: get_messages completed",
+		"requested", len(params.MessageIDs),
+		"found", len(messages),
+	)
+
+	// Format messages for output
+	formatted := make([]map[string]any, len(messages))
+	for i, msg := range messages {
+		formatted[i] = map[string]any{
+			"id":        msg.ID,
+			"timestamp": msg.Timestamp.Format(time.RFC3339),
+			"role":      msg.Role,
+			"content":   msg.Content,
+		}
+		if msg.Source != "" {
+			formatted[i]["source"] = msg.Source
+		}
+		if msg.SessionKey != "" {
+			formatted[i]["session"] = msg.SessionKey
+		}
+	}
+
+	return marshalOutput(map[string]any{
+		"messages":  formatted,
+		"count":     len(messages),
+		"requested": len(params.MessageIDs),
+	})
 }
 
 // buildQueryFilter creates a QueryFilter from transcript input parameters

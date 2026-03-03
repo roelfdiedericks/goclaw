@@ -89,6 +89,7 @@ func (e *Extractor) Extract(ctx context.Context, ec ExtractionContext) (*Extract
 			Confidence:    ConfidenceNotApplicable,
 			Source:        "extraction",
 			SourceSession: ec.SessionKey,
+			SourceMessage: strings.Join(ec.MessageIDs, ","),
 			Username:      ec.Username,
 			Channel:       ec.Channel,
 			ChatID:        ec.ChatID,
