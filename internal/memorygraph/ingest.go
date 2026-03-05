@@ -62,12 +62,13 @@ func Ingest(ctx context.Context, mgr *Manager, source IngestionSource, username 
 // IngestWithBatching processes items with configurable batch size.
 // batchSize > 1 combines multiple items into a single extraction call.
 func IngestWithBatching(ctx context.Context, mgr *Manager, source IngestionSource, username string, batchSize int) (*IngestReport, error) {
-	return IngestWithBatchingAndTotal(ctx, mgr, source, username, batchSize, 0)
+	return IngestWithBatchingAndTotal(ctx, mgr, source, username, batchSize, 0, 0)
 }
 
-// IngestWithBatchingAndTotal processes items with configurable batch size and known total.
+// IngestWithBatchingAndTotal processes items with configurable batch size and known totals.
 // Uses the recall-first ExtractionLoop for better quality extraction with associations.
-func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, source IngestionSource, username string, batchSize, totalItems int) (*IngestReport, error) {
+// alreadyProcessed is the count of items already in ingestion_state (for progress display).
+func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, source IngestionSource, username string, batchSize, totalItems, alreadyProcessed int) (*IngestReport, error) {
 	if batchSize < 1 {
 		batchSize = 1
 	}
@@ -76,6 +77,15 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, source Ingest
 	report := &IngestReport{
 		SourceType: source.Type(),
 	}
+
+	// Calculate remaining items for accurate progress display
+	remainingItems := totalItems - alreadyProcessed
+	if remainingItems < 0 {
+		remainingItems = 0
+	}
+
+	// Track new items actually queued for processing (not skipped)
+	var newProcessed int
 
 	// Create extraction loop (uses summarization provider internally)
 	loop, err := NewExtractionLoop(mgr)
@@ -138,6 +148,23 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, source Ingest
 			ec.ConversationTime = time.Now()
 		}
 
+		// Update new items processed count
+		newProcessed += len(batch)
+
+		// Build progress string showing new items / remaining (not scanned / total)
+		var progressStr string
+		if remainingItems > 0 {
+			pct := float64(newProcessed) / float64(remainingItems) * 100
+			progressStr = fmt.Sprintf("%d/%d (%.1f%%)", newProcessed, remainingItems, pct)
+		} else {
+			progressStr = fmt.Sprintf("%d new", newProcessed)
+		}
+
+		L_info("memorygraph: batch starting",
+			"progress", progressStr,
+			"batch", batchNum,
+			"chunks", len(batch))
+
 		result, err := loop.Run(ctx, ec)
 		if err != nil {
 			L_warn("memorygraph: batch extraction failed", "paths", sourcePaths, "error", err)
@@ -165,14 +192,7 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, source Ingest
 			}
 		}
 
-		// Build progress string
-		progressStr := fmt.Sprintf("%d", report.Scanned)
-		if totalItems > 0 {
-			pct := float64(report.Scanned) / float64(totalItems) * 100
-			progressStr = fmt.Sprintf("%d/%d (%.1f%%)", report.Scanned, totalItems, pct)
-		}
-
-		L_info("memorygraph: batch ingested",
+		L_info("memorygraph: batch complete",
 			"progress", progressStr,
 			"batch", batchNum,
 			"chunks", len(batch),
@@ -182,6 +202,9 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, source Ingest
 		batch = nil
 		return nil
 	}
+
+	// Progress logging interval
+	const progressInterval = 100
 
 	for item := range items {
 		select {
@@ -202,6 +225,15 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, source Ingest
 		if state != nil && state.ContentHash == item.ContentHash {
 			L_trace("memorygraph: skipping unchanged", "path", item.SourcePath)
 			report.Skipped++
+
+			// Log progress periodically during skip-heavy scans
+			if report.Scanned%progressInterval == 0 {
+				queued := report.Scanned - report.Skipped - report.Errors
+				L_info("memorygraph: scanning progress",
+					"scanned", report.Scanned,
+					"skipped", report.Skipped,
+					"queued", queued)
+			}
 			continue
 		}
 
@@ -264,6 +296,15 @@ func IngestWithBatchingAndTotal(ctx context.Context, mgr *Manager, source Ingest
 	}
 
 	report.Duration = time.Since(start)
+
+	// Final summary at info level
+	L_info("memorygraph: ingestion complete",
+		"scanned", report.Scanned,
+		"skipped", report.Skipped,
+		"extracted", report.Extracted,
+		"errors", report.Errors,
+		"duration", report.Duration.Round(time.Second).String())
+
 	return report, nil
 }
 

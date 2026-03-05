@@ -437,7 +437,7 @@ func (p *XAIProvider) StreamMessage(
 		}
 		clientToolNames = append(clientToolNames, name)
 	}
-	L_info("xai: tools",
+	L_debug("xai: tools",
 		"model", p.model,
 		"server", serverTools,
 		"client", clientToolNames,
@@ -1013,7 +1013,7 @@ func (p *XAIProvider) processStream(
 	}
 	if len(resp.ToolCalls) > 0 {
 		resp.StopReason = "tool_use"
-		L_info("llm: tool calls detected", "provider", p.name, "count", len(resp.ToolCalls))
+		L_debug("llm: tool calls detected", "provider", p.name, "count", len(resp.ToolCalls))
 	}
 
 	L_debug("xai: stream complete",

@@ -1819,15 +1819,26 @@ func runGraphIngest(source, username string, maxAgeDays int) error {
 			totalChunks = 0 // Unknown
 		}
 
-		expectedBatches := (totalChunks + batchSize - 1) / batchSize
+		// Count already-processed chunks
+		var alreadyProcessed int
+		processedRow := mgr.DB().QueryRow(`SELECT COUNT(*) FROM ingestion_state WHERE source_type = 'transcript'`)
+		if err := processedRow.Scan(&alreadyProcessed); err != nil {
+			alreadyProcessed = 0
+		}
+
+		remaining := totalChunks - alreadyProcessed
+		if remaining < 0 {
+			remaining = 0
+		}
+
 		fmt.Printf("Ingesting transcript chunks for user: %s\n", username)
 		if maxAgeDays > 0 {
-			fmt.Printf("  Max age: %d days, ", maxAgeDays)
+			fmt.Printf("  Max age: %d days\n", maxAgeDays)
 		}
-		fmt.Printf("Total chunks: %d, batch size: %d, expected batches: %d\n", totalChunks, batchSize, expectedBatches)
+		fmt.Printf("  Total chunks: %d, Already processed: %d, Remaining: ~%d\n", totalChunks, alreadyProcessed, remaining)
 
 		txIngester := memorygraph.NewTranscriptIngesterWithAge(sessionsDB, username, minTimestamp)
-		report, err := memorygraph.IngestWithBatchingAndTotal(ctx, mgr, txIngester, username, batchSize, totalChunks)
+		report, err := memorygraph.IngestWithBatchingAndTotal(ctx, mgr, txIngester, username, batchSize, totalChunks, alreadyProcessed)
 		if err != nil {
 			return fmt.Errorf("transcript ingestion failed: %w", err)
 		}

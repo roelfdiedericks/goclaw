@@ -199,7 +199,7 @@ func (t *RecallTool) Execute(ctx context.Context, input json.RawMessage) (*types
 	// Format output for LLM
 	output := formatRecallResults(results)
 
-	L_info("memory_graph_recall: completed",
+	L_debug("memory_graph_recall: completed",
 		"mode", params.Mode,
 		"results", len(results),
 	)
