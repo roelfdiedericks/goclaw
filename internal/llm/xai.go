@@ -746,6 +746,16 @@ func (p *XAIProvider) addMessageToRequest(req *xai.ChatRequest, msg types.Messag
 			Result: msg.Content,
 		})
 
+	case "system":
+		// Mid-conversation system messages (e.g., bulletins, context updates)
+		// xAI API doesn't support system messages mid-conversation,
+		// so convert to user message with clear formatting
+		if msg.Content != "" {
+			req.UserMessage(xai.UserContent{
+				Text: "[System Context]\n" + msg.Content,
+			})
+		}
+
 	default:
 		L_warn("xai: unknown message role, skipping",
 			"role", msg.Role,

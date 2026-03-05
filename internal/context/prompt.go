@@ -38,6 +38,11 @@ type PromptParams struct {
 	RoleSystemPromptFile string // Path to system prompt file (relative to workspace)
 	// Time injection control
 	TimeInSystemPrompt bool // Include time section in system prompt (default: false)
+	// Memory graph agent extraction
+	AgentExtraction bool // Enable agent-driven memory extraction guidance in prompt
+	// Memory graph bulletins (pre-generated, for injection="prompt" mode)
+	MemoryBulletin  string // Memory bulletin content (if injection="prompt")
+	ContextBulletin string // Context bulletin content (if injection="prompt")
 }
 
 // BuildSystemPrompt builds the full system prompt with workspace context injection
@@ -182,6 +187,27 @@ func BuildSystemPrompt(params PromptParams) string {
 	// 13. Memory vs Transcript guidance (main agent only)
 	if !isMinimal {
 		s := buildMemoryVsTranscriptSection()
+		staticText += s
+		sections = append(sections, s)
+	}
+
+	// 13b. Agent-driven memory extraction guidance (main agent only, if enabled)
+	if !isMinimal && params.AgentExtraction {
+		s := buildAgentExtractionSection()
+		staticText += s
+		sections = append(sections, s)
+	}
+
+	// 13c. Memory bulletin (main agent only, if injection="prompt")
+	if !isMinimal && params.MemoryBulletin != "" {
+		s := buildMemoryBulletinSection(params.MemoryBulletin)
+		staticText += s
+		sections = append(sections, s)
+	}
+
+	// 13d. Context bulletin (main agent only, if injection="prompt")
+	if !isMinimal && params.ContextBulletin != "" {
+		s := buildContextBulletinSection(params.ContextBulletin)
 		staticText += s
 		sections = append(sections, s)
 	}
@@ -516,6 +542,43 @@ You have two search tools for different purposes:
 - Looking for when/how something was discussed? → transcript
 - Need exact quotes or context? → transcript
 - Checking if something was saved to memory? → memory_search`
+}
+
+func buildAgentExtractionSection() string {
+	return `## Real-Time Memory Extraction
+
+When the user shares significant personal information, preferences, or decisions during conversation, you can store memories immediately using memory_graph_store rather than waiting for background extraction.
+
+**When to store immediately:**
+- User shares personal facts, preferences, or important context
+- Key decisions are made that should be remembered
+- User explicitly asks you to remember something
+
+**How to use:**
+- Call memory_graph_store with appropriate type (fact, preference, decision, etc.)
+- Include source attribution and reasoning
+- Use associations to link related memories
+
+**What NOT to extract:**
+- Transient conversation (greetings, acknowledgments)
+- Information already in your context (MEMORY.md, recent messages)
+- Sensitive data the user hasn't explicitly asked to remember
+
+Background extraction still runs as a safety net for anything you miss.`
+}
+
+func buildMemoryBulletinSection(bulletin string) string {
+	if bulletin == "" {
+		return ""
+	}
+	return "## Memory Bulletin\n\n" + bulletin
+}
+
+func buildContextBulletinSection(bulletin string) string {
+	if bulletin == "" {
+		return ""
+	}
+	return "## Context Bulletin\n\n" + bulletin
 }
 
 func buildContextStatusSection(totalTokens, maxTokens int) string {

@@ -159,6 +159,15 @@ func (t *UpdateTool) Execute(ctx context.Context, input json.RawMessage) (*types
 		"contentChanged", contentChanged,
 	)
 
+	// Invalidate the appropriate bulletin cache based on memory type
+	if username != "" {
+		if isContextBulletinType(mem.Type) {
+			t.manager.InvalidateContextBulletinCache(username)
+		} else {
+			t.manager.InvalidateMemoryBulletinCache(username)
+		}
+	}
+
 	result := fmt.Sprintf("Updated memory %s:\n", params.ID)
 	for _, c := range changes {
 		result += fmt.Sprintf("  • %s\n", c)

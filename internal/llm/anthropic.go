@@ -787,6 +787,16 @@ func convertMessages(messages []types.Message) []anthropic.MessageParam {
 					},
 				},
 			})
+
+		case "system":
+			// Mid-conversation system messages (e.g., bulletins, context updates)
+			// Anthropic API doesn't support system messages mid-conversation,
+			// so convert to user message with clear formatting
+			if msg.Content != "" {
+				result = append(result, anthropic.NewUserMessage(
+					anthropic.NewTextBlock("[System Context]\n"+msg.Content),
+				))
+			}
 		}
 	}
 

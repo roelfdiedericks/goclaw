@@ -43,6 +43,17 @@ var DefaultImportance = map[Type]float32{
 	TypeAnomaly:     0.3,
 }
 
+// isContextBulletinType returns true for memory types that appear in the Context Bulletin
+// (routines, predictions, correlations, anomalies, todos)
+func isContextBulletinType(t Type) bool {
+	switch t {
+	case TypeTodo, TypeRoutine, TypePrediction, TypeCorrelation, TypeAnomaly:
+		return true
+	default:
+		return false
+	}
+}
+
 // ConfidenceNotApplicable is the sentinel value for memories where confidence doesn't apply
 const ConfidenceNotApplicable float32 = -1
 

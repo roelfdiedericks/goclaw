@@ -6,154 +6,183 @@ import (
 	"strings"
 	"time"
 
-	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
-// BuildMemoryBulletin generates an LLM-synthesized memory summary for a user
-// wordLimit controls the target word count (0 = no limit)
-func BuildMemoryBulletin(ctx context.Context, mgr *Manager, provider llm.Provider, username string, wordLimit int) (string, error) {
+// BuildMemoryBulletinWithConfig generates a memory bulletin using configurable limits
+// Returns empty string if no sections have content (not a sentinel message)
+func BuildMemoryBulletinWithConfig(ctx context.Context, mgr *Manager, username string, cfg BulletinConfig) (string, error) {
 	if mgr == nil {
 		return "", fmt.Errorf("no memory graph manager")
 	}
 
 	L_debug("memorygraph: building memory bulletin", "username", username)
 
-	// Gather memories for the bulletin
 	var sections []string
-
-	// Identity memories (top 5 by importance)
-	identities, err := Query().
-		Username(username).
-		Types(TypeIdentity).
-		OrderBy("importance").
-		Descending().
-		Limit(5).
-		Execute(mgr.DB())
-	if err == nil && len(identities) > 0 {
-		var items []string
-		for _, m := range identities {
-			items = append(items, "- "+m.Content)
-		}
-		sections = append(sections, "## Identity\n"+strings.Join(items, "\n"))
+	var seenUUIDs map[string]bool
+	if cfg.Deduplicate {
+		seenUUIDs = make(map[string]bool)
 	}
 
-	// Recent memories (last 10)
-	recent, err := Query().
-		Username(username).
-		OrderBy("occurred_at").
-		Descending().
-		Limit(10).
-		Execute(mgr.DB())
-	if err == nil && len(recent) > 0 {
-		var items []string
-		for _, m := range recent {
-			items = append(items, fmt.Sprintf("- [%s] %s", m.Type, m.Content))
+	// Helper to filter already-seen memories
+	filterSeen := func(memories []*Memory) []*Memory {
+		if seenUUIDs == nil {
+			return memories
 		}
-		sections = append(sections, "## Recent Memories\n"+strings.Join(items, "\n"))
+		var filtered []*Memory
+		for _, m := range memories {
+			if !seenUUIDs[m.UUID] {
+				filtered = append(filtered, m)
+				seenUUIDs[m.UUID] = true
+			}
+		}
+		return filtered
 	}
 
-	// Decisions (last 5)
-	decisions, err := Query().
-		Username(username).
-		Types(TypeDecision).
-		OrderBy("occurred_at").
-		Descending().
-		Limit(5).
-		Execute(mgr.DB())
-	if err == nil && len(decisions) > 0 {
-		var items []string
-		for _, m := range decisions {
-			items = append(items, "- "+m.Content)
+	// Section order: Identity -> High Priority -> Goals -> Preferences -> Recent Events -> Decisions
+
+	// 1. Identity (by importance)
+	if cfg.IdentityLimit > 0 {
+		identities, err := Query().
+			Username(username).
+			Types(TypeIdentity).
+			OrderBy("importance").
+			Descending().
+			Limit(cfg.IdentityLimit).
+			Execute(mgr.DB())
+		if err == nil {
+			identities = filterSeen(identities)
+			if len(identities) > 0 {
+				var items []string
+				for _, m := range identities {
+					items = append(items, "- "+m.Content)
+				}
+				sections = append(sections, "## Identity\n"+strings.Join(items, "\n"))
+			}
 		}
-		sections = append(sections, "## Recent Decisions\n"+strings.Join(items, "\n"))
 	}
 
-	// High importance memories (>0.8, top 10)
-	important, err := Query().
-		Username(username).
-		MinImportance(0.8).
-		OrderBy("importance").
-		Descending().
-		Limit(10).
-		Execute(mgr.DB())
-	if err == nil && len(important) > 0 {
-		var items []string
-		for _, m := range important {
-			items = append(items, fmt.Sprintf("- [%.0f%%] %s", m.Importance*100, m.Content))
+	// 2. High Priority (importance >= threshold, all types)
+	if cfg.HighPriorityLimit > 0 {
+		important, err := Query().
+			Username(username).
+			MinImportance(float32(cfg.HighPriorityThreshold)).
+			OrderBy("importance").
+			Descending().
+			Limit(cfg.HighPriorityLimit).
+			Execute(mgr.DB())
+		if err == nil {
+			important = filterSeen(important)
+			if len(important) > 0 {
+				var items []string
+				for _, m := range important {
+					items = append(items, fmt.Sprintf("- [%.0f%%] %s", m.Importance*100, m.Content))
+				}
+				sections = append(sections, "## High Priority\n"+strings.Join(items, "\n"))
+			}
 		}
-		sections = append(sections, "## High Priority\n"+strings.Join(items, "\n"))
 	}
 
-	// Preferences (top 5)
-	preferences, err := Query().
-		Username(username).
-		Types(TypePreference).
-		OrderBy("importance").
-		Descending().
-		Limit(5).
-		Execute(mgr.DB())
-	if err == nil && len(preferences) > 0 {
-		var items []string
-		for _, m := range preferences {
-			items = append(items, "- "+m.Content)
+	// 3. Goals (by importance)
+	if cfg.GoalsLimit > 0 {
+		goals, err := Query().
+			Username(username).
+			Types(TypeGoal).
+			OrderBy("importance").
+			Descending().
+			Limit(cfg.GoalsLimit).
+			Execute(mgr.DB())
+		if err == nil {
+			goals = filterSeen(goals)
+			if len(goals) > 0 {
+				var items []string
+				for _, m := range goals {
+					items = append(items, "- "+m.Content)
+				}
+				sections = append(sections, "## Active Goals\n"+strings.Join(items, "\n"))
+			}
 		}
-		sections = append(sections, "## Preferences\n"+strings.Join(items, "\n"))
 	}
 
-	// Goals (top 3)
-	goals, err := Query().
-		Username(username).
-		Types(TypeGoal).
-		OrderBy("importance").
-		Descending().
-		Limit(3).
-		Execute(mgr.DB())
-	if err == nil && len(goals) > 0 {
-		var items []string
-		for _, m := range goals {
-			items = append(items, "- "+m.Content)
+	// 4. Preferences (by importance)
+	if cfg.PreferencesLimit > 0 {
+		preferences, err := Query().
+			Username(username).
+			Types(TypePreference).
+			OrderBy("importance").
+			Descending().
+			Limit(cfg.PreferencesLimit).
+			Execute(mgr.DB())
+		if err == nil {
+			preferences = filterSeen(preferences)
+			if len(preferences) > 0 {
+				var items []string
+				for _, m := range preferences {
+					items = append(items, "- "+m.Content)
+				}
+				sections = append(sections, "## Preferences\n"+strings.Join(items, "\n"))
+			}
 		}
-		sections = append(sections, "## Active Goals\n"+strings.Join(items, "\n"))
 	}
 
+	// 5. Recent Events (type=event, time-bounded)
+	if cfg.RecentEventsLimit > 0 {
+		cutoff := time.Now().AddDate(0, 0, -cfg.RecentEventsDays)
+		events, err := Query().
+			Username(username).
+			Types(TypeEvent).
+			SinceOccurred(cutoff).
+			OrderBy("occurred_at").
+			Descending().
+			Limit(cfg.RecentEventsLimit).
+			Execute(mgr.DB())
+		if err == nil {
+			events = filterSeen(events)
+			if len(events) > 0 {
+				var items []string
+				for _, m := range events {
+					items = append(items, fmt.Sprintf("- [%s] %s", m.Type, m.Content))
+				}
+				sections = append(sections, "## Recent Events\n"+strings.Join(items, "\n"))
+			}
+		}
+	}
+
+	// 6. Decisions (time-bounded)
+	if cfg.DecisionsLimit > 0 {
+		cutoff := time.Now().AddDate(0, 0, -cfg.DecisionsDays)
+		decisions, err := Query().
+			Username(username).
+			Types(TypeDecision).
+			SinceOccurred(cutoff).
+			OrderBy("occurred_at").
+			Descending().
+			Limit(cfg.DecisionsLimit).
+			Execute(mgr.DB())
+		if err == nil {
+			decisions = filterSeen(decisions)
+			if len(decisions) > 0 {
+				var items []string
+				for _, m := range decisions {
+					items = append(items, "- "+m.Content)
+				}
+				sections = append(sections, "## Recent Decisions\n"+strings.Join(items, "\n"))
+			}
+		}
+	}
+
+	// Return empty string if no sections (not a sentinel message)
 	if len(sections) == 0 {
-		return fmt.Sprintf("No memories found for user %q.", username), nil
+		return "", nil
 	}
 
-	// If no LLM provider, return the raw structured data
-	if provider == nil {
-		return strings.Join(sections, "\n\n"), nil
-	}
-
-	// Use LLM to synthesize into natural language
-	var lengthInstruction string
-	if wordLimit > 0 {
-		lengthInstruction = fmt.Sprintf("about %d words", wordLimit)
-	} else {
-		lengthInstruction = "as comprehensive as needed"
-	}
-
-	prompt := fmt.Sprintf(`Synthesize the following memory data into a natural language summary (%s). 
-Write as if describing what you know about this person - their identity, preferences, goals, and recent activities.
-Be conversational but informative. Don't list items, integrate them into flowing prose.
-
-%s`, lengthInstruction, strings.Join(sections, "\n\n"))
-
-	const systemPrompt = `You are a memory synthesis assistant. Your task is to convert structured memory data into a flowing, natural language summary. Focus on the most important and interesting aspects. Be concise but thorough.`
-
-	response, err := provider.SimpleMessage(ctx, prompt, systemPrompt)
-	if err != nil {
-		L_warn("memorygraph: LLM synthesis failed, returning raw data", "error", err)
-		return strings.Join(sections, "\n\n"), nil
-	}
-
-	return response, nil
+	return strings.Join(sections, "\n\n"), nil
 }
 
-// BuildContextBulletin generates a programmatic context bulletin for anticipatory intelligence
-// Returns structured data about routines, predictions, and correlations
-func BuildContextBulletin(mgr *Manager, username string) (string, error) {
+// BuildContextBulletinWithConfig generates a context bulletin using configurable limits
+// If omitHeader is true, skips the "# Context Bulletin for X" header (for injection)
+// Returns empty string if no sections have content
+func BuildContextBulletinWithConfig(mgr *Manager, username string, cfg BulletinConfig, omitHeader bool) (string, error) {
 	if mgr == nil {
 		return "", fmt.Errorf("no memory graph manager")
 	}
@@ -163,111 +192,129 @@ func BuildContextBulletin(mgr *Manager, username string) (string, error) {
 	var sections []string
 	now := time.Now()
 
-	// Active routines (confidence > 0.5)
-	routines, err := Query().
-		Username(username).
-		Types(TypeRoutine).
-		MinConfidence(0.5).
-		OrderBy("confidence").
-		Descending().
-		Limit(10).
-		Execute(mgr.DB())
-	if err == nil && len(routines) > 0 {
-		var items []string
-		for _, m := range routines {
-			conf := ""
-			if m.Confidence >= 0 {
-				conf = fmt.Sprintf(" (%.0f%% confidence)", m.Confidence*100)
+	// 1. Active routines (confidence > 0.5)
+	if cfg.RoutinesLimit > 0 {
+		routines, err := Query().
+			Username(username).
+			Types(TypeRoutine).
+			MinConfidence(0.5).
+			OrderBy("confidence").
+			Descending().
+			Limit(cfg.RoutinesLimit).
+			Execute(mgr.DB())
+		if err == nil && len(routines) > 0 {
+			var items []string
+			for _, m := range routines {
+				conf := ""
+				if m.Confidence >= 0 {
+					conf = fmt.Sprintf(" (%.0f%% confidence)", m.Confidence*100)
+				}
+				items = append(items, "- "+m.Content+conf)
 			}
-			items = append(items, "- "+m.Content+conf)
+			sections = append(sections, "## Active Routines\n"+strings.Join(items, "\n"))
 		}
-		sections = append(sections, "## Active Routines\n"+strings.Join(items, "\n"))
 	}
 
-	// Pending predictions (next 2 hours)
-	twoHoursLater := now.Add(2 * time.Hour)
-	predictions, err := Query().
-		Username(username).
-		Types(TypePrediction).
-		HasTriggerBefore(twoHoursLater).
-		OrderBy("importance").
-		Descending().
-		Limit(5).
-		Execute(mgr.DB())
-	if err == nil && len(predictions) > 0 {
-		var items []string
-		for _, m := range predictions {
-			trigger := ""
-			if m.NextTriggerAt != nil {
-				trigger = fmt.Sprintf(" [due: %s]", m.NextTriggerAt.Format("15:04"))
+	// 2. Upcoming predictions (next 2 hours)
+	if cfg.PredictionsLimit > 0 {
+		twoHoursLater := now.Add(2 * time.Hour)
+		predictions, err := Query().
+			Username(username).
+			Types(TypePrediction).
+			HasTriggerBefore(twoHoursLater).
+			OrderBy("importance").
+			Descending().
+			Limit(cfg.PredictionsLimit).
+			Execute(mgr.DB())
+		if err == nil && len(predictions) > 0 {
+			var items []string
+			for _, m := range predictions {
+				trigger := ""
+				if m.NextTriggerAt != nil {
+					trigger = fmt.Sprintf(" [due: %s]", m.NextTriggerAt.Format("15:04"))
+				}
+				items = append(items, "- "+m.Content+trigger)
 			}
-			items = append(items, "- "+m.Content+trigger)
+			sections = append(sections, "## Upcoming Predictions\n"+strings.Join(items, "\n"))
 		}
-		sections = append(sections, "## Upcoming Predictions\n"+strings.Join(items, "\n"))
 	}
 
-	// Active correlations (confidence > 0.6)
-	correlations, err := Query().
-		Username(username).
-		Types(TypeCorrelation).
-		MinConfidence(0.6).
-		OrderBy("confidence").
-		Descending().
-		Limit(5).
-		Execute(mgr.DB())
-	if err == nil && len(correlations) > 0 {
-		var items []string
-		for _, m := range correlations {
-			conf := ""
-			if m.Confidence >= 0 {
-				conf = fmt.Sprintf(" (%.0f%% confidence)", m.Confidence*100)
+	// 3. Known correlations (confidence > 0.6)
+	if cfg.CorrelationsLimit > 0 {
+		correlations, err := Query().
+			Username(username).
+			Types(TypeCorrelation).
+			MinConfidence(0.6).
+			OrderBy("confidence").
+			Descending().
+			Limit(cfg.CorrelationsLimit).
+			Execute(mgr.DB())
+		if err == nil && len(correlations) > 0 {
+			var items []string
+			for _, m := range correlations {
+				conf := ""
+				if m.Confidence >= 0 {
+					conf = fmt.Sprintf(" (%.0f%% confidence)", m.Confidence*100)
+				}
+				items = append(items, "- "+m.Content+conf)
 			}
-			items = append(items, "- "+m.Content+conf)
+			sections = append(sections, "## Known Correlations\n"+strings.Join(items, "\n"))
 		}
-		sections = append(sections, "## Known Correlations\n"+strings.Join(items, "\n"))
 	}
 
-	// Recent anomalies (last 24h)
-	yesterday := now.Add(-24 * time.Hour)
-	anomalies, err := Query().
-		Username(username).
-		Types(TypeAnomaly).
-		SinceOccurred(yesterday).
-		OrderBy("occurred_at").
-		Descending().
-		Limit(5).
-		Execute(mgr.DB())
-	if err == nil && len(anomalies) > 0 {
-		var items []string
-		for _, m := range anomalies {
-			items = append(items, "- "+m.Content)
+	// 4. Recent anomalies (last 24h)
+	if cfg.AnomaliesLimit > 0 {
+		yesterday := now.Add(-24 * time.Hour)
+		anomalies, err := Query().
+			Username(username).
+			Types(TypeAnomaly).
+			SinceOccurred(yesterday).
+			OrderBy("occurred_at").
+			Descending().
+			Limit(cfg.AnomaliesLimit).
+			Execute(mgr.DB())
+		if err == nil && len(anomalies) > 0 {
+			var items []string
+			for _, m := range anomalies {
+				items = append(items, "- "+m.Content)
+			}
+			sections = append(sections, "## Recent Anomalies\n"+strings.Join(items, "\n"))
 		}
-		sections = append(sections, "## Recent Anomalies\n"+strings.Join(items, "\n"))
 	}
 
-	// Pending todos
-	todos, err := Query().
-		Username(username).
-		Types(TypeTodo).
-		OrderBy("importance").
-		Descending().
-		Limit(5).
-		Execute(mgr.DB())
-	if err == nil && len(todos) > 0 {
-		var items []string
-		for _, m := range todos {
-			items = append(items, "- "+m.Content)
+	// 5. Pending todos
+	if cfg.TodosLimit > 0 {
+		todos, err := Query().
+			Username(username).
+			Types(TypeTodo).
+			OrderBy("importance").
+			Descending().
+			Limit(cfg.TodosLimit).
+			Execute(mgr.DB())
+		if err == nil && len(todos) > 0 {
+			var items []string
+			for _, m := range todos {
+				items = append(items, "- "+m.Content)
+			}
+			sections = append(sections, "## Pending Todos\n"+strings.Join(items, "\n"))
 		}
-		sections = append(sections, "## Pending Todos\n"+strings.Join(items, "\n"))
 	}
 
+	// Return empty string if no sections
 	if len(sections) == 0 {
-		return "No context data found for this user.", nil
+		return "", nil
 	}
 
-	// Context bulletin is always structured, no LLM synthesis
-	header := fmt.Sprintf("# Context Bulletin for %s\nGenerated: %s\n", username, now.Format(time.RFC3339))
-	return header + "\n" + strings.Join(sections, "\n\n"), nil
+	// Build result
+	result := strings.Join(sections, "\n\n")
+
+	// Add header unless omitted (for injection, header is added by the wrapper)
+	if !omitHeader {
+		header := fmt.Sprintf("# Context Bulletin for %s\nGenerated: %s\n\n", username, now.Format(time.RFC3339))
+		result = header + result
+	}
+
+	return result, nil
 }
 
 // BuildStatsSummary returns a brief statistics summary of the memory graph
@@ -282,7 +329,7 @@ func BuildStatsSummary(mgr *Manager) (string, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("# Memory Graph Statistics\n\n"))
+	sb.WriteString("# Memory Graph Statistics\n\n")
 	sb.WriteString(fmt.Sprintf("- Total Memories: %d\n", stats.TotalMemories))
 	sb.WriteString(fmt.Sprintf("- Total Associations: %d\n", stats.TotalAssociations))
 	sb.WriteString(fmt.Sprintf("- With Embeddings: %d\n", stats.WithEmbeddings))

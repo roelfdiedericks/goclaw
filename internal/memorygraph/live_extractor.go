@@ -31,11 +31,12 @@ type LiveExtractor struct {
 
 // ConversationBatch groups messages by session for extraction.
 type ConversationBatch struct {
-	Username   string
-	Channel    string
-	SessionKey string
-	Content    string
-	MessageIDs []string
+	Username         string
+	Channel          string
+	SessionKey       string
+	Content          string
+	MessageIDs       []string
+	FirstMessageTime time.Time // Timestamp of the first message in the batch
 }
 
 // NewLiveExtractor creates a new live extractor.
@@ -140,12 +141,13 @@ func (e *LiveExtractor) runSync() {
 		}
 
 		ec := LoopExtractionInput{
-			Username:     conv.Username,
-			Channel:      conv.Channel,
-			SessionKey:   conv.SessionKey,
-			Conversation: conv.Content,
-			MessageIDs:   conv.MessageIDs,
-			SourceType:   "live",
+			Username:         conv.Username,
+			Channel:          conv.Channel,
+			SessionKey:       conv.SessionKey,
+			Conversation:     conv.Content,
+			MessageIDs:       conv.MessageIDs,
+			SourceType:       "live",
+			ConversationTime: conv.FirstMessageTime,
 		}
 
 		result, err := e.extractionLoop.Run(ctx, ec)
@@ -235,6 +237,7 @@ func (e *LiveExtractor) getUnextractedConversations(ctx context.Context) []Conve
 	sessionMessages := make(map[string][]messageRow)
 	sessionUsers := make(map[string]string)
 	sessionChannels := make(map[string]string)
+	sessionFirstTime := make(map[string]time.Time)
 
 	for rows.Next() {
 		var m messageRow
@@ -244,6 +247,11 @@ func (e *LiveExtractor) getUnextractedConversations(ctx context.Context) []Conve
 		if err := rows.Scan(&m.ID, &m.SessionKey, &m.Role, &m.Content, &userID, &source, &timestamp); err != nil {
 			L_warn("live extractor: scan failed", "error", err)
 			continue
+		}
+
+		// Parse timestamp (RFC3339 format from sessions.db)
+		if t, err := time.Parse(time.RFC3339, timestamp); err == nil {
+			m.Timestamp = t
 		}
 
 		// Skip already-extracted messages
@@ -259,6 +267,10 @@ func (e *LiveExtractor) getUnextractedConversations(ctx context.Context) []Conve
 		}
 		if source.Valid && source.String != "" && sessionChannels[m.SessionKey] == "" {
 			sessionChannels[m.SessionKey] = source.String
+		}
+		// Track first message time per session
+		if _, ok := sessionFirstTime[m.SessionKey]; !ok && !m.Timestamp.IsZero() {
+			sessionFirstTime[m.SessionKey] = m.Timestamp
 		}
 	}
 
@@ -289,11 +301,12 @@ func (e *LiveExtractor) getUnextractedConversations(ctx context.Context) []Conve
 		}
 
 		batches = append(batches, ConversationBatch{
-			Username:   sessionUsers[sessionKey],
-			Channel:    sessionChannels[sessionKey],
-			SessionKey: sessionKey,
-			Content:    content.String(),
-			MessageIDs: messageIDs,
+			Username:         sessionUsers[sessionKey],
+			Channel:          sessionChannels[sessionKey],
+			SessionKey:       sessionKey,
+			Content:          content.String(),
+			MessageIDs:       messageIDs,
+			FirstMessageTime: sessionFirstTime[sessionKey],
 		})
 	}
 
@@ -305,4 +318,5 @@ type messageRow struct {
 	SessionKey string
 	Role       string
 	Content    string
+	Timestamp  time.Time
 }

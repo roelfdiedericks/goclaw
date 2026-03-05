@@ -26,7 +26,7 @@ func (t *StoreTool) Name() string {
 }
 
 func (t *StoreTool) Description() string {
-	return "Save a memory to the graph. Use after recalling related memories. Supports linking to existing memories via associations."
+	return "Save a memory to the graph. Use after recalling related memories. Supports linking to existing memories via associations. Note: Todos appear automatically in the Context Bulletin - no scheduling needed."
 }
 
 func (t *StoreTool) Schema() map[string]any {
@@ -35,7 +35,7 @@ func (t *StoreTool) Schema() map[string]any {
 		"properties": map[string]any{
 			"content": map[string]any{
 				"type":        "string",
-				"description": "The memory content - clear, standalone statement",
+				"description": "The memory content - clear, standalone statement. Include a target date for todo/reminders/events/etc.",
 			},
 			"memory_type": map[string]any{
 				"type":        "string",
@@ -44,7 +44,7 @@ func (t *StoreTool) Schema() map[string]any {
 			},
 			"importance": map[string]any{
 				"type":        "number",
-				"description": "Importance 0.0-1.0. Uses type default if omitted",
+				"description": "0.0-1.0. Usually omit - system assigns sensible defaults based on memory_type. Only set if explicitly very important (0.9+) or trivial (0.2-).",
 			},
 			"confidence": map[string]any{
 				"type":        "number",
@@ -60,7 +60,7 @@ func (t *StoreTool) Schema() map[string]any {
 			},
 			"occurred_at": map[string]any{
 				"type":        "string",
-				"description": "When this happened (ISO date '2026-02-27' or RFC3339). Defaults to conversation time.",
+				"description": "When this memory was formed. Cannot be in the future. For past events ('yesterday', 'last week'), calculate using conversation date as reference. For todos with target dates, put the date in content instead. Format: ISO date or RFC3339. Usually omit - defaults to conversation timestamp.",
 			},
 			"reasoning": map[string]any{
 				"type":        "string",
@@ -129,9 +129,11 @@ func (t *StoreTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 		return types.ErrorResult(err.Error()), nil
 	}
 
-	// Get additional context from extraction (message IDs, session, channel)
+	// Get additional context from extraction loop or gateway session
 	var messageIDs []string
 	var sessionKey, channel string
+
+	// First try extraction loop context keys
 	if ids, ok := ctx.Value(ContextKeyMessageIDs).([]string); ok {
 		messageIDs = ids
 	}
@@ -140,6 +142,16 @@ func (t *StoreTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 	}
 	if ch, ok := ctx.Value(ContextKeyChannel).(string); ok {
 		channel = ch
+	}
+
+	// Fallback to gateway SessionContext for agent-driven extraction
+	if sessCtx := types.GetSessionContext(ctx); sessCtx != nil {
+		if len(messageIDs) == 0 && len(sessCtx.CurrentMessageIDs) > 0 {
+			messageIDs = sessCtx.CurrentMessageIDs
+		}
+		if channel == "" && sessCtx.Channel != "" {
+			channel = sessCtx.Channel
+		}
 	}
 
 	// Log the store decision with content and reasoning for visibility
@@ -248,6 +260,29 @@ func (t *StoreTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 		"type", params.MemoryType,
 		"associations", associationsCreated,
 	)
+
+	// Mark messages as extracted to prevent duplicate background extraction
+	if len(messageIDs) > 0 {
+		for _, msgID := range messageIDs {
+			_ = setIngestionState(t.manager.DB(), &IngestionState{
+				SourceType:  "agent",
+				SourcePath:  msgID,
+				ContentHash: HashContent(params.Content),
+				IngestedAt:  time.Now(),
+				MemoryCount: 1,
+			})
+		}
+		L_debug("memory_graph_store: marked ingestion state", "messageIDs", messageIDs)
+	}
+
+	// Invalidate the appropriate bulletin cache based on memory type
+	if username != "" {
+		if isContextBulletinType(Type(params.MemoryType)) {
+			t.manager.InvalidateContextBulletinCache(username)
+		} else {
+			t.manager.InvalidateMemoryBulletinCache(username)
+		}
+	}
 
 	// Return the new memory's UUID
 	result := fmt.Sprintf("Saved memory %s [%s] %q", mem.UUID, params.MemoryType, truncateStr(params.Content, 50))

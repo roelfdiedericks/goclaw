@@ -1657,6 +1657,9 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		messageCountBefore = sess.MessageCount()
 	}
 
+	// Track current message IDs for memory provenance (used by memory_graph_store)
+	var currentMsgIDs []string
+
 	// Add user message with content blocks if any (skip if already added by supervision)
 	if !req.SkipAddMessage {
 		L_debug("RunAgent: adding user message", "session", sessionKey, "source", req.Source, "msgLen", len(req.UserMsg))
@@ -1682,6 +1685,10 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				Content:    req.UserMsg,
 				Source:     req.Source,
 			})
+			// Track message ID for memory provenance
+			if userMsgID != "" {
+				currentMsgIDs = []string{userMsgID}
+			}
 		}
 	} else {
 		L_debug("RunAgent: skipping message add (already in session)", "session", sessionKey, "source", req.Source)
@@ -1706,7 +1713,40 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		roleSystemPromptFile = cachedRole.SystemPromptFile
 	}
 
-	systemPrompt := gcontext.BuildSystemPrompt(gcontext.PromptParams{
+	// Check if agent-driven memory extraction is enabled
+	agentExtraction := false
+	var bulletinCfg memorygraph.BulletinConfig
+	var memoryBulletin, contextBulletin string
+
+	if mgr := memorygraph.GetManager(); mgr != nil {
+		agentExtraction = mgr.Config().LiveExtraction.AgentExtraction
+		bulletinCfg = mgr.Config().Bulletin
+
+		// Determine if we should inject bulletins
+		isHeartbeat := req.Purpose == "heartbeat"
+		isCron := strings.HasPrefix(req.Purpose, "cron")
+
+		shouldInject := bulletinCfg.Enabled && userID != ""
+		if shouldInject && isHeartbeat && !bulletinCfg.InjectForHeartbeat {
+			shouldInject = false
+		}
+		if shouldInject && isCron && !bulletinCfg.InjectForCron {
+			shouldInject = false
+		}
+
+		if shouldInject {
+			memoryBulletin, contextBulletin, _ = mgr.GetBulletins(ctx, userID)
+			L_debug("bulletin: fetched for injection",
+				"user", userID,
+				"memoryLen", len(memoryBulletin),
+				"contextLen", len(contextBulletin),
+				"memoryMode", bulletinCfg.MemoryInjection,
+				"contextMode", bulletinCfg.ContextInjection)
+		}
+	}
+
+	// Build prompt params with bulletin injection based on config
+	promptParams := gcontext.PromptParams{
 		WorkspaceDir:         g.config.Gateway.WorkingDir,
 		Tools:                g.tools,
 		Model:                g.llm.Model(),
@@ -1720,7 +1760,18 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		RoleSystemPrompt:     roleSystemPrompt,
 		RoleSystemPromptFile: roleSystemPromptFile,
 		TimeInSystemPrompt:   g.config.PromptCache.GetTimeInSystemPrompt(),
-	})
+		AgentExtraction:      agentExtraction,
+	}
+
+	// Inject bulletins into prompt params based on injection mode (only if not empty)
+	if bulletinCfg.MemoryInjection == "prompt" && memoryBulletin != "" {
+		promptParams.MemoryBulletin = memoryBulletin
+	}
+	if bulletinCfg.ContextInjection == "prompt" && contextBulletin != "" {
+		promptParams.ContextBulletin = contextBulletin
+	}
+
+	systemPrompt := gcontext.BuildSystemPrompt(promptParams)
 
 	// Append media storage instructions
 	systemPrompt += g.buildMediaInstructions()
@@ -1938,9 +1989,50 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		// Resolve media content (FilePath -> base64 Data) before sending to LLM
 		resolvedMessages := g.resolveMediaContent(messages, g.llm)
 
-		// Inject timestamp into last user message (ephemeral — not stored in session or SQLite)
+		// Build ephemeral messages (time, bulletins) to inject before the last user message
+		// This placement maximizes prompt cache efficiency: conversation history stays
+		// cacheable, while dynamic content is placed near the current turn.
+		var ephemeralMessages []types.Message
+
+		// System time and uptime (if enabled)
 		if g.config.PromptCache.GetTimeInUserMessage() {
-			resolvedMessages = injectTimeInLastUserMessage(resolvedMessages)
+			ts := time.Now().Format("Mon 2006-01-02 15:04 MST")
+			content := "[Current Time: " + ts
+			if g.config.PromptCache.GetShowUptime() {
+				content += " | Uptime: " + formatUptime(time.Since(g.startTime))
+			}
+			content += "]"
+			ephemeralMessages = append(ephemeralMessages, types.Message{
+				Role:      "system",
+				Content:   content,
+				Timestamp: time.Now(),
+			})
+		}
+
+		// Memory bulletin (if configured for message injection)
+		if bulletinCfg.MemoryInjection == "message" && memoryBulletin != "" {
+			ephemeralMessages = append(ephemeralMessages, types.Message{
+				Role:      "system",
+				Content:   "[Memory Bulletin]\n" + memoryBulletin,
+				Timestamp: time.Now(),
+			})
+			L_debug("bulletin: prepared memory for injection", "len", len(memoryBulletin))
+		}
+
+		// Context bulletin (if configured for message injection)
+		if bulletinCfg.ContextInjection == "message" && contextBulletin != "" {
+			ephemeralMessages = append(ephemeralMessages, types.Message{
+				Role:      "system",
+				Content:   "[Context Update]\n" + contextBulletin,
+				Timestamp: time.Now(),
+			})
+			L_debug("bulletin: prepared context for injection", "len", len(contextBulletin))
+		}
+
+		// Inject all ephemeral messages just before the last user message
+		if len(ephemeralMessages) > 0 {
+			resolvedMessages = injectEphemeralBeforeLastUser(resolvedMessages, ephemeralMessages...)
+			L_debug("ephemeral: injected before last user message", "count", len(ephemeralMessages))
 		}
 
 		var response *llm.Response
@@ -2162,12 +2254,13 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				// Execute tool with session context
 				toolStartTime := time.Now()
 				toolCtx := tools.WithSessionContext(agentCtx, &tools.SessionContext{
-					Channel:         req.Source,
-					ChatID:          req.ChatID,
-					OwnerChatID:     ownerChatID,
-					User:            req.User,
-					TranscriptScope: transcriptScope,
-					Session:         sess,
+					Channel:           req.Source,
+					ChatID:            req.ChatID,
+					OwnerChatID:       ownerChatID,
+					User:              req.User,
+					TranscriptScope:   transcriptScope,
+					Session:           sess,
+					CurrentMessageIDs: currentMsgIDs,
 				})
 				toolResult, err := g.tools.Execute(toolCtx, tc.Name, tc.Input)
 				toolDuration := time.Since(toolStartTime)
@@ -3103,21 +3196,53 @@ func (g *Gateway) persistMessage(ctx context.Context, p PersistMessageParams) {
 	}
 }
 
-// injectTimeInLastUserMessage returns a copy of messages with a timestamp prefixed
-// to the last user message's content. This is ephemeral — the original session
-// messages are not modified, keeping persistence and transcripts clean.
-func injectTimeInLastUserMessage(messages []types.Message) []types.Message {
-	result := make([]types.Message, len(messages))
-	copy(result, messages)
+// injectEphemeralBeforeLastUser inserts ephemeral messages just before the last
+// user message. This placement maximizes prompt caching efficiency by keeping
+// the conversation history (cacheable prefix) intact, while placing dynamic
+// content (bulletins, context updates) near the current turn.
+func injectEphemeralBeforeLastUser(messages []types.Message, ephemeral ...types.Message) []types.Message {
+	if len(ephemeral) == 0 {
+		return messages
+	}
 
-	for i := len(result) - 1; i >= 0; i-- {
-		if result[i].Role == "user" && result[i].Content != "" {
-			ts := time.Now().Format("[Mon 2006-01-02 15:04 MST]")
-			result[i].Content = ts + " " + result[i].Content
-			return result
+	// Find the last user message index
+	lastUserIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			lastUserIdx = i
+			break
 		}
 	}
+
+	// If no user message found, append ephemeral messages at the end
+	if lastUserIdx == -1 {
+		result := make([]types.Message, 0, len(messages)+len(ephemeral))
+		result = append(result, messages...)
+		result = append(result, ephemeral...)
+		return result
+	}
+
+	// Insert ephemeral messages just before the last user message
+	result := make([]types.Message, 0, len(messages)+len(ephemeral))
+	result = append(result, messages[:lastUserIdx]...)
+	result = append(result, ephemeral...)
+	result = append(result, messages[lastUserIdx:]...)
 	return result
+}
+
+// formatUptime returns a human-readable uptime string like "2d 5h" or "45m"
+func formatUptime(d time.Duration) string {
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	minutes := int(d.Minutes()) % 60
+
+	if days > 0 {
+		return fmt.Sprintf("%dd %dh", days, hours)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
+	return fmt.Sprintf("%dm", minutes)
 }
 
 // extractMessageToolText extracts the sent text from a message tool's input JSON.

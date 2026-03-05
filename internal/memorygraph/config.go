@@ -10,17 +10,19 @@ import (
 
 // Config configures the memory graph system
 type Config struct {
-	Enabled        bool                  `json:"enabled"`        // Enable memory graph
-	DBPath         string                `json:"dbPath"`         // Database path (default: ~/.goclaw/memory_graph.db)
-	Search         SearchConfig          `json:"search"`         // Search configuration
-	Maintenance    MaintenanceConfig     `json:"maintenance"`    // Maintenance configuration
-	Ingestion      IngestionConfig       `json:"ingestion"`      // Ingestion configuration
-	LiveExtraction LiveExtractionConfig  `json:"liveExtraction"` // Live extraction configuration
+	Enabled        bool                 `json:"enabled"`        // Enable memory graph
+	DBPath         string               `json:"dbPath"`         // Database path (default: ~/.goclaw/memory_graph.db)
+	Search         SearchConfig         `json:"search"`         // Search configuration
+	Maintenance    MaintenanceConfig    `json:"maintenance"`    // Maintenance configuration
+	Ingestion      IngestionConfig      `json:"ingestion"`      // Ingestion configuration
+	LiveExtraction LiveExtractionConfig `json:"liveExtraction"` // Live extraction configuration
+	Bulletin       BulletinConfig       `json:"bulletin"`       // Bulletin injection configuration
 }
 
 // LiveExtractionConfig configures automatic memory extraction from conversations
 type LiveExtractionConfig struct {
 	Enabled         bool     `json:"enabled"`         // Enable live extraction
+	AgentExtraction bool     `json:"agentExtraction"` // Enable agent-driven extraction (default: true)
 	IntervalSeconds int      `json:"intervalSeconds"` // Check interval (default: 120)
 	MinMessages     int      `json:"minMessages"`     // Minimum messages before extraction (default: 5)
 	MaxTurns        int      `json:"maxTurns"`        // Max extraction loop turns (default: 10)
@@ -31,6 +33,38 @@ type LiveExtractionConfig struct {
 // DefaultExcludeSources returns the default sources to exclude from extraction.
 func DefaultExcludeSources() []string {
 	return []string{"heartbeat", "cron", "delivered"}
+}
+
+// BulletinConfig configures bulletin injection into agent context
+type BulletinConfig struct {
+	// General settings
+	Enabled          bool   `json:"enabled"`          // Master switch for bulletin injection (default: true)
+	TTLMinutes       int    `json:"ttlMinutes"`       // Cache TTL in minutes (default: 5)
+	MemoryInjection  string `json:"memoryInjection"`  // "prompt" or "message" (default: "prompt")
+	ContextInjection string `json:"contextInjection"` // "prompt" or "message" (default: "message")
+	Deduplicate      bool   `json:"deduplicate"`      // Skip items already shown in earlier sections (default: true)
+
+	// Injection context controls
+	InjectForHeartbeat bool `json:"injectForHeartbeat"` // Inject for heartbeat sessions (default: false)
+	InjectForCron      bool `json:"injectForCron"`      // Inject for cron sessions (default: true)
+
+	// Memory bulletin section limits (0 = disabled)
+	IdentityLimit         int     `json:"identityLimit"`         // Identity items (default: 3)
+	HighPriorityLimit     int     `json:"highPriorityLimit"`     // High importance items (default: 3)
+	HighPriorityThreshold float64 `json:"highPriorityThreshold"` // Importance threshold for high priority (default: 0.8)
+	RecentEventsLimit     int     `json:"recentEventsLimit"`     // Recent event items (default: 5)
+	RecentEventsDays      int     `json:"recentEventsDays"`      // Time bound for recent events (default: 7)
+	DecisionsLimit        int     `json:"decisionsLimit"`        // Decision items (default: 3)
+	DecisionsDays         int     `json:"decisionsDays"`         // Time bound for decisions (default: 14)
+	PreferencesLimit      int     `json:"preferencesLimit"`      // Preference items (default: 3)
+	GoalsLimit            int     `json:"goalsLimit"`            // Goal items (default: 3)
+
+	// Context bulletin section limits (0 = disabled)
+	RoutinesLimit     int `json:"routinesLimit"`     // Routine items (default: 5)
+	PredictionsLimit  int `json:"predictionsLimit"`  // Prediction items (default: 3)
+	CorrelationsLimit int `json:"correlationsLimit"` // Correlation items (default: 3)
+	AnomaliesLimit    int `json:"anomaliesLimit"`    // Anomaly items (default: 3)
+	TodosLimit        int `json:"todosLimit"`        // Todo items (default: 3)
 }
 
 // IngestionConfig configures what content to ingest
@@ -129,11 +163,35 @@ func DefaultConfig() Config {
 		},
 		LiveExtraction: LiveExtractionConfig{
 			Enabled:         true,                    // Enabled by default
+			AgentExtraction: true,                    // Allow agents to store memories directly
 			IntervalSeconds: 120,                     // Every 2 minutes
 			MinMessages:     5,                       // Only extract if 5+ new messages
 			MaxTurns:        10,                      // Safety limit
 			BatchSize:       50,                      // Max messages per extraction
 			ExcludeSources:  DefaultExcludeSources(), // Exclude automated sources
+		},
+		Bulletin: BulletinConfig{
+			Enabled:               true,      // Enabled by default
+			TTLMinutes:            5,         // 5 minute cache
+			MemoryInjection:       "prompt",  // Memory bulletin in system prompt
+			ContextInjection:      "message", // Context bulletin as ephemeral message
+			Deduplicate:           true,      // Skip duplicates across sections
+			InjectForHeartbeat:    false,     // Skip for heartbeats
+			InjectForCron:         true,      // Include for cron jobs
+			IdentityLimit:         3,         // Top 3 identity items
+			HighPriorityLimit:     3,         // Top 3 high importance items
+			HighPriorityThreshold: 0.8,       // 80% importance threshold
+			RecentEventsLimit:     5,         // Last 5 events
+			RecentEventsDays:      7,         // Within 7 days
+			DecisionsLimit:        3,         // Last 3 decisions
+			DecisionsDays:         14,        // Within 14 days
+			PreferencesLimit:      3,         // Top 3 preferences
+			GoalsLimit:            3,         // Top 3 goals
+			RoutinesLimit:         5,         // Top 5 routines
+			PredictionsLimit:      3,         // Next 3 predictions
+			CorrelationsLimit:     3,         // Top 3 correlations
+			AnomaliesLimit:        3,         // Last 3 anomalies
+			TodosLimit:            3,         // Top 3 todos
 		},
 	}
 }
@@ -219,6 +277,12 @@ func ConfigFormDef(cfg Config) forms.FormDef {
 				Nested:    ptrFormDef(LiveExtractionFormDef(cfg.LiveExtraction)),
 			},
 			{
+				Title:     "Bulletin Injection",
+				Collapsed: true,
+				FieldName: "Bulletin",
+				Nested:    ptrFormDef(BulletinFormDef(cfg.Bulletin)),
+			},
+			{
 				Title:     "Search Weights",
 				Collapsed: true,
 				FieldName: "Search",
@@ -245,6 +309,13 @@ func LiveExtractionFormDef(cfg LiveExtractionConfig) forms.FormDef {
 						Title: "Enable Live Extraction",
 						Type:  forms.Toggle,
 						Desc:  "Automatically extract memories from conversations in the background",
+					},
+					{
+						Name:    "agentExtraction",
+						Title:   "Agent-Driven Extraction",
+						Type:    forms.Toggle,
+						Default: true,
+						Desc:    "Allow agents to store memories during conversation. Background extractor skips messages already processed by agents.",
 					},
 					{
 						Name:    "intervalSeconds",
@@ -328,6 +399,221 @@ func SearchConfigFormDef(cfg SearchConfig) forms.FormDef {
 						Min:     0,
 						Max:     1,
 						Desc:    "Weight for graph-based retrieval (connected memories)",
+					},
+				},
+			},
+		},
+	}
+}
+
+// BulletinFormDef returns the form definition for bulletin injection settings
+func BulletinFormDef(cfg BulletinConfig) forms.FormDef {
+	return forms.FormDef{
+		Title:       "Bulletin Injection",
+		Description: "Configure how memory bulletins are injected into agent context",
+		Sections: []forms.Section{
+			{
+				Title: "General",
+				Fields: []forms.Field{
+					{
+						Name:    "enabled",
+						Title:   "Enable Bulletin Injection",
+						Type:    forms.Toggle,
+						Default: true,
+						Desc:    "Master switch for injecting memory bulletins into agent context",
+					},
+					{
+						Name:    "ttlMinutes",
+						Title:   "Cache TTL (minutes)",
+						Type:    forms.Number,
+						Default: 5,
+						Min:     1,
+						Max:     60,
+						Desc:    "How long to cache bulletins before regenerating",
+					},
+					{
+						Name:    "memoryInjection",
+						Title:   "Memory Bulletin Injection",
+						Type:    forms.Select,
+						Default: "prompt",
+						Options: []forms.Option{
+							{Value: "prompt", Label: "System Prompt"},
+							{Value: "message", Label: "Ephemeral Message"},
+						},
+						Desc: "Where to inject the memory bulletin",
+					},
+					{
+						Name:    "contextInjection",
+						Title:   "Context Bulletin Injection",
+						Type:    forms.Select,
+						Default: "message",
+						Options: []forms.Option{
+							{Value: "prompt", Label: "System Prompt"},
+							{Value: "message", Label: "Ephemeral Message"},
+						},
+						Desc: "Where to inject the context bulletin",
+					},
+					{
+						Name:    "deduplicate",
+						Title:   "Deduplicate Items",
+						Type:    forms.Toggle,
+						Default: true,
+						Desc:    "Skip items already shown in earlier sections",
+					},
+				},
+			},
+			{
+				Title: "Injection Context",
+				Fields: []forms.Field{
+					{
+						Name:    "injectForHeartbeat",
+						Title:   "Inject for Heartbeats",
+						Type:    forms.Toggle,
+						Default: false,
+						Desc:    "Include bulletins for heartbeat sessions (usually not needed)",
+					},
+					{
+						Name:    "injectForCron",
+						Title:   "Inject for Cron Jobs",
+						Type:    forms.Toggle,
+						Default: true,
+						Desc:    "Include bulletins for cron job executions",
+					},
+				},
+			},
+			{
+				Title: "Memory Bulletin Limits",
+				Fields: []forms.Field{
+					{
+						Name:    "identityLimit",
+						Title:   "Identity Items",
+						Type:    forms.Number,
+						Default: 3,
+						Min:     0,
+						Max:     10,
+						Desc:    "Number of identity facts to include (0 = disabled)",
+					},
+					{
+						Name:    "highPriorityLimit",
+						Title:   "High Priority Items",
+						Type:    forms.Number,
+						Default: 3,
+						Min:     0,
+						Max:     10,
+						Desc:    "Number of high-importance items to include (0 = disabled)",
+					},
+					{
+						Name:    "highPriorityThreshold",
+						Title:   "High Priority Threshold",
+						Type:    forms.Number,
+						Default: 0.8,
+						Min:     0.5,
+						Max:     1.0,
+						Desc:    "Minimum importance score for high priority items",
+					},
+					{
+						Name:    "goalsLimit",
+						Title:   "Goals",
+						Type:    forms.Number,
+						Default: 3,
+						Min:     0,
+						Max:     10,
+						Desc:    "Number of active goals to include (0 = disabled)",
+					},
+					{
+						Name:    "preferencesLimit",
+						Title:   "Preferences",
+						Type:    forms.Number,
+						Default: 3,
+						Min:     0,
+						Max:     10,
+						Desc:    "Number of preferences to include (0 = disabled)",
+					},
+					{
+						Name:    "recentEventsLimit",
+						Title:   "Recent Events",
+						Type:    forms.Number,
+						Default: 5,
+						Min:     0,
+						Max:     20,
+						Desc:    "Number of recent events to include (0 = disabled)",
+					},
+					{
+						Name:    "recentEventsDays",
+						Title:   "Recent Events (days)",
+						Type:    forms.Number,
+						Default: 7,
+						Min:     1,
+						Max:     30,
+						Desc:    "How many days back to look for recent events",
+					},
+					{
+						Name:    "decisionsLimit",
+						Title:   "Decisions",
+						Type:    forms.Number,
+						Default: 3,
+						Min:     0,
+						Max:     10,
+						Desc:    "Number of recent decisions to include (0 = disabled)",
+					},
+					{
+						Name:    "decisionsDays",
+						Title:   "Decisions (days)",
+						Type:    forms.Number,
+						Default: 14,
+						Min:     1,
+						Max:     60,
+						Desc:    "How many days back to look for decisions",
+					},
+				},
+			},
+			{
+				Title: "Context Bulletin Limits",
+				Fields: []forms.Field{
+					{
+						Name:    "routinesLimit",
+						Title:   "Routines",
+						Type:    forms.Number,
+						Default: 5,
+						Min:     0,
+						Max:     10,
+						Desc:    "Number of active routines to include (0 = disabled)",
+					},
+					{
+						Name:    "predictionsLimit",
+						Title:   "Predictions",
+						Type:    forms.Number,
+						Default: 3,
+						Min:     0,
+						Max:     10,
+						Desc:    "Number of upcoming predictions to include (0 = disabled)",
+					},
+					{
+						Name:    "correlationsLimit",
+						Title:   "Correlations",
+						Type:    forms.Number,
+						Default: 3,
+						Min:     0,
+						Max:     10,
+						Desc:    "Number of known correlations to include (0 = disabled)",
+					},
+					{
+						Name:    "anomaliesLimit",
+						Title:   "Anomalies",
+						Type:    forms.Number,
+						Default: 3,
+						Min:     0,
+						Max:     10,
+						Desc:    "Number of recent anomalies to include (0 = disabled)",
+					},
+					{
+						Name:    "todosLimit",
+						Title:   "Todos",
+						Type:    forms.Number,
+						Default: 3,
+						Min:     0,
+						Max:     10,
+						Desc:    "Number of pending todos to include (0 = disabled)",
 					},
 				},
 			},
@@ -482,7 +768,42 @@ func ValidateConfig(cfg *Config) error {
 	// Auto-normalize search weights to sum to 1.0
 	NormalizeSearchWeights(&cfg.Search)
 
+	// Apply defaults for bulletin config
+	NormalizeBulletinConfig(&cfg.Bulletin)
+
 	return nil
+}
+
+// NormalizeBulletinConfig applies defaults for zero/invalid values
+func NormalizeBulletinConfig(b *BulletinConfig) {
+	// Apply defaults for zero values
+	if b.TTLMinutes <= 0 {
+		b.TTLMinutes = 5
+	}
+	if b.MemoryInjection == "" {
+		b.MemoryInjection = "prompt"
+	}
+	if b.ContextInjection == "" {
+		b.ContextInjection = "message"
+	}
+	// Validate injection modes
+	if b.MemoryInjection != "prompt" && b.MemoryInjection != "message" {
+		b.MemoryInjection = "prompt"
+	}
+	if b.ContextInjection != "prompt" && b.ContextInjection != "message" {
+		b.ContextInjection = "message"
+	}
+	// Apply threshold default
+	if b.HighPriorityThreshold <= 0 || b.HighPriorityThreshold > 1 {
+		b.HighPriorityThreshold = 0.8
+	}
+	// Apply time bound defaults
+	if b.RecentEventsDays <= 0 {
+		b.RecentEventsDays = 7
+	}
+	if b.DecisionsDays <= 0 {
+		b.DecisionsDays = 14
+	}
 }
 
 // NormalizeSearchWeights normalizes search weights to sum to 1.0

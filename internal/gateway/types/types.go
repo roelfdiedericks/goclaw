@@ -14,6 +14,7 @@ type PromptCacheConfig struct {
 	PollInterval       int   `json:"pollInterval"`       // Hash poll interval in seconds (default: 60, 0 = disabled)
 	TimeInSystemPrompt *bool `json:"timeInSystemPrompt"` // Include time in system prompt (default: false)
 	TimeInUserMessage  *bool `json:"timeInUserMessage"`  // Prefix latest user message with timestamp (default: true)
+	ShowUptime         *bool `json:"showUptime"`         // Include gateway uptime with time (default: true)
 }
 
 // GetTimeInSystemPrompt returns whether time should be in the system prompt (default: false)
@@ -28,6 +29,14 @@ func (c *PromptCacheConfig) GetTimeInSystemPrompt() bool {
 func (c *PromptCacheConfig) GetTimeInUserMessage() bool {
 	if c.TimeInUserMessage != nil {
 		return *c.TimeInUserMessage
+	}
+	return true
+}
+
+// GetShowUptime returns whether uptime should be shown with time (default: true)
+func (c *PromptCacheConfig) GetShowUptime() bool {
+	if c.ShowUptime != nil {
+		return *c.ShowUptime
 	}
 	return true
 }

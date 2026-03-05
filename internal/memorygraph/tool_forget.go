@@ -108,6 +108,15 @@ func (t *ForgetTool) Execute(ctx context.Context, input json.RawMessage) (*types
 		"user", username,
 	)
 
+	// Invalidate the appropriate bulletin cache based on memory type
+	if username != "" {
+		if isContextBulletinType(mem.Type) {
+			t.manager.InvalidateContextBulletinCache(username)
+		} else {
+			t.manager.InvalidateMemoryBulletinCache(username)
+		}
+	}
+
 	result := fmt.Sprintf("Forgotten memory %s [%s]: %q", params.ID, mem.Type, truncateStr(mem.Content, 50))
 	if params.Reason != "" {
 		result += fmt.Sprintf("\nReason: %s", params.Reason)

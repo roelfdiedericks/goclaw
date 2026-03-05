@@ -539,6 +539,21 @@ func (p *OaiNextProvider) convertMessage(msg types.Message) []oaiInputItem {
 			CallID: msg.ToolUseID,
 			Output: msg.Content,
 		}}
+	case "system":
+		// Mid-conversation system messages (e.g., bulletins, context updates)
+		// Convert to user message with clear formatting since Responses API
+		// doesn't support system messages mid-conversation
+		if msg.Content == "" {
+			return nil
+		}
+		return []oaiInputItem{{
+			Type: oaiItemTypeMessage,
+			Role: "user",
+			Content: []oaiContentPart{{
+				Type: "input_text",
+				Text: "[System Context]\n" + msg.Content,
+			}},
+		}}
 	default:
 		L_warn("oai-next: unknown message role, skipping", "role", msg.Role)
 		return nil

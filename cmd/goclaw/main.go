@@ -1474,16 +1474,14 @@ func (g *GraphIngestCmd) Run(ctx *Context) error {
 	return runGraphIngest(g.Source, g.User, g.MaxAge)
 }
 
-// GraphBulletinCmd generates memory bulletins
+// GraphBulletinCmd generates memory bulletins (raw structured output, same as agent sees)
 type GraphBulletinCmd struct {
-	Type  string `arg:"" help:"Bulletin type: memory or context" enum:"memory,context"`
-	User  string `help:"Username (defaults to owner)"`
-	Words int    `help:"Target word count for memory bulletin (0 = no limit)" default:"500"`
-	Raw   bool   `help:"Show raw structured data without LLM synthesis"`
+	Type string `arg:"" help:"Bulletin type: memory or context" enum:"memory,context"`
+	User string `help:"Username (defaults to owner)"`
 }
 
 func (g *GraphBulletinCmd) Run(ctx *Context) error {
-	return runGraphBulletin(g.Type, g.User, g.Words, g.Raw)
+	return runGraphBulletin(g.Type, g.User)
 }
 
 // GraphSearchCmd searches the memory graph
@@ -1841,8 +1839,8 @@ func runGraphIngest(source, username string, maxAgeDays int) error {
 	return nil
 }
 
-// runGraphBulletin generates a memory bulletin
-func runGraphBulletin(bulletinType, username string, wordLimit int, raw bool) error {
+// runGraphBulletin generates a memory bulletin (raw structured output, same as agent sees)
+func runGraphBulletin(bulletinType, username string) error {
 	loadResult, err := config.Load()
 	if err != nil {
 		return err
@@ -1873,30 +1871,32 @@ func runGraphBulletin(bulletinType, username string, wordLimit int, raw bool) er
 
 	ctx := context.Background()
 
+	// Get bulletin config from manager
+	bulletinCfg := mgr.Config().Bulletin
+
 	switch bulletinType {
 	case "memory":
-		// For memory bulletin, try to get an LLM provider for synthesis (unless --raw)
-		var provider llm.Provider
-		if !raw {
-			registry, err := buildLLMRegistry(cfg)
-			if err == nil {
-				llm.SetGlobalRegistry(registry)
-				provider, _ = registry.GetProvider("summarization")
-			}
-		}
-
-		bulletin, err := memorygraph.BuildMemoryBulletin(ctx, mgr, provider, username, wordLimit)
+		bulletin, err := memorygraph.BuildMemoryBulletinWithConfig(ctx, mgr, username, bulletinCfg)
 		if err != nil {
 			return fmt.Errorf("build memory bulletin: %w", err)
 		}
-		fmt.Println(bulletin)
+		if bulletin == "" {
+			fmt.Println("(no memory data found)")
+		} else {
+			fmt.Println(bulletin)
+		}
 
 	case "context":
-		bulletin, err := memorygraph.BuildContextBulletin(mgr, username)
+		// For CLI, include header (omitHeader=false)
+		bulletin, err := memorygraph.BuildContextBulletinWithConfig(mgr, username, bulletinCfg, false)
 		if err != nil {
 			return fmt.Errorf("build context bulletin: %w", err)
 		}
-		fmt.Println(bulletin)
+		if bulletin == "" {
+			fmt.Println("(no context data found)")
+		} else {
+			fmt.Println(bulletin)
+		}
 
 	default:
 		return fmt.Errorf("unknown bulletin type: %s", bulletinType)

@@ -23,10 +23,10 @@ Parameters:
 - content (required): Clear, standalone statement about the user
 - memory_type (required): One of: identity, fact, preference, decision, event, observation, goal, todo, routine, feedback, anomaly, correlation, prediction
 - reasoning (required): Brief explanation why this memory is worth storing (for debugging)
-- importance (optional): 0.0-1.0, uses type default if omitted
+- importance (optional): 0.0-1.0. Usually omit - system assigns defaults based on memory_type. Only set if explicitly very important (0.9+) or trivial (0.2-).
 - emotion (optional): User's emotional state: frustrated, excited, stressed, relieved, etc.
 - source (optional): "user stated", "inferred", "observed"
-- occurred_at (optional): When this happened (ISO date like "2026-02-27"). Use the conversation date to calculate dates for relative references ("yesterday", "last week"). Defaults to conversation timestamp if not specified.
+- occurred_at (optional): When this memory was formed. Cannot be in the future. For past events ("yesterday I climbed a wall"), calculate the actual date using the conversation date as reference (e.g., if conversation is March 1st and user says "yesterday", occurred_at = Feb 28th). For todos/goals with target dates, include the date in the content (e.g., "Buy trunks by March 2nd") and leave occurred_at to default. Defaults to conversation timestamp - usually omit.
 - associations (optional): Array of {target_id, relation_type} to link to recalled memories
   - relation_type: "contradicts", "related_to", "part_of", "caused_by", "result_of"
 

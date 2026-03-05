@@ -49,6 +49,8 @@ func ConfigFormDef() forms.FormDef {
 				Collapsed: true,
 				Fields: []forms.Field{
 					{Name: "PromptCache.PollInterval", Title: "Poll Interval (seconds)", Type: forms.Number, Default: 60, Desc: "Hash poll interval for prompt cache (0 = disabled)"},
+					{Name: "PromptCache.TimeInUserMessage", Title: "Show Time to Agent", Type: forms.Toggle, Default: true, Desc: "Inject current time before user messages"},
+					{Name: "PromptCache.ShowUptime", Title: "Show Uptime to Agent", Type: forms.Toggle, Default: true, Desc: "Include gateway uptime with time (privacy sensitive)"},
 				},
 			},
 			{

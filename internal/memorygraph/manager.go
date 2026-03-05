@@ -36,6 +36,9 @@ type Manager struct {
 	// Live extraction
 	sessionsDB    *sql.DB        // Reference to sessions.db (set via SetSessionsDB)
 	liveExtractor *LiveExtractor // Background live extraction
+
+	// Bulletin cache
+	bulletinCache *BulletinCache // Per-user cached bulletins
 }
 
 var (
@@ -101,10 +104,11 @@ func NewManager(cfg Config) (*Manager, error) {
 	provider := &llm.NoopProvider{}
 
 	m := &Manager{
-		db:       db,
-		store:    store,
-		provider: provider,
-		config:   cfg,
+		db:            db,
+		store:         store,
+		provider:      provider,
+		config:        cfg,
+		bulletinCache: NewBulletinCache(time.Duration(cfg.Bulletin.TTLMinutes) * time.Minute),
 	}
 
 	// Subscribe to LLM config changes to refresh embedding provider
@@ -183,6 +187,65 @@ func (m *Manager) Store() *Store {
 // Config returns the current configuration
 func (m *Manager) Config() Config {
 	return m.config
+}
+
+// GetBulletins returns cached bulletins for a user, or generates fresh ones if expired
+func (m *Manager) GetBulletins(ctx context.Context, username string) (memory, ctxBulletin string, err error) {
+	// Check cache first - each bulletin has independent expiry
+	cachedMem, cachedCtx, memValid, ctxValid := m.bulletinCache.Get(username)
+
+	cfg := m.config.Bulletin
+
+	// Use cached memory bulletin or generate fresh
+	if memValid {
+		memory = cachedMem
+	} else {
+		L_debug("memorygraph: generating fresh memory bulletin", "username", username)
+		memory, err = BuildMemoryBulletinWithConfig(ctx, m, username, cfg)
+		if err != nil {
+			L_warn("memorygraph: failed to build memory bulletin", "username", username, "error", err)
+		}
+		m.bulletinCache.SetMemory(username, memory)
+	}
+
+	// Use cached context bulletin or generate fresh
+	if ctxValid {
+		ctxBulletin = cachedCtx
+	} else {
+		L_debug("memorygraph: generating fresh context bulletin", "username", username)
+		ctxBulletin, err = BuildContextBulletinWithConfig(m, username, cfg, true) // omitHeader=true for injection
+		if err != nil {
+			L_warn("memorygraph: failed to build context bulletin", "username", username, "error", err)
+		}
+		m.bulletinCache.SetContext(username, ctxBulletin)
+	}
+
+	if memValid && ctxValid {
+		L_debug("memorygraph: using cached bulletins", "username", username)
+	}
+
+	return memory, ctxBulletin, nil
+}
+
+// InvalidateBulletinCache clears all cached bulletins for a user
+func (m *Manager) InvalidateBulletinCache(username string) {
+	if m.bulletinCache != nil {
+		m.bulletinCache.Invalidate(username)
+	}
+}
+
+// InvalidateMemoryBulletinCache clears only the memory bulletin cache for a user
+func (m *Manager) InvalidateMemoryBulletinCache(username string) {
+	if m.bulletinCache != nil {
+		m.bulletinCache.InvalidateMemory(username)
+	}
+}
+
+// InvalidateContextBulletinCache clears only the context bulletin cache for a user
+func (m *Manager) InvalidateContextBulletinCache(username string) {
+	if m.bulletinCache != nil {
+		m.bulletinCache.InvalidateContext(username)
+	}
 }
 
 // CreateMemory creates a new memory with automatic embedding generation
@@ -558,10 +621,19 @@ func (m *Manager) onConfigApplied(e bus.Event) {
 		m.liveExtractor.UpdateConfig(cfg.LiveExtraction)
 	}
 
+	// Update bulletin cache TTL and invalidate if config changed
+	if m.bulletinCache != nil {
+		newTTL := time.Duration(cfg.Bulletin.TTLMinutes) * time.Minute
+		m.bulletinCache.SetTTL(newTTL)
+		// Invalidate all cached bulletins when config changes (limits may have changed)
+		m.bulletinCache.InvalidateAll()
+	}
+
 	m.config = cfg
 	L_info("memorygraph: config applied",
 		"enabled", cfg.Enabled,
 		"liveEnabled", cfg.LiveExtraction.Enabled,
 		"intervalSeconds", cfg.LiveExtraction.IntervalSeconds,
+		"bulletinEnabled", cfg.Bulletin.Enabled,
 	)
 }

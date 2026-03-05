@@ -1514,8 +1514,14 @@ func convertToOpenAIMessages(messages []types.Message) ([]openai.ChatCompletionM
 			})
 
 		case "system":
-			// System messages are handled separately
-			continue
+			// Mid-conversation system messages (e.g., bulletins, context updates)
+			// OpenAI API supports system messages anywhere in the conversation
+			if msg.Content != "" {
+				result = append(result, openai.ChatCompletionMessage{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: msg.Content,
+				})
+			}
 
 		default:
 			// Unknown role - skip or convert to user
