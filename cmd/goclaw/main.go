@@ -57,6 +57,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/tools/memoryget"
 	toolmemorygraph "github.com/roelfdiedericks/goclaw/internal/tools/memorygraph"
 	"github.com/roelfdiedericks/goclaw/internal/tools/memorysearch"
+	toolmediadisplay "github.com/roelfdiedericks/goclaw/internal/tools/media_display"
 	toolmessage "github.com/roelfdiedericks/goclaw/internal/tools/message"
 	"github.com/roelfdiedericks/goclaw/internal/tools/read"
 	toolskills "github.com/roelfdiedericks/goclaw/internal/tools/skills"
@@ -2310,6 +2311,11 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		L_error("channels: failed to start", "error", err)
 	}
 
+	// Initialize VoiceLLM after HTTP server is running
+	if err := chanMgr.InitVoiceLLM(runCtx, cfg.VoiceLLM); err != nil {
+		L_error("voicellm: failed to initialize", "error", err)
+	}
+
 	// Start cron service AFTER channels are registered
 	if cfg.Cron.Enabled {
 		if err := gw.StartCron(runCtx); err != nil {
@@ -2667,6 +2673,16 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 		messageTool.SetMediaRoot(mediaStore.BaseDir())
 	}
 	reg.Register(messageTool)
+
+	// Media display tool (for voice sessions - creates synthetic {{media:}} messages)
+	// Uses DeliverToolMessage to persist and deliver to ALL channels (including source)
+	reg.Register(toolmediadisplay.NewTool(func(ctx context.Context, u *user.User, source, msg string) error {
+		return gw.DeliverToolMessage(ctx, gateway.ToolMessageParams{
+			User:    u,
+			Source:  source,
+			Message: msg,
+		})
+	}))
 
 	// Transcript tool (also creates the manager)
 	var transcriptMgr *transcript.Manager
