@@ -22,6 +22,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/stt"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
+	"github.com/roelfdiedericks/goclaw/internal/voicellm"
 )
 
 // EditorTview is the tview-based configuration editor
@@ -61,6 +62,7 @@ func (e *EditorTview) Run() error {
 	gateway.RegisterCommands()
 	transcript.RegisterCommands()
 	stt.RegisterCommands()
+	voicellm.RegisterCommands()
 
 	for {
 		// Create UI
@@ -113,6 +115,7 @@ func (e *EditorTview) createMenu() *forms.MenuListResult {
 
 	items := []forms.MenuItem{
 		{Label: "LLM Configuration", OnSelect: e.editLLM},
+		{Label: "VoiceLLM Configuration", OnSelect: e.editVoiceLLM},
 		{Label: "Gateway Settings", OnSelect: e.editGateway},
 		{Label: "Session Management", OnSelect: e.editSession},
 		{IsSeparator: true, Label: "Channels"},
@@ -333,6 +336,18 @@ func (e *EditorTview) editSTT() {
 
 	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Speech-to-Text"})
 	e.app.SetFormContent(content)
+}
+
+// editVoiceLLM opens the VoiceLLM configuration menu
+func (e *EditorTview) editVoiceLLM() {
+	L_info("editor: opening VoiceLLM config")
+
+	voiceLLMEditor := NewVoiceLLMEditor(e.app, &e.cfg.VoiceLLM,
+		func() { e.dirty = true },
+		e.showMainMenu,
+	)
+
+	voiceLLMEditor.Show()
 }
 
 // editTUI opens the TUI settings configuration form

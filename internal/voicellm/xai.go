@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/metrics"
 )
 
 const (
@@ -22,9 +23,10 @@ const (
 
 // XAIProvider implements the VoiceLLM Provider interface for xAI Voice API
 type XAIProvider struct {
-	name      string
-	config    ProviderConfig
-	callbacks Callbacks
+	name         string
+	config       ProviderConfig
+	callbacks    Callbacks
+	metricPrefix string // voicellm/xai/{name}
 
 	mu        sync.Mutex
 	conn      *websocket.Conn
@@ -44,6 +46,9 @@ type XAIProvider struct {
 	// When multiple tools are called in one turn, we must only send ONE response.create
 	// after ALL tool results are submitted, not after each individual tool.
 	pendingToolResults int
+
+	// Session timing
+	sessionStart time.Time
 }
 
 // NewXAIProvider creates a new xAI VoiceLLM provider instance
@@ -64,8 +69,9 @@ func NewXAIProvider(name string, cfg ProviderConfig) (Provider, error) {
 	}
 
 	return &XAIProvider{
-		name:   name,
-		config: cfg,
+		name:         name,
+		config:       cfg,
+		metricPrefix: fmt.Sprintf("voicellm/xai/%s", name),
 	}, nil
 }
 
@@ -88,6 +94,8 @@ func (p *XAIProvider) Connect(ctx context.Context) error {
 		return nil
 	}
 
+	connectStart := time.Now()
+
 	// Create connection context
 	p.ctx, p.cancel = context.WithCancel(ctx)
 
@@ -103,6 +111,8 @@ func (p *XAIProvider) Connect(ctx context.Context) error {
 
 	conn, resp, err := dialer.DialContext(p.ctx, xaiVoiceEndpoint, header)
 	if err != nil {
+		metrics.MetricDuration(p.metricPrefix, "connect", time.Since(connectStart))
+		metrics.MetricFailWithReason(p.metricPrefix, "connect_status", "dial_error")
 		if resp != nil {
 			L_error("xai voicellm: dial failed",
 				"status", resp.StatusCode,
@@ -121,6 +131,13 @@ func (p *XAIProvider) Connect(ctx context.Context) error {
 	p.conn = conn
 	p.connected = true
 	p.readDone = make(chan struct{})
+	p.sessionStart = time.Now()
+	p.audioChunksSent = 0
+
+	// Record metrics
+	metrics.MetricDuration(p.metricPrefix, "connect", time.Since(connectStart))
+	metrics.MetricSuccess(p.metricPrefix, "connect_status")
+	metrics.MetricInc(p.metricPrefix, "sessions_total")
 
 	// Start read loop
 	go p.readLoop()
@@ -222,7 +239,15 @@ func (p *XAIProvider) Configure(cfg SessionConfig) error {
 // Close disconnects from the voice API
 func (p *XAIProvider) Close() error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+
+	// Record session duration if we had a session
+	if !p.sessionStart.IsZero() {
+		sessionDuration := time.Since(p.sessionStart)
+		metrics.MetricDuration(p.metricPrefix, "session", sessionDuration)
+		// Cumulative counter for cost calculations (total seconds connected)
+		metrics.MetricAdd(p.metricPrefix, "session_seconds_total", int64(sessionDuration.Seconds()))
+		p.sessionStart = time.Time{}
+	}
 
 	if p.cancel != nil {
 		p.cancel()
@@ -233,6 +258,7 @@ func (p *XAIProvider) Close() error {
 		p.conn = nil
 	}
 	p.connected = false
+	p.mu.Unlock()
 
 	// Wait for read loop to finish
 	if p.readDone != nil {
@@ -276,6 +302,10 @@ func (p *XAIProvider) SendAudioBase64(b64 string) error {
 	if err := p.writeJSON(msg); err != nil {
 		return fmt.Errorf("xai voicellm: failed to send audio: %w", err)
 	}
+
+	// Decode to get raw byte count for metrics
+	rawBytes := base64.StdEncoding.DecodedLen(len(b64))
+	metrics.MetricAdd(p.metricPrefix, "audio_bytes_in", int64(rawBytes))
 
 	p.audioChunksSent++
 	if p.audioChunksSent%25 == 1 { // Log every 25 chunks (~5 seconds)
@@ -479,6 +509,9 @@ func (p *XAIProvider) handleEvent(event *xaiEvent) {
 
 	case "conversation.item.input_audio_transcription.completed":
 		// User's speech has been transcribed
+		if event.Transcript != "" {
+			metrics.MetricAdd(p.metricPrefix, "user_transcript_chars", int64(len(event.Transcript)))
+		}
 		if p.callbacks.OnInputTranscript != nil && event.Transcript != "" {
 			p.callbacks.OnInputTranscript(event.Transcript)
 		}
@@ -490,12 +523,16 @@ func (p *XAIProvider) handleEvent(event *xaiEvent) {
 			if err != nil {
 				L_warn("xai voicellm: failed to decode audio delta", "error", err)
 			} else {
+				metrics.MetricAdd(p.metricPrefix, "audio_bytes_out", int64(len(audio)))
 				p.callbacks.OnAudioDelta(audio)
 			}
 		}
 
 	case "response.output_audio_transcript.delta":
 		// Transcript delta from assistant speech
+		if event.Delta != "" {
+			metrics.MetricAdd(p.metricPrefix, "agent_transcript_chars", int64(len(event.Delta)))
+		}
 		if p.callbacks.OnTranscriptDelta != nil && event.Delta != "" {
 			p.callbacks.OnTranscriptDelta(event.Delta)
 		}
@@ -543,8 +580,15 @@ func (p *XAIProvider) handleToolCall(event *xaiEvent) {
 		return
 	}
 
+	// Track tool call
+	metrics.MetricInc(p.metricPrefix, "tool_calls")
+	toolStart := time.Now()
+
 	// Execute the tool via callback
 	result := p.callbacks.OnToolCall(event.CallID, event.Name, event.Arguments)
+
+	// Record tool execution time
+	metrics.MetricDuration(p.metricPrefix, "tool_latency", time.Since(toolStart))
 
 	// Send result back to xAI
 	p.mu.Lock()
