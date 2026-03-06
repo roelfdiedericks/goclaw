@@ -359,7 +359,7 @@ func BuildStatsSummary(mgr *Manager) (string, error) {
 // relevant to the user's current message using FTS (no embeddings, fast).
 // Returns empty string if no relevant memories found or feature disabled.
 func BuildChatContextSection(ctx context.Context, mgr *Manager, username, message string, cfg BulletinConfig) string {
-	if mgr == nil || !cfg.GetChatContextEnabled() || cfg.ChatContextLimit <= 0 {
+	if mgr == nil || !cfg.ChatContextEnabled || cfg.ChatContextLimit <= 0 {
 		return ""
 	}
 

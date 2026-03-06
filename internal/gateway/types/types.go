@@ -11,41 +11,17 @@ type GatewayConfig struct {
 
 // PromptCacheConfig configures system prompt caching and time injection
 type PromptCacheConfig struct {
-	PollInterval       int   `json:"pollInterval"`       // Hash poll interval in seconds (default: 60, 0 = disabled)
-	TimeInSystemPrompt *bool `json:"timeInSystemPrompt"` // Include time in system prompt (default: false)
-	TimeInUserMessage  *bool `json:"timeInUserMessage"`  // Prefix latest user message with timestamp (default: true)
-	ShowUptime         *bool `json:"showUptime"`         // Include gateway uptime with time (default: true)
-}
-
-// GetTimeInSystemPrompt returns whether time should be in the system prompt (default: false)
-func (c *PromptCacheConfig) GetTimeInSystemPrompt() bool {
-	if c.TimeInSystemPrompt != nil {
-		return *c.TimeInSystemPrompt
-	}
-	return false
-}
-
-// GetTimeInUserMessage returns whether time should prefix user messages (default: true)
-func (c *PromptCacheConfig) GetTimeInUserMessage() bool {
-	if c.TimeInUserMessage != nil {
-		return *c.TimeInUserMessage
-	}
-	return true
-}
-
-// GetShowUptime returns whether uptime should be shown with time (default: true)
-func (c *PromptCacheConfig) GetShowUptime() bool {
-	if c.ShowUptime != nil {
-		return *c.ShowUptime
-	}
-	return true
+	PollInterval       int  `json:"pollInterval" default:"60"`        // Hash poll interval in seconds (0 = disabled)
+	TimeInSystemPrompt bool `json:"timeInSystemPrompt"`               // Include time in system prompt
+	TimeInUserMessage  bool `json:"timeInUserMessage" default:"true"` // Prefix latest user message with timestamp
+	ShowUptime         bool `json:"showUptime" default:"true"`        // Include gateway uptime with time
 }
 
 // AgentIdentityConfig configures the agent's display identity
 type AgentIdentityConfig struct {
-	Name   string `json:"name"`   // Agent's display name (default: "GoClaw")
-	Emoji  string `json:"emoji"`  // Optional emoji prefix (default: "")
-	Typing string `json:"typing"` // Custom typing indicator text (default: derived from Name)
+	Name   string `json:"name" default:"GoClaw"` // Agent's display name
+	Emoji  string `json:"emoji"`                 // Optional emoji prefix
+	Typing string `json:"typing"`                // Custom typing indicator text (derived from Name if empty)
 }
 
 // DisplayName returns the agent name with emoji prefix if configured
@@ -72,30 +48,19 @@ type SupervisionConfig struct {
 
 // GuidanceConfig configures supervisor guidance injection
 type GuidanceConfig struct {
-	// Prefix prepended to guidance messages (default: "[Supervisor]: ")
-	Prefix string `json:"prefix"`
-	// SystemNote is an optional system message injected with guidance
-	SystemNote string `json:"systemNote,omitempty"`
+	Prefix     string `json:"prefix" default:"[Supervisor]: "` // Prefix prepended to guidance messages
+	SystemNote string `json:"systemNote,omitempty"`            // Optional system message injected with guidance
 }
 
 // GhostwritingConfig configures supervisor ghostwriting
 type GhostwritingConfig struct {
-	// TypingDelayMs is the delay before delivering the message (default: 500)
-	TypingDelayMs int `json:"typingDelayMs"`
+	TypingDelayMs int `json:"typingDelayMs" default:"500"` // Delay before delivering the message
 }
 
 // SafetyConfig configures emergency stop / panic phrase behavior
 type SafetyConfig struct {
-	PanicPhrases []string `json:"panicPhrases"` // Words that trigger emergency stop (default: ["STOP"])
-	PanicEnabled *bool    `json:"panicEnabled"` // Whether panic phrase detection is active (default: true)
-}
-
-// IsPanicEnabled returns whether panic phrase detection is enabled (default: true)
-func (c *SafetyConfig) IsPanicEnabled() bool {
-	if c.PanicEnabled != nil {
-		return *c.PanicEnabled
-	}
-	return true
+	PanicPhrases []string `json:"panicPhrases"`                // Words that trigger emergency stop (GetPanicPhrases has fallback)
+	PanicEnabled bool     `json:"panicEnabled" default:"true"` // Whether panic phrase detection is active
 }
 
 // GetPanicPhrases returns configured panic phrases with fallback default

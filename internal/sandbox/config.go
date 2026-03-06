@@ -22,11 +22,11 @@ type Config struct {
 
 // BubblewrapConfig holds global bubblewrap settings shared by all sandboxed tools.
 type BubblewrapConfig struct {
-	Path       string   `json:"path"`       // Custom bwrap binary path (empty = search PATH)
-	Mode       string   `json:"mode"`       // "ephemeral", "volumes", "home" (default: "home")
-	DataDir    string   `json:"dataDir"`    // Backing directory root (default: ~/.goclaw/sandbox)
-	Volumes    []string `json:"volumes"`    // Isolated mount points (only used in "volumes" mode)
-	ExtraPaths []string `json:"extraPaths"` // Additional PATH entries for sandbox (appended after defaults)
+	Path       string   `json:"path"`                  // Custom bwrap binary path (empty = search PATH)
+	Mode       string   `json:"mode" default:"home"`   // "ephemeral", "volumes", "home"
+	DataDir    string   `json:"dataDir"`               // Backing directory root (default: ~/.goclaw/sandbox)
+	Volumes    []string `json:"volumes"`               // Isolated mount points (runtime default)
+	ExtraPaths []string `json:"extraPaths"`            // Additional PATH entries for sandbox
 }
 
 // GetMode returns the configured mode with default fallback.

@@ -380,7 +380,7 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 	g.commandHandler = commands.NewHandler(g)
 	g.commandHandler.GetManager().SetPanicConfig(
 		cfg.Safety.GetPanicPhrases(),
-		cfg.Safety.IsPanicEnabled(),
+		cfg.Safety.PanicEnabled,
 	)
 	L_debug("command handler initialized")
 
@@ -1759,7 +1759,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		IncludeMemory:        includeMemory,
 		RoleSystemPrompt:     roleSystemPrompt,
 		RoleSystemPromptFile: roleSystemPromptFile,
-		TimeInSystemPrompt:   g.config.PromptCache.GetTimeInSystemPrompt(),
+		TimeInSystemPrompt:   g.config.PromptCache.TimeInSystemPrompt,
 		AgentExtraction:      agentExtraction,
 	}
 
@@ -1995,10 +1995,10 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		var ephemeralMessages []types.Message
 
 		// System time and uptime (if enabled)
-		if g.config.PromptCache.GetTimeInUserMessage() {
+		if g.config.PromptCache.TimeInUserMessage {
 			ts := time.Now().Format("Mon 2006-01-02 15:04 MST")
 			content := "[Current Time: " + ts
-			if g.config.PromptCache.GetShowUptime() {
+			if g.config.PromptCache.ShowUptime {
 				content += " | Uptime: " + formatUptime(time.Since(g.startTime))
 			}
 			content += "]"

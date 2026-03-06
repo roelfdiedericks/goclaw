@@ -10,24 +10,24 @@ import (
 
 // Config configures the memory graph system
 type Config struct {
-	Enabled        bool                 `json:"enabled"`        // Enable memory graph
-	DBPath         string               `json:"dbPath"`         // Database path (default: ~/.goclaw/memory_graph.db)
-	Search         SearchConfig         `json:"search"`         // Search configuration
-	Maintenance    MaintenanceConfig    `json:"maintenance"`    // Maintenance configuration
-	Ingestion      IngestionConfig      `json:"ingestion"`      // Ingestion configuration
-	LiveExtraction LiveExtractionConfig `json:"liveExtraction"` // Live extraction configuration
-	Bulletin       BulletinConfig       `json:"bulletin"`       // Bulletin injection configuration
+	Enabled        bool                 `json:"enabled" default:"true"` // Enable memory graph
+	DBPath         string               `json:"dbPath"`                 // Database path (default: ~/.goclaw/memory_graph.db)
+	Search         SearchConfig         `json:"search"`                 // Search configuration
+	Maintenance    MaintenanceConfig    `json:"maintenance"`            // Maintenance configuration
+	Ingestion      IngestionConfig      `json:"ingestion"`              // Ingestion configuration
+	LiveExtraction LiveExtractionConfig `json:"liveExtraction"`         // Live extraction configuration
+	Bulletin       BulletinConfig       `json:"bulletin"`               // Bulletin injection configuration
 }
 
 // LiveExtractionConfig configures automatic memory extraction from conversations
 type LiveExtractionConfig struct {
-	Enabled         bool     `json:"enabled"`         // Enable live extraction
-	AgentExtraction bool     `json:"agentExtraction"` // Enable agent-driven extraction (default: true)
-	IntervalSeconds int      `json:"intervalSeconds"` // Check interval (default: 120)
-	MinMessages     int      `json:"minMessages"`     // Minimum messages before extraction (default: 5)
-	MaxTurns        int      `json:"maxTurns"`        // Max extraction loop turns (default: 10)
-	BatchSize       int      `json:"batchSize"`       // Max messages per batch (default: 50)
-	ExcludeSources  []string `json:"excludeSources"`  // Message sources to exclude (default: ["heartbeat", "cron", "delivered"])
+	Enabled         bool     `json:"enabled" default:"true"`          // Enable live extraction
+	AgentExtraction bool     `json:"agentExtraction" default:"true"`  // Enable agent-driven extraction
+	IntervalSeconds int      `json:"intervalSeconds" default:"120"`   // Check interval
+	MinMessages     int      `json:"minMessages" default:"5"`         // Minimum messages before extraction
+	MaxTurns        int      `json:"maxTurns" default:"10"`           // Max extraction loop turns
+	BatchSize       int      `json:"batchSize" default:"50"`          // Max messages per batch
+	ExcludeSources  []string `json:"excludeSources"`                  // Message sources to exclude (runtime default)
 }
 
 // DefaultExcludeSources returns the default sources to exclude from extraction.
@@ -38,196 +38,90 @@ func DefaultExcludeSources() []string {
 // BulletinConfig configures bulletin injection into agent context
 type BulletinConfig struct {
 	// General settings
-	Enabled          bool   `json:"enabled"`          // Master switch for bulletin injection (default: true)
-	TTLMinutes       int    `json:"ttlMinutes"`       // Cache TTL in minutes (default: 5)
-	MemoryInjection  string `json:"memoryInjection"`  // "prompt" or "message" (default: "prompt")
-	ContextInjection string `json:"contextInjection"` // "prompt" or "message" (default: "message")
-	Deduplicate      bool   `json:"deduplicate"`      // Skip items already shown in earlier sections (default: true)
+	Enabled          bool   `json:"enabled" default:"true"`             // Master switch for bulletin injection
+	TTLMinutes       int    `json:"ttlMinutes" default:"5"`             // Cache TTL in minutes
+	MemoryInjection  string `json:"memoryInjection" default:"prompt"`   // "prompt" or "message"
+	ContextInjection string `json:"contextInjection" default:"message"` // "prompt" or "message"
+	Deduplicate      bool   `json:"deduplicate" default:"true"`         // Skip items already shown in earlier sections
 
 	// Injection context controls
-	InjectForHeartbeat bool `json:"injectForHeartbeat"` // Inject for heartbeat sessions (default: false)
-	InjectForCron      bool `json:"injectForCron"`      // Inject for cron sessions (default: true)
+	InjectForHeartbeat bool `json:"injectForHeartbeat"`           // Inject for heartbeat sessions
+	InjectForCron      bool `json:"injectForCron" default:"true"` // Inject for cron sessions
 
 	// Memory bulletin section limits (0 = disabled)
-	IdentityLimit         int     `json:"identityLimit"`         // Identity items (default: 3)
-	HighPriorityLimit     int     `json:"highPriorityLimit"`     // High importance items (default: 3)
-	HighPriorityThreshold float64 `json:"highPriorityThreshold"` // Importance threshold for high priority (default: 0.8)
-	RecentEventsLimit     int     `json:"recentEventsLimit"`     // Recent event items (default: 5)
-	RecentEventsDays      int     `json:"recentEventsDays"`      // Time bound for recent events (default: 7)
-	DecisionsLimit        int     `json:"decisionsLimit"`        // Decision items (default: 3)
-	DecisionsDays         int     `json:"decisionsDays"`         // Time bound for decisions (default: 14)
-	PreferencesLimit      int     `json:"preferencesLimit"`      // Preference items (default: 3)
-	GoalsLimit            int     `json:"goalsLimit"`            // Goal items (default: 3)
+	IdentityLimit         int     `json:"identityLimit" default:"3"`           // Identity items
+	HighPriorityLimit     int     `json:"highPriorityLimit" default:"3"`       // High importance items
+	HighPriorityThreshold float64 `json:"highPriorityThreshold" default:"0.8"` // Importance threshold for high priority
+	RecentEventsLimit     int     `json:"recentEventsLimit" default:"5"`       // Recent event items
+	RecentEventsDays      int     `json:"recentEventsDays" default:"7"`        // Time bound for recent events
+	DecisionsLimit        int     `json:"decisionsLimit" default:"3"`          // Decision items
+	DecisionsDays         int     `json:"decisionsDays" default:"14"`          // Time bound for decisions
+	PreferencesLimit      int     `json:"preferencesLimit" default:"3"`        // Preference items
+	GoalsLimit            int     `json:"goalsLimit" default:"3"`              // Goal items
 
 	// Context bulletin section limits (0 = disabled)
-	RoutinesLimit     int `json:"routinesLimit"`     // Routine items (default: 5)
-	PredictionsLimit  int `json:"predictionsLimit"`  // Prediction items (default: 3)
-	CorrelationsLimit int `json:"correlationsLimit"` // Correlation items (default: 3)
-	AnomaliesLimit    int `json:"anomaliesLimit"`    // Anomaly items (default: 3)
-	TodosLimit        int `json:"todosLimit"`        // Todo items (default: 3)
+	RoutinesLimit     int `json:"routinesLimit" default:"5"`     // Routine items
+	PredictionsLimit  int `json:"predictionsLimit" default:"3"`  // Prediction items
+	CorrelationsLimit int `json:"correlationsLimit" default:"3"` // Correlation items
+	AnomaliesLimit    int `json:"anomaliesLimit" default:"3"`    // Anomaly items
+	TodosLimit        int `json:"todosLimit" default:"10"`       // Todo items
 
 	// Chat context section (query-driven, not cached)
-	ChatContextEnabled     *bool  `json:"chatContextEnabled"`     // Enable chat context section (default: true)
-	ChatContextLimit       int    `json:"chatContextLimit"`       // Max items from FTS query (default: 3)
-	ChatContextLanguage    string `json:"chatContextLanguage"`    // Stopwords language ISO 639-1 (default: "en")
-	ChatContextMaxKeywords int    `json:"chatContextMaxKeywords"` // Max keywords to extract from message (default: 8)
-}
-
-// GetChatContextEnabled returns whether chat context is enabled (defaults to true)
-func (c *BulletinConfig) GetChatContextEnabled() bool {
-	if c.ChatContextEnabled != nil {
-		return *c.ChatContextEnabled
-	}
-	return true
-}
-
-// ApplyDefaults sets defaults for nil pointer fields
-func (c *BulletinConfig) ApplyDefaults() {
-	if c.ChatContextEnabled == nil {
-		val := true
-		c.ChatContextEnabled = &val
-	}
-	if c.ChatContextLimit <= 0 {
-		c.ChatContextLimit = 3
-	}
-	if c.ChatContextMaxKeywords <= 0 {
-		c.ChatContextMaxKeywords = 8
-	}
-	if c.ChatContextLanguage == "" {
-		c.ChatContextLanguage = "en"
-	}
+	ChatContextEnabled     bool   `json:"chatContextEnabled" default:"true"`     // Enable chat context section
+	ChatContextLimit       int    `json:"chatContextLimit" default:"3"`          // Max items from FTS query
+	ChatContextLanguage    string `json:"chatContextLanguage" default:"en"`      // Stopwords language ISO 639-1
+	ChatContextMaxKeywords int    `json:"chatContextMaxKeywords" default:"8"`    // Max keywords to extract from message
 }
 
 // IngestionConfig configures what content to ingest
 type IngestionConfig struct {
 	// Markdown ingestion patterns (relative to workspace)
 	// Include patterns - files matching ANY pattern are included
-	// If empty, defaults to ["*.md", "memory/*.md"]
+	// Runtime default: ["*.md", "memory/*.md", "albums/*.md"]
 	IncludePatterns []string `json:"includePatterns"`
 
 	// Exclude patterns - files matching ANY pattern are excluded (takes priority over include)
-	// Default: ["skills/**", "ref/**", "goclaw/**", ".*/**"]
+	// Runtime default: ["skills/**", "ref/**", "goclaw/**", ".*/**"]
 	ExcludePatterns []string `json:"excludePatterns"`
 
 	// Transcript batching - combine multiple chunks per LLM call
-	// Default: 10 (reduces LLM calls by 10x)
-	TranscriptBatchSize int `json:"transcriptBatchSize"`
+	TranscriptBatchSize int `json:"transcriptBatchSize" default:"25"`
 }
 
 // SearchConfig configures hybrid search behavior
 type SearchConfig struct {
-	MaxResults int `json:"maxResults"` // Maximum results to return (default: 10)
+	MaxResults int `json:"maxResults" default:"10"` // Maximum results to return
 
 	// RRF parameters
-	RRFConstant float64 `json:"rrfConstant"` // k parameter in RRF formula (default: 60)
+	RRFConstant float64 `json:"rrfConstant" default:"60"` // k parameter in RRF formula
 
 	// Source weights (should sum to 1.0)
-	VectorWeight  float64 `json:"vectorWeight"`  // Weight for semantic/vector search (default: 0.35)
-	FTSWeight     float64 `json:"ftsWeight"`     // Weight for keyword/FTS search (default: 0.25)
-	GraphWeight   float64 `json:"graphWeight"`   // Weight for graph traversal (default: 0.25)
-	RecencyWeight float64 `json:"recencyWeight"` // Weight for time-based retrieval (default: 0.15)
+	VectorWeight  float64 `json:"vectorWeight" default:"0.35"`  // Weight for semantic/vector search
+	FTSWeight     float64 `json:"ftsWeight" default:"0.25"`     // Weight for keyword/FTS search
+	GraphWeight   float64 `json:"graphWeight" default:"0.25"`   // Weight for graph traversal
+	RecencyWeight float64 `json:"recencyWeight" default:"0.15"` // Weight for time-based retrieval
 }
 
 // MaintenanceConfig configures background maintenance
 type MaintenanceConfig struct {
-	Enabled       bool `json:"enabled"`       // Enable background maintenance
-	IntervalHours int  `json:"intervalHours"` // Hours between maintenance runs (default: 24)
+	Enabled       bool `json:"enabled" default:"true"`    // Enable background maintenance
+	IntervalHours int  `json:"intervalHours" default:"24"` // Hours between maintenance runs
 
 	// Decay settings
-	ImportanceDecayRate float64 `json:"importanceDecayRate"` // Daily decay multiplier (default: 0.995)
-	ConfidenceDecayRate float64 `json:"confidenceDecayRate"` // Daily decay for unconfirmed patterns (default: 0.99)
-	MinImportance       float64 `json:"minImportance"`       // Minimum importance before soft delete (default: 0.1)
-	MinConfidence       float64 `json:"minConfidence"`       // Minimum confidence before invalidation (default: 0.2)
+	ImportanceDecayRate float64 `json:"importanceDecayRate" default:"0.995"` // Daily decay multiplier
+	ConfidenceDecayRate float64 `json:"confidenceDecayRate" default:"0.99"`  // Daily decay for unconfirmed patterns
+	MinImportance       float64 `json:"minImportance" default:"0.1"`         // Minimum importance before soft delete
+	MinConfidence       float64 `json:"minConfidence" default:"0.2"`         // Minimum confidence before invalidation
 
 	// Access boost
-	AccessBoostAmount float64 `json:"accessBoostAmount"` // Amount to boost on access (default: 0.01)
-	MaxImportance     float64 `json:"maxImportance"`     // Cap for importance (default: 1.0)
+	AccessBoostAmount float64 `json:"accessBoostAmount" default:"0.01"` // Amount to boost on access
+	MaxImportance     float64 `json:"maxImportance" default:"1.0"`      // Cap for importance
 
 	// Pruning
-	PruneAfterDays int `json:"pruneAfterDays"` // Days to keep forgotten memories before deletion (default: 30)
+	PruneAfterDays int `json:"pruneAfterDays" default:"30"` // Days to keep forgotten memories before deletion
 
 	// Deduplication
-	DuplicateSimilarity float64 `json:"duplicateSimilarity"` // Embedding similarity threshold for duplicates (default: 0.95)
-}
-
-// DefaultConfig returns sensible defaults for memory graph configuration
-func DefaultConfig() Config {
-	return Config{
-		Enabled: true, // Enabled by default
-		DBPath:  "",   // Will use default path
-		Search: SearchConfig{
-			MaxResults:    10,
-			RRFConstant:   60,
-			VectorWeight:  0.35,
-			FTSWeight:     0.25,
-			GraphWeight:   0.25,
-			RecencyWeight: 0.15,
-		},
-		Maintenance: MaintenanceConfig{
-			Enabled:             true,
-			IntervalHours:       24,
-			ImportanceDecayRate: 0.995,
-			ConfidenceDecayRate: 0.99,
-			MinImportance:       0.1,
-			MinConfidence:       0.2,
-			AccessBoostAmount:   0.01,
-			MaxImportance:       1.0,
-			PruneAfterDays:      30,
-			DuplicateSimilarity: 0.95,
-		},
-		Ingestion: IngestionConfig{
-			// Default include: all .md files in workspace root and memory/ directory
-			IncludePatterns: []string{
-				"*.md",
-				"memory/*.md",
-				"albums/*.md",
-			},
-			// Default exclude: skills, reference code, goclaw source, hidden directories
-			ExcludePatterns: []string{
-				"skills/**",
-				"ref/**",
-				"goclaw/**",
-				".*/**",
-			},
-			// Batch 25 transcript chunks per LLM call (reduces calls significantly)
-			TranscriptBatchSize: 25,
-		},
-		LiveExtraction: LiveExtractionConfig{
-			Enabled:         true,                    // Enabled by default
-			AgentExtraction: true,                    // Allow agents to store memories directly
-			IntervalSeconds: 120,                     // Every 2 minutes
-			MinMessages:     5,                       // Only extract if 5+ new messages
-			MaxTurns:        10,                      // Safety limit
-			BatchSize:       50,                      // Max messages per extraction
-			ExcludeSources:  DefaultExcludeSources(), // Exclude automated sources
-		},
-		Bulletin: BulletinConfig{
-			Enabled:               true,      // Enabled by default
-			TTLMinutes:            5,         // 5 minute cache
-			MemoryInjection:       "prompt",  // Memory bulletin in system prompt
-			ContextInjection:      "message", // Context bulletin as ephemeral message
-			Deduplicate:           true,      // Skip duplicates across sections
-			InjectForHeartbeat:    false,     // Skip for heartbeats
-			InjectForCron:         true,      // Include for cron jobs
-			IdentityLimit:         3,         // Top 3 identity items
-			HighPriorityLimit:     3,         // Top 3 high importance items
-			HighPriorityThreshold: 0.8,       // 80% importance threshold
-			RecentEventsLimit:     5,         // Last 5 events
-			RecentEventsDays:      7,         // Within 7 days
-			DecisionsLimit:        3,         // Last 3 decisions
-			DecisionsDays:         14,        // Within 14 days
-			PreferencesLimit:      3,         // Top 3 preferences
-			GoalsLimit:            3,         // Top 3 goals
-			RoutinesLimit:         5,         // Top 5 routines
-			PredictionsLimit:      3,         // Next 3 predictions
-			CorrelationsLimit:     3,         // Top 3 correlations
-			AnomaliesLimit:        3,         // Last 3 anomalies
-			TodosLimit:             10,       // Top 10 todos
-			ChatContextLimit:       3,        // Top 3 chat context items
-			ChatContextLanguage:    "en",     // English stopwords
-			ChatContextMaxKeywords: 8,        // Top 8 keywords from message
-		},
-	}
+	DuplicateSimilarity float64 `json:"duplicateSimilarity" default:"0.95"` // Embedding similarity threshold for duplicates
 }
 
 // Validate checks the configuration for errors

@@ -46,9 +46,9 @@ type MediaStore struct {
 
 // MediaConfig configures the MediaStore
 type MediaConfig struct {
-	Dir     string `json:"dir"`     // Base directory (gateway defaults to <workspace>/media/)
-	TTL     int    `json:"ttl"`     // TTL in seconds (default: 600 = 10 min)
-	MaxSize int    `json:"maxSize"` // Max file size in bytes (default: 5MB)
+	Dir     string `json:"dir"`                        // Base directory (gateway defaults to <workspace>/media/)
+	TTL     int    `json:"ttl" default:"600"`          // TTL in seconds (10 min)
+	MaxSize int    `json:"maxSize" default:"5242880"`  // Max file size in bytes (5MB)
 }
 
 // NewMediaStore creates a new MediaStore with the given configuration.

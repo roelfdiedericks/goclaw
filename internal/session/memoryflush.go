@@ -26,9 +26,9 @@ type FlushThreshold struct {
 
 // MemoryFlushConfig holds memory flush settings
 type MemoryFlushConfig struct {
-	Enabled            bool             `json:"enabled"`
-	ShowInSystemPrompt bool             `json:"showInSystemPrompt"` // Show context % in system prompt
-	Thresholds         []FlushThreshold `json:"thresholds"`
+	Enabled            bool             `json:"enabled" default:"true"`
+	ShowInSystemPrompt bool             `json:"showInSystemPrompt" default:"true"` // Show context % in system prompt
+	Thresholds         []FlushThreshold `json:"thresholds"`                        // Runtime default (complex struct slice)
 }
 
 // DefaultMemoryFlushConfig returns the default memory flush configuration

@@ -10,18 +10,18 @@ import (
 
 // MemorySearchConfig configures the memory search tool
 type MemorySearchConfig struct {
-	Enabled bool                    `json:"enabled"` // Enable memory search tools
-	DbPath  string                  `json:"dbPath"`  // Database path (default: ~/.goclaw/memory.db)
-	Query   MemorySearchQueryConfig `json:"query"`   // Search query settings
-	Paths   []string                `json:"paths"`   // Additional paths to index (besides memory/ and MEMORY.md)
+	Enabled bool                    `json:"enabled" default:"true"` // Enable memory search tools
+	DbPath  string                  `json:"dbPath"`                 // Database path (runtime default: ~/.goclaw/memory.db)
+	Query   MemorySearchQueryConfig `json:"query"`                  // Search query settings
+	Paths   []string                `json:"paths"`                  // Additional paths to index
 }
 
 // MemorySearchQueryConfig configures search query behavior
 type MemorySearchQueryConfig struct {
-	MaxResults    int     `json:"maxResults"`    // Maximum number of results to return (default: 6)
-	MinScore      float64 `json:"minScore"`      // Minimum score threshold (default: 0.35)
-	VectorWeight  float64 `json:"vectorWeight"`  // Weight for vector/semantic search (default: 0.7)
-	KeywordWeight float64 `json:"keywordWeight"` // Weight for keyword/FTS search (default: 0.3)
+	MaxResults    int     `json:"maxResults" default:"6"`       // Maximum number of results to return
+	MinScore      float64 `json:"minScore" default:"0.35"`      // Minimum score threshold
+	VectorWeight  float64 `json:"vectorWeight" default:"0.7"`   // Weight for vector/semantic search
+	KeywordWeight float64 `json:"keywordWeight" default:"0.3"`  // Weight for keyword/FTS search
 }
 
 // MConfig is an alias for MemorySearchConfig for convenience

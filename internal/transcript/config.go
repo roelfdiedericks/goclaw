@@ -10,15 +10,15 @@ import (
 
 // TranscriptConfig configures transcript indexing and search
 type TranscriptConfig struct {
-	Enabled bool `json:"enabled"` // Enable transcript indexing (default: true)
+	Enabled bool `json:"enabled" default:"true"` // Enable transcript indexing
 
 	// Indexing settings
-	IndexIntervalSeconds   int `json:"indexIntervalSeconds"`   // How often to check for new messages (default: 30)
-	BatchSize              int `json:"batchSize"`              // Max messages to process per batch (default: 100)
-	BackfillBatchSize      int `json:"backfillBatchSize"`      // Max chunks to backfill per interval (default: 10)
-	MaxGroupGapSeconds     int `json:"maxGroupGapSeconds"`     // Max time gap between messages in a chunk (default: 300 = 5 min)
-	MaxMessagesPerChunk    int `json:"maxMessagesPerChunk"`    // Max messages per conversation chunk (default: 8)
-	MaxEmbeddingContentLen int `json:"maxEmbeddingContentLen"` // Max chars to embed per chunk (default: 16000)
+	IndexIntervalSeconds   int `json:"indexIntervalSeconds" default:"30"`      // How often to check for new messages
+	BatchSize              int `json:"batchSize" default:"100"`                // Max messages to process per batch
+	BackfillBatchSize      int `json:"backfillBatchSize" default:"10"`         // Max chunks to backfill per interval
+	MaxGroupGapSeconds     int `json:"maxGroupGapSeconds" default:"300"`       // Max time gap between messages in a chunk
+	MaxMessagesPerChunk    int `json:"maxMessagesPerChunk" default:"8"`        // Max messages per conversation chunk
+	MaxEmbeddingContentLen int `json:"maxEmbeddingContentLen" default:"16000"` // Max chars to embed per chunk
 
 	// Search settings (similar to memory search)
 	Query TranscriptQueryConfig `json:"query"`
@@ -26,10 +26,10 @@ type TranscriptConfig struct {
 
 // TranscriptQueryConfig configures transcript search behavior
 type TranscriptQueryConfig struct {
-	MaxResults    int     `json:"maxResults"`    // Maximum results to return (default: 10)
-	MinScore      float64 `json:"minScore"`      // Minimum score threshold (default: 0.3)
-	VectorWeight  float64 `json:"vectorWeight"`  // Weight for vector search (default: 0.7)
-	KeywordWeight float64 `json:"keywordWeight"` // Weight for keyword search (default: 0.3)
+	MaxResults    int     `json:"maxResults" default:"10"`      // Maximum results to return
+	MinScore      float64 `json:"minScore" default:"0.3"`       // Minimum score threshold
+	VectorWeight  float64 `json:"vectorWeight" default:"0.7"`   // Weight for vector search
+	KeywordWeight float64 `json:"keywordWeight" default:"0.3"`  // Weight for keyword search
 }
 
 // TConfig is an alias for TranscriptConfig for convenience

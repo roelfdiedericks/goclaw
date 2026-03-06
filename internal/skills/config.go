@@ -11,30 +11,27 @@ import (
 
 // SkillInstallConfig configures skill installation sources
 type SkillInstallConfig struct {
-	AllowEmbedded *bool `json:"allowEmbedded,omitempty"` // Allow installing from embedded catalog (default: true)
-	AllowClawHub  bool  `json:"allowClawHub"`            // Allow installing from ClawHub repository (default: false)
-	AllowLocal    bool  `json:"allowLocal"`              // Allow installing from local paths (default: false, security risk)
+	AllowEmbedded bool `json:"allowEmbedded,omitempty" default:"true"` // Allow installing from embedded catalog
+	AllowClawHub  bool `json:"allowClawHub"`                           // Allow installing from ClawHub repository
+	AllowLocal    bool `json:"allowLocal"`                             // Allow installing from local paths (security risk)
 }
 
-// IsEmbeddedAllowed returns true if embedded installation is allowed (defaults to true)
+// IsEmbeddedAllowed returns true if embedded installation is allowed
 func (c SkillInstallConfig) IsEmbeddedAllowed() bool {
-	if c.AllowEmbedded == nil {
-		return true // Default to enabled
-	}
-	return *c.AllowEmbedded
+	return c.AllowEmbedded
 }
 
 // SkillsConfig configures the skills system
 type SkillsConfig struct {
-	Enabled       bool                        `json:"enabled"`
-	BundledDir    string                      `json:"bundledDir"`      // Override bundled skills path (deprecated)
-	ManagedDir    string                      `json:"managedDir"`      // Override managed skills path (deprecated)
-	WorkspaceDir  string                      `json:"workspaceDir"`    // Override workspace skills path
-	ExtraDirs     []string                    `json:"extraDirs"`       // Additional skill directories
-	Install       SkillInstallConfig          `json:"install"`         // Installation source configuration
-	Watch         bool                        `json:"watch"`           // Watch for file changes
-	WatchDebounce int                         `json:"watchDebounceMs"` // Debounce interval in ms
-	Entries       map[string]SkillEntryConfig `json:"entries"`         // Per-skill configuration
+	Enabled       bool                        `json:"enabled" default:"true"`
+	BundledDir    string                      `json:"bundledDir"`               // Override bundled skills path (deprecated)
+	ManagedDir    string                      `json:"managedDir"`               // Override managed skills path (deprecated)
+	WorkspaceDir  string                      `json:"workspaceDir"`             // Override workspace skills path
+	ExtraDirs     []string                    `json:"extraDirs"`                // Additional skill directories
+	Install       SkillInstallConfig          `json:"install"`                  // Installation source configuration
+	Watch         bool                        `json:"watch" default:"true"`     // Watch for file changes
+	WatchDebounce int                         `json:"watchDebounceMs" default:"500"` // Debounce interval in ms
+	Entries       map[string]SkillEntryConfig `json:"entries"`                  // Per-skill configuration (runtime default)
 }
 
 // Note: SkillEntryConfig is defined in types.go

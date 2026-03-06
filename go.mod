@@ -5,8 +5,8 @@ go 1.25.0
 toolchain go1.25.7
 
 require (
-	dario.cat/mergo v1.0.2
 	github.com/BurntSushi/toml v1.6.0
+	github.com/creasty/defaults v1.8.0
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
 	github.com/alecthomas/kong v1.13.0
 	github.com/anthropics/anthropic-sdk-go v1.20.0

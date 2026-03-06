@@ -84,7 +84,7 @@ func GetStatus(sessionsDB, memoryDB *sql.DB, cfg llm.LLMPurposeConfig) (*Status,
 
 	s := &Status{
 		PrimaryModel: primaryModel,
-		AutoRebuild:  cfg.GetAutoRebuild(),
+		AutoRebuild:  cfg.AutoRebuild,
 	}
 
 	transcriptStatus, err := getTableStatusPublic(sessionsDB, "transcript_chunks", primaryModel)
@@ -395,7 +395,7 @@ func (m *Manager) getStatus() (*status, error) {
 
 	s := &status{
 		PrimaryModel: primaryModel,
-		AutoRebuild:  m.cfg.GetAutoRebuild(),
+		AutoRebuild:  m.cfg.AutoRebuild,
 	}
 
 	// Query transcript_chunks

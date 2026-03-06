@@ -32,8 +32,8 @@ type LLMConfig struct {
 
 // ThinkingConfig configures extended thinking for models that support it
 type ThinkingConfig struct {
-	BudgetTokens int    `json:"budgetTokens"` // Token budget for thinking (default: 10000) - legacy, kept for compatibility
-	DefaultLevel string `json:"defaultLevel"` // Global default level: off/minimal/low/medium/high/xhigh (default: "medium")
+	BudgetTokens int    `json:"budgetTokens" default:"10000"` // Token budget for thinking (legacy, kept for compatibility)
+	DefaultLevel string `json:"defaultLevel"`                 // Global default level: off/minimal/low/medium/high/xhigh
 }
 
 // LLMProviderConfig is the configuration for a single provider instance.
@@ -71,17 +71,9 @@ type LLMProviderConfig struct {
 
 // LLMPurposeConfig defines the model chain for a specific purpose (agent, summarization, embeddings).
 type LLMPurposeConfig struct {
-	Models         []string `json:"models"`                   // First = primary, rest = fallbacks
-	MaxInputTokens int      `json:"maxInputTokens,omitempty"` // Input limit for summarization (0 = use model context - buffer)
-	AutoRebuild    *bool    `json:"autoRebuild,omitempty"`    // Embeddings: auto-rebuild on model mismatch (default: true)
-}
-
-// GetAutoRebuild returns the AutoRebuild setting, defaulting to true if not set
-func (c *LLMPurposeConfig) GetAutoRebuild() bool {
-	if c.AutoRebuild == nil {
-		return true // Default: auto-rebuild enabled
-	}
-	return *c.AutoRebuild
+	Models         []string `json:"models"`                              // First = primary, rest = fallbacks
+	MaxInputTokens int      `json:"maxInputTokens,omitempty"`            // Input limit for summarization (0 = use model context - buffer)
+	AutoRebuild    bool     `json:"autoRebuild,omitempty" default:"true"` // Embeddings: auto-rebuild on model mismatch
 }
 
 // --- Form Definition ---

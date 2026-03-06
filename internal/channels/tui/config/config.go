@@ -12,8 +12,8 @@ import (
 
 // Config holds configuration for the terminal user interface.
 type Config struct {
-	Enabled  bool `json:"enabled"`  // Enable TUI channel (standard pattern)
-	ShowLogs bool `json:"showLogs"` // Show logs panel by default (default: true)
+	Enabled  bool `json:"enabled" default:"true"`  // Enable TUI channel
+	ShowLogs bool `json:"showLogs" default:"true"` // Show logs panel by default
 }
 
 const configPath = "channels.tui"

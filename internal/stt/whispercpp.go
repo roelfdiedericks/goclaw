@@ -17,10 +17,10 @@ type WhisperCppProvider struct {
 
 // WhisperCppConfig holds configuration for Whisper.cpp.
 type WhisperCppConfig struct {
-	ModelsDir string `json:"modelsDir"` // Directory containing whisper models
-	Model     string `json:"model"`     // Model name (e.g., "ggml-base.en.bin")
-	Language  string `json:"language"`  // Language code (e.g., "en", "auto" for detection)
-	Threads   uint   `json:"threads"`   // Number of threads (0 = auto)
+	ModelsDir string `json:"modelsDir" default:"~/.goclaw/stt/whisper"` // Directory containing whisper models
+	Model     string `json:"model"`                                     // Model name (e.g., "ggml-base.en.bin")
+	Language  string `json:"language" default:"en"`                     // Language code (e.g., "en", "auto")
+	Threads   uint   `json:"threads"`                                   // Number of threads (0 = auto)
 }
 
 // NewWhisperCppProvider creates a new Whisper.cpp STT provider.

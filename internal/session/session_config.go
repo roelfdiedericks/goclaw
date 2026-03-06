@@ -8,13 +8,13 @@ import (
 // Note: This was previously config.SessionConfig, moved here to avoid import cycles
 type SessionConfig struct {
 	// Storage backend: "sqlite" (only supported backend)
-	Store     string `json:"store"`
-	StorePath string `json:"storePath"` // SQLite DB path (when store="sqlite")
+	Store     string `json:"store" default:"sqlite"`
+	StorePath string `json:"storePath"` // SQLite DB path (runtime default)
 
 	// OpenClaw session inheritance
-	InheritPath string `json:"inheritPath"` // Path to OpenClaw sessions directory
-	Inherit     bool   `json:"inherit"`     // Inherit from OpenClaw session
-	InheritFrom string `json:"inheritFrom"` // Session key to inherit from
+	InheritPath string `json:"inheritPath"`                       // Path to OpenClaw sessions directory (runtime default)
+	Inherit     bool   `json:"inherit" default:"true"`            // Inherit from OpenClaw session
+	InheritFrom string `json:"inheritFrom" default:"agent:main:main"` // Session key to inherit from
 
 	// Features
 	Summarization SummarizationConfig `json:"summarization"`
@@ -42,15 +42,15 @@ func (s *SessionConfig) GetStorePath() string {
 // SummarizationConfig configures LLM-based summarization for checkpoints and compaction
 type SummarizationConfig struct {
 	// LLM Configuration
-	Ollama        OllamaLLMConfig `json:"ollama"`        // Primary: local Ollama model
-	FallbackModel string          `json:"fallbackModel"` // Fallback: Anthropic model (e.g., "claude-3-haiku-20240307")
+	Ollama        OllamaLLMConfig `json:"ollama"`                                                 // Primary: local Ollama model
+	FallbackModel string          `json:"fallbackModel" default:"claude-3-haiku-20240307"` // Fallback: Anthropic model
 
 	// Failover settings
-	FailureThreshold int `json:"failureThreshold"` // Fall back after N consecutive Ollama failures (default: 3)
-	ResetMinutes     int `json:"resetMinutes"`     // Reset failure count after N minutes (default: 30)
+	FailureThreshold int `json:"failureThreshold" default:"3"`  // Fall back after N consecutive Ollama failures
+	ResetMinutes     int `json:"resetMinutes" default:"30"`     // Reset failure count after N minutes
 
 	// Retry settings
-	RetryIntervalSeconds int `json:"retryIntervalSeconds"` // Background retry interval for pending summaries (default: 60)
+	RetryIntervalSeconds int `json:"retryIntervalSeconds" default:"60"` // Background retry interval for pending summaries
 
 	// Sub-features
 	Checkpoint CheckpointSubConfig `json:"checkpoint"`
@@ -59,25 +59,25 @@ type SummarizationConfig struct {
 
 // CheckpointSubConfig configures rolling checkpoint generation
 type CheckpointSubConfig struct {
-	Enabled         bool  `json:"enabled"`
-	Thresholds      []int `json:"thresholds"`      // Token usage percents to trigger checkpoint (e.g., [25, 50, 75])
-	TurnThreshold   int   `json:"turnThreshold"`   // Generate every N user messages
-	MinTokensForGen int   `json:"minTokensForGen"` // Don't checkpoint if < N tokens
+	Enabled         bool  `json:"enabled" default:"true"`
+	Thresholds      []int `json:"thresholds"`                      // Token usage percents (runtime default: [25,50,75])
+	TurnThreshold   int   `json:"turnThreshold" default:"15"`      // Generate every N user messages
+	MinTokensForGen int   `json:"minTokensForGen" default:"10000"` // Don't checkpoint if < N tokens
 }
 
 // CompactionSubConfig configures context compaction
 type CompactionSubConfig struct {
-	ReserveTokens    int  `json:"reserveTokens"`    // Tokens to reserve before compaction (default: 4000)
-	MaxMessages      int  `json:"maxMessages"`      // Trigger compaction if messages exceed this (default: 500, 0 = disabled)
-	PreferCheckpoint bool `json:"preferCheckpoint"` // Use existing checkpoint for summary if available
-	KeepPercent      int  `json:"keepPercent"`      // Percent of messages to keep after compaction (default: 50)
-	MinMessages      int  `json:"minMessages"`      // Minimum messages to always keep (default: 20)
+	ReserveTokens    int  `json:"reserveTokens" default:"4000"`    // Tokens to reserve before compaction
+	MaxMessages      int  `json:"maxMessages" default:"500"`       // Trigger compaction if messages exceed this (0 = disabled)
+	PreferCheckpoint bool `json:"preferCheckpoint" default:"true"` // Use existing checkpoint for summary if available
+	KeepPercent      int  `json:"keepPercent" default:"50"`        // Percent of messages to keep after compaction
+	MinMessages      int  `json:"minMessages" default:"20"`        // Minimum messages to always keep
 }
 
 // OllamaLLMConfig configures an Ollama model for LLM tasks (compaction, checkpoints)
 type OllamaLLMConfig struct {
-	URL            string `json:"url"`            // Ollama API URL (e.g., "http://localhost:11434")
-	Model          string `json:"model"`          // LLM model for chat completion (e.g., "qwen2.5:14b" for 128k context)
-	TimeoutSeconds int    `json:"timeoutSeconds"` // Request timeout in seconds (default: 300 = 5 min)
-	ContextTokens  int    `json:"contextTokens"`  // Override context window (0 = auto-detect from model)
+	URL            string `json:"url"`                            // Ollama API URL (e.g., "http://localhost:11434")
+	Model          string `json:"model"`                          // LLM model for chat completion
+	TimeoutSeconds int    `json:"timeoutSeconds" default:"120"`   // Request timeout in seconds
+	ContextTokens  int    `json:"contextTokens"`                  // Override context window (0 = auto-detect)
 }

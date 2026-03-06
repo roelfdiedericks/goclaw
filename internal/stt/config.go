@@ -11,11 +11,11 @@ import (
 
 // Config holds STT configuration.
 type Config struct {
-	Provider   string           `json:"provider"`   // "whispercpp", "openai", "groq", "google"
-	WhisperCpp WhisperCppConfig `json:"whispercpp"` // Local whisper.cpp
-	OpenAI     OpenAIConfig     `json:"openai"`     // OpenAI Whisper API
-	Groq       GroqConfig       `json:"groq"`       // Groq Whisper API
-	Google     GoogleConfig     `json:"google"`     // Google Cloud STT
+	Provider   string           `json:"provider" default:"whispercpp"` // "whispercpp", "openai", "groq", "google"
+	WhisperCpp WhisperCppConfig `json:"whispercpp"`                    // Local whisper.cpp
+	OpenAI     OpenAIConfig     `json:"openai"`                        // OpenAI Whisper API
+	Groq       GroqConfig       `json:"groq"`                          // Groq Whisper API
+	Google     GoogleConfig     `json:"google"`                        // Google Cloud STT
 }
 
 // OpenAIConfig holds OpenAI Whisper configuration.

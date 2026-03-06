@@ -10,16 +10,16 @@ import (
 
 // CronConfig configures the cron scheduler
 type CronConfig struct {
-	Enabled           bool            `json:"enabled"`           // Enable cron scheduler (default: true)
-	JobTimeoutMinutes int             `json:"jobTimeoutMinutes"` // Timeout for job execution in minutes (default: 30, 0 = no timeout)
-	Heartbeat         HeartbeatConfig `json:"heartbeat"`         // Heartbeat configuration
+	Enabled           bool            `json:"enabled" default:"true"`      // Enable cron scheduler
+	JobTimeoutMinutes int             `json:"jobTimeoutMinutes" default:"5"` // Timeout for job execution in minutes (0 = no timeout)
+	Heartbeat         HeartbeatConfig `json:"heartbeat"`                   // Heartbeat configuration
 }
 
 // HeartbeatConfig configures the periodic heartbeat system
 type HeartbeatConfig struct {
-	Enabled         bool   `json:"enabled"`         // Enable heartbeat (default: true)
-	IntervalMinutes int    `json:"intervalMinutes"` // Interval in minutes (default: 30)
-	Prompt          string `json:"prompt"`          // Custom heartbeat prompt (optional)
+	Enabled         bool   `json:"enabled" default:"true"`       // Enable heartbeat
+	IntervalMinutes int    `json:"intervalMinutes" default:"30"` // Interval in minutes
+	Prompt          string `json:"prompt"`                       // Custom heartbeat prompt (optional)
 }
 
 // CConfig is an alias for CronConfig for convenience
