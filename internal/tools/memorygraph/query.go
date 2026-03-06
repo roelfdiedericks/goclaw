@@ -73,22 +73,22 @@ type queryInput struct {
 }
 
 type queryOutput struct {
-	Memory   *memoryOutput   `json:"memory,omitempty"`
-	Memories []memoryOutput  `json:"memories,omitempty"`
-	Stats    *statsOutput    `json:"stats,omitempty"`
-	Error    string          `json:"error,omitempty"`
+	Memory   *memoryOutput  `json:"memory,omitempty"`
+	Memories []memoryOutput `json:"memories,omitempty"`
+	Stats    *statsOutput   `json:"stats,omitempty"`
+	Error    string         `json:"error,omitempty"`
 }
 
 type memoryOutput struct {
-	ID           string             `json:"id"`
-	Content      string             `json:"content"`
-	Type         string             `json:"type"`
-	Importance   float32            `json:"importance"`
-	Confidence   float32            `json:"confidence,omitempty"`
-	CreatedAt    string             `json:"created_at"`
-	UpdatedAt    string             `json:"updated_at"`
-	AccessCount  int64              `json:"access_count"`
-	Associations []associationInfo  `json:"associations,omitempty"`
+	ID           string            `json:"id"`
+	Content      string            `json:"content"`
+	Type         string            `json:"type"`
+	Importance   float32           `json:"importance"`
+	Confidence   float32           `json:"confidence,omitempty"`
+	CreatedAt    string            `json:"created_at"`
+	UpdatedAt    string            `json:"updated_at"`
+	AccessCount  int64             `json:"access_count"`
+	Associations []associationInfo `json:"associations,omitempty"`
 }
 
 type associationInfo struct {

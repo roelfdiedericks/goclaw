@@ -246,7 +246,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	// Always attempt cancel and confirm - avoids race conditions where session just finished
 	if commands.IsPanicPhrase(req.Message) {
 		if s.channel.gateway != nil {
-			s.channel.gateway.StopAllUserSessions(u.ID)
+			s.channel.gateway.StopAllUserSessions(u.ID) //nolint:errcheck // fire-and-forget panic stop
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Stopping all tasks."}) //nolint:errcheck

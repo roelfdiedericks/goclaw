@@ -18,10 +18,10 @@ type MemorySearchConfig struct {
 
 // MemorySearchQueryConfig configures search query behavior
 type MemorySearchQueryConfig struct {
-	MaxResults    int     `json:"maxResults" default:"6"`       // Maximum number of results to return
-	MinScore      float64 `json:"minScore" default:"0.35"`      // Minimum score threshold
-	VectorWeight  float64 `json:"vectorWeight" default:"0.7"`   // Weight for vector/semantic search
-	KeywordWeight float64 `json:"keywordWeight" default:"0.3"`  // Weight for keyword/FTS search
+	MaxResults    int     `json:"maxResults" default:"6"`      // Maximum number of results to return
+	MinScore      float64 `json:"minScore" default:"0.35"`     // Minimum score threshold
+	VectorWeight  float64 `json:"vectorWeight" default:"0.7"`  // Weight for vector/semantic search
+	KeywordWeight float64 `json:"keywordWeight" default:"0.3"` // Weight for keyword/FTS search
 }
 
 // MConfig is an alias for MemorySearchConfig for convenience

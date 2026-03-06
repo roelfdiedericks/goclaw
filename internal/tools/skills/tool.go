@@ -582,17 +582,17 @@ func (t *Tool) executeInstall(ctx context.Context, skillName, sourceStr string) 
 	}
 
 	type installResponse struct {
-		Success      bool           `json:"success"`
-		SkillName    string         `json:"skill_name"`
-		Source       string         `json:"source"`
-		Message      string         `json:"message"`
-		Path         string         `json:"path,omitempty"`
-		Eligible     bool           `json:"eligible"`
-		Missing      *missingInfo   `json:"missing,omitempty"`
-		InstallHints []installHint  `json:"install_hints,omitempty"`
-		Hint         string         `json:"hint,omitempty"`
-		Flagged      bool           `json:"flagged,omitempty"`
-		Warnings     []string       `json:"warnings,omitempty"`
+		Success      bool          `json:"success"`
+		SkillName    string        `json:"skill_name"`
+		Source       string        `json:"source"`
+		Message      string        `json:"message"`
+		Path         string        `json:"path,omitempty"`
+		Eligible     bool          `json:"eligible"`
+		Missing      *missingInfo  `json:"missing,omitempty"`
+		InstallHints []installHint `json:"install_hints,omitempty"`
+		Hint         string        `json:"hint,omitempty"`
+		Flagged      bool          `json:"flagged,omitempty"`
+		Warnings     []string      `json:"warnings,omitempty"`
 	}
 
 	resp := installResponse{

@@ -23,8 +23,6 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/auth"
 	"github.com/roelfdiedericks/goclaw/internal/browser"
 	"github.com/roelfdiedericks/goclaw/internal/bus"
-	"github.com/roelfdiedericks/goclaw/internal/sandbox"
-	"github.com/roelfdiedericks/goclaw/internal/sandbox/bwrap"
 	"github.com/roelfdiedericks/goclaw/internal/channels"
 	goclawhttp "github.com/roelfdiedericks/goclaw/internal/channels/http"
 	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
@@ -41,8 +39,11 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
+	"github.com/roelfdiedericks/goclaw/internal/memorygraph"
 	"github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox/bwrap"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/setup"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
@@ -54,10 +55,10 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/tools/exec"
 	toolhass "github.com/roelfdiedericks/goclaw/internal/tools/hass"
 	"github.com/roelfdiedericks/goclaw/internal/tools/jq"
+	toolmediadisplay "github.com/roelfdiedericks/goclaw/internal/tools/media_display"
 	"github.com/roelfdiedericks/goclaw/internal/tools/memoryget"
 	toolmemorygraph "github.com/roelfdiedericks/goclaw/internal/tools/memorygraph"
 	"github.com/roelfdiedericks/goclaw/internal/tools/memorysearch"
-	toolmediadisplay "github.com/roelfdiedericks/goclaw/internal/tools/media_display"
 	toolmessage "github.com/roelfdiedericks/goclaw/internal/tools/message"
 	"github.com/roelfdiedericks/goclaw/internal/tools/read"
 	toolskills "github.com/roelfdiedericks/goclaw/internal/tools/skills"
@@ -68,7 +69,6 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/tools/websearch"
 	"github.com/roelfdiedericks/goclaw/internal/tools/write"
 	"github.com/roelfdiedericks/goclaw/internal/tools/xaiimagine"
-	"github.com/roelfdiedericks/goclaw/internal/memorygraph"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
 	"github.com/roelfdiedericks/goclaw/internal/update"
 	"github.com/roelfdiedericks/goclaw/internal/user"
@@ -1762,7 +1762,7 @@ func runGraphIngest(source, username string, maxAgeDays int) error {
 	if mgr == nil {
 		return fmt.Errorf("memory graph is disabled in configuration")
 	}
-	defer mgr.Close()
+	defer mgr.Close() //nolint:errcheck // best-effort cleanup
 
 	// Initialize LLM registry - ExtractionLoop uses GetProvider("summarization") internally
 	registry, err := buildLLMRegistry(cfg)
@@ -1879,7 +1879,7 @@ func runGraphBulletin(bulletinType, username string) error {
 	if mgr == nil {
 		return fmt.Errorf("memory graph is disabled in configuration")
 	}
-	defer mgr.Close()
+	defer mgr.Close() //nolint:errcheck // best-effort cleanup
 
 	ctx := context.Background()
 
@@ -1945,7 +1945,7 @@ func runGraphSearch(query, username string, limit int) error {
 	if mgr == nil {
 		return fmt.Errorf("memory graph is disabled in configuration")
 	}
-	defer mgr.Close()
+	defer mgr.Close() //nolint:errcheck // best-effort cleanup
 
 	// Initialize LLM for semantic search
 	registry, err := buildLLMRegistry(cfg)
@@ -1995,7 +1995,7 @@ func runGraphStats() error {
 		fmt.Println("Memory graph is disabled in configuration")
 		return nil
 	}
-	defer mgr.Close()
+	defer mgr.Close() //nolint:errcheck // best-effort cleanup
 
 	summary, err := memorygraph.BuildStatsSummary(mgr)
 	if err != nil {

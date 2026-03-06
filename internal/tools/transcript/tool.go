@@ -82,19 +82,19 @@ func (t *Tool) Schema() map[string]any {
 				"enum":        []string{"user", "assistant"},
 				"description": "Filter by message role",
 			},
-		"matchType": map[string]any{
-			"type":        "string",
-			"enum":        []string{"exact", "semantic", "hybrid"},
-			"description": "For 'search' action: 'exact' (substring match on messages), 'semantic' (vector search on chunks), 'hybrid' (both with exact boost, default)",
+			"matchType": map[string]any{
+				"type":        "string",
+				"enum":        []string{"exact", "semantic", "hybrid"},
+				"description": "For 'search' action: 'exact' (substring match on messages), 'semantic' (vector search on chunks), 'hybrid' (both with exact boost, default)",
+			},
+			"message_ids": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "For 'get_messages' action: array of message IDs to retrieve (from memory source_message field)",
+			},
 		},
-		"message_ids": map[string]any{
-			"type":        "array",
-			"items":       map[string]any{"type": "string"},
-			"description": "For 'get_messages' action: array of message IDs to retrieve (from memory source_message field)",
-		},
-	},
-	"required": []string{"action"},
-}
+		"required": []string{"action"},
+	}
 }
 
 type transcriptInput struct {

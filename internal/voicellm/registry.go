@@ -34,7 +34,7 @@ type Factory func(name string, cfg ProviderConfig) (Provider, error)
 // Unlike the text LLM registry, this creates new provider instances per voice session
 // since each session maintains its own WebSocket connection.
 type Registry struct {
-	factories map[string]Factory       // driver -> factory (e.g., "xai" -> NewXAIProvider)
+	factories map[string]Factory        // driver -> factory (e.g., "xai" -> NewXAIProvider)
 	configs   map[string]ProviderConfig // provider name -> config
 	dflt      string                    // default provider name
 	globalCfg Config                    // global voicellm config

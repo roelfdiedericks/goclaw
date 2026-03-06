@@ -21,11 +21,11 @@ type Config struct {
 
 // ProviderConfig is the configuration for a specific VoiceLLM provider
 type ProviderConfig struct {
-	Driver      string `json:"driver"`                    // "xai", "openai"
+	Driver      string `json:"driver"` // "xai", "openai"
 	APIKey      string `json:"apiKey"`
-	Voice       string `json:"voice" default:"Eve"`       // Eve, Ara, marin, etc.
+	Voice       string `json:"voice" default:"Eve"`        // Eve, Ara, marin, etc.
 	SampleRate  int    `json:"sampleRate" default:"48000"` // 48kHz matches browser native rate
-	AudioFormat string `json:"audioFormat" default:"pcm"` // pcm, pcmu, pcma
+	AudioFormat string `json:"audioFormat" default:"pcm"`  // pcm, pcmu, pcma
 	BaseURL     string `json:"baseURL,omitempty"`
 }
 
@@ -113,71 +113,71 @@ func ProviderConfigFormDef() forms.FormDef {
 					},
 				},
 			},
-		{
-			Title:    "Voice (xAI)",
-			ShowWhen: "driver=xai",
-			Fields: []forms.Field{
-				{
-					Name:  "voice",
-					Title: "Voice",
-					Desc:  "Select voice for xAI provider",
-					Type:  forms.Select,
-					Options: []forms.Option{
-						{Label: "Eve - Female, energetic (default)", Value: "Eve"},
-						{Label: "Ara - Female, warm/friendly", Value: "Ara"},
-						{Label: "Rex - Male, confident/clear", Value: "Rex"},
-						{Label: "Sal - Neutral, smooth/balanced", Value: "Sal"},
-						{Label: "Leo - Male, authoritative", Value: "Leo"},
+			{
+				Title:    "Voice (xAI)",
+				ShowWhen: "driver=xai",
+				Fields: []forms.Field{
+					{
+						Name:  "voice",
+						Title: "Voice",
+						Desc:  "Select voice for xAI provider",
+						Type:  forms.Select,
+						Options: []forms.Option{
+							{Label: "Eve - Female, energetic (default)", Value: "Eve"},
+							{Label: "Ara - Female, warm/friendly", Value: "Ara"},
+							{Label: "Rex - Male, confident/clear", Value: "Rex"},
+							{Label: "Sal - Neutral, smooth/balanced", Value: "Sal"},
+							{Label: "Leo - Male, authoritative", Value: "Leo"},
+						},
 					},
 				},
 			},
-		},
-		{
-			Title:    "Voice (OpenAI)",
-			ShowWhen: "driver=openai",
-			Fields: []forms.Field{
-				{
-					Name:  "voice",
-					Title: "Voice",
-					Desc:  "Select voice for OpenAI Realtime",
-					Type:  forms.Select,
-					Options: []forms.Option{
-						{Label: "Alloy", Value: "alloy"},
-						{Label: "Echo", Value: "echo"},
-						{Label: "Shimmer", Value: "shimmer"},
-						{Label: "Ash", Value: "ash"},
-						{Label: "Ballad", Value: "ballad"},
-						{Label: "Coral", Value: "coral"},
-						{Label: "Sage", Value: "sage"},
-						{Label: "Verse", Value: "verse"},
+			{
+				Title:    "Voice (OpenAI)",
+				ShowWhen: "driver=openai",
+				Fields: []forms.Field{
+					{
+						Name:  "voice",
+						Title: "Voice",
+						Desc:  "Select voice for OpenAI Realtime",
+						Type:  forms.Select,
+						Options: []forms.Option{
+							{Label: "Alloy", Value: "alloy"},
+							{Label: "Echo", Value: "echo"},
+							{Label: "Shimmer", Value: "shimmer"},
+							{Label: "Ash", Value: "ash"},
+							{Label: "Ballad", Value: "ballad"},
+							{Label: "Coral", Value: "coral"},
+							{Label: "Sage", Value: "sage"},
+							{Label: "Verse", Value: "verse"},
+						},
 					},
 				},
 			},
-		},
-		{
-			Title: "Audio Settings",
-			Fields: []forms.Field{
-				{
-					Name:  "sampleRate",
-					Title: "Sample Rate",
-					Desc:  "Audio sample rate in Hz (default 48000)",
-					Type:  forms.Number,
-					Min:   8000,
-					Max:   48000,
-				},
-				{
-					Name:  "audioFormat",
-					Title: "Audio Format",
-					Desc:  "Audio encoding format",
-					Type:  forms.Select,
-					Options: []forms.Option{
-						{Label: "PCM (default)", Value: "pcm"},
-						{Label: "PCM u-law", Value: "pcmu"},
-						{Label: "PCM a-law", Value: "pcma"},
+			{
+				Title: "Audio Settings",
+				Fields: []forms.Field{
+					{
+						Name:  "sampleRate",
+						Title: "Sample Rate",
+						Desc:  "Audio sample rate in Hz (default 48000)",
+						Type:  forms.Number,
+						Min:   8000,
+						Max:   48000,
+					},
+					{
+						Name:  "audioFormat",
+						Title: "Audio Format",
+						Desc:  "Audio encoding format",
+						Type:  forms.Select,
+						Options: []forms.Option{
+							{Label: "PCM (default)", Value: "pcm"},
+							{Label: "PCM u-law", Value: "pcmu"},
+							{Label: "PCM a-law", Value: "pcma"},
+						},
 					},
 				},
 			},
-		},
 		},
 		Actions: []forms.ActionDef{
 			{

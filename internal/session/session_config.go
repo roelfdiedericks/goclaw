@@ -12,8 +12,8 @@ type SessionConfig struct {
 	StorePath string `json:"storePath"` // SQLite DB path (runtime default)
 
 	// OpenClaw session inheritance
-	InheritPath string `json:"inheritPath"`                       // Path to OpenClaw sessions directory (runtime default)
-	Inherit     bool   `json:"inherit" default:"true"`            // Inherit from OpenClaw session
+	InheritPath string `json:"inheritPath"`                           // Path to OpenClaw sessions directory (runtime default)
+	Inherit     bool   `json:"inherit" default:"true"`                // Inherit from OpenClaw session
 	InheritFrom string `json:"inheritFrom" default:"agent:main:main"` // Session key to inherit from
 
 	// Features
@@ -42,12 +42,12 @@ func (s *SessionConfig) GetStorePath() string {
 // SummarizationConfig configures LLM-based summarization for checkpoints and compaction
 type SummarizationConfig struct {
 	// LLM Configuration
-	Ollama        OllamaLLMConfig `json:"ollama"`                                                 // Primary: local Ollama model
+	Ollama        OllamaLLMConfig `json:"ollama"`                                          // Primary: local Ollama model
 	FallbackModel string          `json:"fallbackModel" default:"claude-3-haiku-20240307"` // Fallback: Anthropic model
 
 	// Failover settings
-	FailureThreshold int `json:"failureThreshold" default:"3"`  // Fall back after N consecutive Ollama failures
-	ResetMinutes     int `json:"resetMinutes" default:"30"`     // Reset failure count after N minutes
+	FailureThreshold int `json:"failureThreshold" default:"3"` // Fall back after N consecutive Ollama failures
+	ResetMinutes     int `json:"resetMinutes" default:"30"`    // Reset failure count after N minutes
 
 	// Retry settings
 	RetryIntervalSeconds int `json:"retryIntervalSeconds" default:"60"` // Background retry interval for pending summaries
@@ -76,8 +76,8 @@ type CompactionSubConfig struct {
 
 // OllamaLLMConfig configures an Ollama model for LLM tasks (compaction, checkpoints)
 type OllamaLLMConfig struct {
-	URL            string `json:"url"`                            // Ollama API URL (e.g., "http://localhost:11434")
-	Model          string `json:"model"`                          // LLM model for chat completion
-	TimeoutSeconds int    `json:"timeoutSeconds" default:"120"`   // Request timeout in seconds
-	ContextTokens  int    `json:"contextTokens"`                  // Override context window (0 = auto-detect)
+	URL            string `json:"url"`                          // Ollama API URL (e.g., "http://localhost:11434")
+	Model          string `json:"model"`                        // LLM model for chat completion
+	TimeoutSeconds int    `json:"timeoutSeconds" default:"120"` // Request timeout in seconds
+	ContextTokens  int    `json:"contextTokens"`                // Override context window (0 = auto-detect)
 }

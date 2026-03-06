@@ -10,15 +10,15 @@ import (
 
 // HomeAssistantConfig configures Home Assistant integration (REST + WebSocket)
 type HomeAssistantConfig struct {
-	Enabled          bool   `json:"enabled"`                                                  // Enable Home Assistant integration
-	URL              string `json:"url"`                                                      // HA base URL
-	Token            string `json:"token"`                                                    // Long-lived access token
-	Insecure         bool   `json:"insecure,omitempty"`                                       // Skip TLS verification
-	Timeout          string `json:"timeout,omitempty" default:"10s"`                          // Request timeout
-	EventTimeout     string `json:"eventTimeout,omitempty" default:"120s"`                    // Agent invocation timeout for wake events
-	EventPrefix      string `json:"eventPrefix,omitempty" default:"[HomeAssistant Event]"`    // Prefix for injected events
+	Enabled          bool   `json:"enabled"`                                                      // Enable Home Assistant integration
+	URL              string `json:"url"`                                                          // HA base URL
+	Token            string `json:"token"`                                                        // Long-lived access token
+	Insecure         bool   `json:"insecure,omitempty"`                                           // Skip TLS verification
+	Timeout          string `json:"timeout,omitempty" default:"10s"`                              // Request timeout
+	EventTimeout     string `json:"eventTimeout,omitempty" default:"120s"`                        // Agent invocation timeout for wake events
+	EventPrefix      string `json:"eventPrefix,omitempty" default:"[HomeAssistant Event]"`        // Prefix for injected events
 	SubscriptionFile string `json:"subscriptionFile,omitempty" default:"hass-subscriptions.json"` // Subscription persistence file
-	ReconnectDelay   string `json:"reconnectDelay,omitempty" default:"5s"`                    // WebSocket reconnect delay
+	ReconnectDelay   string `json:"reconnectDelay,omitempty" default:"5s"`                        // WebSocket reconnect delay
 }
 
 // HConfig is an alias for HomeAssistantConfig for convenience

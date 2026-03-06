@@ -468,7 +468,7 @@ func (b *Bot) handleMessage(evt *events.Message) {
 	// Check for panic phrase (emergency stop) before commands
 	// Always attempt cancel and confirm - avoids race conditions where session just finished
 	if commands.IsPanicPhrase(text) {
-		b.gateway.StopAllUserSessions(u.ID)
+		b.gateway.StopAllUserSessions(u.ID) //nolint:errcheck // fire-and-forget panic stop
 		chatJID := evt.Info.Chat
 		b.client.SendMessage(b.ctx, chatJID, &waE2E.Message{Conversation: proto.String("Stopping all tasks.")}) //nolint:errcheck
 		return

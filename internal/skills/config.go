@@ -24,14 +24,14 @@ func (c SkillInstallConfig) IsEmbeddedAllowed() bool {
 // SkillsConfig configures the skills system
 type SkillsConfig struct {
 	Enabled       bool                        `json:"enabled" default:"true"`
-	BundledDir    string                      `json:"bundledDir"`               // Override bundled skills path (deprecated)
-	ManagedDir    string                      `json:"managedDir"`               // Override managed skills path (deprecated)
-	WorkspaceDir  string                      `json:"workspaceDir"`             // Override workspace skills path
-	ExtraDirs     []string                    `json:"extraDirs"`                // Additional skill directories
-	Install       SkillInstallConfig          `json:"install"`                  // Installation source configuration
-	Watch         bool                        `json:"watch" default:"true"`     // Watch for file changes
+	BundledDir    string                      `json:"bundledDir"`                    // Override bundled skills path (deprecated)
+	ManagedDir    string                      `json:"managedDir"`                    // Override managed skills path (deprecated)
+	WorkspaceDir  string                      `json:"workspaceDir"`                  // Override workspace skills path
+	ExtraDirs     []string                    `json:"extraDirs"`                     // Additional skill directories
+	Install       SkillInstallConfig          `json:"install"`                       // Installation source configuration
+	Watch         bool                        `json:"watch" default:"true"`          // Watch for file changes
 	WatchDebounce int                         `json:"watchDebounceMs" default:"500"` // Debounce interval in ms
-	Entries       map[string]SkillEntryConfig `json:"entries"`                  // Per-skill configuration (runtime default)
+	Entries       map[string]SkillEntryConfig `json:"entries"`                       // Per-skill configuration (runtime default)
 }
 
 // Note: SkillEntryConfig is defined in types.go

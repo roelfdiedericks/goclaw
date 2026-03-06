@@ -62,12 +62,12 @@ type RelationType string
 
 const (
 	// Core relations (from Spacebot)
-	RelationRelatedTo   RelationType = "related_to"   // General semantic connection
-	RelationUpdates     RelationType = "updates"      // Newer version of same info
-	RelationContradicts RelationType = "contradicts"  // Conflicting information
-	RelationCausedBy    RelationType = "caused_by"    // Causal relationship
-	RelationResultOf    RelationType = "result_of"    // Effect relationship
-	RelationPartOf      RelationType = "part_of"      // Hierarchical/containment
+	RelationRelatedTo   RelationType = "related_to"  // General semantic connection
+	RelationUpdates     RelationType = "updates"     // Newer version of same info
+	RelationContradicts RelationType = "contradicts" // Conflicting information
+	RelationCausedBy    RelationType = "caused_by"   // Causal relationship
+	RelationResultOf    RelationType = "result_of"   // Effect relationship
+	RelationPartOf      RelationType = "part_of"     // Hierarchical/containment
 
 	// Anticipatory Intelligence relations
 	RelationTriggers   RelationType = "triggers"   // Routine → Todo/Action
@@ -98,28 +98,28 @@ var DefaultDirected = map[RelationType]bool{
 
 // Memory represents a single memory node in the graph
 type Memory struct {
-	ID             int64     `json:"-"`                            // Internal SQLite rowid
-	UUID           string    `json:"id"`                           // External ID (ULID)
-	Content        string    `json:"content"`                      // Memory content
-	Type           Type      `json:"type"`                         // Memory type
-	Importance     float32   `json:"importance"`                   // 0.0-1.0, affects recall priority
-	Confidence     float32   `json:"confidence"`                   // 0.0-1.0 or -1 for not applicable
-	CreatedAt      time.Time `json:"created_at"`                   // When created
-	UpdatedAt      time.Time `json:"updated_at"`                   // When last updated
-	LastAccessedAt time.Time `json:"last_accessed_at"`             // When last accessed
-	AccessCount    int64     `json:"access_count"`                 // Number of times accessed
-	NextTriggerAt  *time.Time `json:"next_trigger_at,omitempty"`   // For routines/predictions
-	Source         string    `json:"source,omitempty"`             // Origin: "conversation", "extraction", "manual", "import"
-	SourceSession  string    `json:"source_session,omitempty"`     // Session key
-	SourceMessage  string    `json:"source_message,omitempty"`     // Message ID
-	Username       string    `json:"username,omitempty"`           // User.ID (username)
-	Channel        string    `json:"channel,omitempty"`            // Channel name
-	ChatID         string    `json:"chat_id,omitempty"`            // Channel-specific chat ID
-	Emotion        string    `json:"emotion,omitempty"`            // frustrated, excited, stressed, relieved, etc.
-	OccurredAt     time.Time `json:"occurred_at"`                  // When this actually happened (required)
-	Forgotten      bool      `json:"forgotten"`                    // Soft delete flag
-	Embedding      []float32 `json:"-"`                            // Vector embedding
-	EmbeddingModel string    `json:"-"`                            // Model that generated embedding
+	ID             int64      `json:"-"`                         // Internal SQLite rowid
+	UUID           string     `json:"id"`                        // External ID (ULID)
+	Content        string     `json:"content"`                   // Memory content
+	Type           Type       `json:"type"`                      // Memory type
+	Importance     float32    `json:"importance"`                // 0.0-1.0, affects recall priority
+	Confidence     float32    `json:"confidence"`                // 0.0-1.0 or -1 for not applicable
+	CreatedAt      time.Time  `json:"created_at"`                // When created
+	UpdatedAt      time.Time  `json:"updated_at"`                // When last updated
+	LastAccessedAt time.Time  `json:"last_accessed_at"`          // When last accessed
+	AccessCount    int64      `json:"access_count"`              // Number of times accessed
+	NextTriggerAt  *time.Time `json:"next_trigger_at,omitempty"` // For routines/predictions
+	Source         string     `json:"source,omitempty"`          // Origin: "conversation", "extraction", "manual", "import"
+	SourceSession  string     `json:"source_session,omitempty"`  // Session key
+	SourceMessage  string     `json:"source_message,omitempty"`  // Message ID
+	Username       string     `json:"username,omitempty"`        // User.ID (username)
+	Channel        string     `json:"channel,omitempty"`         // Channel name
+	ChatID         string     `json:"chat_id,omitempty"`         // Channel-specific chat ID
+	Emotion        string     `json:"emotion,omitempty"`         // frustrated, excited, stressed, relieved, etc.
+	OccurredAt     time.Time  `json:"occurred_at"`               // When this actually happened (required)
+	Forgotten      bool       `json:"forgotten"`                 // Soft delete flag
+	Embedding      []float32  `json:"-"`                         // Vector embedding
+	EmbeddingModel string     `json:"-"`                         // Model that generated embedding
 }
 
 // Association represents a directed or undirected edge between two memories
@@ -174,9 +174,9 @@ type AnomalyMetadata struct {
 // CorrelationMetadata contains metadata specific to correlation memories
 type CorrelationMetadata struct {
 	MemoryUUID     string     `json:"memory_uuid"`
-	Condition      string     `json:"condition"`        // e.g., "sensor.temperature > 28"
-	Outcome        string     `json:"outcome"`          // e.g., "user requests aircon"
-	Strength       float32    `json:"strength"`         // Correlation strength 0.0-1.0
+	Condition      string     `json:"condition"` // e.g., "sensor.temperature > 28"
+	Outcome        string     `json:"outcome"`   // e.g., "user requests aircon"
+	Strength       float32    `json:"strength"`  // Correlation strength 0.0-1.0
 	Observations   int64      `json:"observations"`
 	LastObservedAt *time.Time `json:"last_observed_at"`
 }
@@ -184,10 +184,10 @@ type CorrelationMetadata struct {
 // PredictionMetadata contains metadata specific to prediction memories
 type PredictionMetadata struct {
 	MemoryUUID             string    `json:"memory_uuid"`
-	RoutineUUID            string    `json:"routine_uuid"`            // UUID of routine this prediction is for
+	RoutineUUID            string    `json:"routine_uuid"` // UUID of routine this prediction is for
 	PredictedTime          time.Time `json:"predicted_time"`
 	Action                 string    `json:"action"`
-	Outcome                string    `json:"outcome"`                  // "", "confirmed", "missed", "rejected"
+	Outcome                string    `json:"outcome"` // "", "confirmed", "missed", "rejected"
 	ConfidenceAtPrediction float32   `json:"confidence_at_prediction"`
 }
 

@@ -586,13 +586,13 @@ func (m *Manager) handleReindex(cmd bus.Command) bus.CommandResult {
 
 // MessageByID represents a message retrieved by ID
 type MessageByID struct {
-	ID        string
+	ID         string
 	SessionKey string
-	Timestamp time.Time
-	Role      string
-	Content   string
-	Source    string
-	UserID    string
+	Timestamp  time.Time
+	Role       string
+	Content    string
+	Source     string
+	UserID     string
 }
 
 // GetMessagesByIDs retrieves messages by their IDs from the session messages table.
@@ -610,6 +610,7 @@ func (m *Manager) GetMessagesByIDs(ctx context.Context, ids []string, userID str
 		args[i] = id
 	}
 
+	//nolint:gosec // placeholders are "?" markers, not user input
 	query := fmt.Sprintf(`
 		SELECT id, session_key, timestamp, role, content, source, user_id
 		FROM messages

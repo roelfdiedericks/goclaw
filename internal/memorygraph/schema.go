@@ -7,8 +7,8 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
-// Current schema version
-const schemaVersion = 1
+// Current schema version (for future migration tracking)
+const _ = 1 // schemaVersion - currently unused but kept for reference
 
 // Migration represents a database migration
 type Migration struct {

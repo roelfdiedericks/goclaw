@@ -36,13 +36,13 @@ func (s *Searcher) SetProvider(provider llm.EmbeddingProvider) {
 
 // SearchOptions configures a search query
 type SearchOptions struct {
-	Query          string   // Search query
-	Username       string   // Filter by username
-	Channel        string   // Filter by channel
-	Types          []Type   // Filter by memory types
-	MinImportance  float32  // Minimum importance threshold
-	MaxResults     int      // Maximum results to return
-	ContextMemory  string   // Optional: UUID of a memory to use as context for graph search
+	Query         string  // Search query
+	Username      string  // Filter by username
+	Channel       string  // Filter by channel
+	Types         []Type  // Filter by memory types
+	MinImportance float32 // Minimum importance threshold
+	MaxResults    int     // Maximum results to return
+	ContextMemory string  // Optional: UUID of a memory to use as context for graph search
 }
 
 // Search performs hybrid search and returns ranked results

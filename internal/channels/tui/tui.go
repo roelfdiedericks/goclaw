@@ -275,7 +275,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Always attempt cancel and confirm - avoids race conditions where session just finished
 					if commands.IsPanicPhrase(text) {
 						m.input.Reset()
-						m.gateway.StopAllUserSessions(m.user.ID)
+						m.gateway.StopAllUserSessions(m.user.ID) //nolint:errcheck // fire-and-forget panic stop
 						m.chatLines = append(m.chatLines, helpStyle.Render("Stopping all tasks."), "")
 						m.chatViewport.SetContent(m.getChatContent())
 						m.chatViewport.GotoBottom()

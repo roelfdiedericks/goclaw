@@ -13,25 +13,25 @@ type ToolsConfig struct {
 // WebToolsConfig contains web tool settings
 type WebToolsConfig struct {
 	BraveAPIKey string `json:"braveApiKey"`
-	UseBrowser  string `json:"useBrowser" default:"auto"`    // Browser fallback: "auto" (on 403/bot), "always", "never"
-	Profile     string `json:"profile" default:"default"`    // Browser profile for web_fetch
-	Headless    bool   `json:"headless" default:"true"`      // Run browser headless
+	UseBrowser  string `json:"useBrowser" default:"auto"` // Browser fallback: "auto" (on 403/bot), "always", "never"
+	Profile     string `json:"profile" default:"default"` // Browser profile for web_fetch
+	Headless    bool   `json:"headless" default:"true"`   // Run browser headless
 }
 
 // BrowserToolsConfig contains browser tool settings
 type BrowserToolsConfig struct {
-	Enabled        bool                    `json:"enabled" default:"true"`         // Enable headless browser tool
-	Dir            string                  `json:"dir"`                            // Browser data directory (empty = ~/.goclaw/browser)
-	AutoDownload   bool                    `json:"autoDownload" default:"true"`    // Download Chromium if missing
-	Revision       string                  `json:"revision"`                       // Chromium revision (empty = latest)
-	Headless       bool                    `json:"headless" default:"true"`        // Run browser in headless mode
-	NoSandbox      bool                    `json:"noSandbox"`                      // Disable Chrome sandbox (needed for Docker/root)
+	Enabled        bool                    `json:"enabled" default:"true"`           // Enable headless browser tool
+	Dir            string                  `json:"dir"`                              // Browser data directory (empty = ~/.goclaw/browser)
+	AutoDownload   bool                    `json:"autoDownload" default:"true"`      // Download Chromium if missing
+	Revision       string                  `json:"revision"`                         // Chromium revision (empty = latest)
+	Headless       bool                    `json:"headless" default:"true"`          // Run browser in headless mode
+	NoSandbox      bool                    `json:"noSandbox"`                        // Disable Chrome sandbox (needed for Docker/root)
 	DefaultProfile string                  `json:"defaultProfile" default:"default"` // Default profile name
-	Timeout        string                  `json:"timeout" default:"30s"`          // Default action timeout
-	Stealth        bool                    `json:"stealth" default:"true"`         // Enable stealth mode
-	Device         string                  `json:"device" default:"clear"`         // Device emulation
-	ProfileDomains map[string]string       `json:"profileDomains"`                 // Domain → profile mapping (runtime default)
-	Bubblewrap     BrowserBubblewrapConfig `json:"bubblewrap"`                     // Sandbox settings
+	Timeout        string                  `json:"timeout" default:"30s"`            // Default action timeout
+	Stealth        bool                    `json:"stealth" default:"true"`           // Enable stealth mode
+	Device         string                  `json:"device" default:"clear"`           // Device emulation
+	ProfileDomains map[string]string       `json:"profileDomains"`                   // Domain → profile mapping (runtime default)
+	Bubblewrap     BrowserBubblewrapConfig `json:"bubblewrap"`                       // Sandbox settings
 }
 
 // BrowserBubblewrapConfig contains bubblewrap settings for browser tool
@@ -60,9 +60,9 @@ type ExecBubblewrapConfig struct {
 
 // XAIImagineConfig contains xAI image generation tool settings
 type XAIImagineConfig struct {
-	Enabled     bool   `json:"enabled"`                            // Enable the tool
-	APIKey      string `json:"apiKey,omitempty"`                   // xAI API key (falls back to provider config)
+	Enabled     bool   `json:"enabled"`                                // Enable the tool
+	APIKey      string `json:"apiKey,omitempty"`                       // xAI API key (falls back to provider config)
 	Model       string `json:"model,omitempty" default:"grok-2-image"` // Model to use
-	Resolution  string `json:"resolution,omitempty" default:"1K"` // Default resolution: "1K" or "2K"
-	SaveToMedia bool   `json:"saveToMedia,omitempty" default:"true"` // Save generated images to media store
+	Resolution  string `json:"resolution,omitempty" default:"1K"`      // Default resolution: "1K" or "2K"
+	SaveToMedia bool   `json:"saveToMedia,omitempty" default:"true"`   // Save generated images to media store
 }

@@ -18,16 +18,16 @@ import (
 // LLMConfig contains LLM provider settings.
 // Providers are aliased instances; models reference them via "alias/model" format.
 type LLMConfig struct {
-	Providers     map[string]LLMProviderConfig `json:"providers"`
-	Agent         LLMPurposeConfig             `json:"agent"`
-	Summarization LLMPurposeConfig             `json:"summarization"`
-	Embeddings    LLMPurposeConfig             `json:"embeddings"`
-	Heartbeat         LLMPurposeConfig             `json:"heartbeat,omitempty"`
-	Cron              LLMPurposeConfig             `json:"cron,omitempty"`
-	Hass              LLMPurposeConfig             `json:"hass,omitempty"`
-	MemoryExtraction  LLMPurposeConfig             `json:"memoryExtraction,omitempty"`
-	Thinking          ThinkingConfig               `json:"thinking"`
-	SystemPrompt  string                       `json:"systemPrompt"`
+	Providers        map[string]LLMProviderConfig `json:"providers"`
+	Agent            LLMPurposeConfig             `json:"agent"`
+	Summarization    LLMPurposeConfig             `json:"summarization"`
+	Embeddings       LLMPurposeConfig             `json:"embeddings"`
+	Heartbeat        LLMPurposeConfig             `json:"heartbeat,omitempty"`
+	Cron             LLMPurposeConfig             `json:"cron,omitempty"`
+	Hass             LLMPurposeConfig             `json:"hass,omitempty"`
+	MemoryExtraction LLMPurposeConfig             `json:"memoryExtraction,omitempty"`
+	Thinking         ThinkingConfig               `json:"thinking"`
+	SystemPrompt     string                       `json:"systemPrompt"`
 }
 
 // ThinkingConfig configures extended thinking for models that support it
@@ -71,8 +71,8 @@ type LLMProviderConfig struct {
 
 // LLMPurposeConfig defines the model chain for a specific purpose (agent, summarization, embeddings).
 type LLMPurposeConfig struct {
-	Models         []string `json:"models"`                              // First = primary, rest = fallbacks
-	MaxInputTokens int      `json:"maxInputTokens,omitempty"`            // Input limit for summarization (0 = use model context - buffer)
+	Models         []string `json:"models"`                               // First = primary, rest = fallbacks
+	MaxInputTokens int      `json:"maxInputTokens,omitempty"`             // Input limit for summarization (0 = use model context - buffer)
 	AutoRebuild    bool     `json:"autoRebuild,omitempty" default:"true"` // Embeddings: auto-rebuild on model mismatch
 }
 

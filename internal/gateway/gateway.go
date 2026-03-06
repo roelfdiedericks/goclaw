@@ -633,10 +633,10 @@ func (g *Gateway) resolveMediaContent(messages []types.Message, provider llm.Pro
 			continue
 		}
 
-	L_trace("resolveMediaContent: message has content blocks",
-		"role", msg.Role,
-		"blockCount", len(msg.ContentBlocks),
-	)
+		L_trace("resolveMediaContent: message has content blocks",
+			"role", msg.Role,
+			"blockCount", len(msg.ContentBlocks),
+		)
 
 		// Check if this message type supports images
 		canHaveImages := false
@@ -3020,7 +3020,6 @@ func (g *Gateway) sessionKeyFor(req AgentRequest) string {
 	// Fallback (shouldn't happen - requests without user should be rejected earlier)
 	return session.PrimarySession
 }
-
 
 // PersistConversationTurn persists a conversation turn to storage WITHOUT distributing.
 // This is the pure persistence primitive - use BroadcastConversationTurn for distribution.

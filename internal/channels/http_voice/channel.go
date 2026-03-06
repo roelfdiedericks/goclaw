@@ -253,7 +253,7 @@ func (c *VoiceChannel) closeSessionLocked(sess *VoiceSession) {
 
 	sess.providerMu.Lock()
 	if sess.provider != nil {
-		sess.provider.Close()
+		sess.provider.Close() //nolint:errcheck // best-effort cleanup
 		sess.provider = nil
 	}
 	sess.isConnected = false
@@ -405,7 +405,7 @@ func (c *VoiceChannel) handleConnect(ctx context.Context, sess *VoiceSession) {
 		Tools:        toolDefs,
 	}); err != nil {
 		L_error("http_voice: provider configure failed", "error", err, "user", sess.UserID)
-		provider.Close()
+		provider.Close() //nolint:errcheck // cleanup on error path
 		sess.sendMessage(ServerMessage{Type: MsgTypeError, Error: "Configuration failed: " + err.Error()})
 		return
 	}
@@ -424,7 +424,7 @@ func (c *VoiceChannel) handleDisconnect(sess *VoiceSession) {
 	defer sess.providerMu.Unlock()
 
 	if sess.provider != nil {
-		sess.provider.Close()
+		sess.provider.Close() //nolint:errcheck // best-effort cleanup
 		sess.provider = nil
 	}
 	sess.isConnected = false

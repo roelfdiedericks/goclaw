@@ -203,6 +203,9 @@ func (e *LiveExtractor) getUnextractedConversations(ctx context.Context) []Conve
 				extractedIDs[id] = true
 			}
 		}
+		if err := extractedRows.Err(); err != nil {
+			L_warn("live extractor: iteration error", "error", err)
+		}
 	}
 
 	// Build placeholders for excluded sources
@@ -215,6 +218,7 @@ func (e *LiveExtractor) getUnextractedConversations(ctx context.Context) []Conve
 
 	// Query messages from sessions.db
 	// Skip excluded sources (automated/proactive messages)
+	//nolint:gosec // placeholders are "?" markers, not user input
 	query := fmt.Sprintf(`
 		SELECT m.id, m.session_key, m.role, m.content, m.user_id, m.source, m.timestamp
 		FROM messages m

@@ -31,21 +31,21 @@ func (e *Extractor) SetProvider(provider llm.Provider) {
 
 // ExtractionContext provides context for memory extraction
 type ExtractionContext struct {
-	Username      string
-	Channel       string
-	ChatID        string
-	SessionKey    string
-	MessageIDs    []string
-	Conversation  string // The conversation text to extract from
-	SourceFile    string // Source filename (e.g., "USER.md", "AGENTS.md") for context
-	SourceType    string // "file" or "transcript"
+	Username     string
+	Channel      string
+	ChatID       string
+	SessionKey   string
+	MessageIDs   []string
+	Conversation string // The conversation text to extract from
+	SourceFile   string // Source filename (e.g., "USER.md", "AGENTS.md") for context
+	SourceType   string // "file" or "transcript"
 }
 
 // ExtractionResult contains the results of memory extraction
 type ExtractionResult struct {
-	Memories  []*Memory
-	Skipped   int    // Number of duplicates/low-value memories skipped
-	Error     error
+	Memories []*Memory
+	Skipped  int // Number of duplicates/low-value memories skipped
+	Error    error
 }
 
 // Extract analyzes a conversation and extracts memories
@@ -269,11 +269,11 @@ Example: [{"content": "The user prefers dark mode", "type": "preference", "impor
 func parseExtractionResponse(response string) ([]ExtractedMemory, error) {
 	// Clean up the response - find JSON array
 	response = strings.TrimSpace(response)
-	
+
 	// Try to find JSON array in response
 	start := strings.Index(response, "[")
 	end := strings.LastIndex(response, "]")
-	
+
 	if start == -1 || end == -1 || end < start {
 		// Try parsing as-is
 		var memories []ExtractedMemory
@@ -284,7 +284,7 @@ func parseExtractionResponse(response string) ([]ExtractedMemory, error) {
 	}
 
 	jsonStr := response[start : end+1]
-	
+
 	var memories []ExtractedMemory
 	if err := json.Unmarshal([]byte(jsonStr), &memories); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %w", err)

@@ -7,8 +7,8 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/roelfdiedericks/goclaw/internal/sandbox/bwrap"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox/bwrap"
 )
 
 // buildSandboxedCommand creates a sandboxed exec.Cmd using bubblewrap.

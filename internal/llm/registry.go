@@ -101,13 +101,13 @@ func NewRegistry(cfg RegistryConfig) (*Registry, error) {
 	r := &Registry{
 		providers: make(map[string]providerInstance),
 		purposes: map[string]LLMPurposeConfig{
-			"agent":              cfg.Agent,
-			"summarization":      cfg.Summarization,
-			"embeddings":         cfg.Embeddings,
-			"heartbeat":          cfg.Heartbeat,
-			"cron":               cfg.Cron,
-			"hass":               cfg.Hass,
-			"memory_extraction":  cfg.MemoryExtraction,
+			"agent":             cfg.Agent,
+			"summarization":     cfg.Summarization,
+			"embeddings":        cfg.Embeddings,
+			"heartbeat":         cfg.Heartbeat,
+			"cron":              cfg.Cron,
+			"hass":              cfg.Hass,
+			"memory_extraction": cfg.MemoryExtraction,
 		},
 		cooldowns: make(map[string]*providerCooldown),
 	}

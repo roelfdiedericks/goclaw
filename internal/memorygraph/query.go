@@ -350,11 +350,11 @@ func (q *QueryOptions) Count(db *sql.DB) (int, error) {
 
 // AssociationQuery represents a query builder for associations
 type AssociationQuery struct {
-	memoryUUID   string
-	direction    string // "from", "to", "both"
-	types        []RelationType
-	minWeight    *float32
-	limit        int
+	memoryUUID string
+	direction  string // "from", "to", "both"
+	types      []RelationType
+	minWeight  *float32
+	limit      int
 }
 
 // QueryAssociations creates a new association query builder

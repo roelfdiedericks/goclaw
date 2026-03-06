@@ -108,7 +108,7 @@ func (m *MarkdownIngester) findMatchingFiles() []string {
 	var matched []string
 
 	// Walk through workspace and collect .md files
-	filepath.Walk(m.workspaceDir, func(path string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(m.workspaceDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}

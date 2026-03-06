@@ -413,6 +413,9 @@ func BuildChatContextSection(ctx context.Context, mgr *Manager, username, messag
 		}
 		items = append(items, fmt.Sprintf("- [%s] %s", memType, content))
 	}
+	if err := rows.Err(); err != nil {
+		L_warn("memorygraph: chat context iteration error", "error", err)
+	}
 
 	if len(items) == 0 {
 		L_debug("memorygraph: chat context - no matches", "keywords", keywords)

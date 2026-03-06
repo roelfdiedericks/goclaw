@@ -315,7 +315,7 @@ func (b *Bot) handleMessage(c tele.Context) error {
 	// Check for panic phrase (emergency stop) before anything else
 	// Always attempt cancel and confirm - avoids race conditions where session just finished
 	if commands.IsPanicPhrase(c.Text()) {
-		b.gateway.StopAllUserSessions(u.ID)
+		b.gateway.StopAllUserSessions(u.ID) //nolint:errcheck // fire-and-forget panic stop
 		return c.Send("Stopping all tasks.")
 	}
 

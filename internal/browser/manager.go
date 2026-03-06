@@ -70,7 +70,7 @@ func (m *Manager) createLauncher(binPath, profileDir string, headless bool) (*la
 		Bin(actualBinPath).
 		UserDataDir(profileDir).
 		Headless(headless).
-		Set("disable-dev-shm-usage").                                    // For Docker/limited memory
+		Set("disable-dev-shm-usage").                                 // For Docker/limited memory
 		Set("enable-features", "BlockInsecurePrivateNetworkRequests") // Block JS requests to localhost/private IPs
 
 	// Set window size for headed mode (otherwise Chrome uses a tiny default)

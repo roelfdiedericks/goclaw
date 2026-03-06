@@ -26,10 +26,10 @@ type TranscriptConfig struct {
 
 // TranscriptQueryConfig configures transcript search behavior
 type TranscriptQueryConfig struct {
-	MaxResults    int     `json:"maxResults" default:"10"`      // Maximum results to return
-	MinScore      float64 `json:"minScore" default:"0.3"`       // Minimum score threshold
-	VectorWeight  float64 `json:"vectorWeight" default:"0.7"`   // Weight for vector search
-	KeywordWeight float64 `json:"keywordWeight" default:"0.3"`  // Weight for keyword search
+	MaxResults    int     `json:"maxResults" default:"10"`     // Maximum results to return
+	MinScore      float64 `json:"minScore" default:"0.3"`      // Minimum score threshold
+	VectorWeight  float64 `json:"vectorWeight" default:"0.7"`  // Weight for vector search
+	KeywordWeight float64 `json:"keywordWeight" default:"0.3"` // Weight for keyword search
 }
 
 // TConfig is an alias for TranscriptConfig for convenience

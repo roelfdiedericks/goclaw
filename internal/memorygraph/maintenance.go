@@ -131,6 +131,7 @@ func (m *Maintainer) decayConfidence(ctx context.Context) (int, error) {
 		args = append(args, string(t))
 	}
 
+	//nolint:gosec // placeholders are "?" markers, not user input
 	result, err := m.db.ExecContext(ctx, `
 		UPDATE memories SET
 			confidence = confidence * ?,
@@ -373,10 +374,10 @@ func (m *Maintainer) mergeDuplicates(ctx context.Context) (int, error) {
 func calculateNextCronTime(cronStr string, from time.Time) time.Time {
 	// Simple cron parser - supports basic cron expressions
 	// For production, consider using a library like github.com/robfig/cron
-	
+
 	// This is a placeholder implementation
 	// TODO: Implement proper cron parsing or use a library
-	
+
 	// For now, just return next hour as a default
 	next := from.Truncate(time.Hour).Add(time.Hour)
 	return next

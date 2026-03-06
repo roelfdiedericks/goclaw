@@ -6,9 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/roelfdiedericks/goclaw/internal/sandbox/bwrap"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox/bwrap"
 )
 
 // BrowserBubblewrapConfig holds bubblewrap settings for browser sandboxing

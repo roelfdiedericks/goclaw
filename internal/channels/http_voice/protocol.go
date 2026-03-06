@@ -10,13 +10,13 @@ const (
 
 // Server -> Client messages
 const (
-	MsgTypeConnected     = "connected"     // Connection acknowledged
-	MsgTypeAudioDelta    = "audio"         // Audio chunk from assistant
-	MsgTypeTranscript    = "transcript"    // Transcript update (user or assistant)
-	MsgTypeMirror        = "mirror"        // Message from another channel
-	MsgTypeAgentMessage  = "agent_message" // Direct agent output (tool messages, etc.)
-	MsgTypeError         = "error"         // Error message
-	MsgTypeStatus        = "status"        // Status update (connecting, connected, etc.)
+	MsgTypeConnected    = "connected"     // Connection acknowledged
+	MsgTypeAudioDelta   = "audio"         // Audio chunk from assistant
+	MsgTypeTranscript   = "transcript"    // Transcript update (user or assistant)
+	MsgTypeMirror       = "mirror"        // Message from another channel
+	MsgTypeAgentMessage = "agent_message" // Direct agent output (tool messages, etc.)
+	MsgTypeError        = "error"         // Error message
+	MsgTypeStatus       = "status"        // Status update (connecting, connected, etc.)
 )
 
 // ClientMessage is a message from the browser to the server

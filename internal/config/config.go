@@ -151,7 +151,7 @@ type Config struct {
 	Gateway       gwtypes.GatewayConfig       `json:"gateway"`
 	Agent         gwtypes.AgentIdentityConfig `json:"agent"`
 	LLM           llm.LLMConfig               `json:"llm"`
-	VoiceLLM      voicellm.Config             `json:"voicellm"` // Real-time voice LLM configuration
+	VoiceLLM      voicellm.Config             `json:"voicellm"`      // Real-time voice LLM configuration
 	HomeAssistant hass.HomeAssistantConfig    `json:"homeassistant"` // Top-level Home Assistant config
 	Tools         toolsconfig.ToolsConfig     `json:"tools"`
 	Channels      ChannelsConfig              `json:"channels"` // All channel configs (telegram, http, tui)
@@ -397,4 +397,3 @@ func mustGetwd() string {
 	}
 	return "unknown"
 }
-

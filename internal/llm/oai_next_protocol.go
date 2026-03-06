@@ -130,17 +130,17 @@ type oaiError struct {
 // =============================================================================
 
 const (
-	oaiEventResponseCreated          = "response.created"
-	oaiEventOutputItemAdded          = "response.output_item.added"
-	oaiEventContentPartAdded         = "response.content_part.added"
-	oaiEventContentPartDone          = "response.content_part.done"
-	oaiEventOutputTextDelta          = "response.output_text.delta"
-	oaiEventReasoningTextDelta       = "response.reasoning_text.delta"
-	oaiEventReasoningSummaryDelta    = "response.reasoning_summary_text.delta"
-	oaiEventOutputItemDone           = "response.output_item.done"
-	oaiEventResponseDone             = "response.done"
-	oaiEventResponseCompleted        = "response.completed"
-	oaiEventError                    = "error"
+	oaiEventResponseCreated       = "response.created"
+	oaiEventOutputItemAdded       = "response.output_item.added"
+	oaiEventContentPartAdded      = "response.content_part.added"
+	oaiEventContentPartDone       = "response.content_part.done"
+	oaiEventOutputTextDelta       = "response.output_text.delta"
+	oaiEventReasoningTextDelta    = "response.reasoning_text.delta"
+	oaiEventReasoningSummaryDelta = "response.reasoning_summary_text.delta"
+	oaiEventOutputItemDone        = "response.output_item.done"
+	oaiEventResponseDone          = "response.done"
+	oaiEventResponseCompleted     = "response.completed"
+	oaiEventError                 = "error"
 
 	oaiItemTypeMessage            = "message"
 	oaiItemTypeFunctionCall       = "function_call"

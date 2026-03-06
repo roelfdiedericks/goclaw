@@ -86,18 +86,18 @@ func (t *QueryTool) Schema() map[string]any {
 				"enum":        []string{"recent", "importance", "most_accessed"},
 				"description": "Sort order",
 			},
-		"include_associations": map[string]any{
-			"type":        "boolean",
-			"description": "Include association details in results",
+			"include_associations": map[string]any{
+				"type":        "boolean",
+				"description": "Include association details in results",
+			},
+			"detail_level": map[string]any{
+				"type":        "string",
+				"enum":        []string{"summary", "standard", "full"},
+				"default":     "standard",
+				"description": "Output detail level: summary (minimal), standard (includes provenance), full (all fields including access stats)",
+			},
 		},
-		"detail_level": map[string]any{
-			"type":        "string",
-			"enum":        []string{"summary", "standard", "full"},
-			"default":     "standard",
-			"description": "Output detail level: summary (minimal), standard (includes provenance), full (all fields including access stats)",
-		},
-	},
-}
+	}
 }
 
 // QueryParams defines input parameters for the full query tool.

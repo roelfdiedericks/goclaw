@@ -10,9 +10,9 @@ import (
 
 // CronConfig configures the cron scheduler
 type CronConfig struct {
-	Enabled           bool            `json:"enabled" default:"true"`      // Enable cron scheduler
+	Enabled           bool            `json:"enabled" default:"true"`        // Enable cron scheduler
 	JobTimeoutMinutes int             `json:"jobTimeoutMinutes" default:"5"` // Timeout for job execution in minutes (0 = no timeout)
-	Heartbeat         HeartbeatConfig `json:"heartbeat"`                   // Heartbeat configuration
+	Heartbeat         HeartbeatConfig `json:"heartbeat"`                     // Heartbeat configuration
 }
 
 // HeartbeatConfig configures the periodic heartbeat system

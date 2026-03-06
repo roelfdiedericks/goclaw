@@ -21,13 +21,13 @@ type Config struct {
 
 // LiveExtractionConfig configures automatic memory extraction from conversations
 type LiveExtractionConfig struct {
-	Enabled         bool     `json:"enabled" default:"true"`          // Enable live extraction
-	AgentExtraction bool     `json:"agentExtraction" default:"true"`  // Enable agent-driven extraction
-	IntervalSeconds int      `json:"intervalSeconds" default:"120"`   // Check interval
-	MinMessages     int      `json:"minMessages" default:"5"`         // Minimum messages before extraction
-	MaxTurns        int      `json:"maxTurns" default:"10"`           // Max extraction loop turns
-	BatchSize       int      `json:"batchSize" default:"50"`          // Max messages per batch
-	ExcludeSources  []string `json:"excludeSources"`                  // Message sources to exclude (runtime default)
+	Enabled         bool     `json:"enabled" default:"true"`         // Enable live extraction
+	AgentExtraction bool     `json:"agentExtraction" default:"true"` // Enable agent-driven extraction
+	IntervalSeconds int      `json:"intervalSeconds" default:"120"`  // Check interval
+	MinMessages     int      `json:"minMessages" default:"5"`        // Minimum messages before extraction
+	MaxTurns        int      `json:"maxTurns" default:"10"`          // Max extraction loop turns
+	BatchSize       int      `json:"batchSize" default:"50"`         // Max messages per batch
+	ExcludeSources  []string `json:"excludeSources"`                 // Message sources to exclude (runtime default)
 }
 
 // DefaultExcludeSources returns the default sources to exclude from extraction.
@@ -67,10 +67,10 @@ type BulletinConfig struct {
 	TodosLimit        int `json:"todosLimit" default:"10"`       // Todo items
 
 	// Chat context section (query-driven, not cached)
-	ChatContextEnabled     bool   `json:"chatContextEnabled" default:"true"`     // Enable chat context section
-	ChatContextLimit       int    `json:"chatContextLimit" default:"3"`          // Max items from FTS query
-	ChatContextLanguage    string `json:"chatContextLanguage" default:"en"`      // Stopwords language ISO 639-1
-	ChatContextMaxKeywords int    `json:"chatContextMaxKeywords" default:"8"`    // Max keywords to extract from message
+	ChatContextEnabled     bool   `json:"chatContextEnabled" default:"true"`  // Enable chat context section
+	ChatContextLimit       int    `json:"chatContextLimit" default:"3"`       // Max items from FTS query
+	ChatContextLanguage    string `json:"chatContextLanguage" default:"en"`   // Stopwords language ISO 639-1
+	ChatContextMaxKeywords int    `json:"chatContextMaxKeywords" default:"8"` // Max keywords to extract from message
 }
 
 // IngestionConfig configures what content to ingest
@@ -104,7 +104,7 @@ type SearchConfig struct {
 
 // MaintenanceConfig configures background maintenance
 type MaintenanceConfig struct {
-	Enabled       bool `json:"enabled" default:"true"`    // Enable background maintenance
+	Enabled       bool `json:"enabled" default:"true"`     // Enable background maintenance
 	IntervalHours int  `json:"intervalHours" default:"24"` // Hours between maintenance runs
 
 	// Decay settings
@@ -342,7 +342,7 @@ func LiveExtractionFormDef(cfg LiveExtractionConfig) forms.FormDef {
 						Desc:    "Maximum messages to process in a single extraction run",
 					},
 					{
-						Name: "excludeSources",
+						Name:  "excludeSources",
 						Title: "Exclude Sources",
 						Type:  forms.StringList,
 						Desc:  "Message sources to skip (e.g., heartbeat, cron, delivered). These appear in transcripts but won't become memories.",
@@ -603,19 +603,19 @@ func BulletinFormDef(cfg BulletinConfig) forms.FormDef {
 						Max:     10,
 						Desc:    "Number of recent anomalies to include (0 = disabled)",
 					},
-				{
-					Name:    "todosLimit",
-					Title:   "Todos",
-					Type:    forms.Number,
-					Default: 3,
-					Min:     0,
-					Max:     10,
-					Desc:    "Number of pending todos to include (0 = disabled)",
+					{
+						Name:    "todosLimit",
+						Title:   "Todos",
+						Type:    forms.Number,
+						Default: 3,
+						Min:     0,
+						Max:     10,
+						Desc:    "Number of pending todos to include (0 = disabled)",
+					},
 				},
 			},
 		},
-	},
-}
+	}
 }
 
 // ptrFormDef is a helper to create pointer to FormDef
@@ -715,12 +715,12 @@ func handleStats(cmd bus.Command) bus.CommandResult {
 	var totalAssociations int
 	var ingestedCount int
 
-	db.QueryRow("SELECT COUNT(*) FROM memories WHERE deleted = 0").Scan(&totalMemories)
-	db.QueryRow("SELECT COUNT(*) FROM associations").Scan(&totalAssociations)
-	db.QueryRow("SELECT COUNT(*) FROM ingestion_state").Scan(&ingestedCount)
+	_ = db.QueryRow("SELECT COUNT(*) FROM memories WHERE deleted = 0").Scan(&totalMemories)
+	_ = db.QueryRow("SELECT COUNT(*) FROM associations").Scan(&totalAssociations)
+	_ = db.QueryRow("SELECT COUNT(*) FROM ingestion_state").Scan(&ingestedCount)
 
 	// Get counts by type
-	rows, err := db.Query("SELECT memory_type, COUNT(*) FROM memories WHERE deleted = 0 GROUP BY memory_type ORDER BY COUNT(*) DESC")
+	rows, err := db.Query("SELECT memory_type, COUNT(*) FROM memories WHERE deleted = 0 GROUP BY memory_type ORDER BY COUNT(*) DESC") //nolint:rowserrcheck // stats query, errors logged below
 	if err == nil {
 		defer rows.Close()
 		var typeStats []string
