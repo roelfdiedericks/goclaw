@@ -86,7 +86,7 @@ nfpms:
     license: GPL-3.0
     formats: [deb]
     bindir: /usr/bin
-    depends:
+    dependencies:
       - bubblewrap
       - ffmpeg
     recommends:

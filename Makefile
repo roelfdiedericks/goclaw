@@ -271,12 +271,15 @@ release-monitor:
 
 # Re-release: delete existing tag and recreate on HEAD
 # Use when a release failed and you need to retry with the same version
+# Use FORCE=1 to skip confirmation prompt
 re-release:
 	@version=$(call get_tag); \
 	echo "=== Re-release $$version ==="; \
-	read -p "Delete and recreate tag $$version? [y/N] " confirm; \
-	if [ "$$confirm" != "y" ] && [ "$$confirm" != "Y" ]; then \
-		echo "Aborted."; exit 1; \
+	if [ "$(FORCE)" != "1" ]; then \
+		read -p "Delete and recreate tag $$version? [y/N] " confirm; \
+		if [ "$$confirm" != "y" ] && [ "$$confirm" != "Y" ]; then \
+			echo "Aborted."; exit 1; \
+		fi; \
 	fi; \
 	echo "Deleting remote tag..."; \
 	git push origin --delete $$version 2>/dev/null || true; \
