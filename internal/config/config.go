@@ -425,6 +425,9 @@ func Load() (*LoadResult, error) {
 	}
 	logging.L_debug("config: loaded from goclaw.json", "path", goclawPath)
 
+	// Apply defaults for pointer fields that may not be set in JSON
+	cfg.MemoryGraph.Bulletin.ApplyDefaults()
+
 	// Log final config summary
 	agentModel := ""
 	if len(cfg.LLM.Agent.Models) > 0 {

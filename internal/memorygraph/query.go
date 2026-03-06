@@ -26,6 +26,8 @@ type QueryOptions struct {
 	hasTriggerBefore *time.Time
 	orderBy          string
 	orderDesc        bool
+	thenBy           string
+	thenDesc         bool
 	limit            int
 	offset           int
 }
@@ -158,6 +160,24 @@ func (q *QueryOptions) Descending() *QueryOptions {
 	return q
 }
 
+// ThenBy sets a secondary order field
+func (q *QueryOptions) ThenBy(field string, desc bool) *QueryOptions {
+	validFields := map[string]bool{
+		"occurred_at":      true,
+		"created_at":       true,
+		"updated_at":       true,
+		"last_accessed_at": true,
+		"importance":       true,
+		"confidence":       true,
+		"access_count":     true,
+	}
+	if validFields[field] {
+		q.thenBy = field
+		q.thenDesc = desc
+	}
+	return q
+}
+
 // Limit sets the maximum number of results
 func (q *QueryOptions) Limit(n int) *QueryOptions {
 	if n > 0 {
@@ -278,6 +298,15 @@ func (q *QueryOptions) Build() (string, []interface{}) {
 		direction = "ASC"
 	}
 	query += fmt.Sprintf(" ORDER BY %s %s", q.orderBy, direction)
+
+	// Secondary order
+	if q.thenBy != "" {
+		thenDir := "DESC"
+		if !q.thenDesc {
+			thenDir = "ASC"
+		}
+		query += fmt.Sprintf(", %s %s", q.thenBy, thenDir)
+	}
 
 	// Pagination
 	query += fmt.Sprintf(" LIMIT %d OFFSET %d", q.limit, q.offset)

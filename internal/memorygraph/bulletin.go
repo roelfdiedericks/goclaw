@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmcarbo/stopwords"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -287,8 +288,9 @@ func BuildContextBulletinWithConfig(mgr *Manager, username string, cfg BulletinC
 		todos, err := Query().
 			Username(username).
 			Types(TypeTodo).
-			OrderBy("importance").
+			OrderBy("occurred_at").
 			Descending().
+			ThenBy("importance", true).
 			Limit(cfg.TodosLimit).
 			Execute(mgr.DB())
 		if err == nil && len(todos) > 0 {
@@ -351,4 +353,144 @@ func BuildStatsSummary(mgr *Manager) (string, error) {
 	}
 
 	return sb.String(), nil
+}
+
+// BuildChatContextSection generates a chat context section by querying memories
+// relevant to the user's current message using FTS (no embeddings, fast).
+// Returns empty string if no relevant memories found or feature disabled.
+func BuildChatContextSection(ctx context.Context, mgr *Manager, username, message string, cfg BulletinConfig) string {
+	if mgr == nil || !cfg.GetChatContextEnabled() || cfg.ChatContextLimit <= 0 {
+		return ""
+	}
+
+	// Extract keywords from message using stopwords removal
+	maxKeywords := cfg.ChatContextMaxKeywords
+	if maxKeywords <= 0 {
+		maxKeywords = 8
+	}
+	keywords := ExtractKeywords(message, cfg.ChatContextLanguage, maxKeywords)
+	if keywords == "" {
+		L_debug("memorygraph: chat context - no keywords extracted", "message", truncateForLog(message, 50))
+		return ""
+	}
+
+	L_debug("memorygraph: chat context query",
+		"username", username,
+		"keywords", keywords,
+		"maxKeywords", maxKeywords,
+		"language", cfg.ChatContextLanguage,
+	)
+
+	// Sanitize for FTS5
+	ftsQuery := sanitizeFTSQuery(keywords)
+	if ftsQuery == "" {
+		return ""
+	}
+
+	// Query using FTS only (fast, no embedding call)
+	query := `
+		SELECT m.uuid, m.content, m.memory_type, bm25(memories_fts) as score
+		FROM memories_fts f
+		JOIN memories m ON m.id = f.rowid
+		WHERE memories_fts MATCH ? AND m.forgotten = 0 AND m.username = ?
+		ORDER BY score
+		LIMIT ?
+	`
+
+	rows, err := mgr.DB().QueryContext(ctx, query, ftsQuery, username, cfg.ChatContextLimit)
+	if err != nil {
+		L_warn("memorygraph: chat context query failed", "error", err)
+		return ""
+	}
+	defer rows.Close()
+
+	var items []string
+	for rows.Next() {
+		var uuid, content, memType string
+		var score float64
+		if err := rows.Scan(&uuid, &content, &memType, &score); err != nil {
+			continue
+		}
+		items = append(items, fmt.Sprintf("- [%s] %s", memType, content))
+	}
+
+	if len(items) == 0 {
+		L_debug("memorygraph: chat context - no matches", "keywords", keywords)
+		return ""
+	}
+
+	L_debug("memorygraph: chat context results", "count", len(items), "keywords", keywords)
+	return "## Chat Memory Context\nUse this information before using the memory_graph_search_tool, unless nothing is relevant.\n" + strings.Join(items, "\n")
+}
+
+// ExtractKeywords removes stopwords from text and returns top N longest keywords
+func ExtractKeywords(text, language string, maxKeywords int) string {
+	if text == "" {
+		return ""
+	}
+
+	// Default to English if language not specified
+	if language == "" {
+		language = "en"
+	}
+
+	// Default max keywords
+	if maxKeywords <= 0 {
+		maxKeywords = 8
+	}
+
+	// Remove stopwords (also strips HTML if any)
+	cleaned := stopwords.CleanString(text, language, true)
+
+	// Trim and normalize whitespace
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" {
+		return ""
+	}
+
+	// Split into words
+	words := strings.Fields(cleaned)
+	if len(words) == 0 {
+		return ""
+	}
+
+	// If within limit, return all
+	if len(words) <= maxKeywords {
+		return strings.Join(words, " ")
+	}
+
+	// Sort by length (longest first) to keep most meaningful words
+	type wordLen struct {
+		word string
+		len  int
+	}
+	wl := make([]wordLen, len(words))
+	for i, w := range words {
+		wl[i] = wordLen{word: w, len: len(w)}
+	}
+
+	// Sort by length descending
+	for i := 0; i < len(wl)-1; i++ {
+		for j := i + 1; j < len(wl); j++ {
+			if wl[j].len > wl[i].len {
+				wl[i], wl[j] = wl[j], wl[i]
+			}
+		}
+	}
+
+	// Take top N longest words
+	result := make([]string, maxKeywords)
+	for i := 0; i < maxKeywords; i++ {
+		result[i] = wl[i].word
+	}
+
+	return strings.Join(result, " ")
+}
+
+// truncateForLog truncates a string for logging purposes
+func truncateForLog(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

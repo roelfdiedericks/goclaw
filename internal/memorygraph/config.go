@@ -65,6 +65,37 @@ type BulletinConfig struct {
 	CorrelationsLimit int `json:"correlationsLimit"` // Correlation items (default: 3)
 	AnomaliesLimit    int `json:"anomaliesLimit"`    // Anomaly items (default: 3)
 	TodosLimit        int `json:"todosLimit"`        // Todo items (default: 3)
+
+	// Chat context section (query-driven, not cached)
+	ChatContextEnabled     *bool  `json:"chatContextEnabled"`     // Enable chat context section (default: true)
+	ChatContextLimit       int    `json:"chatContextLimit"`       // Max items from FTS query (default: 3)
+	ChatContextLanguage    string `json:"chatContextLanguage"`    // Stopwords language ISO 639-1 (default: "en")
+	ChatContextMaxKeywords int    `json:"chatContextMaxKeywords"` // Max keywords to extract from message (default: 8)
+}
+
+// GetChatContextEnabled returns whether chat context is enabled (defaults to true)
+func (c *BulletinConfig) GetChatContextEnabled() bool {
+	if c.ChatContextEnabled != nil {
+		return *c.ChatContextEnabled
+	}
+	return true
+}
+
+// ApplyDefaults sets defaults for nil pointer fields
+func (c *BulletinConfig) ApplyDefaults() {
+	if c.ChatContextEnabled == nil {
+		val := true
+		c.ChatContextEnabled = &val
+	}
+	if c.ChatContextLimit <= 0 {
+		c.ChatContextLimit = 3
+	}
+	if c.ChatContextMaxKeywords <= 0 {
+		c.ChatContextMaxKeywords = 8
+	}
+	if c.ChatContextLanguage == "" {
+		c.ChatContextLanguage = "en"
+	}
 }
 
 // IngestionConfig configures what content to ingest
@@ -191,7 +222,10 @@ func DefaultConfig() Config {
 			PredictionsLimit:      3,         // Next 3 predictions
 			CorrelationsLimit:     3,         // Top 3 correlations
 			AnomaliesLimit:        3,         // Last 3 anomalies
-			TodosLimit:            3,         // Top 3 todos
+			TodosLimit:             10,       // Top 10 todos
+			ChatContextLimit:       3,        // Top 3 chat context items
+			ChatContextLanguage:    "en",     // English stopwords
+			ChatContextMaxKeywords: 8,        // Top 8 keywords from message
 		},
 	}
 }
@@ -281,6 +315,75 @@ func ConfigFormDef(cfg Config) forms.FormDef {
 				Collapsed: true,
 				FieldName: "Bulletin",
 				Nested:    ptrFormDef(BulletinFormDef(cfg.Bulletin)),
+			},
+			{
+				Title:     "Chat Context (Query-Driven)",
+				Collapsed: false,
+				Fields: []forms.Field{
+					{
+						Name:    "Bulletin.chatContextEnabled",
+						Title:   "Enabled",
+						Type:    forms.Toggle,
+						Default: true,
+						Desc:    "Query memories relevant to current user message using FTS (not cached)",
+					},
+					{
+						Name:    "Bulletin.chatContextLimit",
+						Title:   "Max Items",
+						Type:    forms.Number,
+						Default: 3,
+						Min:     0,
+						Max:     10,
+						Desc:    "Number of relevant memories to surface per turn",
+					},
+					{
+						Name:    "Bulletin.chatContextMaxKeywords",
+						Title:   "Max Keywords",
+						Type:    forms.Number,
+						Default: 8,
+						Min:     1,
+						Max:     20,
+						Desc:    "Max keywords to extract from user message (longest words kept)",
+					},
+					{
+						Name:    "Bulletin.chatContextLanguage",
+						Title:   "Stopwords Language",
+						Type:    forms.Select,
+						Default: "en",
+						Options: []forms.Option{
+							{Value: "ar", Label: "Arabic"},
+							{Value: "bg", Label: "Bulgarian"},
+							{Value: "ca", Label: "Catalan"},
+							{Value: "cs", Label: "Czech"},
+							{Value: "da", Label: "Danish"},
+							{Value: "de", Label: "German"},
+							{Value: "el", Label: "Greek"},
+							{Value: "en", Label: "English"},
+							{Value: "es", Label: "Spanish"},
+							{Value: "fa", Label: "Persian"},
+							{Value: "fi", Label: "Finnish"},
+							{Value: "fr", Label: "French"},
+							{Value: "hu", Label: "Hungarian"},
+							{Value: "id", Label: "Indonesian"},
+							{Value: "it", Label: "Italian"},
+							{Value: "ja", Label: "Japanese"},
+							{Value: "km", Label: "Khmer"},
+							{Value: "lv", Label: "Latvian"},
+							{Value: "nl", Label: "Dutch"},
+							{Value: "no", Label: "Norwegian"},
+							{Value: "pl", Label: "Polish"},
+							{Value: "pt", Label: "Portuguese"},
+							{Value: "ro", Label: "Romanian"},
+							{Value: "ru", Label: "Russian"},
+							{Value: "sk", Label: "Slovak"},
+							{Value: "sv", Label: "Swedish"},
+							{Value: "th", Label: "Thai"},
+							{Value: "tr", Label: "Turkish"},
+							{Value: "zu", Label: "Zulu"},
+						},
+						Desc: "Language for stopword removal from user messages",
+					},
+				},
 			},
 			{
 				Title:     "Search Weights",
@@ -606,19 +709,19 @@ func BulletinFormDef(cfg BulletinConfig) forms.FormDef {
 						Max:     10,
 						Desc:    "Number of recent anomalies to include (0 = disabled)",
 					},
-					{
-						Name:    "todosLimit",
-						Title:   "Todos",
-						Type:    forms.Number,
-						Default: 3,
-						Min:     0,
-						Max:     10,
-						Desc:    "Number of pending todos to include (0 = disabled)",
-					},
+				{
+					Name:    "todosLimit",
+					Title:   "Todos",
+					Type:    forms.Number,
+					Default: 3,
+					Min:     0,
+					Max:     10,
+					Desc:    "Number of pending todos to include (0 = disabled)",
 				},
 			},
 		},
-	}
+	},
+}
 }
 
 // ptrFormDef is a helper to create pointer to FormDef

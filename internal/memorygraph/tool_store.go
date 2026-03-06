@@ -48,7 +48,7 @@ func (t *StoreTool) Schema() map[string]any {
 			},
 			"confidence": map[string]any{
 				"type":        "number",
-				"description": "Confidence 0.0-1.0. For pattern types (routine, correlation, prediction)",
+				"description": "0.0-1.0. For pattern types only (routine, correlation, prediction). Use 0.7+ for clear patterns, 0.5 for uncertain, lower for speculative.",
 			},
 			"emotion": map[string]any{
 				"type":        "string",

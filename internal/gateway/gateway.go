@@ -2029,6 +2029,44 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			L_debug("bulletin: prepared context for injection", "len", len(contextBulletin))
 		}
 
+		// Chat context section (query-driven, not cached)
+		// Uses FTS search based on user's latest message
+		if mgr := memorygraph.GetManager(); mgr != nil && bulletinCfg.GetChatContextEnabled() {
+			// Find the last user message content
+			var lastUserMessage string
+			for i := len(resolvedMessages) - 1; i >= 0; i-- {
+				if resolvedMessages[i].Role == "user" && resolvedMessages[i].Content != "" {
+					lastUserMessage = resolvedMessages[i].Content
+					break
+				}
+			}
+
+			if lastUserMessage != "" {
+				chatContext := memorygraph.BuildChatContextSection(agentCtx, mgr, userID, lastUserMessage, bulletinCfg)
+				if chatContext != "" {
+					ephemeralMessages = append(ephemeralMessages, types.Message{
+						Role:      "system",
+						Content:   "[Relevant Memories]\nUse this information before using the memory_graph_search_tool, unless nothing is relevant.\n" + chatContext,
+						Timestamp: time.Now(),
+					})
+					// Log actual FTS keywords and preview of results
+					maxKw := bulletinCfg.ChatContextMaxKeywords
+					if maxKw <= 0 {
+						maxKw = 8
+					}
+					ftsKeywords := memorygraph.ExtractKeywords(lastUserMessage, bulletinCfg.ChatContextLanguage, maxKw)
+					contextPreview := chatContext
+					if len(contextPreview) > 300 {
+						contextPreview = contextPreview[:300] + "..."
+					}
+					L_debug("bulletin: chat context",
+						"ftsQuery", ftsKeywords,
+						"preview", contextPreview,
+						"len", len(chatContext))
+				}
+			}
+		}
+
 		// Inject all ephemeral messages just before the last user message
 		if len(ephemeralMessages) > 0 {
 			resolvedMessages = injectEphemeralBeforeLastUser(resolvedMessages, ephemeralMessages...)

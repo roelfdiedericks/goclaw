@@ -559,6 +559,14 @@ When the user shares significant personal information, preferences, or decisions
 - Include source attribution and reasoning
 - Use associations to link related memories
 
+**Pattern recognition:**
+If you notice recurring behaviors, correlations, or can make predictions based on session history, store them:
+- routine: Recurring behavior patterns (e.g., "user checks calendar every morning")
+- correlation: Observed relationships (e.g., "user stress correlates with Project X mentions")
+- prediction: Forward-looking anticipations based on patterns
+
+For pattern types, set confidence: 0.7+ for clear patterns, 0.5 for uncertain, lower for speculative.
+
 **What NOT to extract:**
 - Transient conversation (greetings, acknowledgments)
 - Information already in your context (MEMORY.md, recent messages)

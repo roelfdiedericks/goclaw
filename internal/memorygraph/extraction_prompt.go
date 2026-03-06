@@ -24,6 +24,7 @@ Parameters:
 - memory_type (required): One of: identity, fact, preference, decision, event, observation, goal, todo, routine, feedback, anomaly, correlation, prediction
 - reasoning (required): Brief explanation why this memory is worth storing (for debugging)
 - importance (optional): 0.0-1.0. Usually omit - system assigns defaults based on memory_type. Only set if explicitly very important (0.9+) or trivial (0.2-).
+- confidence (optional): 0.0-1.0. For pattern types only (routine, correlation, prediction). How confident you are this pattern is real. Use 0.7+ for clear patterns, 0.5 for uncertain, lower for speculative.
 - emotion (optional): User's emotional state: frustrated, excited, stressed, relieved, etc.
 - source (optional): "user stated", "inferred", "observed"
 - occurred_at (optional): When this memory was formed. Cannot be in the future. For past events ("yesterday I climbed a wall"), calculate the actual date using the conversation date as reference (e.g., if conversation is March 1st and user says "yesterday", occurred_at = Feb 28th). For todos/goals with target dates, include the date in the content (e.g., "Buy trunks by March 2nd") and leave occurred_at to default. Defaults to conversation timestamp - usually omit.
