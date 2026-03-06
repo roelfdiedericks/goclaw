@@ -307,8 +307,66 @@ main() {
     # Configure PATH
     configure_path "$OS"
     
+    # Install runtime dependencies (Linux only)
+    install_dependencies "$OS"
+    
     echo ""
     success "Installation complete!"
+}
+
+# Install runtime dependencies (Linux only)
+install_dependencies() {
+    os="$1"
+    
+    if [ "$os" != "linux" ]; then
+        return
+    fi
+    
+    echo ""
+    info "Checking runtime dependencies..."
+    
+    missing=""
+    if ! command -v bwrap >/dev/null 2>&1; then
+        missing="$missing bubblewrap"
+    fi
+    if ! command -v ffmpeg >/dev/null 2>&1; then
+        missing="$missing ffmpeg"
+    fi
+    
+    if [ -z "$missing" ]; then
+        success "All dependencies installed"
+        return
+    fi
+    
+    info "Optional dependencies not found:$missing"
+    info "These enable sandboxed execution and audio processing."
+    
+    # Detect package manager
+    pkg_cmd=""
+    if command -v apt-get >/dev/null 2>&1; then
+        pkg_cmd="sudo apt-get install -y"
+    elif command -v dnf >/dev/null 2>&1; then
+        pkg_cmd="sudo dnf install -y"
+    elif command -v pacman >/dev/null 2>&1; then
+        pkg_cmd="sudo pacman -S --noconfirm"
+    elif command -v apk >/dev/null 2>&1; then
+        pkg_cmd="sudo apk add"
+    fi
+    
+    if [ -z "$pkg_cmd" ]; then
+        warn "Could not detect package manager"
+        echo "Please install manually:$missing"
+        return
+    fi
+    
+    printf "Install with: ${GREEN}%s%s${NC}? [y/N] " "$pkg_cmd" "$missing"
+    read -r confirm
+    if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+        # shellcheck disable=SC2086
+        $pkg_cmd $missing && success "Dependencies installed" || warn "Some dependencies failed to install"
+    else
+        echo "Skipped. Install manually if needed:$missing"
+    fi
 }
 
 main "$@"

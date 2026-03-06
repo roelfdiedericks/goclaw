@@ -1,23 +1,33 @@
 # Minimal Dockerfile for GoReleaser
-# Uses pre-built binary, no build stage needed
+# Uses pre-built binary (with whisper.cpp statically linked), no build stage needed
 
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add ca-certificates ffmpeg
 
 # Create non-root user
 RUN adduser -D -h /home/goclaw goclaw
 
+# Create directories for whisper model
+RUN mkdir -p /usr/share/goclaw/stt
+
 WORKDIR /home/goclaw
 
-# Copy pre-built binary from GoReleaser
+# Copy pre-built binary from GoReleaser (includes whisper statically linked)
 COPY goclaw /usr/local/bin/
+
+# Copy bundled whisper model
+COPY whisper-model/ggml-tiny.en.bin /usr/share/goclaw/stt/
 
 # Copy entrypoint script for first-run setup
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 USER goclaw
+
+# Create user's whisper directory and symlink to bundled model
+RUN mkdir -p /home/goclaw/.goclaw/stt/whisper && \
+    ln -sf /usr/share/goclaw/stt/ggml-tiny.en.bin /home/goclaw/.goclaw/stt/whisper/
 
 EXPOSE 1337
 

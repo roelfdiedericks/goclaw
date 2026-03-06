@@ -22,7 +22,33 @@ jobs:
           go-version: '1.25'
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcc g++ build-essential
+        run: sudo apt-get update && sudo apt-get install -y gcc g++ build-essential cmake
+
+      - name: Build whisper.cpp
+        run: |
+          WHISPER_VERSION=1.8.3
+          WHISPER_LIB=$HOME/.goclaw/lib/whisper
+          mkdir -p $WHISPER_LIB
+          git clone --depth 1 -b v$WHISPER_VERSION https://github.com/ggerganov/whisper.cpp /tmp/whisper.cpp
+          cd /tmp/whisper.cpp
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+          cmake --build build -j$(nproc)
+          cp build/src/libwhisper.a $WHISPER_LIB/
+          cp build/ggml/src/libggml*.a $WHISPER_LIB/
+          cp include/whisper.h $WHISPER_LIB/
+          cp ggml/include/*.h $WHISPER_LIB/
+          rm -rf /tmp/whisper.cpp
+
+      - name: Download whisper model for bundling
+        run: |
+          mkdir -p whisper-model
+          curl -L -o whisper-model/ggml-tiny.en.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+
+      - name: Set CGO environment
+        run: |
+          echo "CGO_CFLAGS=-DSQLITE_ENABLE_FTS5 -I$HOME/.goclaw/lib/whisper" >> $GITHUB_ENV
+          echo "CGO_LDFLAGS=-L$HOME/.goclaw/lib/whisper $HOME/.goclaw/lib/whisper/libwhisper.a $HOME/.goclaw/lib/whisper/libggml.a $HOME/.goclaw/lib/whisper/libggml-base.a $HOME/.goclaw/lib/whisper/libggml-cpu.a -lm -lstdc++ -fopenmp -lpthread" >> $GITHUB_ENV
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -62,7 +88,33 @@ jobs:
           go-version: '1.25'
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcc g++ build-essential
+        run: sudo apt-get update && sudo apt-get install -y gcc g++ build-essential cmake
+
+      - name: Build whisper.cpp
+        run: |
+          WHISPER_VERSION=1.8.3
+          WHISPER_LIB=$HOME/.goclaw/lib/whisper
+          mkdir -p $WHISPER_LIB
+          git clone --depth 1 -b v$WHISPER_VERSION https://github.com/ggerganov/whisper.cpp /tmp/whisper.cpp
+          cd /tmp/whisper.cpp
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+          cmake --build build -j$(nproc)
+          cp build/src/libwhisper.a $WHISPER_LIB/
+          cp build/ggml/src/libggml*.a $WHISPER_LIB/
+          cp include/whisper.h $WHISPER_LIB/
+          cp ggml/include/*.h $WHISPER_LIB/
+          rm -rf /tmp/whisper.cpp
+
+      - name: Download whisper model for bundling
+        run: |
+          mkdir -p whisper-model
+          curl -L -o whisper-model/ggml-tiny.en.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+
+      - name: Set CGO environment
+        run: |
+          echo "CGO_CFLAGS=-DSQLITE_ENABLE_FTS5 -I$HOME/.goclaw/lib/whisper" >> $GITHUB_ENV
+          echo "CGO_LDFLAGS=-L$HOME/.goclaw/lib/whisper $HOME/.goclaw/lib/whisper/libwhisper.a $HOME/.goclaw/lib/whisper/libggml.a $HOME/.goclaw/lib/whisper/libggml-base.a $HOME/.goclaw/lib/whisper/libggml-cpu.a -lm -lstdc++ -fopenmp -lpthread" >> $GITHUB_ENV
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -89,69 +141,72 @@ jobs:
           path: dist/
           retention-days: 1
 
-  # Build Darwin AMD64 (cross-compile from M1 runner)
-  build-darwin-amd64:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-
-      - uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser-pro
-          args: release --clean --split
-        env:
-          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CGO_ENABLED: 1
-          SDKROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
-          GGOOS: darwin
-          GGOARCH: amd64
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist-darwin-amd64
-          path: dist/
-          retention-days: 1
-
-  # Build Darwin ARM64 natively on M1 runner
-  build-darwin-arm64:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-
-      - uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser-pro
-          args: release --clean --split
-        env:
-          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CGO_ENABLED: 1
-          SDKROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
-          GGOOS: darwin
-          GGOARCH: arm64
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist-darwin-arm64
-          path: dist/
-          retention-days: 1
+  # Darwin builds commented out - users can build from source
+  # Re-enable when macOS support is needed
+  #
+  # # Build Darwin AMD64 (cross-compile from M1 runner)
+  # build-darwin-amd64:
+  #   runs-on: macos-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         fetch-depth: 0
+  #
+  #     - uses: actions/setup-go@v5
+  #       with:
+  #         go-version: '1.25'
+  #
+  #     - uses: goreleaser/goreleaser-action@v6
+  #       with:
+  #         distribution: goreleaser-pro
+  #         args: release --clean --split
+  #       env:
+  #         GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #         CGO_ENABLED: 1
+  #         SDKROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
+  #         GGOOS: darwin
+  #         GGOARCH: amd64
+  #
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: dist-darwin-amd64
+  #         path: dist/
+  #         retention-days: 1
+  #
+  # # Build Darwin ARM64 natively on M1 runner
+  # build-darwin-arm64:
+  #   runs-on: macos-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         fetch-depth: 0
+  #
+  #     - uses: actions/setup-go@v5
+  #       with:
+  #         go-version: '1.25'
+  #
+  #     - uses: goreleaser/goreleaser-action@v6
+  #       with:
+  #         distribution: goreleaser-pro
+  #         args: release --clean --split
+  #       env:
+  #         GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #         CGO_ENABLED: 1
+  #         SDKROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
+  #         GGOOS: darwin
+  #         GGOARCH: arm64
+  #
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: dist-darwin-arm64
+  #         path: dist/
+  #         retention-days: 1
 
   # Merge all builds and create release
   release:
-    needs: [build-linux-amd64, build-linux-arm64, build-darwin-amd64, build-darwin-arm64]
+    needs: [build-linux-amd64, build-linux-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -173,15 +228,16 @@ jobs:
           name: dist-linux-arm64
           path: dist/
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist-darwin-amd64
-          path: dist/
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: dist-darwin-arm64
-          path: dist/
+      # Darwin artifacts commented out
+      # - uses: actions/download-artifact@v4
+      #   with:
+      #     name: dist-darwin-amd64
+      #     path: dist/
+      #
+      # - uses: actions/download-artifact@v4
+      #   with:
+      #     name: dist-darwin-arm64
+      #     path: dist/
 
       - name: List dist contents
         run: find dist -type f | head -50
