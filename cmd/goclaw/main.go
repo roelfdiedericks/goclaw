@@ -2576,14 +2576,10 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 	}
 
 	// Web fetch
-	webHeadless := true
-	if cfg.Tools.Web.Headless != nil {
-		webHeadless = *cfg.Tools.Web.Headless
-	}
 	reg.Register(webfetch.NewToolWithConfig(webfetch.ToolConfig{
 		UseBrowser: cfg.Tools.Web.UseBrowser,
 		Profile:    cfg.Tools.Web.Profile,
-		Headless:   webHeadless,
+		Headless:   cfg.Tools.Web.Headless,
 	}))
 
 	// Cron tool

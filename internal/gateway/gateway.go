@@ -950,7 +950,7 @@ func (g *Gateway) checkEmbeddingsMismatch(ctx context.Context) {
 		"total", needsRebuild)
 
 	// Check auto-rebuild setting
-	if !cfg.GetAutoRebuild() {
+	if !cfg.AutoRebuild {
 		L_warn("embeddings: auto-rebuild disabled, run '/embeddings rebuild' or 'goclaw embeddings rebuild' for consistency")
 		return
 	}
@@ -2031,7 +2031,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 		// Chat context section (query-driven, not cached)
 		// Uses FTS search based on user's latest message
-		if mgr := memorygraph.GetManager(); mgr != nil && bulletinCfg.GetChatContextEnabled() {
+		if mgr := memorygraph.GetManager(); mgr != nil && bulletinCfg.ChatContextEnabled {
 			// Find the last user message content
 			var lastUserMessage string
 			for i := len(resolvedMessages) - 1; i >= 0; i-- {
