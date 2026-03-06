@@ -77,6 +77,9 @@
 }
 </style>
 
+<!-- Shared utilities library -->
+<script src="/js/goclaw-common.js"></script>
+
 <script>
 $(document).ready(function() {
     var eventSource = null;
@@ -435,9 +438,10 @@ $(document).ready(function() {
         
         eventSource.addEventListener('mirror', function(e) {
             var data = JSON.parse(e.data);
-            // Show mirrored conversation
-            appendMessage('mirror-user', '[' + data.source + '] ' + data.userMsg);
-            appendMessage('mirror-assistant', data.response);
+            // Show mirrored user message from another channel (with source label)
+            if (data.userMsg) {
+                appendMessage('mirror-user', '[' + data.source + '] ' + data.userMsg);
+            }
         });
         
         eventSource.addEventListener('agent_error', function(e) {
@@ -451,7 +455,10 @@ $(document).ready(function() {
         
         eventSource.addEventListener('agent_message', function(e) {
             var data = JSON.parse(e.data);
-            if (data.type === 'text') {
+            if (data.message) {
+                // Direct agent output (from DeliverMessage - tool messages, etc.)
+                appendMessage('assistant', data.message);
+            } else if (data.type === 'text') {
                 appendMessage('assistant', data.text);
             } else if (data.type === 'media') {
                 // Show media with optional caption

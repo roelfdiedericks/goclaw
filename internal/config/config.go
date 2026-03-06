@@ -28,6 +28,7 @@ import (
 	toolsconfig "github.com/roelfdiedericks/goclaw/internal/tools/config"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
 	"github.com/roelfdiedericks/goclaw/internal/user"
+	"github.com/roelfdiedericks/goclaw/internal/voicellm"
 )
 
 // LoadResult contains the loaded config and metadata about where it came from
@@ -150,6 +151,7 @@ type Config struct {
 	Gateway       gwtypes.GatewayConfig       `json:"gateway"`
 	Agent         gwtypes.AgentIdentityConfig `json:"agent"`
 	LLM           llm.LLMConfig               `json:"llm"`
+	VoiceLLM      voicellm.Config             `json:"voicellm"` // Real-time voice LLM configuration
 	HomeAssistant hass.HomeAssistantConfig    `json:"homeassistant"` // Top-level Home Assistant config
 	Tools         toolsconfig.ToolsConfig     `json:"tools"`
 	Channels      ChannelsConfig              `json:"channels"` // All channel configs (telegram, http, tui)
@@ -165,9 +167,9 @@ type Config struct {
 	Supervision   gwtypes.SupervisionConfig   `json:"supervision"`
 	Roles         user.RolesConfig            `json:"roles"`    // Role-based access control
 	Auth          auth.AuthConfig             `json:"auth"`     // Role elevation authentication
-	Sandbox       sandbox.Config               `json:"sandbox"`   // Sandbox and bubblewrap configuration
-	Safety        gwtypes.SafetyConfig        `json:"safety"`    // Emergency stop / panic phrase config
-	Security      gwtypes.SecurityConfig      `json:"security"`  // Security policies (tool restrictions per purpose)
+	Sandbox       sandbox.Config              `json:"sandbox"`  // Sandbox and bubblewrap configuration
+	Safety        gwtypes.SafetyConfig        `json:"safety"`   // Emergency stop / panic phrase config
+	Security      gwtypes.SecurityConfig      `json:"security"` // Security policies (tool restrictions per purpose)
 }
 
 // Load reads configuration from goclaw.json.

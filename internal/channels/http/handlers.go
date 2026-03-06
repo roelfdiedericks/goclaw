@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -120,6 +121,61 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		logging.L_error("http: template error", "error", err)
 		http.Error(w, "Template error", http.StatusInternalServerError)
 	}
+}
+
+// handleVoice serves the voice chat interface
+func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
+	// Reload templates in dev mode
+	if err := s.reloadTemplatesIfDev(); err != nil {
+		logging.L_error("http: template reload error", "error", err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+		return
+	}
+
+	u := getUserFromContext(r)
+	if u == nil {
+		logging.L_error("http: voice failed - no user in context")
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+
+	data := struct {
+		Title     string
+		User      *UserTemplateData
+		Timestamp time.Time
+	}{
+		Title:     "GoClaw - Voice",
+		User:      &UserTemplateData{Name: u.Name, Username: u.ID, Role: string(u.Role), IsOwner: u.IsOwner()},
+		Timestamp: time.Now(),
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.templates.ExecuteTemplate(w, "voice.html", data); err != nil {
+		logging.L_error("http: template error", "error", err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+	}
+}
+
+// handleStaticJS serves static JavaScript files
+// Served without auth middleware for AudioWorklet compatibility
+func (s *Server) handleStaticJS(w http.ResponseWriter, r *http.Request) {
+	// In dev mode, serve from disk
+	if s.devMode && s.templatesDir != "" {
+		filePath := filepath.Join(s.templatesDir, r.URL.Path[1:]) // Remove leading /
+		http.ServeFile(w, r, filePath)
+		return
+	}
+
+	// Production: serve from embedded FS
+	jsFS, err := fs.Sub(htmlFS, "html")
+	if err != nil {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+
+	// Strip /js/ prefix and serve
+	w.Header().Set("Content-Type", "application/javascript")
+	http.StripPrefix("/", http.FileServer(http.FS(jsFS))).ServeHTTP(w, r)
 }
 
 // UserTemplateData holds user info for templates

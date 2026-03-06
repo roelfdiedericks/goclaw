@@ -9,6 +9,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/channels/http"
 	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
+	"github.com/roelfdiedericks/goclaw/internal/channels/http_voice"
 	"github.com/roelfdiedericks/goclaw/internal/channels/telegram"
 	telegramconfig "github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
 	"github.com/roelfdiedericks/goclaw/internal/channels/tui"
@@ -20,6 +21,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/user"
+	"github.com/roelfdiedericks/goclaw/internal/voicellm"
 )
 
 // ManagedChannel is re-exported from types for convenience
@@ -56,6 +58,9 @@ type Manager struct {
 
 	// HTTP server instance
 	httpServer *http.Server
+
+	// Voice channel instance
+	voiceChannel *http_voice.VoiceChannel
 
 	// TUI instance (only during RunTUI)
 	tuiInstance *tui.TUI
@@ -113,6 +118,66 @@ func (m *Manager) StartAll(ctx context.Context, cfg config.ChannelsConfig, opts 
 	m.subscribeConfigEvents()
 
 	return nil
+}
+
+// InitVoiceLLM initializes the VoiceLLM registry and voice channel.
+// Must be called after StartAll (requires HTTP server to be running).
+func (m *Manager) InitVoiceLLM(ctx context.Context, cfg voicellm.Config) error {
+	if !cfg.Enabled {
+		logging.L_info("voicellm: disabled by configuration")
+		return nil
+	}
+
+	if len(cfg.Providers) == 0 {
+		logging.L_warn("voicellm: enabled but no providers configured")
+		return nil
+	}
+
+	// Create and set the global VoiceLLM registry
+	registry, err := voicellm.NewRegistry(cfg)
+	if err != nil {
+		return fmt.Errorf("voicellm: failed to create registry: %w", err)
+	}
+	voicellm.SetGlobalRegistry(registry)
+
+	// Create voice channel
+	voiceChan := http_voice.NewVoiceChannel(http_voice.Config{Enabled: true})
+	voiceChan.SetGateway(m.gw)
+
+	// Register voice channel routes with HTTP server
+	if m.httpServer != nil {
+		voiceChan.RegisterRoutes(m.httpServer)
+	} else {
+		logging.L_warn("voicellm: HTTP server not running, voice routes not registered")
+		return nil
+	}
+
+	// Start the voice channel
+	if err := voiceChan.Start(ctx); err != nil {
+		return fmt.Errorf("http_voice: failed to start: %w", err)
+	}
+
+	// Register with gateway
+	m.gw.RegisterChannel(voiceChan)
+
+	m.mu.Lock()
+	m.voiceChannel = voiceChan
+	m.channels["http_voice"] = voiceChan
+	m.mu.Unlock()
+
+	logging.L_info("voicellm: initialized",
+		"providers", len(cfg.Providers),
+		"default", cfg.Default,
+		"serverVAD", cfg.ServerVAD)
+
+	return nil
+}
+
+// GetVoiceChannel returns the voice channel instance (may be nil)
+func (m *Manager) GetVoiceChannel() *http_voice.VoiceChannel {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.voiceChannel
 }
 
 // startTelegram creates and starts the Telegram bot

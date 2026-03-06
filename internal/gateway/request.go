@@ -46,3 +46,31 @@ type HealthStatus struct {
 	UserCount    int    `json:"userCount"`
 	Uptime       int64  `json:"uptime"` // seconds
 }
+
+// PersistParams contains parameters for persisting a conversation turn to storage.
+// This is the pure persistence primitive - no distribution/mirroring.
+type PersistParams struct {
+	User             *user.User // The user involved in the conversation
+	Source           string     // Channel source (e.g., "http_voice", "telegram")
+	UserMessage      string     // What the user said
+	AssistantMessage string     // What the assistant responded
+	SkipUserMessage  bool       // True if user message already added to session
+	Ephemeral        bool       // True to skip persistence (heartbeat mode)
+}
+
+// BroadcastParams contains parameters for broadcasting a conversation turn to other channels.
+// This is the distribution primitive - mirrors user message, delivers agent response.
+type BroadcastParams struct {
+	User             *user.User // The user (for DeliverMessage calls)
+	Source           string     // Originating channel (will be excluded from delivery)
+	UserMessage      string     // User message to mirror (with source label)
+	AssistantMessage string     // Agent response to deliver (no label)
+}
+
+// ToolMessageParams contains parameters for delivering a tool-generated message.
+// Used by tools like media_display that need to send messages to ALL channels including source.
+type ToolMessageParams struct {
+	User    *user.User // The user context
+	Source  string     // Originating channel (will be INCLUDED in delivery)
+	Message string     // The message to deliver (will be enriched for media refs)
+}

@@ -255,27 +255,46 @@ func (b *Bot) Send(ctx context.Context, msg string) error {
 	return err
 }
 
-// SendMirror sends a cross-channel mirror summary to the owner (implements gateway.Channel)
-func (b *Bot) SendMirror(ctx context.Context, source, userMsg, response string) error {
+// SendMirror sends a mirrored user message to the owner (implements gateway.Channel)
+func (b *Bot) SendMirror(ctx context.Context, source, userMsg string) error {
 	owner := b.users.Owner()
 	if owner == nil || owner.WhatsAppID == "" {
 		return nil
 	}
 	jid := phoneToJID(owner.WhatsAppID)
 
-	agentName := b.gateway.AgentIdentity().Name
 	truncatedUser := truncate(userMsg, 500)
-	truncatedResponse := truncate(response, maxWhatsAppMessage-600)
-	formattedResponse := FormatMessage(truncatedResponse)
-
-	mirror := fmt.Sprintf("*%s*\n\n*You:* %s\n\n*%s:* %s",
-		source, truncatedUser, agentName, formattedResponse)
+	mirror := fmt.Sprintf("*%s*\n\n*You:* %s", source, truncatedUser)
 
 	_, err := b.client.SendMessage(ctx, jid, &waE2E.Message{
 		Conversation: proto.String(mirror),
 	})
 	if err != nil {
 		L_error("whatsapp: failed to send mirror", "error", err)
+	}
+	return err
+}
+
+// DeliverMessage sends agent output to the user's WhatsApp (implements gateway.Channel)
+func (b *Bot) DeliverMessage(ctx context.Context, u *user.User, message string) error {
+	if u == nil || u.WhatsAppID == "" {
+		return nil
+	}
+	jid := phoneToJID(u.WhatsAppID)
+
+	// Handle messages with media refs (e.g., from media_display tool)
+	if media.ContainsMediaRefs(message) {
+		b.sendWithMediaRefs(jid, message)
+		return nil
+	}
+
+	// Text-only message
+	formatted := FormatMessage(message)
+	_, err := b.client.SendMessage(ctx, jid, &waE2E.Message{
+		Conversation: proto.String(formatted),
+	})
+	if err != nil {
+		L_error("whatsapp: failed to send message", "error", err)
 	}
 	return err
 }

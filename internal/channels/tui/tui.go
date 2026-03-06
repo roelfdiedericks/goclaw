@@ -64,6 +64,9 @@ type Model struct {
 	// Mirror channel for receiving mirrored messages from other channels
 	mirrorChan chan mirrorMsg
 
+	// Agent message channel for receiving direct agent output (tool messages, etc.)
+	agentMsgChan chan string
+
 	// System channel for receiving direct messages (HASS events, etc.)
 	systemChan chan string
 
@@ -79,10 +82,10 @@ type agentEventMsg gateway.AgentEvent
 type agentDoneMsg struct{ err error }
 type logMsg string
 type mirrorMsg struct {
-	source   string
-	userMsg  string
-	response string
+	source  string
+	userMsg string
 }
+type agentDeliverMsg string // Direct agent output (tool messages, etc.)
 type systemMsg string
 
 // New creates a new TUI model
@@ -110,6 +113,7 @@ func New(gw *gateway.Gateway, u *user.User, showLogs bool) Model {
 	// Create channels
 	logChan := make(chan string, 100)
 	mirrorChan := make(chan mirrorMsg, 10)
+	agentMsgChan := make(chan string, 10)
 	systemChan := make(chan string, 10)
 
 	m := Model{
@@ -121,6 +125,7 @@ func New(gw *gateway.Gateway, u *user.User, showLogs bool) Model {
 		logsLines:    []string{},
 		logChan:      logChan,
 		mirrorChan:   mirrorChan,
+		agentMsgChan: agentMsgChan,
 		systemChan:   systemChan,
 		gateway:      gw,
 		user:         u,
@@ -146,6 +151,7 @@ func (m Model) Init() tea.Cmd {
 		tea.EnterAltScreen,
 		m.waitForLog(),
 		m.waitForMirror(),
+		m.waitForAgentMsg(),
 		m.waitForSystem(),
 	)
 }
@@ -174,6 +180,21 @@ func (m *Model) waitForMirror() tea.Cmd {
 				return nil
 			}
 			return msg
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
+}
+
+// waitForAgentMsg returns a command that waits for the next agent message
+func (m *Model) waitForAgentMsg() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case msg, ok := <-m.agentMsgChan:
+			if !ok {
+				return nil
+			}
+			return agentDeliverMsg(msg)
 		case <-m.ctx.Done():
 			return nil
 		}
@@ -360,12 +381,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatViewport.GotoBottom()
 
 	case mirrorMsg:
-		// Display mirrored conversation from another channel
+		// Display mirrored user message from another channel
 		m.chatLines = append(m.chatLines,
 			mirrorStyle.Render(fmt.Sprintf("┌─ 📱 %s ─────────────────────", msg.source)),
 			mirrorStyle.Render("│ ")+userStyle.Render("You: ")+truncateMsg(msg.userMsg, 100),
-			mirrorStyle.Render("│"),
-			mirrorStyle.Render("│ ")+assistantStyle.Render(m.gateway.AgentIdentity().DisplayName()+": ")+truncateMsg(msg.response, 300),
 			mirrorStyle.Render("└────────────────────────────────"),
 			"",
 		)
@@ -373,6 +392,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatViewport.GotoBottom()
 		// Continue listening for more mirrors
 		cmds = append(cmds, m.waitForMirror())
+
+	case agentDeliverMsg:
+		// Display direct agent output (tool messages, etc.)
+		m.chatLines = append(m.chatLines,
+			assistantStyle.Render(m.gateway.AgentIdentity().DisplayName()+": ")+string(msg),
+			"",
+		)
+		m.chatViewport.SetContent(m.getChatContent())
+		m.chatViewport.GotoBottom()
+		// Continue listening for more agent messages
+		cmds = append(cmds, m.waitForAgentMsg())
 
 	case systemMsg:
 		// Display system message (HASS events, etc.) - clean format like agent response
@@ -724,20 +754,22 @@ func truncateMsg(s string, maxLen int) string {
 
 // TUIChannel wraps the TUI to implement the Channel interface
 type TUIChannel struct {
-	mirrorChan chan<- mirrorMsg
-	systemChan chan<- string
-	user       *user.User
-	gateway    *gateway.Gateway
-	mu         sync.Mutex
+	mirrorChan   chan<- mirrorMsg
+	agentMsgChan chan<- string
+	systemChan   chan<- string
+	user         *user.User
+	gateway      *gateway.Gateway
+	mu           sync.Mutex
 }
 
 // NewTUIChannel creates a Channel wrapper for the TUI
-func NewTUIChannel(mirrorChan chan<- mirrorMsg, systemChan chan<- string, u *user.User, gw *gateway.Gateway) *TUIChannel {
+func NewTUIChannel(mirrorChan chan<- mirrorMsg, agentMsgChan chan<- string, systemChan chan<- string, u *user.User, gw *gateway.Gateway) *TUIChannel {
 	return &TUIChannel{
-		mirrorChan: mirrorChan,
-		systemChan: systemChan,
-		user:       u,
-		gateway:    gw,
+		mirrorChan:   mirrorChan,
+		agentMsgChan: agentMsgChan,
+		systemChan:   systemChan,
+		user:         u,
+		gateway:      gw,
 	}
 }
 
@@ -771,19 +803,38 @@ func (c *TUIChannel) Send(ctx context.Context, msg string) error {
 	}
 }
 
-// SendMirror sends a mirrored conversation to the TUI
-func (c *TUIChannel) SendMirror(ctx context.Context, source, userMsg, response string) error {
+// SendMirror sends a mirrored user message to the TUI
+func (c *TUIChannel) SendMirror(ctx context.Context, source, userMsg string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	select {
-	case c.mirrorChan <- mirrorMsg{source: source, userMsg: userMsg, response: response}:
+	case c.mirrorChan <- mirrorMsg{source: source, userMsg: userMsg}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		// Channel full, drop the mirror
 		logging.L_warn("TUI mirror channel full, dropping message")
+		return nil
+	}
+}
+
+// DeliverMessage sends agent output to the TUI
+func (c *TUIChannel) DeliverMessage(ctx context.Context, u *user.User, message string) error {
+	if c.user == nil || u == nil || c.user.ID != u.ID {
+		return nil // Not the TUI user
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	select {
+	case c.agentMsgChan <- message:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		logging.L_warn("TUI agent message channel full, dropping message")
 		return nil
 	}
 }
@@ -808,8 +859,8 @@ func (c *TUIChannel) DeliverGhostwrite(ctx context.Context, u *user.User, messag
 
 	logging.L_info("tui: ghostwrite", "user", u.ID, "messageLen", len(message))
 
-	// TUI doesn't need typing delay - it's not a real-time chat interface
-	return c.SendMirror(ctx, "ghostwrite", "", message)
+	// TUI doesn't need typing delay - use DeliverMessage for agent output
+	return c.DeliverMessage(ctx, u, message)
 }
 
 // Run starts the TUI and returns a Channel that can receive mirrors
@@ -818,7 +869,7 @@ func Run(ctx context.Context, gw *gateway.Gateway, u *user.User, showLogs bool) 
 	m := New(gw, u, showLogs)
 
 	// Create TUI channel for receiving mirrors/system messages and register it with gateway
-	tuiChannel := NewTUIChannel(m.mirrorChan, m.systemChan, u, gw)
+	tuiChannel := NewTUIChannel(m.mirrorChan, m.agentMsgChan, m.systemChan, u, gw)
 	gw.RegisterChannel(tuiChannel)
 
 	// Set up log hook to forward logs to TUI (exclusive - suppresses stderr)
@@ -841,6 +892,7 @@ func Run(ctx context.Context, gw *gateway.Gateway, u *user.User, showLogs bool) 
 		logging.SetHookExclusive(nil)
 		close(m.logChan)
 		close(m.mirrorChan)
+		close(m.agentMsgChan)
 	}()
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
@@ -927,9 +979,17 @@ func (t *TUI) Send(ctx context.Context, msg string) error {
 }
 
 // SendMirror sends a mirror message (implements gateway.Channel)
-func (t *TUI) SendMirror(ctx context.Context, source, userMsg, response string) error {
+func (t *TUI) SendMirror(ctx context.Context, source, userMsg string) error {
 	if t.channel != nil {
-		return t.channel.SendMirror(ctx, source, userMsg, response)
+		return t.channel.SendMirror(ctx, source, userMsg)
+	}
+	return nil
+}
+
+// DeliverMessage delivers agent output (implements gateway.Channel)
+func (t *TUI) DeliverMessage(ctx context.Context, u *user.User, message string) error {
+	if t.channel != nil {
+		return t.channel.DeliverMessage(ctx, u, message)
 	}
 	return nil
 }

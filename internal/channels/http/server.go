@@ -22,12 +22,13 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
-//go:embed html/*.html
+//go:embed html/*.html html/js/*.js
 var htmlFS embed.FS
 
 // Server represents the HTTP server
 type Server struct {
 	server       *http.Server
+	mux          *http.ServeMux // Store mux for adding routes post-creation
 	users        *user.Registry
 	templates    *template.Template
 	rateLimiter  *RateLimiter
@@ -146,7 +147,7 @@ func (s *Server) SetGateway(gw GatewayRunner) {
 
 // setupRoutes configures all HTTP routes
 func (s *Server) setupRoutes() http.Handler {
-	mux := http.NewServeMux()
+	s.mux = http.NewServeMux()
 
 	// Apply middleware chain: logging -> strip headers -> rate limit -> auth
 	wrap := func(h http.HandlerFunc) http.HandlerFunc {
@@ -154,21 +155,40 @@ func (s *Server) setupRoutes() http.Handler {
 	}
 
 	// API routes
-	mux.HandleFunc("/api/send", wrap(s.handleSend))
-	mux.HandleFunc("/api/events", wrap(s.handleEvents))
-	mux.HandleFunc("/api/status", wrap(s.handleStatus))
-	mux.HandleFunc("/api/media", wrap(s.handleMedia))
-	mux.HandleFunc("/api/metrics", wrap(s.handleMetricsAPI))
+	s.mux.HandleFunc("/api/send", wrap(s.handleSend))
+	s.mux.HandleFunc("/api/events", wrap(s.handleEvents))
+	s.mux.HandleFunc("/api/status", wrap(s.handleStatus))
+	s.mux.HandleFunc("/api/media", wrap(s.handleMedia))
+	s.mux.HandleFunc("/api/metrics", wrap(s.handleMetricsAPI))
 
 	// Supervision routes (owner-only, checked in handler)
-	mux.HandleFunc("/api/sessions/", wrap(s.handleSessionsAction))
+	s.mux.HandleFunc("/api/sessions/", wrap(s.handleSessionsAction))
 
 	// Web UI routes
-	mux.HandleFunc("/", wrap(s.handleIndex))
-	mux.HandleFunc("/chat", wrap(s.handleChat))
-	mux.HandleFunc("/metrics", wrap(s.handleMetrics))
+	s.mux.HandleFunc("/", wrap(s.handleIndex))
+	s.mux.HandleFunc("/chat", wrap(s.handleChat))
+	s.mux.HandleFunc("/voice", wrap(s.handleVoice))
+	s.mux.HandleFunc("/metrics", wrap(s.handleMetrics))
 
-	return mux
+	// Static JS files (served without auth for AudioWorklet compatibility)
+	s.mux.HandleFunc("/js/", s.handleStaticJS)
+
+	return s.mux
+}
+
+// WrapHandler applies the standard middleware chain to a handler
+func (s *Server) WrapHandler(h http.HandlerFunc) http.HandlerFunc {
+	return s.logRequest(s.stripHeaders(s.rateLimit(s.basicAuth(h))))
+}
+
+// Mux returns the server's ServeMux for registering additional routes
+func (s *Server) Mux() *http.ServeMux {
+	return s.mux
+}
+
+// Users returns the user registry for authentication
+func (s *Server) Users() *user.Registry {
+	return s.users
 }
 
 // loadTemplates loads HTML templates (from disk in dev mode, embedded otherwise)
@@ -317,8 +337,13 @@ func (s *Server) Send(ctx context.Context, msg string) error {
 }
 
 // SendMirror sends a mirror message (implements gateway.Channel)
-func (s *Server) SendMirror(ctx context.Context, source, userMsg, response string) error {
-	return s.channel.SendMirror(ctx, source, userMsg, response)
+func (s *Server) SendMirror(ctx context.Context, source, userMsg string) error {
+	return s.channel.SendMirror(ctx, source, userMsg)
+}
+
+// DeliverMessage delivers agent output (implements gateway.Channel)
+func (s *Server) DeliverMessage(ctx context.Context, u *user.User, message string) error {
+	return s.channel.DeliverMessage(ctx, u, message)
 }
 
 // HasUser checks if a user has this channel (implements gateway.Channel)

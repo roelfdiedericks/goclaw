@@ -139,17 +139,16 @@ func (c *HTTPChannel) Send(ctx context.Context, msg string) error {
 	return nil
 }
 
-// SendMirror sends a mirrored conversation to all owner sessions
-func (c *HTTPChannel) SendMirror(ctx context.Context, source, userMsg, response string) error {
+// SendMirror sends a mirrored user message to all owner sessions
+func (c *HTTPChannel) SendMirror(ctx context.Context, source, userMsg string) error {
 	c.sessionsMu.RLock()
 	defer c.sessionsMu.RUnlock()
 
 	event := SSEEvent{
 		Event: "mirror",
 		Data: map[string]string{
-			"source":   source,
-			"userMsg":  userMsg,
-			"response": response,
+			"source":  source,
+			"userMsg": userMsg,
 		},
 	}
 
@@ -158,6 +157,26 @@ func (c *HTTPChannel) SendMirror(ctx context.Context, source, userMsg, response 
 		if sess.User == nil || !sess.User.IsOwner() {
 			continue
 		}
+		sess.SendEvent(event)
+	}
+	return nil
+}
+
+// DeliverMessage sends agent output to the user's HTTP session(s)
+func (c *HTTPChannel) DeliverMessage(ctx context.Context, u *user.User, message string) error {
+	sessions := c.getSessionsForUser(u)
+	if len(sessions) == 0 {
+		return nil
+	}
+
+	event := SSEEvent{
+		Event: "agent_message",
+		Data: map[string]string{
+			"message": message,
+		},
+	}
+
+	for _, sess := range sessions {
 		sess.SendEvent(event)
 	}
 	return nil

@@ -51,13 +51,17 @@ const (
 type Channel interface {
 	Name() string
 	Send(ctx context.Context, msg string) error
-	SendMirror(ctx context.Context, source, userMsg, response string) error
+	SendMirror(ctx context.Context, source, userMsg string) error
 	HasUser(u *user.User) bool
 
 	// StreamEvent streams a single agent event to the user (for real-time updates).
 	// Returns true if the channel supports streaming and delivered the event.
 	// Batch-only channels (Telegram, TUI) should return false.
 	StreamEvent(u *user.User, event AgentEvent) bool
+
+	// DeliverMessage delivers agent output (tool messages, responses) to the user.
+	// Unlike SendMirror, this has no source label - it's direct agent output.
+	DeliverMessage(ctx context.Context, u *user.User, message string) error
 
 	// DeliverGhostwrite sends a ghostwritten message with appropriate UX
 	// (typing indicator, delay, etc.). Used for supervision ghostwriting.
@@ -461,6 +465,143 @@ func (g *Gateway) Channels() map[string]Channel {
 	return g.channels
 }
 
+// allChannels returns a slice of all registered channels.
+// Use this when you need to deliver to ALL channels (including source).
+func (g *Gateway) allChannels() []Channel {
+	result := make([]Channel, 0, len(g.channels))
+	for _, ch := range g.channels {
+		result = append(result, ch)
+	}
+	return result
+}
+
+// channelsExcept returns all channels except the one matching the given source name.
+// Use this when mirroring/broadcasting to OTHER channels (excluding the originator).
+func (g *Gateway) channelsExcept(source string) []Channel {
+	result := make([]Channel, 0, len(g.channels))
+	for name, ch := range g.channels {
+		if name != source {
+			result = append(result, ch)
+		}
+	}
+	return result
+}
+
+// mirrorUserMessage sends a user message (with source label) to the specified channels.
+// This is the primitive for showing "what user said on another channel".
+// Channels filter by HasUser internally if needed.
+func (g *Gateway) mirrorUserMessage(ctx context.Context, source, userMsg string, u *user.User, channels []Channel) {
+	if userMsg == "" {
+		return
+	}
+	for _, ch := range channels {
+		if u != nil && !ch.HasUser(u) {
+			continue
+		}
+		L_debug("mirror: sending user message", "from", source, "to", ch.Name())
+		ch.SendMirror(ctx, source, userMsg) //nolint:errcheck // fire-and-forget mirror
+	}
+}
+
+// deliverAgentMessage sends agent output (no source label) to the specified channels.
+// This is the primitive for delivering agent responses, tool output, etc.
+// Channels filter by HasUser internally if needed.
+func (g *Gateway) deliverAgentMessage(ctx context.Context, u *user.User, message string, channels []Channel) {
+	if message == "" {
+		return
+	}
+	for _, ch := range channels {
+		if u != nil && !ch.HasUser(u) {
+			continue
+		}
+		L_debug("deliver: sending agent message", "to", ch.Name(), "msgLen", len(message))
+		ch.DeliverMessage(ctx, u, message) //nolint:errcheck // fire-and-forget delivery
+	}
+}
+
+// MirrorUserMessageToOthers mirrors a user message to all channels except the source.
+// Public wrapper for voice channel to call when user transcript is finalized.
+func (g *Gateway) MirrorUserMessageToOthers(ctx context.Context, source, userMsg string, u *user.User) {
+	g.mirrorUserMessage(ctx, source, userMsg, u, g.channelsExcept(source))
+}
+
+// DeliverAgentMessageToOthers delivers agent output to all channels except the source.
+// Public wrapper for voice channel to call when assistant response is complete.
+func (g *Gateway) DeliverAgentMessageToOthers(ctx context.Context, source string, u *user.User, message string) {
+	g.deliverAgentMessage(ctx, u, message, g.channelsExcept(source))
+}
+
+// BroadcastConversationTurn persists a conversation turn and distributes to OTHER channels.
+// - Persists both user and assistant messages to storage
+// - Mirrors user message (with source label) to other channels
+// - Delivers agent response (no label) to other channels
+// Use this for normal conversation flow where source channel already has the messages.
+func (g *Gateway) BroadcastConversationTurn(ctx context.Context, params BroadcastParams) error {
+	if params.User == nil {
+		return fmt.Errorf("user required for broadcast")
+	}
+
+	// Persist the conversation turn
+	enrichedAssistant, err := g.PersistConversationTurn(ctx, PersistParams{
+		User:             params.User,
+		Source:           params.Source,
+		UserMessage:      params.UserMessage,
+		AssistantMessage: params.AssistantMessage,
+	})
+	if err != nil {
+		return fmt.Errorf("persist failed: %w", err)
+	}
+
+	// Get channels excluding the source
+	otherChannels := g.channelsExcept(params.Source)
+
+	// Mirror user message to other channels (with source label)
+	g.mirrorUserMessage(ctx, params.Source, params.UserMessage, params.User, otherChannels)
+
+	// Deliver agent response to other channels (no label)
+	g.deliverAgentMessage(ctx, params.User, enrichedAssistant, otherChannels)
+
+	L_debug("broadcast: conversation turn distributed",
+		"source", params.Source,
+		"userMsgLen", len(params.UserMessage),
+		"assistantMsgLen", len(enrichedAssistant),
+		"targetChannels", len(otherChannels))
+
+	return nil
+}
+
+// DeliverToolMessage persists and delivers a tool-generated message to ALL channels.
+// Unlike BroadcastConversationTurn, this includes the source channel in delivery.
+// Used by tools like media_display that need their output visible everywhere.
+func (g *Gateway) DeliverToolMessage(ctx context.Context, params ToolMessageParams) error {
+	if params.User == nil {
+		return fmt.Errorf("user required for tool message delivery")
+	}
+
+	// Persist as assistant message (no user message for tool output)
+	enrichedMsg, err := g.PersistConversationTurn(ctx, PersistParams{
+		User:             params.User,
+		Source:           params.Source,
+		UserMessage:      "",
+		AssistantMessage: params.Message,
+		SkipUserMessage:  true,
+	})
+	if err != nil {
+		return fmt.Errorf("persist failed: %w", err)
+	}
+
+	// Deliver to ALL channels (including source)
+	allCh := g.allChannels()
+	g.deliverAgentMessage(ctx, params.User, enrichedMsg, allCh)
+
+	L_debug("deliver: tool message distributed",
+		"source", params.Source,
+		"msgLen", len(enrichedMsg),
+		"targetChannels", len(allCh))
+
+	return nil
+}
+
 // MediaStore returns the media store
 func (g *Gateway) MediaStore() *media.MediaStore {
 	return g.mediaStore
@@ -831,11 +972,10 @@ func (g *Gateway) mirrorOpenClawRecords(ctx context.Context, records []session.R
 			}
 			g.lastOpenClawUserMsg = "" // Reset after pairing
 
-			for _, ch := range g.channels {
-				if err := ch.SendMirror(ctx, "openclaw", userMsg, content); err != nil {
-					L_debug("session: mirror send failed", "channel", ch.Name(), "error", err)
-				}
-			}
+			// Use primitives to mirror to all channels (nil user = no HasUser filter)
+			allCh := g.allChannels()
+			g.mirrorUserMessage(ctx, "openclaw", userMsg, nil, allCh)
+			g.deliverAgentMessage(ctx, nil, content, allCh)
 		}
 	}
 }
@@ -1516,6 +1656,71 @@ func isMemoryTool(name string) bool {
 	return name == "memory_search" || name == "memory_get"
 }
 
+// GetToolDefinitionsForUser returns tool definitions filtered by the user's role permissions.
+// This is the public API for external callers (like voice channel) to get available tools.
+func (g *Gateway) GetToolDefinitionsForUser(u *user.User) []types.ToolDefinition {
+	return g.filterToolsForUser(u)
+}
+
+// ToolExecutionParams contains parameters for executing a tool outside the main agent loop.
+type ToolExecutionParams struct {
+	Name   string     // Tool name
+	Input  string     // JSON input string
+	User   *user.User // User context
+	Source string     // Channel source (e.g., "http_voice")
+	ChatID string     // Chat ID (optional)
+}
+
+// ExecuteTool executes a tool with the given parameters and returns the result.
+// This is a simplified tool execution for external callers (like voice channel).
+// It sets up proper session context but doesn't do event broadcasting or security wrapping.
+func (g *Gateway) ExecuteTool(ctx context.Context, params ToolExecutionParams) (*types.ToolResult, error) {
+	if params.Name == "" {
+		return nil, fmt.Errorf("tool name required")
+	}
+
+	// Get owner chat ID for fallback (used by telegram in cron/heartbeat)
+	ownerChatID := ""
+	if owner := g.users.Owner(); owner != nil {
+		ownerChatID = owner.TelegramID
+	}
+
+	// Resolve transcript scope for user
+	transcriptScope := "none"
+	if params.User != nil {
+		if resolvedRole, err := g.users.ResolveUserRole(params.User); err == nil {
+			transcriptScope = resolvedRole.Transcripts
+		}
+	}
+
+	// Build session context
+	toolCtx := tools.WithSessionContext(ctx, &tools.SessionContext{
+		Channel:         params.Source,
+		ChatID:          params.ChatID,
+		OwnerChatID:     ownerChatID,
+		User:            params.User,
+		TranscriptScope: transcriptScope,
+	})
+
+	// Execute tool - convert string input to json.RawMessage
+	result, err := g.tools.Execute(toolCtx, params.Name, json.RawMessage(params.Input))
+	if err != nil {
+		userName := ""
+		if params.User != nil {
+			userName = params.User.Name
+		}
+		L_warn("ExecuteTool: failed", "tool", params.Name, "error", err, "user", userName)
+		return types.ErrorResult(err.Error()), err
+	}
+
+	userName := ""
+	if params.User != nil {
+		userName = params.User.Name
+	}
+	L_debug("ExecuteTool: success", "tool", params.Name, "user", userName, "source", params.Source)
+	return result, nil
+}
+
 // Hardcoded default tool restrictions per purpose.
 // User config overrides these entirely per purpose key.
 var defaultToolRestrictions = map[string]gwtypes.ToolRestriction{
@@ -1773,8 +1978,8 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 	systemPrompt := gcontext.BuildSystemPrompt(promptParams)
 
-	// Append media storage instructions
-	systemPrompt += g.buildMediaInstructions()
+	// Append media storage instructions (text channels use inline {{media:}} syntax)
+	systemPrompt += g.buildMediaInstructions(MediaPromptOptions{IsVoice: false})
 
 	// Check if session is supervised - inject supervision prompt
 	if sess.IsSupervised() {
@@ -2481,9 +2686,11 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	// Reset flush thresholds if context dropped (e.g., after compaction)
 	session.ResetThresholdsIfNeeded(sess)
 
-	// Mirror response to other channels (not for group chats, not if caller handles delivery)
+	// Distribute to other channels (not for group chats, not if caller handles delivery)
 	if !req.IsGroup && !req.SkipMirror {
-		g.mirrorToOthers(ctx, req, finalText)
+		otherChannels := g.channelsExcept(req.Source)
+		g.mirrorUserMessage(ctx, req.Source, req.UserMsg, req.User, otherChannels)
+		g.deliverAgentMessage(ctx, req.User, finalText, otherChannels)
 	}
 
 	return nil
@@ -2814,24 +3021,206 @@ func (g *Gateway) sessionKeyFor(req AgentRequest) string {
 	return session.PrimarySession
 }
 
-// mirrorToOthers sends a mirror of the conversation to other channels
-func (g *Gateway) mirrorToOthers(ctx context.Context, req AgentRequest, response string) {
-	if req.User == nil {
-		return
+
+// PersistConversationTurn persists a conversation turn to storage WITHOUT distributing.
+// This is the pure persistence primitive - use BroadcastConversationTurn for distribution.
+// Returns the enriched assistant message (with media refs resolved).
+func (g *Gateway) PersistConversationTurn(ctx context.Context, params PersistParams) (enrichedAssistantMsg string, err error) {
+	if params.User == nil {
+		return "", fmt.Errorf("user required for conversation turn")
 	}
 
-	for name, ch := range g.channels {
-		if name == req.Source {
-			continue // don't mirror to source
-		}
+	// Get session key using same logic as text channels
+	sessionKey := g.sessionKeyFor(AgentRequest{User: params.User, Source: params.Source})
+	sess := g.sessions.Get(sessionKey)
 
-		if !ch.HasUser(req.User) {
-			continue // skip channels user isn't connected to
-		}
-
-		L_debug("mirror: sending", "from", req.Source, "to", name)
-		ch.SendMirror(ctx, req.Source, req.UserMsg, response) //nolint:errcheck // fire-and-forget mirror
+	userID := ""
+	if params.User != nil {
+		userID = params.User.ID
 	}
+
+	// Add user message to session (if not already added)
+	if !params.SkipUserMessage && params.UserMessage != "" {
+		msgID := sess.AddUserMessage(params.UserMessage, params.Source)
+
+		if !params.Ephemeral {
+			g.persistMessage(ctx, PersistMessageParams{
+				MsgID:      msgID,
+				SessionKey: sessionKey,
+				UserID:     userID,
+				Role:       "user",
+				Content:    params.UserMessage,
+				Source:     params.Source,
+			})
+		}
+	}
+
+	// Enrich media references in assistant message: {{media:path}} -> {{media:mime:'path'}}
+	enrichedAssistantMsg = g.enrichMediaRefs(params.AssistantMessage)
+
+	// Add assistant message to session
+	if enrichedAssistantMsg != "" {
+		msgID := sess.AddAssistantMessage(enrichedAssistantMsg)
+
+		if !params.Ephemeral {
+			g.persistMessage(ctx, PersistMessageParams{
+				MsgID:      msgID,
+				SessionKey: sessionKey,
+				UserID:     userID,
+				Role:       "assistant",
+				Content:    enrichedAssistantMsg,
+				Source:     params.Source,
+			})
+		}
+	}
+
+	L_debug("conversation turn persisted",
+		"source", params.Source,
+		"user", userID,
+		"userMsgLen", len(params.UserMessage),
+		"assistantMsgLen", len(params.AssistantMessage),
+		"ephemeral", params.Ephemeral)
+
+	return enrichedAssistantMsg, nil
+}
+
+// VoicePromptParams contains parameters for building a voice session system prompt
+type VoicePromptParams struct {
+	User     *user.User
+	Source   string // channel name (e.g., "http_voice")
+	Language string // e.g., "English", empty for default
+	// MaxSentences is a hint for response length
+	MaxSentences int
+	// Pronunciations is a map of words to phonetic spellings
+	Pronunciations map[string]string
+	// AdditionalInstructions are appended to voice instructions
+	AdditionalInstructions string
+}
+
+// BuildSystemPromptForVoice builds a complete system prompt for a voice session.
+// It uses the full prompt (not minimal) with memory/context bulletins,
+// then appends voice-specific instructions.
+func (g *Gateway) BuildSystemPromptForVoice(ctx context.Context, params VoicePromptParams) string {
+	// Get workspace files
+	var workspaceFiles []gcontext.WorkspaceFile
+	if g.promptCache != nil {
+		workspaceFiles = g.promptCache.GetWorkspaceFiles()
+	}
+
+	// Get skills prompt for user
+	skillsPrompt := g.GetSkillsPromptForUser(params.User, false) // voice doesn't have skills tool
+
+	// Determine memory access and role prompts
+	includeMemory := true
+	var roleSystemPrompt, roleSystemPromptFile string
+	if params.User != nil {
+		if role, err := g.users.ResolveUserRole(params.User); err == nil && role != nil {
+			includeMemory = role.HasMemoryAccess()
+			roleSystemPrompt = role.SystemPrompt
+			roleSystemPromptFile = role.SystemPromptFile
+		}
+	}
+
+	// Get bulletins from memory graph
+	var memoryBulletin, contextBulletin string
+	var bulletinCfg memorygraph.BulletinConfig
+	agentExtraction := false
+	userID := ""
+	if params.User != nil {
+		userID = params.User.ID
+	}
+
+	if mgr := memorygraph.GetManager(); mgr != nil {
+		agentExtraction = mgr.Config().LiveExtraction.AgentExtraction
+		bulletinCfg = mgr.Config().Bulletin
+
+		if bulletinCfg.Enabled && userID != "" {
+			memoryBulletin, contextBulletin, _ = mgr.GetBulletins(ctx, userID)
+			L_debug("voice: bulletin fetched",
+				"user", userID,
+				"memoryLen", len(memoryBulletin),
+				"contextLen", len(contextBulletin))
+		}
+	}
+
+	// Build base prompt params
+	promptParams := gcontext.PromptParams{
+		WorkspaceDir:         g.config.Gateway.WorkingDir,
+		Tools:                g.tools,
+		Model:                g.llm.Model(),
+		Channel:              params.Source,
+		User:                 params.User,
+		TotalTokens:          0, // voice sessions don't track tokens the same way
+		MaxTokens:            0,
+		WorkspaceFiles:       workspaceFiles,
+		SkillsPrompt:         skillsPrompt,
+		IncludeMemory:        includeMemory,
+		RoleSystemPrompt:     roleSystemPrompt,
+		RoleSystemPromptFile: roleSystemPromptFile,
+		TimeInSystemPrompt:   g.config.PromptCache.TimeInSystemPrompt,
+		AgentExtraction:      agentExtraction,
+	}
+
+	// Inject bulletins based on mode
+	if bulletinCfg.MemoryInjection == "prompt" && memoryBulletin != "" {
+		promptParams.MemoryBulletin = memoryBulletin
+	}
+	if bulletinCfg.ContextInjection == "prompt" && contextBulletin != "" {
+		promptParams.ContextBulletin = contextBulletin
+	}
+
+	// Build the base system prompt
+	systemPrompt := gcontext.BuildSystemPrompt(promptParams)
+
+	// Add media instructions (voice channels use media_display tool instead of inline syntax)
+	systemPrompt += g.buildMediaInstructions(MediaPromptOptions{IsVoice: true})
+
+	// Append voice-specific instructions
+	systemPrompt += buildVoiceInstructions(params)
+
+	return systemPrompt
+}
+
+// buildVoiceInstructions creates the voice-specific prompt section
+func buildVoiceInstructions(params VoicePromptParams) string {
+	var sb strings.Builder
+	sb.WriteString("\n\n## Voice Session\n\n")
+	sb.WriteString("You are currently in a real-time voice conversation. ")
+	sb.WriteString("The user is speaking to you directly through audio.\n\n")
+	sb.WriteString("**Voice Guidelines:**\n")
+	sb.WriteString("- Keep responses concise and natural for spoken delivery\n")
+	sb.WriteString("- Avoid long lists, code blocks, or complex formatting\n")
+	sb.WriteString("- Use conversational language appropriate for speaking\n")
+	sb.WriteString("- Tools are implementation details - don't announce or acknowledge tool usage\n")
+	sb.WriteString("- After using tools, respond naturally with the relevant information\n")
+	sb.WriteString("- For visual tools like media_display, invoke the tool, with a brief caption and continue the conversation\n")
+
+	// Language instruction
+	if params.Language != "" {
+		sb.WriteString(fmt.Sprintf("\n**Language:** Respond in %s.\n", params.Language))
+	}
+
+	// Response length hint
+	if params.MaxSentences > 0 {
+		sb.WriteString(fmt.Sprintf("\n**Response Length:** Keep responses to approximately %d sentences unless the topic requires more detail.\n", params.MaxSentences))
+	}
+
+	// Pronunciations
+	if len(params.Pronunciations) > 0 {
+		sb.WriteString("\n**Pronunciation Guide:**\n")
+		for word, pronunciation := range params.Pronunciations {
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", word, pronunciation))
+		}
+	}
+
+	// Additional instructions
+	if params.AdditionalInstructions != "" {
+		sb.WriteString("\n**Additional Instructions:**\n")
+		sb.WriteString(params.AdditionalInstructions)
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
 }
 
 // InjectMessage injects a message into a user's session and delivers appropriately.
@@ -3335,11 +3724,26 @@ func (g *Gateway) resolveThinkingLevel(req AgentRequest, providerName string) ll
 	return llm.DefaultThinkingLevel
 }
 
-func (g *Gateway) buildMediaInstructions() string {
+// MediaPromptOptions configures channel-specific media prompt generation.
+type MediaPromptOptions struct {
+	IsVoice bool // Voice channel (real-time audio) - uses media_display tool instead of inline syntax
+}
+
+// buildMediaInstructions returns media instructions appropriate for the channel type.
+func (g *Gateway) buildMediaInstructions(opts MediaPromptOptions) string {
 	if g.mediaStore == nil {
 		return ""
 	}
 
+	if opts.IsVoice {
+		return g.buildVoiceMediaInstructions()
+	}
+	return g.buildTextMediaInstructions()
+}
+
+// buildTextMediaInstructions returns media instructions for text-based channels.
+// Text channels use inline {{media:path}} syntax for conversational media embedding.
+func (g *Gateway) buildTextMediaInstructions() string {
 	return fmt.Sprintf(`
 
 ## Media Storage
@@ -3364,7 +3768,7 @@ When saving media, use appropriate subdirectory. If unsure, use downloads/.
 
 Two ways to send media:
 
-1. **Inline (conversational):** Write {{media:path}} in your response
+1. **Inline (preferred):** Write {{media:path}} in your response
    - Goes to whoever you're talking to
    - Gateway enriches with mimetype, channels render appropriately
    - Example: Here's the screenshot: {{media:screenshots/desktop.png}}
@@ -3375,6 +3779,33 @@ Two ways to send media:
    - Use for specific channel/chat targeting, programmatic sends, delivery confirmation
 
 Prefer inline {{media:}} for conversational flow. Use message tool for explicit sends.
+`, g.mediaStore.BaseDir())
+}
+
+// buildVoiceMediaInstructions returns media instructions for voice channels.
+// Voice channels use the media_display tool to avoid vocalizing {{media:}} syntax.
+func (g *Gateway) buildVoiceMediaInstructions() string {
+	return fmt.Sprintf(`
+
+## Media Display
+
+Media root: %s
+
+Subdirectory mapping:
+- camera/      - camera/security captures
+- browser/     - browser screenshots
+- screenshots/ - general screenshots, screen captures
+- inbound/     - user-uploaded media (Telegram photos, HTTP paste)
+- generated/   - AI-generated images
+- downloads/   - downloaded files (default fallback if path isn't obvious)
+
+To show images, screenshots, or media to the user:
+- Use the media_display tool with the file path
+- The media appears on the user's screen silently while you continue speaking
+- Do NOT mention file paths or technical syntax in your speech
+- Example: call media_display(path="camera/driveway.jpg"), then say "Here's the driveway view"
+
+Do NOT use {{media:path}} syntax in voice mode - it will be spoken aloud.
 `, g.mediaStore.BaseDir())
 }
 

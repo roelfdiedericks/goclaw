@@ -1292,71 +1292,65 @@ func (b *Bot) SendPhotoFromBytes(chatID int64, data []byte, caption string) erro
 	return err
 }
 
-// SendMirror sends a mirrored message to a user's Telegram chat
-func (b *Bot) SendMirror(ctx context.Context, source, userMsg, response string) error {
-	// Find all users who should receive mirrors
-	// For now, we'll send to the owner's chat if they have a Telegram identity
+// SendMirror sends a mirrored user message to the owner's Telegram chat
+func (b *Bot) SendMirror(ctx context.Context, source, userMsg string) error {
 	owner := b.users.Owner()
-	if owner == nil {
+	if owner == nil || owner.TelegramID == "" {
 		return nil
 	}
 
-	// Get owner's Telegram ID
-	telegramID := owner.TelegramID
-	if telegramID == "" {
-		return nil
-	}
-
-	// Parse telegram ID to int64
 	var chatID int64
-	if _, err := fmt.Sscanf(telegramID, "%d", &chatID); err != nil {
-		logging.L_warn("telegram: invalid telegram ID for mirror", "telegramID", telegramID, "error", err)
+	if _, err := fmt.Sscanf(owner.TelegramID, "%d", &chatID); err != nil {
+		logging.L_warn("telegram: invalid telegram ID for mirror", "telegramID", owner.TelegramID, "error", err)
 		return nil
 	}
 	chat := &tele.Chat{ID: chatID}
 
-	// Telegram max message is 4096 chars. Reserve space for formatting.
-	const maxTelegramMsg = 4096
-	agentName := b.gateway.AgentIdentity().Name
-	headerReserve := 80 + len(agentName) // for "📱 <b>source</b>\n\n<b>You:</b> ...\n\n<b>AgentName:</b> "
-
-	// Calculate available space
-	availableForContent := maxTelegramMsg - headerReserve
-	userMsgLimit := min(500, availableForContent/4)     // User msg gets up to 1/4
-	responseLimit := availableForContent - len(userMsg) // Response gets the rest
-	if len(userMsg) > userMsgLimit {
-		responseLimit = availableForContent - userMsgLimit
-	}
-
-	truncatedUser := truncate(userMsg, userMsgLimit)
-	truncatedResponse := truncate(response, responseLimit)
-
-	// Format mirror message using HTML (escape HTML entities in content)
+	// Format mirror: just the user message with source label
+	truncatedUser := truncate(userMsg, 500)
 	escapedUser := escapeHTML(truncatedUser)
-	escapedResponse := FormatMessage(truncatedResponse) // Convert markdown to HTML
-
-	mirror := fmt.Sprintf("📱 <b>%s</b>\n\n<b>You:</b> %s\n\n<b>%s:</b> %s",
-		source, escapedUser, agentName, escapedResponse)
+	mirror := fmt.Sprintf("📱 <b>%s</b>\n\n<b>You:</b> %s", source, escapedUser)
 
 	_, err := b.bot.Send(chat, mirror, &tele.SendOptions{ParseMode: tele.ModeHTML})
 	if err != nil {
-		// Fallback to plain text (common with emoji/special chars)
-		// Show snippet of what failed for debugging
-		snippet := mirror
-		if len(snippet) > 100 {
-			snippet = snippet[:100] + "..."
-		}
-		logging.L_debug("telegram: HTML mirror failed, falling back to plain text",
-			"error", err,
-			"source", source,
-			"mirrorLen", len(mirror),
-			"snippet", snippet)
-		plainMirror := fmt.Sprintf("📱 %s\n\nYou: %s\n\n%s: %s",
-			source, truncatedUser, agentName, truncatedResponse)
+		logging.L_debug("telegram: HTML mirror failed, falling back to plain text", "error", err, "source", source)
+		plainMirror := fmt.Sprintf("📱 %s\n\nYou: %s", source, truncatedUser)
 		_, err = b.bot.Send(chat, plainMirror)
 	}
 	if err != nil {
 		logging.L_error("failed to send telegram mirror", "error", err)
+	}
+	return err
+}
+
+// DeliverMessage sends agent output to the user's Telegram chat
+func (b *Bot) DeliverMessage(ctx context.Context, u *user.User, message string) error {
+	if u == nil || u.TelegramID == "" {
+		return nil
+	}
+
+	var chatID int64
+	if _, err := fmt.Sscanf(u.TelegramID, "%d", &chatID); err != nil {
+		logging.L_warn("telegram: invalid telegram ID for deliver", "telegramID", u.TelegramID, "error", err)
+		return nil
+	}
+	chat := &tele.Chat{ID: chatID}
+
+	// Handle messages with media refs (e.g., from media_display tool)
+	if containsMediaRefs(message) {
+		return b.sendWithMediaRefs(chat, message)
+	}
+
+	// Text-only: format and send as HTML
+	formatted := FormatMessage(message)
+	_, err := b.bot.Send(chat, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
+	if err != nil {
+		// Fallback to plain text
+		logging.L_debug("telegram: HTML deliver failed, falling back to plain text", "error", err)
+		_, err = b.bot.Send(chat, message)
+	}
+	if err != nil {
+		logging.L_error("failed to send telegram message", "error", err)
 	}
 	return err
 }
