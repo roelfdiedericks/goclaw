@@ -64,7 +64,7 @@ Voice is accessed through the HTTP channel, which must be enabled:
   "channels": {
     "http": {
       "enabled": true,
-      "port": 8080
+      "port": 1337
     }
   }
 }
@@ -75,7 +75,7 @@ Voice is accessed through the HTTP channel, which must be enabled:
 Open your browser to:
 
 ```
-http://localhost:8080/voice
+http://localhost:1337/voice
 ```
 
 Click the microphone button and start talking.
