@@ -196,6 +196,36 @@ Run `goclaw setup edit` and select "Sandbox" to configure modes and options.
 
 Or during initial setup, the wizard detects bwrap and offers to enable sandboxing.
 
+## Browser URL Safety
+
+The browser tool validates URLs before navigation to prevent SSRF (Server-Side Request Forgery) attacks. This protection is **always active**, regardless of bubblewrap status, because bubblewrap sandboxes the filesystem but not the network.
+
+### Blocked Destinations
+
+| Category | Examples | Why Blocked |
+|----------|----------|-------------|
+| Loopback | `127.0.0.1`, `localhost`, `::1` | Local service access |
+| Private networks | `10.x.x.x`, `192.168.x.x`, `172.16-31.x.x` | Internal network access |
+| Link-local | `169.254.x.x`, `fe80::` | Network infrastructure |
+| Cloud metadata | `169.254.169.254`, `metadata.google.internal` | Credential theft |
+
+### Evasion Prevention
+
+The URL safety check resolves hostnames to IPs before validation, catching common evasion techniques:
+
+- Decimal IP encoding (`2130706433` = `127.0.0.1`)
+- Hex IP encoding (`0x7f000001` = `127.0.0.1`)
+- Octal encoding (`0177.0.0.1` = `127.0.0.1`)
+- DNS rebinding (`localtest.me` → `127.0.0.1`)
+- Short forms (`127.1` → `127.0.0.1`)
+- IPv4-mapped IPv6 (`::ffff:127.0.0.1`)
+
+### Allowed
+
+Only `http://` and `https://` URLs to public internet addresses are allowed.
+
+---
+
 ## Security Considerations
 
 ### Defense in Depth

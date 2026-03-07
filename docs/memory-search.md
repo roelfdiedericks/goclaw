@@ -147,14 +147,37 @@ Returns:
 }
 ```
 
-### `memory_list`
+### `memory_get`
 
-List available memory files:
+Read full content from a memory file. Use after `memory_search` to get complete context around a match.
 
 ```json
 {
-  "tool": "memory_list",
-  "input": {}
+  "tool": "memory_get",
+  "input": {
+    "path": "memory/2024-01-15.md"
+  }
+}
+```
+
+Optional parameters:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `path` | string | Path to memory file (required) |
+| `from` | int | Start reading from this line (1-indexed) |
+| `lines` | int | Number of lines to read (omit for entire file) |
+
+Example reading a specific section:
+
+```json
+{
+  "tool": "memory_get",
+  "input": {
+    "path": "memory/2024-01-15.md",
+    "from": 10,
+    "lines": 20
+  }
 }
 ```
 

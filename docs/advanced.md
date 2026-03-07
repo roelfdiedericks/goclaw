@@ -82,10 +82,10 @@ Enable verbose logging for troubleshooting:
 
 ```bash
 # Debug level (-d)
-./bin/goclaw gateway -d
+./goclaw gateway -d
 
 # Trace level (-t) - very verbose
-./bin/goclaw gateway -t
+./goclaw gateway -t
 
 # Via make
 make debug
@@ -105,13 +105,13 @@ make debug
 
 ```bash
 # Only errors
-./bin/goclaw gateway -d 2>&1 | grep -E "ERRO|error"
+./goclaw gateway -d 2>&1 | grep -E "ERRO|error"
 
 # Specific component
-./bin/goclaw gateway -d 2>&1 | grep compaction
+./goclaw gateway -d 2>&1 | grep compaction
 
 # Exclude noise
-./bin/goclaw gateway -d 2>&1 | grep -v "TRAC"
+./goclaw gateway -d 2>&1 | grep -v "TRAC"
 ```
 
 ---

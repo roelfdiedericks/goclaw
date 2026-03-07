@@ -54,8 +54,8 @@ Checkpoints are generated based on configuration:
       "checkpoint": {
         "enabled": true,
         "thresholds": [25, 50, 75],
-        "turnThreshold": 10,
-        "minTokensForGen": 5000
+        "turnThreshold": 15,
+        "minTokensForGen": 10000
       }
     }
   }
@@ -254,26 +254,41 @@ This allows:
 
 ---
 
-## Memory Flush Prompting
+## Context Pressure Warnings
 
-GoClaw can prompt the agent to save important context to memory files before compaction.
+GoClaw shows context usage in the system prompt and warns the agent when approaching limits.
+
+### System Prompt Status
+
+The agent always sees a context status section in the system prompt:
+
+```
+## Context Status
+
+[Context: 85k/200k tokens (42%)]
+```
+
+At higher usage levels, warnings are added:
+
+| Usage | Warning |
+|-------|---------|
+| 50%+ | "You may want to note important decisions to memory files." |
+| 75%+ | "Consider writing key decisions to memory/YYYY-MM-DD.md." |
+| 90%+ | "CRITICAL: Write important context to memory files NOW before compaction." |
+
+### Memory Flush Prompts
+
+You can also inject user messages at specific thresholds to prompt the agent more directly:
 
 ```json
 {
   "session": {
     "memoryFlush": {
       "enabled": true,
-      "showInSystemPrompt": true,
       "thresholds": [
         {
-          "percent": 50,
-          "prompt": "Consider noting key decisions to memory.",
-          "injectAs": "system",
-          "oncePerCycle": true
-        },
-        {
-          "percent": 75,
-          "prompt": "Write important context to memory now.",
+          "percent": 90,
+          "prompt": "Context at 90%. Save important decisions to memory/YYYY-MM-DD.md before compaction.",
           "injectAs": "user",
           "oncePerCycle": true
         }
@@ -286,12 +301,13 @@ GoClaw can prompt the agent to save important context to memory files before com
 | Field | Description |
 |-------|-------------|
 | `enabled` | Enable memory flush prompting |
-| `showInSystemPrompt` | Show context usage in system prompt |
 | `thresholds` | Array of threshold configurations |
 | `percent` | Context usage percent to trigger |
 | `prompt` | Message to inject |
-| `injectAs` | "system" or "user" message |
+| `injectAs` | Must be `"user"` (injected as a user message) |
 | `oncePerCycle` | Only trigger once per compaction cycle |
+
+The prompt is injected as a user message before the agent's next turn. Use `YYYY-MM-DD` in the prompt — it's automatically replaced with today's date.
 
 ---
 
@@ -380,8 +396,8 @@ CREATE TABLE checkpoints (
       "checkpoint": {
         "enabled": true,
         "thresholds": [25, 50, 75],
-        "turnThreshold": 10,
-        "minTokensForGen": 5000
+        "turnThreshold": 15,
+        "minTokensForGen": 10000
       },
       
       "compaction": {
@@ -395,10 +411,8 @@ CREATE TABLE checkpoints (
     
     "memoryFlush": {
       "enabled": true,
-      "showInSystemPrompt": true,
       "thresholds": [
-        {"percent": 50, "prompt": "Consider noting key decisions.", "injectAs": "system", "oncePerCycle": true},
-        {"percent": 75, "prompt": "Write important context now.", "injectAs": "user", "oncePerCycle": true}
+        {"percent": 90, "prompt": "Context at 90%. Save key context to memory/YYYY-MM-DD.md.", "injectAs": "user", "oncePerCycle": true}
       ]
     }
   }

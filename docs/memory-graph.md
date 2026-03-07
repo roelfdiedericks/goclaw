@@ -49,15 +49,15 @@ The memory graph:
 
 ## Memory Graph Tools
 
-The agent has access to five tools for managing the memory graph:
+The agent has access to six tools for managing the memory graph:
 
-### recall
+### memory_graph_recall
 
 Retrieve relevant memories for the current context. This is the primary tool for accessing memories.
 
 ```json
 {
-  "tool": "recall",
+  "tool": "memory_graph_recall",
   "input": {
     "query": "user's coffee preferences",
     "limit": 5
@@ -67,13 +67,13 @@ Retrieve relevant memories for the current context. This is the primary tool for
 
 Returns memories ranked by relevance using hybrid search (semantic + keyword).
 
-### query
+### memory_graph_query
 
 Search and filter memories with more control than recall.
 
 ```json
 {
-  "tool": "query", 
+  "tool": "memory_graph_query", 
   "input": {
     "filter": "type:preference",
     "query": "food",
@@ -84,16 +84,16 @@ Search and filter memories with more control than recall.
 
 Supports filtering by entity type, date ranges, and other metadata.
 
-### store
+### memory_graph_store
 
 Add a new memory to the graph.
 
 ```json
 {
-  "tool": "store",
+  "tool": "memory_graph_store",
   "input": {
     "content": "User prefers dark roast coffee",
-    "type": "preference",
+    "memory_type": "preference",
     "entities": ["user", "coffee"],
     "confidence": 0.9
   }
@@ -103,17 +103,17 @@ Add a new memory to the graph.
 | Field | Type | Description |
 |-------|------|-------------|
 | `content` | string | The memory content |
-| `type` | string | Entity type (preference, fact, event, etc.) |
+| `memory_type` | string | Entity type (preference, fact, event, etc.) |
 | `entities` | array | Related entity names |
 | `confidence` | float | Confidence score (0-1) |
 
-### update
+### memory_graph_update
 
 Modify an existing memory.
 
 ```json
 {
-  "tool": "update",
+  "tool": "memory_graph_update",
   "input": {
     "id": "mem_abc123",
     "content": "User now prefers medium roast coffee",
@@ -122,13 +122,13 @@ Modify an existing memory.
 }
 ```
 
-### forget
+### memory_graph_forget
 
 Remove a memory from the graph.
 
 ```json
 {
-  "tool": "forget",
+  "tool": "memory_graph_forget",
   "input": {
     "id": "mem_abc123",
     "reason": "User corrected this information"
@@ -137,6 +137,22 @@ Remove a memory from the graph.
 ```
 
 The `reason` field is optional but helps with audit trails.
+
+### memory_graph_skip
+
+Explicitly document why information is not being stored. Used during memory extraction to log skip decisions.
+
+```json
+{
+  "tool": "memory_graph_skip",
+  "input": {
+    "content": "User mentioned the weather",
+    "reason": "transient, not about user"
+  }
+}
+```
+
+This tool is primarily used by the automatic extraction process to provide visibility into what was considered but not stored. Useful for debugging extraction behavior.
 
 ## Context Bulletin
 

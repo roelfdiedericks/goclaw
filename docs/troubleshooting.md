@@ -278,9 +278,9 @@ Find your user ID: message [@userinfobot](https://t.me/userinfobot)
 **Symptoms:** Exec tool fails after delay
 
 **Solutions:**
-1. Increase timeout:
+1. Increase timeout in tool call:
    ```json
-   {"command": "long-running-cmd", "timeout": 120}
+   {"command": "long-running-cmd", "timeout_seconds": 120}
    ```
 2. Run command in background
 3. Check if command is actually hanging
@@ -356,12 +356,12 @@ Find your user ID: message [@userinfobot](https://t.me/userinfobot)
 ### Enable Debug Logging
 
 ```bash
-# Via make
+# Via make (recommended)
 make debug
 
 # Via flags
-./bin/goclaw gateway -d   # Debug logging
-./bin/goclaw gateway -t   # Trace logging (very verbose)
+./goclaw gateway -d   # Debug logging
+./goclaw gateway -t   # Trace logging (very verbose)
 ```
 
 ### Log Levels
@@ -395,7 +395,7 @@ make debug 2>&1 | grep -v "trace\|TRAC"
 
 When reporting issues, include:
 
-1. GoClaw version: `./bin/goclaw --version`
+1. GoClaw version: `./goclaw --version` or `goclaw --version`
 2. Go version: `go version`
 3. OS: `uname -a`
 4. Relevant config (redact secrets)

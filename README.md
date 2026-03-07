@@ -20,7 +20,7 @@ GoClaw can run side-by-side with OpenClaw in the same workspace directory. The t
 
 A SQLite database with vector extensions manages session storage, semantic memory search, and session transcripts.
 
-GoClaw is a bit opinionated about security, considering the brave new era we're entering. Tool sandboxing and exec bubblewrap if available. The managed Chromium install can also be bubblewrapped (tested on Ubuntu). Many other guardrails also exist. Of course you can disable this if you want your bot to have unfettered, dangerous access. Nothing is ever entirely secure, but one can try.
+GoClaw is a bit opinionated about security, considering the brave new era we're entering. Tool sandboxing and exec bubblewrap if available, as well as external content/prompt injection wrapping. The managed Chromium install can also be bubblewrapped (tested on Ubuntu). Many other guardrails also exist. Of course you can disable this if you want your bot to have unfettered, dangerous access. Nothing is ever entirely secure, but one can try.
 
 *This AI agent was written by an AI agent, under human guidance*
 
@@ -192,7 +192,7 @@ If a provider fails, GoClaw automatically tries the next model in the chain. See
 
 ### Metrics & Cost Tracking
 
-GoClaw tracks LLM costs automatically using embedded `models.json` pricing data:
+GoClaw tracks LLM costs and performance automatically using embedded `models.json` pricing data:
 
 - **Per-turn costs** — Input, output, and cache token costs calculated per request
 - **Accumulated totals** — Running cost totals across sessions
@@ -201,6 +201,17 @@ GoClaw tracks LLM costs automatically using embedded `models.json` pricing data:
 - **JSON API** — Programmatic access via `/api/metrics`
 
 See [Metrics](docs/metrics.md) for details.
+
+### External Content Protection
+
+GoClaw wraps content from external sources (web fetches, etc.) with cryptographic boundary markers to defend against prompt injection:
+
+- **Unique markers** — Each external content block gets a random boundary ID
+- **Explicit warnings** — LLM is told to treat content as DATA only, not instructions
+- **Spoofing detection** — Content containing the marker is blocked
+- **Homoglyph normalization** — Unicode lookalike characters are detected
+
+See [External Content Wrapping](docs/security-external-content.md) for details.
 
 ### Session Storage
 
@@ -278,7 +289,8 @@ Full documentation available at [goclaw.org/docs](https://goclaw.org/docs/) or i
 - [Advanced Topics](docs/advanced.md) — Deep dives
 - [Roles & Access](docs/roles.md) — RBAC and auth
 - [Skills](docs/skills.md) — Extensibility
-- [Sandbox](docs/sandbox.md) — Security
+- [Sandbox](docs/sandbox.md) — Execution isolation
+- [Security](docs/security.md) — Secrets, external content protection
 - [Deployment](docs/deployment.md) — Production setup
 - [Troubleshooting](docs/troubleshooting.md) — Common issues
 

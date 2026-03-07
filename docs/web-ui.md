@@ -139,7 +139,7 @@ GoClaw is designed for trusted network environments. Do not expose directly to t
 For development, run with debug logging:
 
 ```bash
-./bin/goclaw gateway -d
+./goclaw gateway -d
 ```
 
 ---

@@ -29,16 +29,32 @@ Basic file and system operations:
 |------|-------------|---------------|
 | `message` | Send, edit, react to channel messages | [Message Tool](tools/message.md) |
 
-### Memory & Search
+### Memory Graph
+
+Structured knowledge graph for persistent agent memory:
 
 | Tool | Description | Documentation |
 |------|-------------|---------------|
-| `recall` | Retrieve relevant memories from graph | [Memory Graph](memory-graph.md) |
-| `query` | Search/filter memory graph | [Memory Graph](memory-graph.md) |
-| `store` | Add memory to graph | [Memory Graph](memory-graph.md) |
-| `update` | Modify existing memory | [Memory Graph](memory-graph.md) |
-| `forget` | Remove memory from graph | [Memory Graph](memory-graph.md) |
-| `memory_search` | Semantic search over memory files | [Memory Search](memory-search.md) |
+| `memory_graph_recall` | Retrieve relevant memories | [Memory Graph](memory-graph.md) |
+| `memory_graph_query` | Search/filter with metadata | [Memory Graph](memory-graph.md) |
+| `memory_graph_store` | Add memory to graph | [Memory Graph](memory-graph.md) |
+| `memory_graph_update` | Modify existing memory | [Memory Graph](memory-graph.md) |
+| `memory_graph_forget` | Remove memory from graph | [Memory Graph](memory-graph.md) |
+| `memory_graph_skip` | Log skip decision with reason | [Memory Graph](memory-graph.md) |
+
+### Memory Files
+
+Semantic search over markdown memory files:
+
+| Tool | Description | Documentation |
+|------|-------------|---------------|
+| `memory_search` | Search memory files | [Memory Search](memory-search.md) |
+| `memory_get` | Read memory file content | [Memory Search](memory-search.md) |
+
+### Search
+
+| Tool | Description | Documentation |
+|------|-------------|---------------|
 | `transcript_search` | Search conversation history | [Transcript Search](transcript-search.md) |
 | `web_search` | Search the web | [Web Tools](tools/web.md) |
 | `web_fetch` | Fetch web page content | [Web Tools](tools/web.md) |
@@ -89,7 +105,30 @@ Tool configuration in `goclaw.json`:
 
 ## Tool Permissions
 
-Tools can be restricted per-user in `users.json`:
+Tool access is controlled at two levels:
+
+### Role-Based (goclaw.json)
+
+Roles define default tool access:
+
+```json
+{
+  "roles": {
+    "user": {
+      "tools": ["read", "memory_search", "transcript_search", "web_search"]
+    },
+    "guest": {
+      "tools": ["read"]
+    }
+  }
+}
+```
+
+Use `"tools": "*"` to allow all tools (default for `owner` role).
+
+### Per-User Override (users.json)
+
+Override role defaults for specific users:
 
 ```json
 {
@@ -104,19 +143,9 @@ Tools can be restricted per-user in `users.json`:
 }
 ```
 
-When `permissions` is set, only those tools are available. Owners have access to all tools.
+When `permissions` is set, it overrides the role's tool list for that user.
 
-## Tool Errors
-
-Tools return structured errors:
-
-| Error | Cause |
-|-------|-------|
-| `file not found` | Path doesn't exist |
-| `permission denied` | File not readable/writable |
-| `path traversal detected` | Attempted `../` escape |
-| `old_string is not unique` | Multiple matches in edit |
-| `command timed out` | Exec exceeded timeout |
+See [Roles & Access Control](roles.md) for full RBAC documentation.
 
 ---
 
