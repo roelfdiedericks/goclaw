@@ -48,11 +48,11 @@ In `goclaw.json`:
 }
 ```
 
-Or use the setup wizard:
+Or use the setup wizard (initial setup includes a voice step):
 
 ```bash
-goclaw setup edit
-# Navigate to VoiceLLM section
+goclaw setup        # Initial setup includes voice configuration
+goclaw setup edit   # Edit existing config
 ```
 
 ### 2. Enable HTTP Channel

@@ -56,7 +56,7 @@ GoClaw is configured via `goclaw.json` in the working directory.
       "xai": {
         "driver": "xai",
         "apiKey": "xai-...",
-        "voice": "Charon"
+        "voice": "Eve"
       }
     }
   },
@@ -106,19 +106,16 @@ GoClaw is configured via `goclaw.json` in the working directory.
     }
   },
 
-  "memorySearch": {
+  "memory": {
     "enabled": true,
-    "ollama": {
-      "url": "http://localhost:11434",
-      "model": "nomic-embed-text"
-    },
+    "dbPath": "",
+    "paths": [],
     "query": {
       "maxResults": 6,
       "minScore": 0.35,
       "vectorWeight": 0.7,
       "keywordWeight": 0.3
-    },
-    "paths": []
+    }
   },
 
   "skills": {
@@ -155,8 +152,9 @@ GoClaw is configured via `goclaw.json` in the working directory.
   },
 
   "gateway": {
-    "port": 8080,
-    "workingDir": "/path/to/workspace"
+    "workingDir": "~/.goclaw/workspace",
+    "logFile": "~/.goclaw/goclaw.log",
+    "pidFile": "~/.goclaw/goclaw.pid"
   }
 }
 ```
@@ -169,9 +167,12 @@ GoClaw is configured via `goclaw.json` in the working directory.
 
 | Section | Description | Documentation |
 |---------|-------------|---------------|
-| `llm` | Primary LLM provider settings | [LLM Providers](llm-providers.md) |
+| `agent` | Agent name, emoji, personality | Below |
+| `llm` | LLM provider settings and purpose chains | [LLM Providers](llm-providers.md) |
 | `session` | Session storage, compaction, checkpoints | [Session Management](session-management.md) |
-| `memorySearch` | Semantic memory search | [Memory Search](memory-search.md) |
+| `memory` | Semantic memory search | [Memory Search](memory-search.md) |
+| `memoryGraph` | Knowledge graph extraction and bulletins | [Memory Graph](memory-graph.md) |
+| `transcript` | Conversation transcript indexing | [Transcript Search](transcript-search.md) |
 
 ### Channels
 
@@ -179,7 +180,7 @@ GoClaw is configured via `goclaw.json` in the working directory.
 |---------|-------------|---------------|
 | `channels.telegram` | Telegram bot configuration | [Telegram](telegram.md) |
 | `channels.whatsapp` | WhatsApp via linked device | [WhatsApp](whatsapp.md) |
-| `channels.http` | Web UI and HTTP API | [Web UI](web-ui.md) |
+| `channels.http` | Web UI, chat, and voice | [Web UI](web-ui.md) |
 | `channels.tui` | Terminal UI settings | [TUI](tui.md) |
 
 ### Voice & Audio
@@ -196,6 +197,7 @@ GoClaw is configured via `goclaw.json` in the working directory.
 | `tools.exec` | Shell command execution | [Tools](tools.md) |
 | `tools.browser` | Browser automation | [Browser Tool](tools/browser.md) |
 | `tools.web` | Web search and fetch | [Tools](tools.md) |
+| `tools.xaiImagine` | xAI image generation | [Tools](tools.md) |
 | `skills` | Skills system | [Skills](skills.md) |
 
 ### System
@@ -206,6 +208,12 @@ GoClaw is configured via `goclaw.json` in the working directory.
 | `promptCache` | Workspace file caching | Below |
 | `gateway` | Server settings | Below |
 | `auth` | Role elevation via external script | [User Auth Tool](tools/user-auth.md) |
+| `roles` | Role-based access control definitions | [Roles](roles.md) |
+| `cron` | Scheduled jobs and heartbeat | [Cron](tools/cron.md) |
+| `safety` | Panic stop phrases | [Security](security.md) |
+| `sandbox` | Execution isolation (bubblewrap) | [Sandbox](sandbox.md) |
+| `supervision` | Ghostwriting and guidance | [Supervision](supervision.md) |
+| `homeassistant` | Home Assistant integration | [Home Assistant](tools/hass.md) |
 
 ---
 

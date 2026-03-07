@@ -109,9 +109,8 @@ func loadRuntimePaths() (*RuntimePaths, error) {
 // boundaries produce hyphens (e.g. WhatsApp → whats-app). To get a single
 // word like "whatsapp", use a flat name: Whatsapp, not WhatsApp.
 type CLI struct {
-	Debug  bool   `help:"Enable debug logging" short:"d"`
-	Trace  bool   `help:"Enable trace logging" short:"t"`
-	Config string `help:"Config file path" short:"c" type:"path"`
+	Debug bool `help:"Enable debug logging" short:"d"`
+	Trace bool `help:"Enable trace logging" short:"t"`
 
 	Gateway    GatewayCmd    `cmd:"" help:"Run the gateway (foreground by default)"`
 	Start      StartCmd      `cmd:"" help:"Start gateway as background daemon"`
@@ -127,7 +126,7 @@ type CLI struct {
 	Graph      GraphCmd      `cmd:"" help:"Memory graph operations (ingest, search, bulletin, stats)"`
 	Setup      SetupCmd      `cmd:"" help:"Interactive setup wizard"`
 	Onboard    OnboardCmd    `cmd:"" help:"Run onboarding wizard"`
-	Cfg        ConfigCmd     `cmd:"config" help:"View configuration"`
+	Config     ConfigCmd     `cmd:"" help:"View configuration"`
 	TUI        TUICmd        `cmd:"tui" help:"Run gateway with interactive TUI"`
 }
 
@@ -2086,9 +2085,8 @@ func (t *TUICmd) Run(ctx *Context) error {
 
 // Context passed to all commands
 type Context struct {
-	Debug  bool
-	Trace  bool
-	Config string
+	Debug bool
+	Trace bool
 }
 
 // runGateway is the actual gateway logic
@@ -2425,9 +2423,8 @@ func main() {
 
 	// Run the selected command
 	err := ctx.Run(&Context{
-		Debug:  cli.Debug,
-		Trace:  cli.Trace,
-		Config: cli.Config,
+		Debug: cli.Debug,
+		Trace: cli.Trace,
 	})
 	if err != nil {
 		// Print user-facing errors cleanly without log formatting

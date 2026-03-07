@@ -99,6 +99,11 @@ type WizardData struct {
 	STTEnabled        bool
 	STTModel          string
 	STTModelAvailable bool // true if model exists (bundled or downloaded)
+
+	// VoiceLLM (Real-time Voice)
+	VoiceLLMEnabled bool
+	VoiceLLMAPIKey  string
+	VoiceLLMVoice   string // Eve, Ara, Rex, Sal, Leo
 }
 
 // NewWizardData creates a new WizardData with defaults
@@ -163,6 +168,13 @@ func (d *WizardData) LoadFromExisting(cfg *config.Config, path string) {
 				}
 			}
 		}
+	}
+
+	// VoiceLLM
+	d.VoiceLLMEnabled = cfg.VoiceLLM.Enabled
+	if xai, ok := cfg.VoiceLLM.Providers["xai"]; ok {
+		d.VoiceLLMAPIKey = xai.APIKey
+		d.VoiceLLMVoice = xai.Voice
 	}
 
 	// Load user data from users.json
@@ -322,6 +334,7 @@ func buildWizardSteps(data *WizardData) []forms.WizardStep {
 		stepHTTP(data),
 		stepSTT(data),
 		stepLLMProvider(data),
+		stepVoiceLLM(data),
 		stepSandbox(data),
 		stepReview(data),
 	)
@@ -745,6 +758,127 @@ This requires a model file (~39 MB for the tiny English model).
 				return fmt.Errorf("please download a model or disable STT")
 			}
 			L_info("wizard: stt", "enabled", data.STTEnabled, "model", data.STTModel)
+			return nil
+		},
+	}
+}
+
+// Step: VoiceLLM (Real-time Voice)
+func stepVoiceLLM(data *WizardData) forms.WizardStep {
+	return forms.WizardStep{
+		Title: "Real-time Voice",
+		Content: func(w *forms.Wizard) tview.Primitive {
+			form := tview.NewForm()
+			form.SetBorder(false)
+			enableFormMouseScroll(form, w)
+
+			// Reuse xAI API key from LLM step if available
+			if data.VoiceLLMAPIKey == "" && data.LLMProviderID == "xai" && data.LLMAPIKey != "" {
+				data.VoiceLLMAPIKey = data.LLMAPIKey
+			}
+
+			// Auto-enable if API key is present and HTTP is enabled
+			if data.VoiceLLMAPIKey != "" && data.HTTPEnabled && !data.VoiceLLMEnabled {
+				data.VoiceLLMEnabled = true
+			}
+
+			// If HTTP is disabled, show warning and disable the feature
+			if !data.HTTPEnabled {
+				return formWithHeader(`[yellow]⚠ HTTP channel is disabled[white]
+
+Real-time voice requires the HTTP channel to be enabled.
+Enable it in the [cyan]HTTP Server[white] step to use voice.
+
+You can skip this step and configure voice later via
+[cyan]goclaw setup edit[white].`, 7, form)
+			}
+
+			// Default voice to Eve if not set
+			if data.VoiceLLMVoice == "" {
+				data.VoiceLLMVoice = "Eve"
+			}
+
+			form.AddCheckbox("Enable real-time voice", data.VoiceLLMEnabled, func(checked bool) {
+				data.VoiceLLMEnabled = checked
+			})
+
+			form.AddPasswordField("xAI API Key", data.VoiceLLMAPIKey, 50, '*', func(text string) {
+				data.VoiceLLMAPIKey = text
+				// Auto-enable when API key is entered
+				if text != "" && !data.VoiceLLMEnabled {
+					data.VoiceLLMEnabled = true
+					w.RefreshCurrentStep()
+				}
+			})
+
+			// Voice dropdown
+			voiceOptions := []string{"Eve", "Ara", "Rex", "Sal", "Leo"}
+			voiceDescriptions := map[string]string{
+				"Eve": "Female, energetic (default)",
+				"Ara": "Female, warm/friendly",
+				"Rex": "Male, confident/clear",
+				"Sal": "Neutral, smooth/balanced",
+				"Leo": "Male, authoritative",
+			}
+
+			// Find current voice index
+			voiceIndex := 0
+			for i, v := range voiceOptions {
+				if v == data.VoiceLLMVoice {
+					voiceIndex = i
+					break
+				}
+			}
+
+			form.AddDropDown("Voice", voiceOptions, voiceIndex, func(option string, index int) {
+				data.VoiceLLMVoice = option
+			})
+
+			// Add voice description
+			if desc, ok := voiceDescriptions[data.VoiceLLMVoice]; ok {
+				form.AddTextView("", "[gray]"+desc+"[white]", 40, 1, true, false)
+			}
+
+			// Test button
+			form.AddButton("Test API Key", func() {
+				if data.VoiceLLMAPIKey == "" {
+					w.App().ShowModal("Please enter an API key first.", []string{"OK"}, nil)
+					return
+				}
+
+				// Validate voice
+				validVoices := map[string]bool{"Eve": true, "Ara": true, "Rex": true, "Sal": true, "Leo": true}
+				voice := data.VoiceLLMVoice
+				if voice == "" {
+					voice = "Eve"
+				}
+				if !validVoices[voice] {
+					w.App().ShowModal(fmt.Sprintf("Unknown voice '%s'. Valid: Eve, Ara, Rex, Sal, Leo", voice), []string{"OK"}, nil)
+					return
+				}
+
+				// Basic API key format validation for xAI
+				if !strings.HasPrefix(data.VoiceLLMAPIKey, "xai-") {
+					w.App().ShowModal("xAI API keys typically start with 'xai-'. Please verify your key.", []string{"OK"}, nil)
+					return
+				}
+
+				w.App().ShowModal(fmt.Sprintf("Configuration valid!\n\nDriver: xAI\nVoice: %s", voice), []string{"OK"}, nil)
+			})
+
+			return formWithHeader(`[cyan]Real-time Voice[white] enables natural spoken conversations
+via the HTTP [yellow]/voice[white] endpoint.
+
+Uses [yellow]xAI's Realtime Voice API[white] for low-latency voice interaction.
+
+[gray]Advanced options (OpenAI, sample rates) available in[white]
+[cyan]goclaw setup edit[white] [gray]after initial setup.[white]`, 7, form)
+		},
+		OnExit: func(w *forms.Wizard) error {
+			if data.VoiceLLMEnabled && data.VoiceLLMAPIKey == "" {
+				return fmt.Errorf("xAI API key is required when voice is enabled")
+			}
+			L_info("wizard: voicellm", "enabled", data.VoiceLLMEnabled, "voice", data.VoiceLLMVoice)
 			return nil
 		},
 	}
@@ -1349,6 +1483,19 @@ func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
 		deepSet(cfg, "stt.provider", "whispercpp")
 		deepSet(cfg, "stt.whispercpp.model", data.STTModel)
 		deepSet(cfg, "stt.whispercpp.modelsDir", "~/.goclaw/stt/whisper")
+	}
+
+	// VoiceLLM (Real-time Voice)
+	if data.VoiceLLMEnabled && data.VoiceLLMAPIKey != "" {
+		deepSet(cfg, "voicellm.enabled", true)
+		deepSet(cfg, "voicellm.default", "xai")
+		deepSet(cfg, "voicellm.providers.xai.driver", "xai")
+		deepSet(cfg, "voicellm.providers.xai.apiKey", data.VoiceLLMAPIKey)
+		voice := data.VoiceLLMVoice
+		if voice == "" {
+			voice = "Eve"
+		}
+		deepSet(cfg, "voicellm.providers.xai.voice", voice)
 	}
 
 	return cfg

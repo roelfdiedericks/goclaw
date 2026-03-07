@@ -12,13 +12,13 @@ GoClaw is a Golang implementation of a certain molty bot, compatible with OpenCl
 
 Originally intended as a "minimum viable" replacement for OpenClaw, it has molted to reasonable feature parity with OpenClaw. It's not a complete replacement for OpenClaw but it's very driveable.
 
-GoClaw has a superpower called **transcript search** — a persistent, searchable conversation history that survives context compaction. Your bot is able to recall detailed chat messages from its birth. Long live the memories!
+GoClaw has superpowers: **transcript search** — a persistent, searchable conversation history that survives context compaction — and a **memory graph** that extracts facts, preferences, and relationships into a semantic knowledge graph. Your bot can recall detailed chat messages from its birth and build structured understanding over time. Long live the memories!
 
-Telegram, HTTP (web), and TUI interfaces are the primary methods for interaction at the moment.
+Telegram, WhatsApp, HTTP (web), real-time voice (via xAI), and TUI interfaces are available for chatting to GoClaw.
 
 GoClaw can run side-by-side with OpenClaw in the same workspace directory. The two "consciousness" streams are merged at startup to create one unified timeline, and GoClaw monitors your OpenClaw session to sync any new interactions in real-time. Two brains, one identity. It can also run completely standalone if you prefer.
 
-A SQLite database with vector extensions manages session storage, semantic memory search, and session transcripts.
+SQLite with vector extensions handles all session, transcript, and memory graph storage.
 
 GoClaw is a bit opinionated about security, considering the brave new era we're entering. Tool sandboxing and exec bubblewrap if available, as well as external content/prompt injection wrapping. The managed Chromium install can also be bubblewrapped (tested on Ubuntu). Many other guardrails also exist. Of course you can disable this if you want your bot to have unfettered, dangerous access. Nothing is ever entirely secure, but one can try.
 
@@ -40,14 +40,16 @@ curl -fsSL https://goclaw.org/install.sh | sh
 goclaw setup
 ```
 
-The setup wizard will:
+The setup wizard is fully mouse-enabled. Click through the steps to configure:
 
-1. **Detect OpenClaw** — If found, offer to import settings (API keys, workspace, Telegram token)
-2. **Create workspace** — Set up your agent's home directory with default files
-3. **Configure providers** — Select and test LLM providers (Anthropic, Ollama, LM Studio, etc.)
-4. **Set up user** — Create your owner account with optional Telegram ID
-5. **Test connections** — Validate API keys and fetch available models
-6. **Optionally launch browser** — Set up authenticated browser profiles
+1. **OpenClaw migration** — If found, offer to import settings
+2. **Workspace** — Set up your agent's home directory
+3. **User profile** — Create your owner account
+4. **Channels** — Telegram, WhatsApp, HTTP server
+5. **Speech-to-text** — Configure transcription (Whisper, Groq, Deepgram)
+6. **LLM providers** — Select and test providers (Anthropic, OpenAI, Ollama, etc.)
+7. **Real-time voice** — Configure xAI voice for spoken conversations
+8. **Sandboxing** — Configure security options
 
 After setup, start GoClaw:
 
@@ -56,6 +58,8 @@ goclaw tui           # Interactive TUI mode (recommended)
 goclaw gateway       # Foreground mode (logs to terminal)
 goclaw start         # Daemon mode (background)
 ```
+
+Once running, open http://localhost:1337 for web chat and voice conversations, or use Telegram/WhatsApp.
 
 ### Manual Setup
 
@@ -67,8 +71,6 @@ For manual tweaks, use `goclaw setup edit` to access the menu-based editor. For 
 goclaw setup              # Auto-detect: edit if config exists, wizard if new
 goclaw setup wizard       # Force full wizard (re-walk all steps)
 goclaw setup edit         # Edit existing config (menu-based)
-goclaw config             # View current configuration
-goclaw config path        # Show config file location
 ```
 
 ### Other Installation Methods
@@ -245,7 +247,7 @@ Full documentation available at [goclaw.org/docs](https://goclaw.org/docs/) or i
 
 ### Getting Started
 
-- [Installation](docs/installation.md) — Download, build, and install
+- [Installation](docs/installation.md) — Download, install, or build.
 - [Configuration](docs/configuration.md) — Config file reference
 - [First Run](docs/first-run.md) — Starting the gateway
 
@@ -267,8 +269,12 @@ Full documentation available at [goclaw.org/docs](https://goclaw.org/docs/) or i
 
 - [Channels Overview](docs/channels.md) — Communication interfaces
 - [Telegram](docs/telegram.md) — Bot setup
+- [WhatsApp](docs/whatsapp.md) — WhatsApp integration
 - [Web UI](docs/web-ui.md) — HTTP interface
+- [Voice](docs/voice.md) — Real-time voice via xAI
+- [TUI](docs/tui.md) — Terminal interface
 - [Commands](docs/commands.md) — Slash commands
+- [Supervision](docs/supervision.md) — Ghostwriting and guidance
 
 ### Tools
 
@@ -280,6 +286,7 @@ Full documentation available at [goclaw.org/docs](https://goclaw.org/docs/) or i
 ### Agent Memory
 
 - [Memory Overview](docs/agent-memory.md) — Memory architecture
+- [Memory Graph](docs/memory-graph.md) — Knowledge graph extraction
 - [Memory Search](docs/memory-search.md) — Workspace files
 - [Transcript Search](docs/transcript-search.md) — Conversation history
 - [Embeddings](docs/embeddings.md) — Vector search
@@ -291,7 +298,9 @@ Full documentation available at [goclaw.org/docs](https://goclaw.org/docs/) or i
 - [Skills](docs/skills.md) — Extensibility
 - [Sandbox](docs/sandbox.md) — Execution isolation
 - [Security](docs/security.md) — Secrets, external content protection
+- [Metrics](docs/metrics.md) — LLM usage and cost tracking
 - [Deployment](docs/deployment.md) — Production setup
+- [Updating](docs/updating.md) — Upgrading GoClaw
 - [Troubleshooting](docs/troubleshooting.md) — Common issues
 
 ---
