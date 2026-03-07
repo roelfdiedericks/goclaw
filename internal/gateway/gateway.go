@@ -395,9 +395,6 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 		for name, entry := range cfg.Skills.Entries {
 			skillConfigs[name] = &skills.SkillEntryConfig{
 				Enabled: entry.Enabled,
-				APIKey:  entry.APIKey,
-				Env:     entry.Env,
-				Config:  entry.Config,
 			}
 		}
 

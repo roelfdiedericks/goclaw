@@ -310,8 +310,8 @@ Pages with missing or unrecognized `section` frontmatter:
 - "You" for the reader, avoid "we" except for project decisions
 
 ### Consistent Examples
-- Use `TheRoDent` for usernames in examples
-- Use `Ratpup` for agent names
+- Use `Alice` for usernames in examples
+- Use generic agent names
 - Use placeholder API keys: `YOUR_API_KEY`, `sk-ant-...`
 
 ### Formatting
@@ -336,7 +336,7 @@ Pages with missing or unrecognized `section` frontmatter:
 | `sk-ant-api03-...` | Real Anthropic keys |
 | `YOUR_BOT_TOKEN` | Real Telegram tokens |
 | `user@example.com` | Real email addresses |
-| `TheRoDent` | Real usernames |
+| `Alice` | Real usernames |
 | `192.168.1.x` | Real IP addresses |
 | `example.com` | Real domains (unless public docs) |
 
@@ -348,8 +348,7 @@ This applies to:
 - Error messages
 
 If you need realistic-looking examples, use:
-- **Username:** `TheRoDent`
-- **Agent name:** `Ratpup`
+- **Username:** `Alice`, `Bob`
 - **API keys:** `YOUR_API_KEY`, `sk-ant-...`, `gsk_...`
 - **Tokens:** `YOUR_BOT_TOKEN`, `YOUR_TOKEN`
 - **IPs:** `192.168.1.x`, `10.0.0.x`

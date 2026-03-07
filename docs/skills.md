@@ -11,16 +11,16 @@ GoClaw implements a skills system compatible with OpenClaw. Skills are markdown 
 
 ## Overview
 
-Skills are loaded from multiple directories in precedence order (lowest to highest):
+Skills are loaded from configured directories in precedence order:
 
 | Priority | Source | Path | Purpose |
 |----------|--------|------|---------|
-| Lowest | Extra | Config `extraDirs` | Additional directories |
-| Low | Bundled | `<goclaw>/skills/` | Ships with GoClaw |
-| Medium | Managed | `~/.openclaw/skills/` | User-installed via clawhub |
-| Highest | Workspace | `<workspace>/skills/` | Project-specific |
+| Lower | Extra | Config `extraDirs` | Additional directories (power user) |
+| Higher | Workspace | `<workspace>/skills/` | Installed and project-specific skills |
 
 Higher precedence skills override lower ones with the same name.
+
+Skills from the embedded catalog (bundled with GoClaw) can be installed to the workspace using the `skills` tool's `install` action.
 
 ## Skill Format
 
@@ -70,15 +70,18 @@ Instructions for the agent on how to use this skill...
 
 ### Install Kinds
 
-| Kind | Description | Supported |
-|------|-------------|-----------|
-| `brew` | Homebrew formula | Yes |
-| `go` | Go module | Yes |
-| `uv` | Python uv tool | Yes |
-| `download` | Direct download | Yes |
-| `node` | npm/pnpm/yarn | **BLOCKED** |
+| Kind | Description | Behavior |
+|------|-------------|----------|
+| `brew` | Homebrew formula | Auto-install |
+| `go` | Go module (`go install`) | Auto-install |
+| `uv` | Python uv tool | Auto-install |
+| `download` | Direct download URL | Manual (shows URL) |
+| `npm`/`node` | npm package | Manual (shows command) |
+| `pnpm` | pnpm package | Manual (shows command) |
+| `yarn` | yarn package | Manual (shows command) |
 
-Node.js installation is blocked for security reasons. Install npm packages manually.
+- **Auto-install**: GoClaw runs the install command automatically
+- **Manual**: Returns the install command; agent runs it via `exec` if needed
 
 ## Configuration
 
@@ -88,21 +91,14 @@ Add to `goclaw.json`:
 {
   "skills": {
     "enabled": true,
-    "bundledDir": "",
-    "managedDir": "",
     "workspaceDir": "",
     "extraDirs": [],
     "watch": true,
     "watchDebounceMs": 500,
-    "entries": {
-      "skill-name": {
-        "enabled": true,
-        "apiKey": "...",
-        "env": {
-          "VAR": "value"
-        },
-        "config": {}
-      }
+    "install": {
+      "allowEmbedded": true,
+      "allowClawHub": false,
+      "allowLocal": true
     }
   }
 }
@@ -113,33 +109,30 @@ Add to `goclaw.json`:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `enabled` | `true` | Enable/disable skills system |
-| `bundledDir` | `<exe>/skills/` | Override bundled skills path |
-| `managedDir` | `~/.openclaw/skills/` | Override managed skills path |
 | `workspaceDir` | `<workspace>/skills/` | Override workspace skills path |
 | `extraDirs` | `[]` | Additional skill directories |
 | `watch` | `true` | Watch for file changes |
 | `watchDebounceMs` | `500` | Debounce interval for changes |
-| `entries` | `{}` | Per-skill configuration |
+| `install` | See below | Installation source configuration |
+| `entries` | `{}` | Whitelist flagged skills (see below) |
 
-### Per-Skill Config
+### Whitelisting Flagged Skills
 
-Override settings for specific skills:
+When the security auditor flags a skill, it's disabled by default. If you trust the skill, whitelist it:
 
 ```json
 {
   "skills": {
     "entries": {
-      "discord": {
-        "enabled": true,
-        "apiKey": "your-discord-token"
-      },
-      "suspicious-skill": {
-        "enabled": false
+      "flagged-but-trusted": {
+        "enabled": true
       }
     }
   }
 }
 ```
+
+This is the only use case for per-skill config. To remove an unwanted skill, simply uninstall it rather than disabling via config.
 
 ## Security Auditor
 
@@ -377,7 +370,7 @@ Install a skill from a source.
 }
 ```
 
-**Sources:** `embedded` (bundled with GoClaw), `clawhub` (remote registry), `local` (workspace)
+**Sources:** `embedded` (bundled with GoClaw), `clawhub` (remote registry - not yet implemented), `local` (workspace path)
 
 **Output:**
 ```json
@@ -418,7 +411,7 @@ List available skill sources/repositories.
 {
   "sources": [
     {"name": "embedded", "enabled": true, "count": 55},
-    {"name": "clawhub", "enabled": false, "url": "https://clawhub.com"},
+    {"name": "clawhub", "enabled": false, "url": "https://clawhub.com", "note": "not yet implemented"},
     {"name": "local", "enabled": true, "path": "~/.goclaw/workspace/skills"}
   ]
 }
@@ -437,21 +430,19 @@ Rescan skill directories and refresh the registry.
 
 Use after manually adding skills to directories.
 
-## Syncing Bundled Skills
+## Embedded Catalog (Developer)
 
-GoClaw bundled skills are synced from OpenClaw. To update:
+GoClaw ships with an embedded catalog of skills from OpenClaw. For GoClaw developers:
 
 ```bash
+# Sync skills from OpenClaw repository
 make skills-update
-```
 
-To check for differences without updating:
-
-```bash
+# Check for differences without updating
 make skills-check
 ```
 
-This uses git sparse checkout to fetch only the `skills/` directory from the OpenClaw repository.
+End users install skills from the embedded catalog using the `skills` tool's `install` action.
 
 ## Troubleshooting
 

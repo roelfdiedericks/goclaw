@@ -16,7 +16,7 @@ This section covers advanced configuration, deployment, and troubleshooting for 
 
 | Topic | Description |
 |-------|-------------|
-| [Deployment](deployment.md) | Production deployment, systemd, Docker |
+| [Deployment](deployment.md) | Production deployment, daemon mode, Docker |
 | [Sandbox](sandbox.md) | File sandboxing and bubblewrap |
 
 ### Operations

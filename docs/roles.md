@@ -25,12 +25,12 @@ Users are defined in `users.json`:
 {
   "users": [
     {
-      "name": "TheRoDent",
+      "name": "Alice",
       "role": "owner",
       "identities": [
         {"provider": "telegram", "id": "123456789"},
         {"provider": "whatsapp", "id": "1234567890"},
-        {"provider": "http", "id": "therodent"}
+        {"provider": "http", "id": "alice"}
       ],
       "credentials": [
         {"type": "password", "hash": "<argon2-hash>", "label": "web-login"}
@@ -64,7 +64,7 @@ Identities link external accounts to GoClaw users:
 |----------|-----------|---------|
 | `telegram` | Telegram user ID | `123456789` |
 | `whatsapp` | Phone number (no +) | `1234567890` |
-| `http` | Username for web UI | `therodent` |
+| `http` | Username for web UI | `alice` |
 | `local` | `owner` for CLI | `owner` |
 
 ### Built-in Roles

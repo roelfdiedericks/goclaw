@@ -246,6 +246,88 @@ func Load() (*LoadResult, error) {
 	}, nil
 }
 
+// LoadRuntime reads configuration from goclaw.json with environment variable expansion.
+// Use this for gateway startup and CLI commands that execute functionality.
+// Use Load() instead for setup wizard/editor where ${VAR} placeholders must be preserved.
+//
+// Environment variables are referenced using ${VAR_NAME} syntax. If any referenced
+// variable is not set, an error is returned.
+func LoadRuntime() (*LoadResult, error) {
+	home, _ := os.UserHomeDir()
+	goclawDir, _ := paths.BaseDir()
+	goclawGlobalPath, _ := paths.DefaultConfigPath()
+	goclawLocalPath := "goclaw.json"
+
+	logging.L_debug("config: checking files (runtime)", "goclawDir", goclawDir, "cwd", mustGetwd())
+
+	// Determine which goclaw.json to use (local takes priority)
+	var goclawPath string
+	var goclawData []byte
+	var goclawExists bool
+
+	if data, err := os.ReadFile(goclawLocalPath); err == nil {
+		absPath, _ := filepath.Abs(goclawLocalPath)
+		goclawPath = absPath
+		goclawData = data
+		goclawExists = true
+		logging.L_debug("config: found local goclaw.json", "path", absPath, "size", len(data))
+	} else if data, err := os.ReadFile(goclawGlobalPath); err == nil {
+		goclawPath = goclawGlobalPath
+		goclawData = data
+		goclawExists = true
+		logging.L_debug("config: found global goclaw.json", "path", goclawGlobalPath, "size", len(data))
+	}
+
+	if !goclawExists {
+		return nil, fmt.Errorf("no goclaw.json configuration found. Run 'goclaw setup' to create one")
+	}
+
+	if isMinimalJSON(goclawData) {
+		return nil, fmt.Errorf("goclaw.json is empty or incomplete. Run 'goclaw setup' to configure")
+	}
+
+	// Expand ${VAR} environment variable references
+	if HasEnvVars(goclawData) {
+		logging.L_debug("config: expanding environment variables")
+		expanded, err := ExpandEnvVars(goclawData)
+		if err != nil {
+			return nil, err
+		}
+		goclawData = expanded
+	}
+
+	logging.L_debug("config: loading from goclaw.json (runtime)")
+
+	cfg := &Config{}
+	if err := defaults.Set(cfg); err != nil {
+		return nil, fmt.Errorf("failed to set config defaults: %w", err)
+	}
+
+	if err := json.Unmarshal(goclawData, cfg); err != nil {
+		logging.L_error("config: failed to parse goclaw.json", "path", goclawPath, "error", err)
+		return nil, formatJSONError(goclawData, err)
+	}
+	logging.L_debug("config: loaded from goclaw.json (runtime)", "path", goclawPath)
+
+	applyRuntimeDefaults(cfg, goclawDir, home)
+
+	agentModel := ""
+	if len(cfg.LLM.Agent.Models) > 0 {
+		agentModel = cfg.LLM.Agent.Models[0]
+	}
+	logging.L_debug("config: loaded (runtime)",
+		"agentModel", agentModel,
+		"providers", len(cfg.LLM.Providers),
+		"telegramEnabled", cfg.Channels.Telegram.Enabled,
+		"workingDir", cfg.Gateway.WorkingDir,
+	)
+
+	return &LoadResult{
+		Config:     cfg,
+		SourcePath: goclawPath,
+	}, nil
+}
+
 // applyRuntimeDefaults sets defaults that cannot be expressed as struct tags
 // (file paths, slices, maps, function-derived values)
 func applyRuntimeDefaults(cfg *Config, goclawDir, home string) {

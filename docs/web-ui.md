@@ -111,10 +111,10 @@ The HTTP channel supports password authentication via `users.json`:
 {
   "users": [
     {
-      "name": "TheRoDent",
+      "name": "Alice",
       "role": "owner",
       "identities": [
-        {"provider": "http", "id": "therodent"}
+        {"provider": "http", "id": "alice"}
       ],
       "credentials": [
         {"type": "password", "hash": "<argon2-hash>", "label": "web-login"}

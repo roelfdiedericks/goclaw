@@ -87,9 +87,9 @@ type RuntimePaths struct {
 
 // loadRuntimePaths loads config and derives all runtime paths from session.storePath
 func loadRuntimePaths() (*RuntimePaths, error) {
-	loadResult, err := config.Load()
+	loadResult, err := config.LoadRuntime()
 	if err != nil {
-		// Don't wrap - config.Load() error already includes "Run 'goclaw setup'" hint
+		// Don't wrap - config.LoadRuntime() error already includes "Run 'goclaw setup'" hint
 		return nil, err
 	}
 
@@ -921,7 +921,7 @@ func (b *BrowserDownloadCmd) Run(ctx *Context) error {
 	}
 
 	// Load config to get browser settings
-	loadResult, err := config.Load()
+	loadResult, err := config.LoadRuntime()
 	if err != nil {
 		return err
 	}
@@ -989,7 +989,7 @@ func (b *BrowserSetupCmd) Run(ctx *Context) error {
 	}
 
 	// Load config
-	loadResult, err := config.Load()
+	loadResult, err := config.LoadRuntime()
 	if err != nil {
 		return err
 	}
@@ -1076,7 +1076,7 @@ func (b *BrowserProfilesCmd) Run(ctx *Context) error {
 	}
 
 	// Load config
-	loadResult, err := config.Load()
+	loadResult, err := config.LoadRuntime()
 	if err != nil {
 		return err
 	}
@@ -1142,7 +1142,7 @@ func (b *BrowserClearCmd) Run(ctx *Context) error {
 	}
 
 	// Load config
-	loadResult, err := config.Load()
+	loadResult, err := config.LoadRuntime()
 	if err != nil {
 		return err
 	}
@@ -1193,7 +1193,7 @@ func (b *BrowserStatusCmd) Run(ctx *Context) error {
 	}
 
 	// Load config
-	loadResult, err := config.Load()
+	loadResult, err := config.LoadRuntime()
 	if err != nil {
 		return err
 	}
@@ -1534,7 +1534,7 @@ func (w *WhatsAppStatusCmd) Run(ctx *Context) error {
 // runEmbeddingsStatus shows detailed embedding status
 func runEmbeddingsStatus() error {
 	// Load config
-	loadResult, err := config.Load()
+	loadResult, err := config.LoadRuntime()
 	if err != nil {
 		return err
 	}
@@ -1642,7 +1642,7 @@ func buildLLMRegistry(cfg *config.Config) (*llm.Registry, error) {
 // runEmbeddingsRebuild rebuilds all non-primary embeddings
 func runEmbeddingsRebuild(batchSize int) error {
 	// Load config
-	loadResult, err := config.Load()
+	loadResult, err := config.LoadRuntime()
 	if err != nil {
 		return err
 	}
@@ -1736,7 +1736,7 @@ func openMemoryDB(cfg *config.Config) (*sql.DB, error) {
 
 // runGraphIngest ingests content into the memory graph
 func runGraphIngest(source, username string, maxAgeDays int) error {
-	loadResult, err := config.Load()
+	loadResult, err := config.LoadRuntime()
 	if err != nil {
 		return err
 	}
@@ -1853,7 +1853,7 @@ func runGraphIngest(source, username string, maxAgeDays int) error {
 
 // runGraphBulletin generates a memory bulletin (raw structured output, same as agent sees)
 func runGraphBulletin(bulletinType, username string) error {
-	loadResult, err := config.Load()
+	loadResult, err := config.LoadRuntime()
 	if err != nil {
 		return err
 	}
@@ -1919,7 +1919,7 @@ func runGraphBulletin(bulletinType, username string) error {
 
 // runGraphSearch searches the memory graph
 func runGraphSearch(query, username string, limit int) error {
-	loadResult, err := config.Load()
+	loadResult, err := config.LoadRuntime()
 	if err != nil {
 		return err
 	}
@@ -1980,7 +1980,7 @@ func runGraphSearch(query, username string, limit int) error {
 
 // runGraphStats shows memory graph statistics
 func runGraphStats() error {
-	loadResult, err := config.Load()
+	loadResult, err := config.LoadRuntime()
 	if err != nil {
 		return err
 	}
@@ -2096,7 +2096,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	L_info("starting gateway", "version", version)
 
 	// Load config (handles bootstrap from openclaw.json if needed)
-	loadResult, err := config.Load()
+	loadResult, err := config.LoadRuntime()
 	if err != nil {
 		return err
 	}

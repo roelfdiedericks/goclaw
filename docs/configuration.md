@@ -487,17 +487,29 @@ See [User Auth Tool](tools/user-auth.md) for full documentation.
 
 **Config is stored outside the workspace directory** in the normal layout. The default config path is `~/.goclaw/goclaw.json`; the default workspace (where the agent reads/writes) is `~/.goclaw/workspace` or a path you set (e.g. a project directory). So the config file is not inside the agent’s workspace. If you use a local `goclaw.json` in the current directory, it can be alongside the workspace but remains inaccessible to the agent because of the denied list. For stricter setups, keep `goclaw.json` in `~/.goclaw/` with mode `0600` and avoid committing it.
 
-### Why not environment variables at runtime
+### Environment variable references
 
-GoClaw does **not** read API keys or tokens from environment variables at runtime. Reasons:
+GoClaw does **not** automatically scan environment variables for API keys. However, you can explicitly reference env vars using `${VAR_NAME}` syntax:
 
-For a fuller discussion (unintended behaviour, security concerns, best practice), see [Environment variables and secrets](security-envvars.md).
+```json
+{
+  "llm": {
+    "providers": {
+      "anthropic": {
+        "apiKey": "${ANTHROPIC_API_KEY}"
+      }
+    }
+  }
+}
+```
 
-- **Predictable behaviour** — No ambiguity about precedence (file vs env). The only source of secrets is the config file.
-- **Security** — Env vars are process-visible (any child process or user with proc access can read them), often appear in logs and crash dumps, and can be inherited by shells and subprocesses. Storing secrets in env is explicitly called out as risky (e.g. CWE-526: cleartext storage in environment variables). Env vars built from or passed through untrusted input can also be a vector for injection (e.g. Shellshock-style issues, or command injection when values are used in shell commands).
-- **Operational clarity** — One place to look for and rotate secrets: `goclaw.json` (and `users.json`). No need to track which env vars are set in which environment.
+- **At runtime** — `${VAR}` references are expanded when starting the gateway or CLI commands
+- **In setup wizard** — The literal `${VAR_NAME}` text is preserved for editing
+- **Missing vars** — GoClaw fails with a clear error if a referenced variable is not set
 
-Storing secrets in a file has downsides too (backups, permissions), but the file is at a fixed path, can be permission-restricted (`chmod 0600`), and is explicitly excluded from agent tool access. The setup wizard can copy API keys from your environment or from existing auth-profiles into `goclaw.json` during setup; after that, runtime uses only the config file.
+This is useful for Kubernetes, Docker, CI/CD pipelines, and other deployment systems that inject secrets via environment.
+
+For the full rationale (why explicit references rather than auto-scanning, security considerations, best practice), see [Environment variables and secrets](security-envvars.md).
 
 ---
 
@@ -509,7 +521,7 @@ User access is configured in `users.json`:
 {
   "users": [
     {
-      "name": "TheRoDent",
+      "name": "Alice",
       "role": "owner",
       "identities": [
         {"provider": "telegram", "id": "123456789"}

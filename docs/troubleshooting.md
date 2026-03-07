@@ -106,7 +106,7 @@ sqlite3 ~/.goclaw/sessions.db ".tables"
 {
   "users": [
     {
-      "name": "TheRoDent",
+      "name": "Alice",
       "role": "owner",
       "identities": [
         {"provider": "telegram", "id": "YOUR_USER_ID"}

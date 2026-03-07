@@ -30,7 +30,7 @@ The TUI has a split-pane layout:
 │                                 │                    │
 │ > Type a message...             │                    │
 ├─────────────────────────────────┴────────────────────┤
-│ ✓ Ready │ User: TheRoDent │ Tab: focus │ Enter: send │
+│ ✓ Ready │ User: Alice │ Tab: focus │ Enter: send │
 └──────────────────────────────────────────────────────┘
 ```
 

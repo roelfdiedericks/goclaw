@@ -32,23 +32,33 @@ GoClaw includes a Telegram bot for interacting with the agent via chat.
 
 ### 3. Set Up User Access
 
-Add authorized users to `users.json`:
+Use the CLI to set your Telegram ID:
+
+```bash
+goclaw users set-telegram <username> <telegram_id>
+```
+
+For example:
+
+```bash
+goclaw users set-telegram alice 123456789
+```
+
+Find your Telegram user ID by messaging [@userinfobot](https://t.me/userinfobot).
+
+Alternatively, edit `users.json` directly:
 
 ```json
 {
   "users": [
     {
-      "name": "TheRoDent",
+      "name": "Alice",
       "role": "owner",
-      "identities": [
-        {"provider": "telegram", "id": "123456789"}
-      ]
+      "telegram_id": "123456789"
     }
   ]
 }
 ```
-
-Find your Telegram user ID by messaging [@userinfobot](https://t.me/userinfobot).
 
 ---
 
@@ -198,7 +208,7 @@ Add your user ID to `users.json`:
 {
   "users": [
     {
-      "name": "TheRoDent",
+      "name": "Alice",
       "role": "owner",
       "identities": [
         {"provider": "telegram", "id": "YOUR_USER_ID"}

@@ -67,7 +67,7 @@ Anthropic supports extended thinking (reasoning) on Claude 3.5+ models. Configur
 {
   "users": [
     {
-      "name": "TheRoDent",
+      "name": "Alice",
       "role": "owner",
       "thinking": true,
       "thinkingLevel": "medium"

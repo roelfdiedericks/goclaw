@@ -48,22 +48,34 @@ Add to your `goclaw.json`:
 
 ### 3. Configure User Identity
 
-Add your WhatsApp JID to your user entry in `users.json`:
+Use the CLI to set your WhatsApp ID:
+
+```bash
+goclaw users set-whatsapp <username> <phone_number>
+```
+
+For example:
+
+```bash
+goclaw users set-whatsapp alice 27821234567
+```
+
+The phone number should be in international format without the `+` — just the country code and number as shown in your JID (e.g., `27821234567` from `27821234567@s.whatsapp.net`).
+
+Alternatively, edit `users.json` directly:
 
 ```json
 {
   "users": [
     {
-      "id": "rodent",
-      "name": "Rodent",
+      "id": "alice",
+      "name": "Alice",
       "role": "owner",
-      "whatsapp_id": "1234567890"
+      "whatsapp_id": "27821234567"
     }
   ]
 }
 ```
-
-The `whatsapp_id` is your phone number without the `+` or country code prefix — just the number as shown in your JID (e.g., `1234567890` from `1234567890@s.whatsapp.net`).
 
 ## Device Management
 

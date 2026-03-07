@@ -75,7 +75,7 @@ Stops all running agent tasks for your user across all sessions.
 
 **Output:**
 ```
-Stopped all agent tasks for user TheRoDent
+Stopped all agent tasks for user Alice
 ```
 
 Use this when:

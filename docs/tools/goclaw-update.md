@@ -169,7 +169,6 @@ The restart method depends on how GoClaw was started:
 | Foreground (`goclaw gateway`) | Process replaces itself via `exec()` |
 | TUI (`goclaw tui`) | TUI restarts with new version |
 | Daemon (`goclaw start`) | Daemon restarts, PID file updated |
-| Systemd | GoClaw exits, systemd restarts it |
 | Docker | Update works but is not persistent |
 
 ---

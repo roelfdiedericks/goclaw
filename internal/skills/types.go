@@ -96,10 +96,7 @@ type EligibilityContext struct {
 
 // SkillEntryConfig holds per-skill configuration from goclaw.json
 type SkillEntryConfig struct {
-	Enabled bool              `json:"enabled"`
-	APIKey  string            `json:"apiKey,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-	Config  map[string]any    `json:"config,omitempty"`
+	Enabled bool `json:"enabled"`
 }
 
 // InstallResult reports the outcome of an install attempt

@@ -71,14 +71,6 @@ goclaw update --no-restart
 - Daemon process is restarted
 - PID file is updated
 
-### Supervised (systemd)
-
-- Binary is replaced
-- GoClaw exits
-- systemd restarts it automatically
-
-**Note:** Ensure your systemd unit has `Restart=always`.
-
 ### Docker
 
 - Binary replacement inside the container is not persistent

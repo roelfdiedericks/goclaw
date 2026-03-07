@@ -155,7 +155,7 @@ Per-user in `users.json`:
 {
   "users": [
     {
-      "name": "TheRoDent",
+      "name": "Alice",
       "role": "owner",
       "thinking": true,
       "thinkingLevel": "medium"

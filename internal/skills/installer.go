@@ -2,15 +2,12 @@ package skills
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os/exec"
 	"runtime"
 	"strings"
 )
 
-// ErrNodeBlocked is returned when a node/npm install is requested
-var ErrNodeBlocked = errors.New("Node.js package installation is not supported for security reasons. Please install manually")
 
 // Installer handles skill dependency installation.
 type Installer struct {
@@ -52,8 +49,12 @@ func (i *Installer) Install(ctx context.Context, spec InstallSpec) (*InstallResu
 		return i.installUV(ctx, spec)
 	case "download":
 		return i.installDownload(ctx, spec)
-	case "node", "npm", "pnpm", "yarn":
-		return nil, ErrNodeBlocked
+	case "node", "npm":
+		return i.installNode(ctx, spec, "npm")
+	case "pnpm":
+		return i.installNode(ctx, spec, "pnpm")
+	case "yarn":
+		return i.installNode(ctx, spec, "yarn")
 	default:
 		return &InstallResult{
 			Success: false,
@@ -166,7 +167,7 @@ func (i *Installer) installUV(ctx context.Context, spec InstallSpec) (*InstallRe
 	}, nil
 }
 
-// installDownload downloads and extracts a tarball.
+// installDownload returns instructions for manual download.
 func (i *Installer) installDownload(ctx context.Context, spec InstallSpec) (*InstallResult, error) {
 	if spec.URL == "" {
 		return &InstallResult{
@@ -175,10 +176,34 @@ func (i *Installer) installDownload(ctx context.Context, spec InstallSpec) (*Ins
 		}, nil
 	}
 
-	// For now, just return instructions - actual download is complex
 	return &InstallResult{
 		Success: false,
 		Message: fmt.Sprintf("Manual download required: %s", spec.URL),
+	}, nil
+}
+
+// installNode returns instructions for Node.js package installation.
+func (i *Installer) installNode(ctx context.Context, spec InstallSpec, pm string) (*InstallResult, error) {
+	if spec.Package == "" {
+		return &InstallResult{
+			Success: false,
+			Message: "No package specified for node install",
+		}, nil
+	}
+
+	var cmd string
+	switch pm {
+	case "pnpm":
+		cmd = fmt.Sprintf("pnpm add -g %s", spec.Package)
+	case "yarn":
+		cmd = fmt.Sprintf("yarn global add %s", spec.Package)
+	default:
+		cmd = fmt.Sprintf("npm install -g %s", spec.Package)
+	}
+
+	return &InstallResult{
+		Success: false,
+		Message: fmt.Sprintf("Run manually: %s", cmd),
 	}, nil
 }
 
