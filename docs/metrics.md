@@ -153,29 +153,6 @@ Persistence saves every 30 seconds and on graceful shutdown.
 | `http/requests` | HTTP request counts |
 | `whatsapp/messages` | WhatsApp message counts |
 
-## Programmatic Access
-
-Use the metrics API in Go code:
-
-```go
-import . "github.com/roelfdiedericks/goclaw/internal/metrics"
-
-// Timing
-key := MetricStart("my_topic", "my_function")
-// ... do work ...
-MetricEnd(key)
-
-// Or auto-timed:
-defer MetricFunc("my_topic")()
-
-// Counters
-MetricInc("requests", "total")
-MetricAdd("bytes", "processed", 1024)
-
-// Cost (microdollars)
-MetricCost("llm/anthropic", "claude-sonnet", 234500) // $0.2345
-```
-
 ---
 
 ## See Also

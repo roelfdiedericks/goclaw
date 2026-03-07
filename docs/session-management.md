@@ -33,15 +33,13 @@ Checkpoints are **rolling snapshots** of conversation state. They do NOT delete 
 
 ### What's in a Checkpoint?
 
-```go
-type CheckpointData struct {
-    Summary           string   // LLM-generated summary
-    TokensAtCheckpoint int     // Token count when created
-    Topics            []string // Topics discussed
-    KeyDecisions      []string // Decisions made
-    OpenQuestions     []string // Outstanding questions
-}
-```
+Each checkpoint captures:
+
+- **Summary** — LLM-generated summary of the conversation so far
+- **Token count** — How many tokens were used when the checkpoint was created
+- **Topics** — Topics discussed in the conversation
+- **Key decisions** — Decisions made during the conversation
+- **Open questions** — Outstanding questions that haven't been resolved
 
 ### When Are Checkpoints Created?
 

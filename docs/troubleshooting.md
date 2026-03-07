@@ -395,7 +395,7 @@ make debug 2>&1 | grep -v "trace\|TRAC"
 
 When reporting issues, include:
 
-1. GoClaw version: `./goclaw --version` or `goclaw --version`
+1. GoClaw version: `./goclaw version` or `goclaw version`
 2. Go version: `go version`
 3. OS: `uname -a`
 4. Relevant config (redact secrets)

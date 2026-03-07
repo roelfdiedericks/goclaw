@@ -293,7 +293,7 @@ Voice uses a completely separate provider system:
 - [WhatsApp](whatsapp.md) — WhatsApp linked device
 - [TUI](tui.md) — Terminal interface
 - [Web UI](web-ui.md) — HTTP interface
+- [Voice](voice.md) — Real-time voice conversations
 - [Cron](cron.md) — Scheduled tasks
 - [Channel Commands](commands.md) — Slash commands
 - [Configuration](configuration.md) — Full config reference
-- [Architecture](architecture.md) — HTTP Voice & VoiceLLM details

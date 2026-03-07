@@ -37,7 +37,7 @@ curl -fsSL https://goclaw.org/install.sh | sh -s -- --version 0.1.1
 Verify the installation:
 
 ```bash
-goclaw --version
+goclaw version
 ```
 
 ### Install from Debian Package

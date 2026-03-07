@@ -187,7 +187,7 @@ GoClaw is configured via `goclaw.json` in the working directory.
 | Section | Description | Documentation |
 |---------|-------------|---------------|
 | `stt` | Speech-to-text transcription | Below |
-| `voicellm` | Real-time voice conversations | Below |
+| `voicellm` | Real-time voice conversations | [Voice](voice.md) |
 
 ### Tools
 
@@ -405,7 +405,7 @@ The prompt cache watches workspace identity files (SOUL.md, AGENTS.md, etc.) for
       "xai": {
         "driver": "xai",
         "apiKey": "xai-...",
-        "voice": "Charon",
+        "voice": "Eve",
         "sampleRate": 48000
       }
     }
@@ -425,12 +425,12 @@ The prompt cache watches workspace identity files (SOUL.md, AGENTS.md, etc.) for
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `driver` | string | - | `xai` or `openai` |
+| `driver` | string | - | `xai` |
 | `apiKey` | string | - | Provider API key |
-| `voice` | string | `Eve` | Voice name (xAI: Eve, Charon, Ash, etc.) |
+| `voice` | string | `Eve` | Voice name (Eve, Ara, Rex, Sal, Leo) |
 | `sampleRate` | int | `48000` | Audio sample rate |
 
-Real-time voice is accessible via the HTTP channel's `/voice` endpoint.
+See [Voice](voice.md) for full documentation including prompt customization and browser requirements.
 
 ---
 

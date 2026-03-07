@@ -142,13 +142,10 @@ GoClaw supports multiple release channels:
 ## Checking Current Version
 
 ```bash
-goclaw --version
+goclaw version
 ```
 
-Output includes:
-- Version number
-- Build date
-- Git commit (if available)
+Output shows the version number and channel (e.g., `goclaw 0.2.0` or `goclaw 0.2.1-beta.1`).
 
 ---
 

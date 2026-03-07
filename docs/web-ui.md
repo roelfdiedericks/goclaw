@@ -146,6 +146,7 @@ For development, run with debug logging:
 
 ## See Also
 
+- [Voice](voice.md) — Real-time voice conversations
 - [Channels](channels.md) — Channel overview
 - [Metrics](metrics.md) — Monitoring and metrics
 - [Roles](roles.md) — Access control
