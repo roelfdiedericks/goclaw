@@ -33,6 +33,11 @@ Basic file and system operations:
 
 | Tool | Description | Documentation |
 |------|-------------|---------------|
+| `recall` | Retrieve relevant memories from graph | [Memory Graph](memory-graph.md) |
+| `query` | Search/filter memory graph | [Memory Graph](memory-graph.md) |
+| `store` | Add memory to graph | [Memory Graph](memory-graph.md) |
+| `update` | Modify existing memory | [Memory Graph](memory-graph.md) |
+| `forget` | Remove memory from graph | [Memory Graph](memory-graph.md) |
 | `memory_search` | Semantic search over memory files | [Memory Search](memory-search.md) |
 | `transcript_search` | Search conversation history | [Transcript Search](transcript-search.md) |
 | `web_search` | Search the web | [Web Tools](tools/web.md) |
@@ -53,7 +58,9 @@ Basic file and system operations:
 | `jq` | JSON query and transformation | [JQ Tool](tools/jq.md) |
 | `xai_imagine` | xAI image generation | [xAI Imagine](tools/xai-imagine.md) |
 | `user_auth` | Request role elevation | [User Auth](tools/user-auth.md) |
-| `skills` | Query skill registry | [Skills](skills.md) |
+| `skills` | List, search, install, and manage skills | [Skills](skills.md) |
+| `media_display` | Display images/media to user | — |
+| `goclaw_update` | Check for and install updates | [GoClaw Update](tools/goclaw-update.md) |
 
 ## Configuration
 
@@ -116,7 +123,9 @@ Tools return structured errors:
 ## See Also
 
 - [Internal Tools](tools/internal.md) — read, write, edit, exec
+- [Memory Graph](memory-graph.md) — Semantic knowledge graph
 - [Browser Tool](tools/browser.md) — Browser automation
 - [Home Assistant](tools/hass.md) — Smart home control
+- [Skills](skills.md) — Skills system and installation
 - [Configuration](configuration.md) — Full config reference
 - [Sandbox](sandbox.md) — Tool security

@@ -71,21 +71,21 @@ goclaw config             # View current configuration
 goclaw config path        # Show config file location
 ```
 
+### Other Installation Methods
+
+See [Installation Guide](docs/installation.md) for:
+- **Debian/Ubuntu** — `.deb` packages with bundled dependencies
+- **Docker** — Container images on `ghcr.io`
+- **Windows** — WSL2 installer script
+- **Build from source** — For development or custom builds
+
 ---
 
 ## Superpowers
 
 ### Transcript Search — Your Agent Never Forgets
 
-GoClaw indexes every conversation into a searchable database with semantic embeddings. GoClaw transcripts are:
-
-- **Local & Private** — Your conversations stay on your machine
-- **Persistent** — Survives context compaction; nothing is ever truly lost
-- **Cross-Platform** — Merges OpenClaw + GoClaw history into one searchable index
-- **Real-time** — New messages indexed within 30 seconds
-- **Hybrid Search** — Combines semantic understanding with keyword matching
-
-Your agent can search past conversations to recover context after compaction, find previous decisions, or recall what you discussed weeks ago.
+Every conversation is indexed into a local, searchable database with semantic embeddings. Transcripts survive context compaction — nothing is ever truly lost. The agent can recover context, find previous decisions, or recall discussions from weeks ago.
 
 ```
 Agent: "What did we decide about the authentication system?"
@@ -98,20 +98,24 @@ See [Transcript Search](docs/transcript-search.md) for full documentation.
 
 ### Memory Search — Workspace Knowledge
 
-Search your memory files (`memory/*.md`, `MEMORY.md`) with the same hybrid semantic + keyword search. The agent can find relevant notes, decisions, and context from your written records.
+Search your memory files (`memory/*.md`, `MEMORY.md`) with hybrid semantic + keyword search. The agent finds relevant notes, decisions, and context from your written records.
 
 See [Memory Search](docs/memory-search.md) for details.
 
+### Memory Graph — Structured Knowledge
+
+A semantic knowledge graph that automatically extracts entities, facts, and relationships from conversations. Unlike file-based memory, Memory Graph provides structured, queryable memory with tools like `recall`, `store`, and `query`.
+
+See [Memory Graph](docs/memory-graph.md) for details.
+
 ### Managed Browser — First-Class Web Access
 
-GoClaw includes a managed Chromium browser as a first-class citizen, not an afterthought:
+GoClaw includes a managed Chromium browser with auto-download/update:
 
-- **`web_fetch`** — Automatically uses the browser for JavaScript-rendered pages (SPAs, dynamic content). Falls back gracefully when browser isn't available.
-- **`browser` tool** — Full browser automation: navigate, click, type, screenshot, extract content. Headless or headed operation.
-- **Persistent Profiles** — Maintain authenticated sessions across restarts. Log in once, stay logged in.
-- **Domain Mapping** — Route specific sites to specific profiles (e.g., `*.twitter.com` → `twitter` profile).
-
-The browser auto-downloads and updates Chromium, so there's nothing to install manually.
+- **`web_fetch`** — Automatic browser fallback for JavaScript-rendered pages
+- **`browser` tool** — Full automation: navigate, click, type, screenshot
+- **Persistent Profiles** — Authenticated sessions survive restarts
+- **Domain Mapping** — Route sites to specific profiles (e.g., `*.twitter.com` → `twitter`)
 
 See [Browser Tool](docs/tools/browser.md) for full documentation.
 
@@ -135,64 +139,92 @@ GoClaw manages the LLM's context window automatically:
 
 See [Session Management](docs/session-management.md) for details.
 
-### Supported LLM Providers
+### Text LLM Providers
 
-| Provider | Use Cases |
-|----------|-----------|
-| **Anthropic** | Agent responses (Claude Opus, Sonnet, Haiku) |
-| **Ollama** | Local inference, embeddings, summarization |
-| **OpenAI-compatible** | LM Studio, LocalAI, Kimi, OpenRouter, etc. |
+| Provider | Driver | Use Cases |
+|----------|--------|-----------|
+| **Anthropic** | `anthropic` | Agent responses (Claude Opus, Sonnet, Haiku) |
+| **xAI** | `xai` | Low-latency, Grok models, server-side tools (gRPC) |
+| **Ollama** | `ollama` | Local inference, embeddings, summarization |
+| **OpenAI** | `openai` | GPT models, OpenAI-compatible APIs |
+| **OpenAI Next** | `oai-next` | WebSocket streaming, reduced latency |
 
-Different providers can be assigned to different tasks (agent, summarization, embeddings) with automatic fallback chains.
+The `oai-next` driver uses OpenAI's WebSocket API for lower-latency streaming compared to the standard HTTP driver.
 
-### LLM Tiering
+### Speech-to-Text (STT)
 
-GoClaw supports using different LLMs for different tasks:
+STT transcribes voice notes from Telegram and WhatsApp into text for the agent:
 
-| Task | Typical Choice | Purpose |
-|------|----------------|---------|
-| Agent responses | Anthropic Claude | Main intelligence |
-| Summarization | LM Studio / Ollama / Haiku | Checkpoints and compaction |
-| Embeddings | LM Studio / Ollama | Memory and transcript search |
+| Provider | Driver | Notes |
+|----------|--------|-------|
+| **Whisper.cpp** | `whispercpp` | Local, bundled model in `.deb`/Docker |
+| **OpenAI Whisper** | `openai` | Cloud API |
+| **Groq** | `groq` | Fast cloud inference |
+| **Google** | `google` | Google Speech-to-Text API |
 
-Each task can have a fallback chain — if the primary provider fails, GoClaw automatically tries the next in the list.
+The Debian package and Docker images include a bundled Whisper model (`ggml-tiny.en.bin`) for zero-config local transcription.
+
+### Realtime Voice LLM Providers
+
+GoClaw has a separate **VoiceLLM Registry** for real-time voice conversations:
+
+| Provider | Driver | Use Cases |
+|----------|--------|-----------|
+| **xAI Voice** | `xai` | Grok-based real-time voice |
+
+Voice providers maintain per-session WebSocket connections and handle bidirectional audio streaming. They power the HTTP Voice channel for spoken conversations.
+
+See [Channels](docs/channels.md#http-voice-channel) for voice setup.
+
+### LLM Routing & Purpose Chains
+
+GoClaw routes LLM requests based on **purpose**. Each purpose has a model chain with automatic failover:
+
+| Purpose | Used For | Typical Provider |
+|---------|----------|------------------|
+| `agent` | Main conversation, tool use | Anthropic Claude |
+| `summarization` | Checkpoints, compaction | Ollama / Haiku |
+| `embeddings` | Memory, transcript, Memory Graph search | Ollama |
+
+Additional purposes (`heartbeat`, `cron`, `hass`, `memoryExtraction`) fall back to `agent` if not configured.
+
+If a provider fails, GoClaw automatically tries the next model in the chain. See [LLM Providers](docs/llm-providers.md#purpose-chains) for configuration details.
+
+### Metrics & Cost Tracking
+
+GoClaw tracks LLM costs automatically using embedded `models.json` pricing data:
+
+- **Per-turn costs** — Input, output, and cache token costs calculated per request
+- **Accumulated totals** — Running cost totals across sessions
+- **Persistence** — Metrics survive restarts (stored in SQLite)
+- **Web UI** — Interactive tree view at `/metrics`
+- **JSON API** — Programmatic access via `/api/metrics`
+
+See [Metrics](docs/metrics.md) for details.
 
 ### Session Storage
 
-Sessions are stored in SQLite (`~/.openclaw/sessions.db`) with full message history. Even after compaction truncates in-memory messages, the full history remains in the database for:
+Sessions are stored in SQLite (`~/.goclaw/sessions.db`) with full message history. Even after compaction truncates in-memory messages, the full history remains in the database for:
 
 - Audit trails
-- Summary retry after failures
+- Embeddings/summarization rebuilds
+- Memory Graph extraction
 - Future analysis
 
 ---
 
 ## OpenClaw Compatibility
 
-On first run, GoClaw bootstraps from your existing `openclaw.json` — extracting workspace, Telegram, browser settings, and Anthropic API key. Other providers (Ollama, LM Studio) need manual configuration.
+GoClaw can run alongside OpenClaw in the same workspace. On first run, the setup wizard detects OpenClaw and offers to import:
 
-**From `openclaw.json`:**
+- Workspace path and identity files
+- Telegram bot token
+- Anthropic API key
+- Browser settings
 
-| Setting | GoClaw Equivalent |
-|---------|-------------------|
-| `agents.defaults.workspace` | Working directory |
-| `agents.defaults.model.primary` | Primary agent model |
-| `channels.telegram.botToken` | Telegram bot token |
-| `tools.web.search.apiKey` | Brave search API key |
-| `browser.*` | Browser tool settings |
+Session transcripts from both systems are merged into a unified searchable history. GoClaw monitors OpenClaw sessions in real-time, so conversations from either system stay in sync.
 
-**From `~/.openclaw/agents/main/agent/auth-profiles.json`:**
-
-| Setting | GoClaw Equivalent |
-|---------|-------------------|
-| `profiles["anthropic:default"].key` | Anthropic API key |
-
-**Not extracted** (configure manually):
-- Ollama URL and settings
-- OpenAI/LM Studio API keys
-- Embedding provider configuration
-
-After bootstrap, `goclaw.json` is the authoritative config.
+After setup, `goclaw.json` is the authoritative config. See [Configuration](docs/configuration.md) for details.
 
 ---
 

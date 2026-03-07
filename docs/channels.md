@@ -1,6 +1,6 @@
 ---
 title: "Channels"
-description: "Communication interfaces for GoClaw: Telegram, Web UI, and TUI"
+description: "Communication interfaces for GoClaw: Telegram, WhatsApp, Web UI, Voice, and TUI"
 section: "Channels"
 weight: 1
 landing: true
@@ -15,30 +15,38 @@ Channels are communication interfaces that connect users to the GoClaw agent. Ea
 | Channel | Description | Documentation |
 |---------|-------------|---------------|
 | Telegram | Bot interface via Telegram messenger | [Telegram](telegram.md) |
-| TUI | Interactive terminal user interface | [TUI](tui.md) |
+| WhatsApp | Personal WhatsApp via linked device | [WhatsApp](whatsapp.md) |
 | HTTP | Web interface and REST API | [Web UI](web-ui.md) |
+| HTTP Voice | Real-time voice conversations | Below |
+| TUI | Interactive terminal user interface | [TUI](tui.md) |
 | Cron | Scheduled task execution | [Cron](cron.md) |
 
 ## Channel Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                         Channels                              │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐     │
-│  │ Telegram │  │   TUI    │  │   HTTP   │  │   Cron   │     │
-│  │   Bot    │  │ Terminal │  │  WebUI   │  │ Scheduler│     │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘     │
-│       │             │             │             │            │
-└───────┼─────────────┼─────────────┼─────────────┼────────────┘
-        │             │             │             │
-        └─────────────┴──────┬──────┴─────────────┘
-                             │
-                             ▼
-                    ┌────────────────┐
-                    │    Gateway     │
-                    │  (Agent Loop)  │
-                    └────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│                              Channels                                  │
+│  ┌────────┐ ┌────────┐ ┌────────┐ ┌──────────┐ ┌─────┐ ┌──────┐      │
+│  │Telegram│ │WhatsApp│ │  HTTP  │ │HTTP Voice│ │ TUI │ │ Cron │      │
+│  │  Bot   │ │ Linked │ │ WebUI  │ │   WS     │ │Term │ │Sched │      │
+│  └───┬────┘ └───┬────┘ └───┬────┘ └────┬─────┘ └──┬──┘ └──┬───┘      │
+│      │          │          │           │          │       │           │
+└──────┼──────────┼──────────┼───────────┼──────────┼───────┼───────────┘
+       │          │          │           │          │       │
+       └──────────┴──────────┴─────┬─────┴──────────┴───────┘
+                                   │
+                   ┌───────────────┴───────────────┐
+                   │                               │
+                   ▼                               ▼
+          ┌────────────────┐             ┌─────────────────┐
+          │    Gateway     │             │ VoiceLLM        │
+          │  (Text Agent)  │             │ (Voice Agent)   │
+          └────────────────┘             └─────────────────┘
 ```
+
+**Text channels** (Telegram, WhatsApp, HTTP, TUI, Cron) use the main Gateway and LLM Registry.
+
+**Voice channel** (HTTP Voice) uses a separate VoiceLLM Registry with per-session WebSocket connections to xAI or OpenAI real-time voice APIs.
 
 All channels:
 1. Receive user input (messages, commands, scheduled triggers)
@@ -48,13 +56,14 @@ All channels:
 
 ## Channel Commands
 
-All channels support the same set of slash commands:
+All text channels support the same set of slash commands:
 
 | Command | Description |
 |---------|-------------|
 | `/status` | Session info and compaction health |
 | `/clear` | Clear session history (alias: `/reset`) |
 | `/cleartool` | Delete tool messages (fixes corruption) |
+| `/stop` | Stop all running agent tasks |
 | `/compact` | Force context compaction |
 | `/help` | List available commands |
 | `/skills` | List available skills |
@@ -67,29 +76,75 @@ See [Channel Commands](commands.md) for detailed documentation.
 
 ## Channel Configuration
 
+All channel configs live under `channels` in `goclaw.json`:
+
 ### Telegram
 
 ```json
 {
-  "telegram": {
-    "enabled": true,
-    "botToken": "123456:ABC..."
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": "123456:ABC..."
+    }
   }
 }
 ```
 
 The setup wizard can detect `TELEGRAM_BOT_TOKEN` from your environment.
 
+### WhatsApp
+
+```json
+{
+  "channels": {
+    "whatsapp": {
+      "enabled": true
+    }
+  }
+}
+```
+
+WhatsApp uses the linked device protocol (whatsmeow). Run `goclaw whatsapp link` first to scan a QR code with your phone. Session data persists in `~/.goclaw/whatsapp.db`.
+
+**Note:** This is your personal WhatsApp, not a business API. The agent responds as you.
+
 ### HTTP/Web UI
 
 ```json
 {
-  "http": {
-    "enabled": true,
-    "port": 8080
+  "channels": {
+    "http": {
+      "enabled": true,
+      "listen": ":1337"
+    }
   }
 }
 ```
+
+### HTTP Voice
+
+HTTP Voice is enabled via `voicellm` configuration (not `channels`):
+
+```json
+{
+  "voicellm": {
+    "enabled": true,
+    "default": "xai",
+    "providers": {
+      "xai": {
+        "driver": "xai",
+        "apiKey": "xai-...",
+        "voice": "Charon"
+      }
+    }
+  }
+}
+```
+
+When enabled, the `/voice` endpoint is available on the HTTP server. Voice uses a separate VoiceLLM Registry with per-session WebSocket connections.
+
+See [Configuration](configuration.md#voice-llm-real-time-voice) for full VoiceLLM options.
 
 ### TUI
 
@@ -101,15 +156,17 @@ goclaw tui
 Optional config:
 ```json
 {
-  "tui": {
-    "showLogs": true
+  "channels": {
+    "tui": {
+      "showLogs": true
+    }
   }
 }
 ```
 
 ### Cron
 
-Cron jobs are defined in configuration:
+Cron jobs are defined separately (not under `channels`):
 ```json
 {
   "cron": {
@@ -133,7 +190,9 @@ Each channel creates sessions with a specific key format:
 | Channel | Session Key Format | Example |
 |---------|-------------------|---------|
 | Telegram | `telegram:<user_id>` | `telegram:123456789` |
+| WhatsApp | `whatsapp:<jid>` | `whatsapp:1234567890@s.whatsapp.net` |
 | HTTP | `http:<session_id>` | `http:abc123` |
+| HTTP Voice | `voice:<session_id>` | `voice:abc123` |
 | TUI | `main` | `main` |
 | Cron | `cron:<job_name>` | `cron:morning-briefing` |
 
@@ -152,6 +211,7 @@ The `message` tool allows the agent to send messages to channels:
 
 It also supports channel-specific features:
 - **Telegram**: Reactions, replies, formatting
+- **WhatsApp**: Reactions, replies, media
 - **HTTP**: WebSocket push notifications
 
 See [Tools](tools.md) for message tool documentation.
@@ -162,13 +222,18 @@ You can enable multiple channels simultaneously:
 
 ```json
 {
-  "telegram": {
-    "enabled": true,
-    "botToken": "..."
-  },
-  "http": {
-    "enabled": true,
-    "port": 8080
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": "..."
+    },
+    "whatsapp": {
+      "enabled": true
+    },
+    "http": {
+      "enabled": true,
+      "listen": ":1337"
+    }
   }
 }
 ```
@@ -177,14 +242,58 @@ Each channel operates independently with its own sessions, but they share:
 - The same gateway instance
 - The same tools and skills
 - The same user registry
+- The same Memory Graph
+
+## HTTP Voice Channel
+
+HTTP Voice provides real-time voice conversations via WebSocket. Unlike text channels, it:
+
+- Uses **VoiceLLM Registry** instead of the standard LLM Registry
+- Maintains **per-session WebSocket** connections to the voice provider
+- Supports **interruption** — user can speak while agent is talking
+- Handles **audio streaming** in both directions
+
+### Architecture
+
+```
+Browser/Client                   GoClaw                    Voice Provider
+    │                              │                              │
+    │◄──── WebSocket ────────────►│                              │
+    │      (audio chunks)          │◄──── WebSocket ────────────►│
+    │                              │      (real-time voice API)   │
+    │  mic audio ─────────────────►│ ─────────────────────────────►
+    │◄──────────────────────────── │ ◄─────────────────────────────
+    │  speaker audio               │        agent audio           │
+```
+
+### Supported Providers
+
+| Provider | Driver | Features |
+|----------|--------|----------|
+| xAI Voice | `xai` | Grok-based real-time voice |
+| OpenAI Realtime | `openai-realtime` | GPT-4o real-time audio |
+
+### VoiceLLM vs LLM Registry
+
+Voice uses a completely separate provider system:
+
+| Aspect | LLM Registry | VoiceLLM Registry |
+|--------|--------------|-------------------|
+| Config key | `llm.providers` | `voicellm.providers` |
+| Connection | Per-request | Per-session WebSocket |
+| I/O | Text | Audio streams |
+| Interruption | N/A | Native support |
+| Tools | Full tool system | Via voice API |
 
 ---
 
 ## See Also
 
 - [Telegram](telegram.md) — Telegram bot setup
+- [WhatsApp](whatsapp.md) — WhatsApp linked device
 - [TUI](tui.md) — Terminal interface
 - [Web UI](web-ui.md) — HTTP interface
 - [Cron](cron.md) — Scheduled tasks
 - [Channel Commands](commands.md) — Slash commands
 - [Configuration](configuration.md) — Full config reference
+- [Architecture](architecture.md) — HTTP Voice & VoiceLLM details

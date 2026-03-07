@@ -12,50 +12,65 @@ GoClaw is a Go implementation of an AI agent gateway, designed to orchestrate LL
 ## High-Level Architecture
 
 ```
-┌───────────────────────────────────────────────────────────┐
-│                       Channels                             │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
-│  │ Telegram │  │   TUI    │  │   HTTP   │  │   Cron   │  │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  │
-│       │             │             │             │         │
-└───────┼─────────────┼─────────────┼─────────────┼─────────┘
-        │             │             │             │
-        └─────────────┴──────┬──────┴─────────────┘
-                             │
-                             ▼
-                ┌───────────────────────────┐
-                │         Gateway           │
-                │  ┌─────────────────────┐  │
-                │  │    Agent Loop       │  │
-                │  │  ┌───────────────┐  │  │
-                │  │  │ LLM Registry  │  │  │
-                │  │  │ (4 providers) │  │  │
-                │  │  └───────────────┘  │  │
-                │  │  ┌───────────────┐  │  │
-                │  │  │ Tool Registry │  │  │
-                │  │  └───────────────┘  │  │
-                │  └─────────────────────┘  │
-                │                           │
-                │  ┌─────────────────────┐  │
-                │  │  Session Manager    │  │
-                │  │  ┌───────────────┐  │  │
-                │  │  │ Compactor     │  │  │
-                │  │  └───────────────┘  │  │
-                │  │  ┌───────────────┐  │  │
-                │  │  │ Checkpoint    │  │  │
-                │  │  │ Generator     │  │  │
-                │  │  └───────────────┘  │  │
-                │  └─────────────────────┘  │
-                │                           │
-                │  ┌─────────────────────┐  │
-                │  │  Support Services   │  │
-                │  │  • Prompt Cache     │  │
-                │  │  • Skills Manager   │  │
-                │  │  • Memory Manager   │  │
-                │  │  • Media Store      │  │
-                │  │  • HASS Manager     │  │
-                │  └─────────────────────┘  │
-                └───────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│                             Channels                                   │
+│  ┌────────┐ ┌────────┐ ┌────────┐ ┌──────────┐ ┌─────┐ ┌──────┐      │
+│  │Telegram│ │WhatsApp│ │  HTTP  │ │HTTP Voice│ │ TUI │ │ Cron │      │
+│  └───┬────┘ └───┬────┘ └───┬────┘ └────┬─────┘ └──┬──┘ └──┬───┘      │
+│      │          │          │           │          │       │           │
+└──────┼──────────┼──────────┼───────────┼──────────┼───────┼───────────┘
+       │          │          │           │          │       │
+       └──────────┴──────────┴─────┬─────┴──────────┴───────┘
+                                   │
+                                   ▼
+                ┌───────────────────────────────┐
+                │           Gateway             │
+                │  ┌─────────────────────────┐  │
+                │  │      Agent Loop         │  │
+                │  │  ┌───────────────────┐  │  │
+                │  │  │   LLM Registry    │  │  │
+                │  │  │   (4 providers)   │  │  │
+                │  │  └───────────────────┘  │  │
+                │  │  ┌───────────────────┐  │  │
+                │  │  │   Tool Registry   │  │  │
+                │  │  └───────────────────┘  │  │
+                │  └─────────────────────────┘  │
+                │                               │
+                │  ┌─────────────────────────┐  │
+                │  │    Session Manager      │  │
+                │  │  ┌───────────────────┐  │  │
+                │  │  │ Compactor         │  │  │
+                │  │  └───────────────────┘  │  │
+                │  │  ┌───────────────────┐  │  │
+                │  │  │ Checkpoint Gen    │  │  │
+                │  │  └───────────────────┘  │  │
+                │  └─────────────────────────┘  │
+                │                               │
+                │  ┌─────────────────────────┐  │
+                │  │    Support Services     │  │
+                │  │  • Prompt Cache         │  │
+                │  │  • Skills Manager       │  │
+                │  │  • Memory Manager       │  │
+                │  │  • Memory Graph         │  │
+                │  │  • Transcript Manager   │  │
+                │  │  • Media Store          │  │
+                │  │  • HASS Manager         │  │
+                │  │  • STT Provider         │  │
+                │  └─────────────────────────┘  │
+                └───────────────────────────────┘
+                            │
+        ┌───────────────────┴───────────────────┐
+        │                                       │
+        ▼                                       ▼
+┌───────────────────────┐         ┌───────────────────────────┐
+│   Text Agent Loop     │         │    Voice Agent Loop       │
+│   (LLM Registry)      │         │    (VoiceLLM Registry)    │
+│                       │         │                           │
+│  Channels: Telegram,  │         │  Channel: HTTP Voice only │
+│  WhatsApp, HTTP, TUI, │         │                           │
+│  Cron                 │         │  Per-session WebSocket    │
+└───────────────────────┘         │  instances with audio I/O │
+                                  └───────────────────────────┘
                             │
                             ▼
                 ┌───────────────────────────┐
@@ -161,6 +176,11 @@ Available agent tools:
 | `edit` | Edit file (string replace) |
 | `exec` | Execute shell commands (sandboxed) |
 | `message` | Send messages to channels |
+| `recall` | Retrieve memories from graph |
+| `query` | Search/filter memory graph |
+| `store` | Add memory to graph |
+| `update` | Modify memory in graph |
+| `forget` | Remove memory from graph |
 | `memory_search` | Semantic search over memory files |
 | `transcript_search` | Search conversation history |
 | `web_search` | Search the web (Brave API) |
@@ -171,7 +191,9 @@ Available agent tools:
 | `jq` | JSON query/transformation |
 | `xai_imagine` | xAI image generation |
 | `user_auth` | Role elevation requests |
-| `skills` | Skill information and invocation |
+| `skills` | Skill management and installation |
+| `media_display` | Display images/media to user |
+| `goclaw_update` | Self-update GoClaw |
 
 ### Channels
 
@@ -179,10 +201,64 @@ Communication interfaces:
 
 | Channel | Package | Description |
 |---------|---------|-------------|
-| Telegram | `internal/telegram` | Bot interface via telebot.v4 |
-| TUI | `internal/tui` | Terminal UI via bubbletea |
-| HTTP | `internal/http` | Web UI and REST API |
+| Telegram | `internal/channels/telegram` | Bot interface via telebot.v4 |
+| WhatsApp | `internal/channels/whatsapp` | Linked device protocol via whatsmeow |
+| HTTP | `internal/channels/http` | Web UI and REST API |
+| HTTP Voice | `internal/channels/http_voice` | Real-time voice conversations via WebSocket |
+| TUI | `internal/channels/tui` | Terminal UI via bubbletea |
 | Cron | `internal/cron` | Scheduled task execution |
+
+### HTTP Voice Channel & VoiceLLM
+
+The HTTP Voice channel (`http_voice`) provides real-time voice conversations. Unlike text channels that use the main LLM Registry, voice uses a completely separate **VoiceLLM Registry** with its own provider interface.
+
+```
+                         ┌─────────────────────────┐
+Browser ←──WebSocket──→  │   HTTP Voice Channel    │
+           (PCM audio)   │                         │
+                         │  ┌───────────────────┐  │
+                         │  │ VoiceLLM Registry │  │
+                         │  │ (per-session)     │  │
+                         │  └─────────┬─────────┘  │
+                         │            │            │
+                         │            ▼            │
+                         │  ┌───────────────────┐  │
+                         │  │ VoiceLLM Provider │──┼──→ xAI/OpenAI WebSocket
+                         │  │ (xAI, OpenAI)     │  │    (bidirectional audio)
+                         │  └───────────────────┘  │
+                         └─────────────────────────┘
+```
+
+**Key differences from Text LLM:**
+
+| Aspect | Text LLM Registry | VoiceLLM Registry |
+|--------|-------------------|-------------------|
+| Providers | Shared instances | Per-session instances |
+| Connection | HTTP request/response | Persistent WebSocket |
+| I/O | Text messages | Streaming audio |
+| Tool calls | Via agent loop | Via callbacks |
+| Channels | All text channels | HTTP Voice only |
+
+**VoiceLLM Provider Interface:**
+
+| Method | Purpose |
+|--------|---------|
+| `Connect()` | Establish WebSocket to voice API |
+| `Configure()` | Send session config (voice, tools, instructions) |
+| `SendAudio()` | Stream PCM audio to provider |
+| `SetCallbacks()` | Register handlers for audio, transcripts, tool calls |
+
+**Callbacks (async events):**
+
+| Callback | Event |
+|----------|-------|
+| `OnAudioDelta` | Response audio chunks |
+| `OnTranscriptDelta` | What assistant is saying |
+| `OnInputTranscript` | Transcribed user speech |
+| `OnToolCall` | Tool invocation (agent can use tools in voice mode) |
+| `OnSpeechStarted/Stopped` | VAD events |
+
+See [Voice LLM](configuration.md#voice-llm-real-time-voice) for configuration.
 
 ### Command Handler (`internal/commands`)
 
@@ -194,12 +270,15 @@ Unified slash command handling across all channels:
 | `/compact` | Force context compaction |
 | `/clear` | Reset session (alias: `/reset`) |
 | `/cleartool` | Delete tool messages (fixes corruption) |
+| `/stop` | Stop all running agent tasks |
 | `/help` | List commands |
 | `/skills` | List available skills |
 | `/heartbeat` | Trigger heartbeat check |
 | `/hass` | Home Assistant status/debug |
 | `/llm` | LLM provider status and cooldown management |
 | `/embeddings` | Embeddings status and rebuild |
+
+See [Channel Commands](commands.md) for detailed documentation.
 
 ### Embeddings (`internal/embeddings`)
 
@@ -357,126 +436,107 @@ gateway.RunAgent()
 
 ```
 goclaw/
-├── cmd/goclaw/          # Main entry point
+├── cmd/goclaw/              # Main entry point
 │   └── main.go
 │
 ├── internal/
-│   ├── auth/            # Authentication & role checking
-│   │   └── auth.go
+│   ├── auth/                # Authentication & role checking
 │   │
-│   ├── browser/         # Managed Chromium browser
-│   │   ├── manager.go       # Browser lifecycle
-│   │   ├── tool.go          # Browser tool implementation
-│   │   ├── profiles.go      # Auth profile management
-│   │   └── urlsafety.go     # URL validation
+│   ├── browser/             # Managed Chromium browser
+│   │   ├── manager.go           # Browser lifecycle
+│   │   ├── tool.go              # Browser tool implementation
+│   │   └── profiles.go          # Auth profile management
 │   │
-│   ├── bwrap/           # Bubblewrap sandbox wrapper
-│   │   └── bwrap.go
+│   ├── bwrap/               # Bubblewrap sandbox wrapper
 │   │
-│   ├── channel/         # Shared channel utilities
-│   │   └── channel.go
+│   ├── channels/            # Communication channels
+│   │   ├── telegram/            # Telegram bot (telebot.v4)
+│   │   ├── whatsapp/            # WhatsApp (whatsmeow)
+│   │   ├── http/                # Web UI, API, voice
+│   │   │   └── http_voice/      # Real-time voice sessions
+│   │   └── tui/                 # Terminal UI (bubbletea)
 │   │
-│   ├── commands/        # Slash command handling
-│   │   ├── manager.go       # Command registry
-│   │   └── builtins.go      # Built-in commands
+│   ├── commands/            # Slash command handling
 │   │
-│   ├── config/          # Configuration loading
-│   │   └── config.go
+│   ├── config/              # Configuration loading
 │   │
-│   ├── context/         # Prompt construction
-│   │   ├── prompt.go        # System prompt building
-│   │   └── cache.go         # Workspace file caching
+│   ├── context/             # Prompt construction & caching
 │   │
-│   ├── cron/            # Scheduled tasks
-│   │   └── cron.go
+│   ├── cron/                # Scheduled tasks
 │   │
-│   ├── embeddings/      # Embedding management
-│   │   └── manager.go       # Status, rebuild
+│   ├── embeddings/          # Embedding management
 │   │
-│   ├── gateway/         # Central orchestrator
+│   ├── gateway/             # Central orchestrator
 │   │   └── gateway.go
 │   │
-│   ├── hass/            # Home Assistant integration
-│   │   └── manager.go       # Event subscriptions
+│   ├── hass/                # Home Assistant integration
 │   │
-│   ├── http/            # HTTP server
-│   │   ├── server.go        # Web UI and API
-│   │   └── channel.go       # HTTP channel adapter
+│   ├── llm/                 # LLM providers
+│   │   ├── registry.go          # Provider management
+│   │   ├── anthropic.go         # Anthropic (Claude)
+│   │   ├── openai.go            # OpenAI / compatible
+│   │   ├── ollama.go            # Ollama (local)
+│   │   ├── xai.go               # xAI (Grok)
+│   │   └── thinking.go          # Extended thinking
 │   │
-│   ├── llm/             # LLM providers
-│   │   ├── registry.go      # Provider management
-│   │   ├── provider.go      # Provider interface
-│   │   ├── anthropic.go     # Anthropic (Claude)
-│   │   ├── openai.go        # OpenAI / compatible
-│   │   ├── ollama.go        # Ollama (local)
-│   │   ├── xai.go           # xAI (Grok)
-│   │   ├── thinking.go      # Extended thinking
-│   │   └── errors.go        # Error classification
+│   ├── logging/             # Structured logging
 │   │
-│   ├── logging/         # Structured logging
-│   │   └── logging.go
+│   ├── media/               # Media file storage
 │   │
-│   ├── media/           # Media file storage
-│   │   └── store.go
+│   ├── memory/              # File-based memory search
 │   │
-│   ├── memory/          # Memory search
-│   │   └── manager.go
+│   ├── memorygraph/         # Semantic knowledge graph
+│   │   ├── manager.go           # Graph lifecycle
+│   │   ├── extractor.go         # Entity extraction
+│   │   ├── bulletin.go          # Context injection
+│   │   └── tool_*.go            # CRUD tools
 │   │
-│   ├── metrics/         # Prometheus metrics
-│   │   └── metrics.go
+│   ├── sandbox/             # File security
 │   │
-│   ├── sandbox/         # File security
-│   │   └── sandbox.go
+│   ├── session/             # Session management
+│   │   ├── manager.go           # Session lifecycle
+│   │   ├── compaction.go        # Compactor
+│   │   ├── checkpoint.go        # CheckpointGenerator
+│   │   └── sqlite_store.go      # SQLite storage
 │   │
-│   ├── session/         # Session management
-│   │   ├── manager.go       # Session lifecycle
-│   │   ├── session.go       # In-memory state
-│   │   ├── compaction.go    # Compactor
-│   │   ├── checkpoint.go    # CheckpointGenerator
-│   │   ├── sqlite_store.go  # SQLite storage
-│   │   ├── jsonl.go         # JSONL reader (OpenClaw)
-│   │   ├── watcher.go       # OpenClaw session sync
-│   │   └── types.go         # Record definitions
+│   ├── setup/               # Setup wizard (tview)
 │   │
-│   ├── setup/           # Setup wizard
-│   │   └── wizard.go
+│   ├── skills/              # Skill management & installation
 │   │
-│   ├── skills/          # Skill management
-│   │   └── manager.go
+│   ├── stt/                 # Speech-to-text
+│   │   ├── whispercpp.go        # Local Whisper.cpp
+│   │   ├── openai.go            # OpenAI Whisper API
+│   │   ├── groq.go              # Groq Whisper
+│   │   └── google.go            # Google Cloud STT
 │   │
-│   ├── supervisor/      # Daemon mode
-│   │   └── supervisor.go
+│   ├── supervisor/          # Daemon mode
 │   │
-│   ├── telegram/        # Telegram channel
-│   │   └── bot.go
+│   ├── tokens/              # Token counting
 │   │
-│   ├── tokens/          # Token counting
-│   │   └── tokens.go
-│   │
-│   ├── tools/           # Agent tools
+│   ├── tools/               # Agent tools
 │   │   ├── registry.go
-│   │   ├── read.go, write.go, edit.go, exec.go
-│   │   ├── message.go
-│   │   ├── memory_search.go, transcript.go
-│   │   ├── web_search.go, web_fetch.go
-│   │   ├── hass.go, cron.go, jq.go
-│   │   ├── xai_imagine.go, user_auth.go
-│   │   └── skills.go
+│   │   ├── read/, write/, edit/, exec/
+│   │   ├── message/, memorysearch/, transcript/
+│   │   ├── websearch/, webfetch/, browser/
+│   │   ├── hass/, cron/, jq/, skills/
+│   │   ├── xaiimagine/, userauth/, update/
+│   │   └── media_display/
 │   │
-│   ├── transcript/      # Transcript indexing
-│   │   └── indexer.go
+│   ├── transcript/          # Transcript indexing
 │   │
-│   ├── tui/             # Terminal UI
-│   │   └── tui.go
+│   ├── types/               # Shared types
 │   │
-│   ├── types/           # Shared types
-│   │   └── types.go
+│   ├── update/              # Self-update logic
 │   │
-│   └── user/            # User registry
-│       └── registry.go
+│   ├── user/                # User registry
+│   │
+│   └── voicellm/            # Real-time voice LLM
+│       ├── xai.go               # xAI voice provider
+│       └── openai.go            # OpenAI realtime
 │
-├── docs/                # Documentation
-└── goclaw.json          # Configuration
+├── docs/                    # Documentation
+├── skills/                  # Bundled skills
+└── installer/               # Install scripts
 ```
 
 ---
@@ -495,6 +555,9 @@ goclaw/
 | Cron scheduler | Executes scheduled tasks |
 | HASS event subscriber | Listens for Home Assistant events |
 | Embeddings rebuild | Background re-indexing |
+| Memory graph extractor | Extracts entities from conversations |
+| Transcript indexer | Indexes conversation history |
+| Voice sessions | Manages real-time voice WebSocket connections |
 
 ### Synchronization
 
@@ -509,6 +572,7 @@ goclaw/
 ## See Also
 
 - [Session Management](session-management.md) — Compaction and checkpoints
+- [Memory Graph](memory-graph.md) — Semantic knowledge graph
 - [Configuration](configuration.md) — All config options
 - [Tools](tools.md) — Available agent tools
 - [Embeddings](embeddings.md) — Semantic search infrastructure

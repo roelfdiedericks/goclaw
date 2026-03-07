@@ -16,6 +16,7 @@ GoClaw provides slash commands available across all channels (Telegram, TUI, HTT
 | `/status` | Show session info and compaction health |
 | `/clear` | Clear conversation history |
 | `/cleartool` | Delete all tool messages (fixes corruption) |
+| `/stop` | Stop all running agent tasks |
 | `/compact` | Force context compaction |
 | `/help` | List available commands |
 | `/skills` | List available skills |
@@ -67,6 +68,22 @@ Use this when:
 - Tool message corruption is causing errors
 - Orphaned tool results are confusing the agent
 - Need to clean up without losing conversation context
+
+### /stop
+
+Stops all running agent tasks for your user across all sessions.
+
+**Output:**
+```
+Stopped all agent tasks for user TheRoDent
+```
+
+Use this when:
+- Agent is stuck in a long-running operation
+- Need to interrupt an unwanted task
+- Agent is in an infinite loop or runaway state
+
+Note: This is a "panic stop" that immediately cancels all in-progress agent runs. The agent will not complete any pending tool calls.
 
 ### /compact
 

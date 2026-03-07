@@ -1,13 +1,13 @@
 ---
 title: "Embeddings"
-description: "Vector embeddings powering semantic search for memory and transcripts"
+description: "Vector embeddings powering semantic search for memory, transcripts, and Memory Graph"
 section: "Agent Memory"
 weight: 10
 ---
 
 # Embeddings
 
-Embeddings power semantic search in GoClaw, enabling `memory_search` and `transcript_search` to find content by meaning rather than exact keywords.
+Embeddings power semantic search in GoClaw, enabling `memory_search`, `transcript_search`, and Memory Graph queries to find content by meaning rather than exact keywords.
 
 ## Overview
 
@@ -16,10 +16,35 @@ Embeddings convert text into numerical vectors that capture semantic meaning. Si
 GoClaw uses embeddings for:
 - **Memory search** — Find relevant memory file chunks
 - **Transcript search** — Find past conversation segments
+- **Memory Graph** — Semantic similarity for `recall` and `query` tools
 
 ## Configuration
 
-Embeddings use Ollama by default:
+### Via LLM Purpose Chain (Recommended)
+
+Configure embeddings using the `embeddings` purpose in your LLM config:
+
+```json
+{
+  "llm": {
+    "providers": {
+      "ollama-local": {
+        "driver": "ollama",
+        "url": "http://localhost:11434"
+      }
+    },
+    "embeddings": {
+      "models": ["ollama-local/nomic-embed-text"]
+    }
+  }
+}
+```
+
+The `models` array is a fallback chain — if the first model fails, the next is tried. See [LLM Providers](llm-providers.md#purpose-chains) for details on purpose chains.
+
+### Via memorySearch (Simple)
+
+For basic setups, configure embeddings directly in `memorySearch`:
 
 ```json
 {
@@ -33,24 +58,7 @@ Embeddings use Ollama by default:
 }
 ```
 
-Or via the LLM config for more control:
-
-```json
-{
-  "llm": {
-    "providers": {
-      "ollama-embed": {
-        "type": "ollama",
-        "url": "http://localhost:11434",
-        "embeddingOnly": true
-      }
-    },
-    "embeddings": {
-      "models": ["ollama-embed/nomic-embed-text"]
-    }
-  }
-}
-```
+This automatically creates an embedding provider. Use `llm.embeddings` for more control (multiple models, fallback chains).
 
 ## Recommended Models
 
@@ -64,12 +72,12 @@ Or via the LLM config for more control:
 
 Embeddings are stored in SQLite alongside the content they index:
 
-| Table | Content |
-|-------|---------|
-| `memory` | Memory file chunks and embeddings |
-| `transcripts` | Conversation chunks and embeddings |
+| Database | Tables | Content |
+|----------|--------|---------|
+| `~/.goclaw/sessions.db` | `memory`, `transcripts` | Memory file chunks, conversation chunks |
+| `~/.goclaw/memorygraph.db` | `memories` | Memory Graph entities with embeddings |
 
-Location: `~/.goclaw/sessions.db`
+Memory Graph maintains its own embeddings in `memorygraph.db`, separate from the file-based memory search.
 
 ## Commands
 
@@ -167,6 +175,7 @@ After changing embedding models, run `/embeddings rebuild` to re-index with the 
 ## See Also
 
 - [Agent Memory](agent-memory.md) — Memory system overview
+- [Memory Graph](memory-graph.md) — Semantic knowledge graph
 - [Memory Search](memory-search.md) — memory_search tool
 - [Transcript Search](transcript-search.md) — transcript_search tool
-- [Ollama Provider](providers/ollama.md) — Ollama configuration
+- [LLM Providers](llm-providers.md) — Provider configuration

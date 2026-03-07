@@ -29,6 +29,7 @@ Users are defined in `users.json`:
       "role": "owner",
       "identities": [
         {"provider": "telegram", "id": "123456789"},
+        {"provider": "whatsapp", "id": "1234567890"},
         {"provider": "http", "id": "therodent"}
       ],
       "credentials": [
@@ -62,6 +63,7 @@ Identities link external accounts to GoClaw users:
 | Provider | ID Format | Example |
 |----------|-----------|---------|
 | `telegram` | Telegram user ID | `123456789` |
+| `whatsapp` | Phone number (no +) | `1234567890` |
 | `http` | Username for web UI | `therodent` |
 | `local` | `owner` for CLI | `owner` |
 
@@ -255,5 +257,6 @@ In `users.json`:
 
 - [Configuration](configuration.md) — Full config reference
 - [Telegram](telegram.md) — Telegram user setup
+- [WhatsApp](whatsapp.md) — WhatsApp user setup
 - [Web UI](web-ui.md) — HTTP authentication
 - [Tools](tools.md) — Available tools

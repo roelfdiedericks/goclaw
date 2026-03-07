@@ -14,6 +14,7 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
+	"github.com/roelfdiedericks/goclaw/internal/stt"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
@@ -93,6 +94,11 @@ type WizardData struct {
 	LLMBaseURL      string
 	LLMModel        string
 	LLMSkipped      bool
+
+	// STT (Speech-to-Text)
+	STTEnabled        bool
+	STTModel          string
+	STTModelAvailable bool // true if model exists (bundled or downloaded)
 }
 
 // NewWizardData creates a new WizardData with defaults
@@ -314,6 +320,7 @@ func buildWizardSteps(data *WizardData) []forms.WizardStep {
 		stepTelegram(data),
 		stepWhatsApp(data),
 		stepHTTP(data),
+		stepSTT(data),
 		stepLLMProvider(data),
 		stepSandbox(data),
 		stepReview(data),
@@ -645,6 +652,99 @@ func stepHTTP(data *WizardData) forms.WizardStep {
 				return fmt.Errorf("listen address is required when HTTP is enabled")
 			}
 			L_info("wizard: http", "enabled", data.HTTPEnabled, "listen", data.HTTPListen)
+			return nil
+		},
+	}
+}
+
+// Step: Speech-to-Text
+func stepSTT(data *WizardData) forms.WizardStep {
+	return forms.WizardStep{
+		Title: "Speech-to-Text",
+		Content: func(w *forms.Wizard) tview.Primitive {
+			form := tview.NewForm()
+			form.SetBorder(false)
+			enableFormMouseScroll(form, w)
+
+			// Check if model is available (user dir or system dir)
+			defaultModel := "ggml-tiny.en.bin"
+			modelsDir := "~/.goclaw/stt/whisper"
+			expandedDir, _ := paths.ExpandTilde(modelsDir)
+
+			// Check user directory
+			modelAvailable := stt.IsModelDownloaded(expandedDir, defaultModel)
+			// Check system directory (fallback for .deb installs)
+			if !modelAvailable {
+				modelAvailable = stt.IsModelDownloaded("/usr/share/goclaw/stt", defaultModel)
+			}
+			data.STTModelAvailable = modelAvailable
+			data.STTModel = defaultModel
+
+			// Enable by default if model is available
+			if modelAvailable && !data.STTEnabled {
+				data.STTEnabled = true
+			}
+
+			form.AddCheckbox("Enable Speech-to-Text", data.STTEnabled, func(checked bool) {
+				data.STTEnabled = checked
+			})
+
+			// Model status with colors (5th param enables dynamic colors)
+			statusText := "[red]Not available[-] - download required"
+			if modelAvailable {
+				statusText = "[green]Ready[-] - ggml-tiny.en.bin available"
+			}
+
+			form.AddTextView("Model Status", statusText, 50, 1, true, false)
+
+			// Download button (only if model not available)
+			if !modelAvailable {
+				form.AddButton("Download Model (~39 MB)", func() {
+					// Show downloading message
+					w.App().ShowModal(
+						"Downloading whisper model (ggml-tiny.en.bin)...\n\nThis may take a minute.",
+						[]string{},
+						nil,
+					)
+
+					// Download in background
+					go func() {
+						model := stt.GetModel(defaultModel)
+						if model == nil {
+							w.App().App().QueueUpdateDraw(func() {
+								w.App().ShowModal("Error: Model not found in catalog", []string{"OK"}, nil)
+							})
+							return
+						}
+
+						err := stt.DownloadModel(model, modelsDir)
+						w.App().App().QueueUpdateDraw(func() {
+							if err != nil {
+								w.App().ShowModal(fmt.Sprintf("Download failed: %v", err), []string{"OK"}, nil)
+							} else {
+								data.STTModelAvailable = true
+								w.App().ShowModal("Model downloaded successfully!", []string{"OK"}, func(idx int, label string) {
+									w.RefreshCurrentStep()
+								})
+							}
+						})
+					}()
+				})
+			}
+
+			return formWithHeader(`[cyan]Speech-to-Text[white] enables voice message transcription.
+
+GoClaw uses [yellow]Whisper.cpp[white] for local, offline transcription.
+This requires a model file (~39 MB for the tiny English model).
+
+[gray]Advanced options (cloud providers, larger models) available in[white]
+[cyan]goclaw setup edit[white] [gray]after initial setup.[white]`, 7, form)
+		},
+		OnExit: func(w *forms.Wizard) error {
+			if data.STTEnabled && !data.STTModelAvailable {
+				return fmt.Errorf("please download a model or disable STT")
+			}
+			L_info("wizard: stt", "enabled", data.STTEnabled, "model", data.STTModel)
 			return nil
 		},
 	}
@@ -987,6 +1087,11 @@ func stepReview(data *WizardData) forms.WizardStep {
 				llmInfo = fmt.Sprintf("%s (%s)", data.LLMProviderName, data.LLMModel)
 			}
 
+			sttInfo := "disabled"
+			if data.STTEnabled {
+				sttInfo = fmt.Sprintf("whispercpp (%s)", data.STTModel)
+			}
+
 			summary := fmt.Sprintf(`[cyan]Configuration Summary[white]
 
 Workspace:    %s
@@ -994,6 +1099,7 @@ User:         %s (%s)
 Telegram:     %s
 WhatsApp:     %s
 HTTP:         %s
+STT:          %s
 Sandboxing:   exec=%v, browser=%v
 LLM:          %s
 
@@ -1004,6 +1110,7 @@ Press [yellow]Finish[white] to complete setup.`,
 				boolToEnabled(data.TelegramEnabled),
 				boolToEnabled(data.WhatsAppEnabled),
 				formatHTTP(data),
+				sttInfo,
 				data.ExecBubblewrap,
 				data.BrowserBubblewrap,
 				llmInfo,
@@ -1234,6 +1341,14 @@ func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
 			agentModels = []string{ref}
 		}
 		deepSet(cfg, "llm.agent.models", agentModels)
+	}
+
+	// STT (Speech-to-Text)
+	if data.STTEnabled {
+		deepSet(cfg, "stt.enabled", true)
+		deepSet(cfg, "stt.provider", "whispercpp")
+		deepSet(cfg, "stt.whispercpp.model", data.STTModel)
+		deepSet(cfg, "stt.whispercpp.modelsDir", "~/.goclaw/stt/whisper")
 	}
 
 	return cfg

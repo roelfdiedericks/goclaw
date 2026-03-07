@@ -3,11 +3,35 @@ package stt
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/ggerganov/whisper.cpp/bindings/go/pkg/whisper"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
+
+// System path for models installed via package manager (.deb)
+const systemModelsDir = "/usr/share/goclaw/stt"
+
+// findModelPath searches for a model file in user directory first, then system directory.
+func findModelPath(userDir, modelName string) string {
+	// Try user directory first (if configured)
+	if userDir != "" {
+		userPath := userDir + "/" + modelName
+		if _, err := os.Stat(userPath); err == nil {
+			return userPath
+		}
+	}
+
+	// Fall back to system directory
+	systemPath := systemModelsDir + "/" + modelName
+	if _, err := os.Stat(systemPath); err == nil {
+		L_debug("stt: using system-installed model", "path", systemPath)
+		return systemPath
+	}
+
+	return ""
+}
 
 // WhisperCppProvider implements STT using whisper.cpp.
 type WhisperCppProvider struct {
@@ -25,14 +49,16 @@ type WhisperCppConfig struct {
 
 // NewWhisperCppProvider creates a new Whisper.cpp STT provider.
 func NewWhisperCppProvider(cfg WhisperCppConfig) (*WhisperCppProvider, error) {
-	if cfg.ModelsDir == "" {
-		return nil, fmt.Errorf("whisper.cpp modelsDir not configured")
-	}
 	if cfg.Model == "" {
 		return nil, fmt.Errorf("whisper.cpp model not configured")
 	}
 
-	modelPath := cfg.ModelsDir + "/" + cfg.Model
+	// Find model: check user directory first, then system directory
+	modelPath := findModelPath(cfg.ModelsDir, cfg.Model)
+	if modelPath == "" {
+		return nil, fmt.Errorf("whisper model not found: %s (checked %s and %s)", cfg.Model, cfg.ModelsDir, systemModelsDir)
+	}
+
 	L_info("stt: loading whisper.cpp model", "path", modelPath)
 
 	model, err := whisper.New(modelPath)

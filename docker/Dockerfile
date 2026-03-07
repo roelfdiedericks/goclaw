@@ -42,12 +42,8 @@ FROM alpine:latest
 
 RUN apk --no-cache add ca-certificates ffmpeg
 
-# Create non-root user and directories
-RUN adduser -D -h /home/goclaw goclaw && \
-    mkdir -p /usr/share/goclaw/stt
-
-# Copy whisper model
-COPY --from=whisper-builder /whisper-model/ggml-tiny.en.bin /usr/share/goclaw/stt/
+# Create non-root user
+RUN adduser -D -h /home/goclaw goclaw
 
 WORKDIR /home/goclaw
 
@@ -56,11 +52,11 @@ COPY --from=builder /app/bin/goclaw /usr/local/bin/
 COPY --chown=goclaw:goclaw docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-USER goclaw
+# Copy whisper model to user's expected location
+RUN mkdir -p /home/goclaw/.goclaw/stt/whisper
+COPY --chown=goclaw:goclaw --from=whisper-builder /whisper-model/ggml-tiny.en.bin /home/goclaw/.goclaw/stt/whisper/
 
-# Create user's whisper directory and symlink to bundled model
-RUN mkdir -p /home/goclaw/.goclaw/stt/whisper && \
-    ln -sf /usr/share/goclaw/stt/ggml-tiny.en.bin /home/goclaw/.goclaw/stt/whisper/
+USER goclaw
 
 EXPOSE 1337
 

@@ -39,11 +39,13 @@ See [Session Management](session-management.md) for details on compaction and ch
 | Channel | Description |
 |---------|-------------|
 | [Telegram](telegram.md) | Bot interface via Telegram |
-| [TUI](tui.md) | Interactive terminal UI |
+| [WhatsApp](whatsapp.md) | Personal WhatsApp via linked device |
 | [HTTP](web-ui.md) | Web interface and API |
+| HTTP Voice | Real-time voice conversations |
+| [TUI](tui.md) | Interactive terminal UI |
 | [Cron](cron.md) | Scheduled task execution |
 
-Each channel adapts its input/output format but uses the same underlying gateway.
+Text channels use the main **Gateway** and LLM Registry. The voice channel uses a separate **VoiceLLM Registry** with per-session WebSocket connections to real-time voice APIs.
 
 See [Channels](channels.md) for the full overview.
 
@@ -56,7 +58,10 @@ See [Channels](channels.md) for the full overview.
 | File operations | read, write, edit |
 | System | exec (shell commands) |
 | Search | memory_search, transcript_search, web_search |
+| Memory Graph | recall, query, store, update, forget |
 | Integration | hass (Home Assistant), browser, cron |
+| Communication | message (send to channels) |
+| Utility | media_display, skills, goclaw_update |
 
 Tools are registered with the gateway and exposed to the LLM via function calling. The agent decides when and how to use them.
 
@@ -92,11 +97,22 @@ GoClaw supports multiple **LLM providers** through a unified registry:
 
 The registry supports **purpose chains** — different providers for different tasks (agent, summarization, embeddings) with automatic fallback.
 
+### VoiceLLM Registry
+
+A separate **VoiceLLM Registry** handles real-time voice conversations:
+
+| Provider | Description |
+|----------|-------------|
+| xAI Voice | Grok-based real-time voice |
+| OpenAI Realtime | GPT-4o real-time audio |
+
+Voice providers maintain per-session WebSocket connections and handle audio streaming directly.
+
 See [LLM Providers](llm-providers.md) for configuration.
 
 ## Memory
 
-GoClaw has two memory systems:
+GoClaw has three memory systems:
 
 ### Workspace Memory
 Traditional markdown files that the agent can read and write:
@@ -108,7 +124,15 @@ Embeddings-based search over memory files and conversation transcripts:
 - **memory_search** — Search memory files by meaning
 - **transcript_search** — Search past conversations
 
-See [Agent Memory](agent-memory.md) for the memory architecture.
+### Memory Graph
+A semantic knowledge graph for structured facts and relationships:
+- **recall** — Retrieve relevant context automatically
+- **store/update/forget** — Manage entities and facts
+- **query** — Natural language questions over the graph
+
+Memory Graph provides structured, queryable memory that persists across sessions. It's designed to eventually supersede file-based memory.
+
+See [Agent Memory](agent-memory.md) for the memory architecture and [Memory Graph](memory-graph.md) for details.
 
 ## Roles & Access Control
 
@@ -142,3 +166,4 @@ File operations are sandboxed to the workspace by default.
 - [Configuration](configuration.md) — All configuration options
 - [Session Management](session-management.md) — Context and compaction
 - [LLM Providers](llm-providers.md) — Provider setup
+- [Memory Graph](memory-graph.md) — Semantic knowledge graph

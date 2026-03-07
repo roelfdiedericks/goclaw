@@ -1,73 +1,165 @@
 ---
 title: "First Run"
-description: "Run GoClaw for the first time and verify your setup"
+description: "Your first 5 minutes with GoClaw after installation"
 section: "Getting Started"
 weight: 3
 ---
 
 # First Run
 
-This guide walks you through running GoClaw for the first time after installation.
+This guide walks you through your first 5 minutes with GoClaw after installation.
 
-## Prerequisites
+## After Installation
 
-- GoClaw binary installed (see [Installation](installation.md))
-- Configuration file created (see [Configuration](configuration.md))
-- At least one LLM provider configured
-
-## Starting the Gateway
-
-The gateway is the main GoClaw process that handles all channels and agent interactions.
+If you installed via the one-line installer:
 
 ```bash
-# Start the gateway
+curl -fsSL https://goclaw.org/install.sh | sh
+```
+
+You now have:
+- `goclaw` binary in `~/.goclaw/bin/`
+- PATH updated (restart your shell or run `source ~/.bashrc`)
+
+Verify the installation:
+
+```bash
+goclaw version
+```
+
+## Setup Wizard
+
+Run the interactive setup wizard:
+
+```bash
+goclaw setup
+```
+
+The wizard walks you through:
+
+1. **OpenClaw Detection** — If found, offers to import settings (API keys, workspace, Telegram token)
+2. **Workspace** — Creates your agent's home directory with identity files
+3. **LLM Providers** — Configure at least one provider (Anthropic, OpenAI, Ollama, xAI)
+4. **User Account** — Create your owner account with optional Telegram/WhatsApp IDs
+5. **Channels** — Enable Telegram, HTTP, WhatsApp as needed
+6. **Test Connection** — Validates API keys and fetches available models
+
+After setup completes, you'll have:
+- `~/.goclaw/goclaw.json` — Main configuration
+- `~/.goclaw/users.json` — User accounts
+- `~/.goclaw/workspace/` — Agent workspace with identity files
+
+## Starting GoClaw
+
+### Interactive TUI (Recommended for First Run)
+
+```bash
+goclaw tui
+```
+
+Opens an interactive terminal chat. You can immediately start talking to your agent. Press `Ctrl+C` to exit.
+
+### Background Daemon
+
+```bash
+goclaw start
+```
+
+Runs GoClaw as a background daemon with automatic restart on crash. Use this for production.
+
+```bash
+goclaw status   # Check if running
+goclaw stop     # Stop the daemon
+```
+
+### Foreground Mode
+
+```bash
 goclaw gateway
-
-# Or with debug logging
-goclaw gateway -d
-
-# Or with trace logging (very verbose)
-goclaw gateway -t
 ```
 
-## Interactive TUI
-
-For a terminal-based chat interface:
+Runs in the foreground with logs to terminal. Useful for debugging.
 
 ```bash
-goclaw gateway -i
+goclaw gateway -d   # Debug logging
+goclaw gateway -t   # Trace logging (very verbose)
 ```
 
-This starts the gateway with an interactive TUI where you can chat directly with your agent.
+## Verifying It Works
 
-## Verifying the Setup
-
-Once running, you should see log output indicating:
-
-1. Configuration loaded successfully
-2. LLM provider connected
-3. Channels started (Telegram, HTTP, etc.)
-
-Example output:
+On successful startup, you'll see:
 
 ```
 INFO  gateway: starting
 INFO  config: loaded goclaw.json
+INFO  llm: registry created providers=1 agent_models=1
 INFO  anthropic: initialized model=claude-sonnet-4-20250514
 INFO  telegram: bot started username=MyAgentBot
-INFO  http: listening port=3333
+INFO  http: listening addr=:1337
 ```
+
+Key indicators:
+- LLM provider initialized with your model
+- Channels started (Telegram, HTTP, etc.)
+- No error messages
+
+## Quick Test
+
+### Via TUI
+
+If using `goclaw tui`, just type a message:
+
+```
+You: Hello! What can you do?
+```
+
+### Via Telegram
+
+If Telegram is configured, message your bot. It should respond within a few seconds.
+
+### Via Web UI
+
+If HTTP is enabled, open your browser:
+
+```
+http://localhost:1337/chat
+```
+
+## Common First-Run Issues
+
+### "no providers configured"
+
+Run `goclaw setup` to configure at least one LLM provider.
+
+### "failed to authenticate" (Telegram)
+
+Check your bot token in `goclaw.json`. Get a new token from [@BotFather](https://t.me/BotFather).
+
+### "connection refused" (Ollama)
+
+Ensure Ollama is running: `ollama serve`
+
+### "invalid API key"
+
+Double-check your API key in `goclaw.json`. Keys are stored in `llm.providers.<name>.apiKey`.
+
+## Re-running Setup
+
+You can re-run the wizard anytime:
+
+```bash
+goclaw setup              # Auto-detect: edit if config exists, wizard if new
+goclaw setup wizard       # Force full wizard (re-walk all steps)
+goclaw setup edit         # Edit existing config (menu-based)
+```
+
+---
 
 ## Next Steps
 
-- [Set up Telegram](telegram.md) for mobile access
-- [Configure Home Assistant](home-assistant.md) for smart home control
-- [Add scheduled tasks](cron.md) for automated actions
-
-## Troubleshooting
-
-If the gateway fails to start:
-
-1. Run with debug logging to see errors: `goclaw gateway -d`
-2. Verify API keys are set correctly in `goclaw.json`
-3. Check the [Troubleshooting](troubleshooting.md) guide
+- [Telegram Setup](telegram.md) — Configure your Telegram bot
+- [WhatsApp Setup](whatsapp.md) — Link your WhatsApp account
+- [Web UI](web-ui.md) — Access the HTTP interface
+- [Commands](commands.md) — Slash commands reference
+- [Tools](tools.md) — Available agent tools
+- [Configuration](configuration.md) — Full config reference

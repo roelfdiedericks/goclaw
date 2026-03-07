@@ -16,7 +16,7 @@ GoClaw is configured via `goclaw.json` in the working directory.
   "llm": {
     "providers": {
       "anthropic": {
-        "type": "anthropic",
+        "driver": "anthropic",
         "apiKey": "sk-ant-...",
         "promptCaching": true
       }
@@ -27,14 +27,38 @@ GoClaw is configured via `goclaw.json` in the working directory.
     }
   },
 
-  "telegram": {
-    "enabled": true,
-    "botToken": "123456:ABC..."
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": "123456:ABC..."
+    },
+    "whatsapp": {
+      "enabled": false
+    },
+    "http": {
+      "enabled": true,
+      "listen": ":1337"
+    }
   },
 
-  "http": {
-    "enabled": true,
-    "port": 8080
+  "stt": {
+    "provider": "whispercpp",
+    "whispercpp": {
+      "model": "ggml-tiny.en.bin",
+      "modelsDir": "~/.goclaw/stt/whisper"
+    }
+  },
+
+  "voicellm": {
+    "enabled": false,
+    "default": "xai",
+    "providers": {
+      "xai": {
+        "driver": "xai",
+        "apiKey": "xai-...",
+        "voice": "Charon"
+      }
+    }
   },
 
   "session": {
@@ -153,9 +177,17 @@ GoClaw is configured via `goclaw.json` in the working directory.
 
 | Section | Description | Documentation |
 |---------|-------------|---------------|
-| `telegram` | Telegram bot configuration | [Telegram](telegram.md) |
-| `http` | Web UI and HTTP API | [Web UI](web-ui.md) |
-| `tui` | Terminal UI settings | [TUI](tui.md) |
+| `channels.telegram` | Telegram bot configuration | [Telegram](telegram.md) |
+| `channels.whatsapp` | WhatsApp via linked device | [WhatsApp](whatsapp.md) |
+| `channels.http` | Web UI and HTTP API | [Web UI](web-ui.md) |
+| `channels.tui` | Terminal UI settings | [TUI](tui.md) |
+
+### Voice & Audio
+
+| Section | Description | Documentation |
+|---------|-------------|---------------|
+| `stt` | Speech-to-text transcription | Below |
+| `voicellm` | Real-time voice conversations | Below |
 
 ### Tools
 
@@ -211,9 +243,11 @@ See [LLM Providers](llm-providers.md) for full configuration details.
 
 ```json
 {
-  "telegram": {
-    "enabled": true,
-    "botToken": "123456:ABC..."
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": "123456:ABC..."
+    }
   }
 }
 ```
@@ -224,6 +258,38 @@ See [LLM Providers](llm-providers.md) for full configuration details.
 | `botToken` | string | - | Bot token from @BotFather |
 
 The setup wizard (`goclaw setup`) can detect `TELEGRAM_BOT_TOKEN` from your environment and offer to use it.
+
+### WhatsApp Settings
+
+```json
+{
+  "channels": {
+    "whatsapp": {
+      "enabled": true
+    }
+  }
+}
+```
+
+WhatsApp uses the linked device protocol (no business API required). On first run, scan the QR code with your phone to link. Session persists in `~/.goclaw/whatsapp/`.
+
+### HTTP Settings
+
+```json
+{
+  "channels": {
+    "http": {
+      "enabled": true,
+      "listen": ":1337"
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable HTTP/Web UI |
+| `listen` | string | `:1337` | Listen address (`:port` or `host:port`) |
 
 ### Session Storage
 
@@ -288,20 +354,83 @@ The prompt cache watches workspace identity files (SOUL.md, AGENTS.md, etc.) for
 ```json
 {
   "gateway": {
-    "port": 8080,
-    "workingDir": "/path/to/workspace",
-    "logFile": "goclaw.log",
-    "pidFile": "goclaw.pid"
+    "workingDir": "~/.goclaw/workspace",
+    "logFile": "~/.goclaw/goclaw.log",
+    "pidFile": "~/.goclaw/goclaw.pid"
   }
 }
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `port` | int | `8080` | HTTP server port |
-| `workingDir` | string | cwd | Workspace directory |
+| `workingDir` | string | `~/.goclaw/workspace` | Workspace directory |
 | `logFile` | string | - | Log file path |
 | `pidFile` | string | - | PID file path |
+
+### Speech-to-Text (STT)
+
+```json
+{
+  "stt": {
+    "provider": "whispercpp",
+    "whispercpp": {
+      "model": "ggml-tiny.en.bin",
+      "modelsDir": "~/.goclaw/stt/whisper"
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `provider` | string | `"whispercpp"` | Provider: `whispercpp`, `openai`, `groq`, `google` |
+| `whispercpp.model` | string | `ggml-tiny.en.bin` | Model filename |
+| `whispercpp.modelsDir` | string | `~/.goclaw/stt/whisper` | Models directory |
+| `openai.apiKey` | string | - | OpenAI API key (for Whisper API) |
+| `groq.apiKey` | string | - | Groq API key |
+| `google.apiKey` | string | - | Google Cloud API key |
+
+**Local whisper.cpp** is the default and runs offline. Models are downloaded via the setup wizard or `goclaw setup edit`. The `.deb` package includes `ggml-tiny.en.bin` at `/usr/share/goclaw/stt/`.
+
+### Voice LLM (Real-time Voice)
+
+```json
+{
+  "voicellm": {
+    "enabled": true,
+    "default": "xai",
+    "serverVAD": true,
+    "idleTimeout": 300,
+    "providers": {
+      "xai": {
+        "driver": "xai",
+        "apiKey": "xai-...",
+        "voice": "Charon",
+        "sampleRate": 48000
+      }
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable real-time voice |
+| `default` | string | - | Default provider name |
+| `serverVAD` | bool | `true` | Server-side voice activity detection |
+| `idleTimeout` | int | `300` | Idle timeout in seconds |
+| `providers` | object | - | Named provider configs |
+
+**Provider config:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `driver` | string | - | `xai` or `openai` |
+| `apiKey` | string | - | Provider API key |
+| `voice` | string | `Eve` | Voice name (xAI: Eve, Charon, Ash, etc.) |
+| `sampleRate` | int | `48000` | Audio sample rate |
+
+Real-time voice is accessible via the HTTP channel's `/voice` endpoint.
 
 ---
 

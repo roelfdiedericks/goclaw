@@ -1,137 +1,185 @@
 ---
 title: "Metrics"
-description: "Monitoring and observability endpoints"
+description: "Real-time metrics, LLM cost tracking, and observability"
 section: "Advanced"
-weight: 40
+weight: 55
 ---
 
 # Metrics
 
-GoClaw exposes metrics for monitoring and observability.
+GoClaw includes a comprehensive metrics system for monitoring performance, tracking LLM costs, and observability.
 
-## Endpoints
+## Overview
 
-### JSON Metrics
+Metrics are organized in a hierarchical tree structure by topic and function:
 
 ```
-GET /api/metrics
+llm/
+├── anthropic/
+│   └── claude-sonnet-4/
+│       ├── timing (p50: 2.3s, p99: 8.1s)
+│       └── cost (total: $1.23)
+├── ollama/
+│   └── nomic-embed-text/
+│       └── timing (p50: 45ms)
+gateway/
+├── agent_loop/
+│   └── timing
+└── compaction/
+    └── success_fail
 ```
 
-Returns all metrics as JSON:
+## Accessing Metrics
+
+### Web UI
+
+Visit `/metrics` on your HTTP channel for an interactive tree view:
+
+```
+http://localhost:1337/metrics
+```
+
+The UI auto-refreshes and allows expanding/collapsing metric branches.
+
+### JSON API
+
+Get a JSON snapshot via `/api/metrics`:
+
+```bash
+curl http://localhost:1337/api/metrics | jq
+```
+
+Returns all metrics with current values, organized by path.
+
+## LLM Cost Tracking
+
+GoClaw tracks LLM costs automatically using pricing data from the embedded `models.json`:
+
+- **Input tokens** — Cost per million input tokens
+- **Output tokens** — Cost per million output tokens
+- **Cache read** — Discounted cost for cached prompt tokens (Anthropic)
+- **Cache write** — One-time cost when caching new content
+
+### How It Works
+
+1. Each LLM call records token counts (input, output, cache read/write)
+2. Pricing is looked up from `models.json` based on provider and model
+3. Cost is calculated in microdollars (USD × 1,000,000) for precision
+4. Metrics track: total accumulated, last request, min/max per request
+
+### Viewing Costs
+
+Costs appear in the metrics tree under the LLM provider path:
+
+```
+llm/anthropic/claude-sonnet-4/cost
+  Total: $1.234567
+  Last:  $0.002340
+  Min:   $0.000120
+  Max:   $0.045000
+  Count: 523
+```
+
+### Custom Pricing
+
+Override `models.json` pricing in your provider config:
 
 ```json
 {
-  "metrics": [
-    {
-      "path": "llm.requests",
-      "type": "counter",
-      "health": 0,
-      "data": {"value": 1234}
+  "llm": {
+    "providers": {
+      "my-claude": {
+        "driver": "anthropic",
+        "apiKey": "...",
+        "costInput": 3.0,
+        "costOutput": 15.0,
+        "costCacheRead": 0.3,
+        "costCacheWrite": 3.75
+      }
     }
-  ]
+  }
 }
 ```
 
-### Prometheus Metrics
-
-```
-GET /metrics
-```
-
-Returns metrics in Prometheus text format for scraping.
+Values are USD per million tokens. Set to `0` to use `models.json` defaults.
 
 ## Metric Types
 
-| Type | Description |
+| Type | Description | Example |
+|------|-------------|---------|
+| **Timing** | Duration with percentiles (p50, p95, p99) | LLM response time |
+| **Counter** | Incrementing count | Messages processed |
+| **Gauge** | Point-in-time value | Active sessions |
+| **HitMiss** | Cache hit/miss ratio | Prompt cache |
+| **SuccessFail** | Success/failure counts | Tool execution |
+| **Outcome** | Multiple outcome categories | LLM response types |
+| **Error** | Error counts by type | API errors |
+| **Cost** | Accumulated cost tracking | LLM spend |
+| **Threshold** | Value vs threshold tracking | Context usage |
+
+## Persistence
+
+Metrics persist across restarts in SQLite (`~/.goclaw/sessions.db`). This enables:
+
+- Cumulative cost tracking over time
+- Historical comparison
+- Survival across gateway restarts
+
+Persistence saves every 30 seconds and on graceful shutdown.
+
+## Key Metrics
+
+### LLM Performance
+
+| Path | Description |
 |------|-------------|
-| `counter` | Incrementing count |
-| `gauge` | Value that can increase or decrease |
-| `timing` | Duration measurements with percentiles |
-| `hit_miss` | Cache hit/miss ratios |
-| `success_fail` | Success/failure counts with rates |
-| `outcome` | Multiple possible outcomes |
-| `error` | Error tracking by type |
-| `condition` | Boolean state tracking |
-| `threshold` | Values against thresholds |
+| `llm/<provider>/<model>/timing` | Response latency |
+| `llm/<provider>/<model>/cost` | Token costs |
+| `llm/<provider>/<model>/tokens` | Token counts |
 
-## Available Metrics
+### Gateway
 
-### LLM Metrics
+| Path | Description |
+|------|-------------|
+| `gateway/agent_loop/timing` | Full agent loop time |
+| `gateway/compaction/timing` | Compaction duration |
+| `gateway/tool/<name>/timing` | Tool execution time |
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `llm.requests` | counter | Total LLM API requests |
-| `llm.latency` | timing | Request latency |
-| `llm.tokens.input` | counter | Input tokens used |
-| `llm.tokens.output` | counter | Output tokens generated |
-| `llm.cache` | hit_miss | Prompt cache performance |
+### Channels
 
-### Session Metrics
+| Path | Description |
+|------|-------------|
+| `telegram/messages` | Message counts |
+| `http/requests` | HTTP request counts |
+| `whatsapp/messages` | WhatsApp message counts |
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `session.messages` | gauge | Current message count |
-| `session.tokens` | gauge | Current token count |
-| `session.compactions` | counter | Compaction count |
+## Programmatic Access
 
-### Tool Metrics
+Use the metrics API in Go code:
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `tools.calls` | counter | Total tool invocations |
-| `tools.latency` | timing | Tool execution time |
-| `tools.errors` | error | Tool errors by type |
+```go
+import . "github.com/roelfdiedericks/goclaw/internal/metrics"
 
-## Health Status
+// Timing
+key := MetricStart("my_topic", "my_function")
+// ... do work ...
+MetricEnd(key)
 
-Each metric includes a health status:
+// Or auto-timed:
+defer MetricFunc("my_topic")()
 
-| Status | Value | Meaning |
-|--------|-------|---------|
-| Good | 0 | Normal operation |
-| Warning | 1 | Needs attention |
-| Critical | 2 | Action required |
+// Counters
+MetricInc("requests", "total")
+MetricAdd("bytes", "processed", 1024)
 
-## Configuration
-
-No configuration required. Metrics are enabled when the HTTP channel is active.
-
-## Prometheus Integration
-
-Add GoClaw as a Prometheus scrape target:
-
-```yaml
-scrape_configs:
-  - job_name: 'goclaw'
-    static_configs:
-      - targets: ['localhost:8080']
-    metrics_path: /metrics
-```
-
-## Example Queries
-
-### Request Rate (Prometheus)
-
-```promql
-rate(goclaw_llm_requests_total[5m])
-```
-
-### Average Latency
-
-```promql
-rate(goclaw_llm_latency_sum[5m]) / rate(goclaw_llm_latency_count[5m])
-```
-
-### Token Usage
-
-```promql
-increase(goclaw_llm_tokens_input_total[1h])
+// Cost (microdollars)
+MetricCost("llm/anthropic", "claude-sonnet", 234500) // $0.2345
 ```
 
 ---
 
 ## See Also
 
-- [Web UI](web-ui.md) — HTTP endpoints
-- [Configuration](configuration.md) — Full config reference
-- [Advanced](advanced.md) — Debugging and monitoring
+- [LLM Providers](llm-providers.md) — Provider configuration
+- [Deployment](deployment.md) — Monitoring setup
+- [Architecture](architecture.md) — System overview

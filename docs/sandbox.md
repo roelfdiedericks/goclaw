@@ -13,59 +13,47 @@ GoClaw implements multiple layers of sandboxing to protect your system from unin
 
 | Layer | Scope | Mechanism | Default |
 |-------|-------|-----------|---------|
-| File Tools | read, write, edit | Go path validation | Always on |
+| File Tools | read, write, edit | Path validation | Always on |
 | Exec Tool | Shell commands | bubblewrap (Linux) | Off |
 | Browser | Chromium | bubblewrap (Linux) | Off |
 
 ## File Tools Sandbox
 
-The `read`, `write`, and `edit` tools use Go-side path validation to restrict file access to the workspace directory.
+The `read`, `write`, and `edit` tools validate all paths to restrict file access.
 
-### How It Works
+### Protections
 
-1. **Path Resolution** - Relative paths are resolved against the current working directory
-2. **Workspace Containment** - All resolved paths must be within the workspace root
-3. **Symlink Prevention** - Symlinks in the path are rejected to prevent escapes
-4. **Denied Files** - Sensitive files are always blocked, even within the workspace
+- **Workspace Containment** — All paths must resolve within the workspace
+- **Symlink Prevention** — Symlinks in paths are rejected to prevent escapes
+- **Denied Files** — Sensitive files are always blocked, even within the workspace
+- **Unicode Normalization** — Unicode space characters normalized to prevent confusion attacks
 
 ### Denied Files
 
-These files are blocked to protect credentials and configuration:
+These files are blocked to protect credentials:
 
-- `users.json` - Contains user credentials and hashes
-- `goclaw.json` - Contains API keys and tokens
-- `openclaw.json` - Contains API keys and tokens
-
-### Unicode Normalization
-
-Unicode space characters (non-breaking spaces, em spaces, etc.) are normalized to regular spaces to prevent path confusion attacks.
+- `users.json` — User credentials and hashes
+- `goclaw.json` — API keys and tokens
+- `openclaw.json` — API keys and tokens
+- `.env` — Environment secrets
 
 ### User Override
 
-Users with `sandbox: false` in `users.json` can bypass path validation:
+Users with `sandbox: false` in `users.json` bypass path validation:
 
 ```json
 {
-  "admin": {
-    "name": "Admin User",
-    "role": "owner",
-    "sandbox": false
-  }
+  "name": "Admin",
+  "role": "owner",
+  "sandbox": false
 }
 ```
 
-**Warning**: Disabling sandbox allows the agent to read/write any file the GoClaw process can access.
+**Warning**: This allows the agent to access any file the GoClaw process can read/write.
 
-## Exec Tool Sandbox (bubblewrap)
+## Bubblewrap Sandbox
 
-The exec tool can optionally use [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) for kernel-level process isolation on Linux.
-
-### What bubblewrap Does
-
-- **Filesystem Isolation** - Only workspace directory is writable
-- **Environment Isolation** - Clears environment variables (prevents API key leaks)
-- **PID Namespace** - Process cannot see or signal other processes
-- **Network Control** - Network access can be disabled
+The exec tool and browser can use [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) for kernel-level isolation on Linux.
 
 ### Prerequisites
 
@@ -79,147 +67,158 @@ sudo apt install bubblewrap
 sudo pacman -S bubblewrap
 ```
 
-### Configuration
+The Debian package and Docker images include bubblewrap.
 
-In `goclaw.json`:
+### Sandbox Modes
+
+GoClaw supports three sandbox modes:
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `home` | Full isolated home directory | Recommended default |
+| `volumes` | Only specific directories persist | Controlled persistence |
+| `ephemeral` | Nothing persists between runs | Maximum security |
+
+### Configuration
 
 ```json
 {
-  "tools": {
+  "sandbox": {
     "bubblewrap": {
-      "path": ""  // Empty = search PATH, or explicit path to bwrap
-    },
-    "exec": {
-      "timeout": 1800,  // 30 minutes (matches OpenClaw)
-      "bubblewrap": {
-        "enabled": false,      // Enable sandboxing
-        "extraRoBind": [],     // Additional read-only mounts
-        "extraBind": [],       // Additional writable mounts
-        "extraEnv": {},        // Additional environment variables
-        "allowNetwork": true,  // Allow network access
-        "clearEnv": true       // Clear env before setting defaults
-      }
+      "mode": "home",
+      "path": "",
+      "dataDir": "",
+      "volumes": [],
+      "extraPaths": []
     }
   }
 }
 ```
 
-### Enabled via Setup
+| Option | Default | Description |
+|--------|---------|-------------|
+| `mode` | `home` | Sandbox mode: `home`, `volumes`, or `ephemeral` |
+| `path` | (search PATH) | Custom path to bwrap binary |
+| `dataDir` | `~/.goclaw/sandbox` | Backing storage for isolated directories |
+| `volumes` | `~/.local`, `~/.config`, `~/.cache` | Directories to persist (volumes mode only) |
+| `extraPaths` | [] | Additional PATH entries inside sandbox |
 
-Run `goclaw setup edit` and select "Sandboxing" to toggle exec sandboxing.
+### Home Mode (Recommended)
 
-Or run `goclaw setup wizard` during initial setup - it will detect bwrap and offer to enable sandboxing.
+The default mode creates a full isolated home directory at `~/.goclaw/sandbox/home/`. Agent-installed tools persist across runs, but are isolated from your real home.
+
+```json
+{
+  "sandbox": {
+    "bubblewrap": {
+      "mode": "home"
+    }
+  }
+}
+```
+
+### Volumes Mode
+
+Only specific directories persist. Useful when you want controlled isolation:
+
+```json
+{
+  "sandbox": {
+    "bubblewrap": {
+      "mode": "volumes",
+      "volumes": ["~/.local", "~/.config", "~/.npm-global"]
+    }
+  }
+}
+```
+
+### Ephemeral Mode
+
+Nothing persists between runs. Maximum security but agent-installed tools are lost:
+
+```json
+{
+  "sandbox": {
+    "bubblewrap": {
+      "mode": "ephemeral"
+    }
+  }
+}
+```
 
 ### What Commands Can Access
 
-When exec sandbox is enabled:
+Inside the sandbox:
 
 | Path | Access | Notes |
 |------|--------|-------|
 | Workspace | Read/Write | Agent's working directory |
-| `/usr`, `/lib`, `/bin`, `/sbin` | Read-only | System binaries and libraries |
-| `/etc/resolv.conf`, `/etc/hosts` | Read-only | Network configuration |
-| `/etc/passwd`, `/etc/group` | Read-only | User/group info for tools |
+| Isolated home | Read/Write | Based on mode |
+| `/usr`, `/lib`, `/bin`, `/sbin` | Read-only | System binaries |
+| `/etc/resolv.conf`, `/etc/hosts` | Read-only | Network config |
 | `/etc/ssl`, `/etc/ca-certificates` | Read-only | SSL certificates |
-| `/tmp` | Read/Write | Isolated tmpfs (not host /tmp) |
+| `/tmp` | Read/Write | Isolated tmpfs |
 | `/proc` | Read-only | Process information |
-| `/dev` | Limited | Basic devices only |
 
 ### What Commands Cannot Access
 
-- Home directory (except workspace)
+- Your real home directory (except workspace)
 - Other users' files
+- Host environment variables (API keys, tokens)
 - System configuration outside allowed paths
-- Host environment variables (unless explicitly passed)
 
-### Environment Variables
+### PATH Inside Sandbox
 
-When `clearEnv: true` (default), the sandbox starts with a clean environment:
+The sandbox automatically includes common user binary directories:
 
-| Variable | Value | Notes |
-|----------|-------|-------|
-| `PATH` | `/usr/bin:/bin:/usr/sbin:/sbin` | Standard paths |
-| `HOME` | Workspace path | Agent's home |
-| `TERM` | `xterm` | Terminal type |
-| `LANG` | From host or `C.UTF-8` | Locale |
-| `USER` | From host | Username |
+- `~/.local/bin`
+- `~/.npm-global/bin`
+- `~/go/bin`
+- `~/.cargo/bin`
+- `~/.bun/bin`
+- `~/pip-tools/bin`
 
-Additional variables can be passed via `extraEnv`.
-
-### User Override
-
-Users with `sandbox: false` run commands without bubblewrap, regardless of global setting.
-
-### Error Handling
-
-- **bwrap not found at startup**: Warning logged, sandbox disabled in memory
-- **bwrap fails during execution**: Hard error returned to agent
-- **Non-Linux systems**: Sandbox unavailable, warning logged if enabled
-
-## Browser Sandbox (bubblewrap)
-
-The browser tool can also use bubblewrap to isolate the Chromium instance.
-
-### Configuration
+Add custom paths via `extraPaths`:
 
 ```json
 {
-  "tools": {
-    "browser": {
-      "enabled": true,
-      "bubblewrap": {
-        "enabled": false,     // Enable sandboxing
-        "extraRoBind": [],    // Additional read-only mounts
-        "extraBind": [],      // Additional writable mounts
-        "gpu": true           // Enable GPU acceleration
-      }
+  "sandbox": {
+    "bubblewrap": {
+      "extraPaths": ["/opt/mytools/bin", "~/.custom/bin"]
     }
   }
 }
 ```
 
-### What Browser Can Access
+### Enabling via Setup
 
-When browser sandbox is enabled:
+Run `goclaw setup edit` and select "Sandbox" to configure modes and options.
 
-| Path | Access | Notes |
-|------|--------|-------|
-| Workspace | Read/Write | For screenshots, downloads |
-| Browser profile | Read/Write | Cookies, cache, settings |
-| `/dev/shm` | Read/Write | Required for Chromium IPC |
-| `/dev/dri` | Read-only | GPU acceleration (if enabled) |
-| X11/Wayland socket | Read-only | Display access |
-| Fonts | Read-only | System fonts |
-
-### Limitations
-
-- Browser sandbox requires headed mode to work properly with display
-- GPU acceleration may not work in all configurations
-- Some sites may detect sandboxed browsers
+Or during initial setup, the wizard detects bwrap and offers to enable sandboxing.
 
 ## Security Considerations
 
 ### Defense in Depth
 
-The sandboxing layers complement each other:
+The layers complement each other:
 
-1. **File tools sandbox** - Prevents direct file access outside workspace
-2. **Exec sandbox** - Prevents shell commands from escaping
-3. **Browser sandbox** - Prevents browser from accessing system files
+1. **File tools sandbox** — Prevents direct file access outside workspace
+2. **Bubblewrap sandbox** — Prevents shell commands from escaping
+3. **Isolated home** — Agent tools don't mix with your real environment
 
 ### What Sandboxing Does NOT Protect Against
 
-- Network-based attacks (exec sandbox allows network by default)
+- Network-based attacks (network access is allowed)
 - Side-channel attacks
 - Bugs in bubblewrap itself
-- Actions within the workspace (agent can still delete workspace files)
+- Actions within the workspace (agent can still modify workspace files)
 
 ### Recommendations
 
-1. **Enable exec sandbox** if running on Linux with untrusted prompts
-2. **Use `sandbox: false`** sparingly, only for trusted admin users
-3. **Review `extraBind` paths** carefully - they become writable
-4. **Consider `allowNetwork: false`** for highly sensitive environments
+1. **Use `home` mode** for general use — good balance of security and usability
+2. **Use `ephemeral` mode** for untrusted prompts — nothing persists
+3. **Use `sandbox: false`** sparingly — only for trusted admin users
+4. **Review `extraPaths`** — they become accessible inside sandbox
 
 ## Troubleshooting
 
@@ -229,51 +228,36 @@ Install bubblewrap (see Prerequisites above).
 
 ### "namespace operation not permitted"
 
-Some container environments restrict namespace creation. Options:
+Some container environments restrict namespace creation:
 
 1. Run GoClaw outside the container
 2. Use `--privileged` flag with Docker
-3. Disable sandbox (`enabled: false`)
+3. Use a different sandbox mode or disable
 
 ### Commands fail inside sandbox
 
-Check if the command needs access to paths not in the sandbox. Add them to `extraRoBind` or `extraBind`:
+The command may need paths not available. Add them to `extraPaths`:
 
 ```json
 {
-  "tools": {
-    "exec": {
-      "bubblewrap": {
-        "enabled": true,
-        "extraRoBind": ["/opt/mytools"]
-      }
+  "sandbox": {
+    "bubblewrap": {
+      "extraPaths": ["/opt/mytools"]
     }
   }
 }
 ```
 
-### Environment variable missing
+### Agent-installed tools not found
 
-Add required variables to `extraEnv`:
+In `ephemeral` mode, tools don't persist. Switch to `home` or `volumes` mode.
 
-```json
-{
-  "tools": {
-    "exec": {
-      "bubblewrap": {
-        "enabled": true,
-        "extraEnv": {
-          "MY_VAR": "value"
-        }
-      }
-    }
-  }
-}
-```
+In `volumes` mode, ensure the tool's install location is in your volumes list.
+
+---
 
 ## See Also
 
-- [specs/EXEC_SANDBOX.md](../specs/EXEC_SANDBOX.md) - Detailed exec sandbox specification
-- [specs/BROWSER_SANDBOX.md](../specs/BROWSER_SANDBOX.md) - Browser sandbox specification
-- [Configuration](configuration.md) - Full configuration reference
-- [Tools](tools.md) - Tool documentation
+- [Configuration](configuration.md) — Full config reference
+- [Tools](tools.md) — Tool documentation
+- [Deployment](deployment.md) — Production setup

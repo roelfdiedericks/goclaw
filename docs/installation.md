@@ -31,7 +31,7 @@ This will:
 curl -fsSL https://goclaw.org/install.sh | sh -s -- --channel beta
 
 # Install specific version
-curl -fsSL https://goclaw.org/install.sh | sh -s -- --version 0.2.0
+curl -fsSL https://goclaw.org/install.sh | sh -s -- --version 0.1.1
 ```
 
 Verify the installation:
@@ -56,13 +56,78 @@ sudo dpkg -i goclaw_${VERSION}_linux_amd64.deb
 2. Download the `.deb` file for your architecture (`amd64` or `arm64`)
 3. Install with: `sudo dpkg -i goclaw_*.deb`
 
+**What's included:**
+- Dependencies: `bubblewrap` (sandboxing), `ffmpeg` (audio processing)
+- Bundled Whisper model at `/usr/share/goclaw/stt/ggml-tiny.en.bin`
+
+After installation, run `goclaw setup` to configure.
+
 ### Docker
 
 ```bash
 docker pull ghcr.io/roelfdiedericks/goclaw:latest
 ```
 
+**First run — Interactive setup (recommended):**
+
+```bash
+# Start container (will pause waiting for setup)
+docker run -d --name goclaw \
+  -p 1337:1337 \
+  -v goclaw-data:/home/goclaw/.goclaw \
+  ghcr.io/roelfdiedericks/goclaw:latest
+
+# Run the setup wizard
+docker exec -it goclaw goclaw setup
+
+# Restart to apply config
+docker restart goclaw
+```
+
+**First run — Quick start with defaults:**
+
+```bash
+docker run -d --name goclaw \
+  -p 1337:1337 \
+  -v goclaw-data:/home/goclaw/.goclaw \
+  -e GOCLAW_QUICK_START=1 \
+  ghcr.io/roelfdiedericks/goclaw:latest
+```
+
+This generates default configs with a random password (shown in logs). You'll need to edit `goclaw.json` to add your API key.
+
+**What's included:**
+- Debian-based image with `ffmpeg` for audio processing
+- Bundled Whisper model (`ggml-tiny.en.bin`) for local speech-to-text
+- Non-root user (`goclaw`)
+
 See [Deployment](deployment.md#docker) for Docker Compose setup.
+
+### Windows (via WSL2)
+
+GoClaw runs on Windows through WSL2 (Windows Subsystem for Linux).
+
+**Automated installer:**
+
+```powershell
+# Run in PowerShell as Administrator
+irm https://goclaw.org/install-windows.ps1 | iex
+```
+
+This will:
+- Enable WSL2 features (may require restart)
+- Install Debian WSL distribution
+- Run the Linux installer inside WSL
+- Create a "GoClaw" desktop shortcut
+
+**Manual setup:**
+
+1. Install WSL2: `wsl --install -d Debian`
+2. Open Debian and run the Linux installer:
+   ```bash
+   curl -fsSL https://goclaw.org/install.sh | sh
+   goclaw setup
+   ```
 
 ### Run Setup Wizard
 
@@ -160,9 +225,12 @@ GoClaw is a single static binary. These are optional but enhance functionality:
 | Feature | Dependency | Installation |
 |---------|------------|--------------|
 | Sandboxed exec | Bubblewrap | `sudo apt install bubblewrap` |
+| Audio processing | FFmpeg | `sudo apt install ffmpeg` |
 | Browser automation | Chromium | Auto-downloaded on first use |
 | Local embeddings | Ollama | [ollama.ai](https://ollama.ai) |
 | Local LLM | LM Studio | [lmstudio.ai](https://lmstudio.ai) |
+
+**Note:** The `.deb` package and Docker image include `bubblewrap` and `ffmpeg` automatically.
 
 ---
 
@@ -181,7 +249,7 @@ GoClaw stores all its data in `~/.goclaw/`:
 └── browser/          # Managed Chromium installation + profiles
 ```
 
-The **workspace** (where your agent's SOUL.md, memory/, etc. live) is configured separately and defaults to `~/.openclaw/workspace/` for compatibility with OpenClaw.
+The **workspace** (where your agent's SOUL.md, memory/, etc. live) is configured separately and defaults to `~/.goclaw/workspace/`. If migrating from OpenClaw, the setup wizard can import your existing workspace path.
 
 **OpenClaw compatibility:**
 
@@ -362,6 +430,16 @@ Ensure OpenClaw config exists at the expected path:
 ```bash
 ls ~/.openclaw/openclaw.json
 ls ~/.openclaw/agents/main/agent/auth-profiles.json
+```
+
+Alternatively, skip the import and configure your workspace manually via `goclaw setup edit` → Gateway → Working Directory, or edit `~/.goclaw/goclaw.json`:
+
+```json
+{
+  "gateway": {
+    "workingDir": "/path/to/your/workspace"
+  }
+}
 ```
 
 ---

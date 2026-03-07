@@ -84,11 +84,17 @@ For advanced setups with multiple providers and purpose-specific chains:
 
 GoClaw routes LLM requests based on **purpose**:
 
-| Purpose | Used For |
-|---------|----------|
-| `agent` | Main conversation, tool use |
-| `summarization` | Compaction summaries, checkpoints |
-| `embeddings` | Semantic search vectors |
+| Purpose | Config Key | Used For |
+|---------|------------|----------|
+| `agent` | `agent` | Main conversation, tool use |
+| `summarization` | `summarization` | Compaction summaries, checkpoints |
+| `embeddings` | `embeddings` | Semantic search (memory, transcripts, Memory Graph) |
+| `heartbeat` | `heartbeat` | Periodic heartbeat tasks |
+| `cron` | `cron` | Scheduled cron jobs |
+| `hass` | `hass` | Home Assistant queries |
+| `memory_extraction` | `memoryExtraction` | Memory Graph entity extraction |
+
+If a purpose has no models configured, it falls back to the `agent` chain.
 
 Each purpose has a **model chain** — the first model is primary, others are fallbacks:
 
@@ -279,5 +285,7 @@ Cooldowns use exponential backoff within these ranges.
 - [OpenAI Provider](providers/openai.md) — GPT and compatible APIs
 - [Ollama Provider](providers/ollama.md) — Local inference
 - [xAI Provider](providers/xai.md) — Grok models
+- [Embeddings](embeddings.md) — Embeddings purpose configuration
+- [Memory Graph](memory-graph.md) — Memory extraction purpose
 - [Configuration](configuration.md) — Full config reference
 - [Session Management](session-management.md) — Summarization config

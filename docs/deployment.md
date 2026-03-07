@@ -1,6 +1,6 @@
 ---
 title: "Deployment"
-description: "Running GoClaw in production with systemd and containers"
+description: "Running GoClaw in production with supervisor mode and containers"
 section: "Advanced"
 weight: 60
 ---
@@ -72,62 +72,45 @@ EOF
 ### 4. Run
 
 ```bash
+# Start as background daemon (recommended)
+goclaw start
+
+# Or run in foreground
 goclaw gateway
-# Or with full path:
-~/.goclaw/bin/goclaw gateway
 ```
 
 ---
 
-## Systemd Service
+## Daemon Mode (Recommended)
 
-### Create Service File
-
-```bash
-sudo cat > /etc/systemd/system/goclaw.service << 'EOF'
-[Unit]
-Description=GoClaw AI Agent Gateway
-After=network.target
-
-[Service]
-Type=simple
-User=goclaw
-Group=goclaw
-WorkingDirectory=/home/goclaw
-ExecStart=/home/goclaw/.goclaw/bin/goclaw gateway
-Restart=always
-RestartSec=5
-
-# Logging
-StandardOutput=journal
-StandardError=journal
-
-# Security
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/home/goclaw/.goclaw /home/goclaw/.openclaw
-
-[Install]
-WantedBy=multi-user.target
-EOF
-```
-
-**Note:** All configuration (API keys, tokens) must be in `goclaw.json`. GoClaw does not read environment variables at runtime.
-
-### Enable and Start
+GoClaw has a built-in daemon mode with supervisor that keeps the gateway running:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable goclaw
-sudo systemctl start goclaw
+# Start as background daemon
+goclaw start
 
 # Check status
-sudo systemctl status goclaw
+goclaw status
 
-# View logs
-sudo journalctl -u goclaw -f
+# Stop the daemon
+goclaw stop
 ```
+
+The daemon:
+- Daemonizes and detaches from the terminal
+- Runs a supervisor that automatically restarts the gateway on crash
+- Writes PID file for process management
+- Handles graceful shutdown on SIGINT/SIGTERM
+
+### Foreground Mode
+
+To run in the foreground (useful for debugging or containers):
+
+```bash
+goclaw gateway
+```
+
+This runs without daemonizing — useful when you want to see logs directly or when running inside Docker/containers.
 
 ---
 
@@ -143,9 +126,6 @@ docker pull ghcr.io/roelfdiedericks/goclaw:latest
 
 # Or pull specific version
 docker pull ghcr.io/roelfdiedericks/goclaw:0.1.0
-
-# Or pull latest beta
-docker pull ghcr.io/roelfdiedericks/goclaw:beta
 ```
 
 Using the provided Docker Compose:
@@ -155,15 +135,31 @@ cd docker
 docker-compose up
 ```
 
-On first run, the container will:
-1. Generate default `goclaw.json` and `users.json`
-2. Create a random password for the owner account
-3. Print the password and exit
+### First Run Options
 
-Then:
-1. Note the generated password from the output
-2. Edit the config to add your API key (see below)
-3. Run `docker-compose up -d` to start normally
+On first run (no config exists), you have two options:
+
+**Option 1: Interactive Setup Wizard (Recommended)**
+
+The container will print instructions and exit. Run the wizard interactively:
+
+```bash
+docker exec -it goclaw goclaw setup
+```
+
+This walks you through LLM providers, channels, and user configuration.
+
+**Option 2: Quick Start with Defaults**
+
+Set `GOCLAW_QUICK_START=1` to auto-generate default configs:
+
+```yaml
+# In docker-compose.yml
+environment:
+  - GOCLAW_QUICK_START=1
+```
+
+This generates `goclaw.json` and `users.json` with a random password, then starts the gateway. Edit the config afterward to add your API key.
 
 ### Editing the Config
 
@@ -218,7 +214,10 @@ docker-compose logs -f goclaw
 | Path | Purpose |
 |------|---------|
 | `~/.goclaw/sessions.db` | SQLite session database |
+| `~/.goclaw/memorygraph.db` | Memory Graph database |
+| `~/.goclaw/whatsapp.db` | WhatsApp session (if enabled) |
 | `~/.goclaw/media/` | Temporary media files |
+| `~/.goclaw/stt/whisper/` | Whisper STT models |
 | `./goclaw.json` | Configuration |
 | `./users.json` | User authorization |
 
@@ -226,12 +225,16 @@ docker-compose logs -f goclaw
 
 Back up these files regularly:
 ```bash
-# SQLite database (contains all conversation history)
+# SQLite databases (conversation history, memory graph)
 cp ~/.goclaw/sessions.db backup/sessions-$(date +%Y%m%d).db
+cp ~/.goclaw/memorygraph.db backup/memorygraph-$(date +%Y%m%d).db
 
 # Configuration
 cp goclaw.json backup/
 cp users.json backup/
+
+# WhatsApp session (if using WhatsApp)
+cp ~/.goclaw/whatsapp.db backup/whatsapp-$(date +%Y%m%d).db
 ```
 
 ---
@@ -241,11 +244,8 @@ cp users.json backup/
 ### Status Check
 
 ```bash
-# Check if daemon is running (reads PID file)
+# Check if gateway is running (reads PID file)
 goclaw status
-
-# Or check systemd status
-sudo systemctl status goclaw
 ```
 
 ### Logging
@@ -265,7 +265,9 @@ make debug
 
 ### Metrics
 
-GoClaw exposes metrics at `/metrics` (Prometheus format) and `/api/metrics` (JSON).
+GoClaw exposes metrics via the HTTP channel:
+- `/metrics` — Web UI dashboard with auto-refresh
+- `/api/metrics` — JSON snapshot for programmatic access
 
 See [Metrics](metrics.md) for details.
 
@@ -275,12 +277,6 @@ See [Metrics](metrics.md) for details.
 
 For comprehensive security guidance, see the [Security](security.md) section.
 
-### API Keys
-
-- Never commit API keys to git
-- Store secrets only in `goclaw.json` (not environment variables)
-- Protect config with `chmod 0600`
-- Rotate keys periodically
 
 See [Environment variables and secrets](security-envvars.md) for why GoClaw uses config-only secrets.
 

@@ -338,11 +338,104 @@ Check why a skill is ineligible and get fix suggestions.
 - `flagged` - Disabled by security auditor
 - `whitelisted` - Manually enabled despite audit flags
 
-### Future Extensions
+#### search
 
-Future versions may support:
-- `search` - Search skill registries (clawdhub.com, etc.)
-- `install` - Install skills from approved registries with audit
+Search available skills from all sources (embedded, clawhub, local).
+
+**Input:**
+```json
+{
+  "action": "search",
+  "query": "email"
+}
+```
+
+**Output:**
+```json
+{
+  "results": [
+    {
+      "name": "himalaya",
+      "description": "CLI to manage emails via IMAP/SMTP",
+      "source": "embedded",
+      "installed": false
+    }
+  ]
+}
+```
+
+#### install
+
+Install a skill from a source.
+
+**Input:**
+```json
+{
+  "action": "install",
+  "skill": "himalaya",
+  "source": "embedded"
+}
+```
+
+**Sources:** `embedded` (bundled with GoClaw), `clawhub` (remote registry), `local` (workspace)
+
+**Output:**
+```json
+{
+  "success": true,
+  "skill": "himalaya",
+  "path": "/home/user/.goclaw/skills/himalaya/SKILL.md"
+}
+```
+
+**Note:** Installation is controlled by `skills.install` config:
+
+```json
+{
+  "skills": {
+    "install": {
+      "allowEmbedded": true,
+      "allowClawHub": false,
+      "allowLocal": true
+    }
+  }
+}
+```
+
+#### sources
+
+List available skill sources/repositories.
+
+**Input:**
+```json
+{
+  "action": "sources"
+}
+```
+
+**Output:**
+```json
+{
+  "sources": [
+    {"name": "embedded", "enabled": true, "count": 55},
+    {"name": "clawhub", "enabled": false, "url": "https://clawhub.com"},
+    {"name": "local", "enabled": true, "path": "~/.goclaw/workspace/skills"}
+  ]
+}
+```
+
+#### reload
+
+Rescan skill directories and refresh the registry.
+
+**Input:**
+```json
+{
+  "action": "reload"
+}
+```
+
+Use after manually adding skills to directories.
 
 ## Syncing Bundled Skills
 
