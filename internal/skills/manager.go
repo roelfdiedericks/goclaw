@@ -3,6 +3,8 @@ package skills
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -526,6 +528,38 @@ func (m *Manager) InstallSkill(ctx context.Context, skillName string, source Sou
 	}
 
 	return result, nil
+}
+
+// UninstallSkill removes a skill from the workspace directory.
+// Only skills installed to the workspace can be uninstalled.
+func (m *Manager) UninstallSkill(skillName string) error {
+	if m.workspaceDir == "" {
+		return fmt.Errorf("workspace skills directory not configured")
+	}
+
+	// Check skill exists and is from workspace
+	skill := m.GetSkill(skillName)
+	if skill == nil {
+		return fmt.Errorf("skill %q not found", skillName)
+	}
+	if skill.Source != SourceWorkspace {
+		return fmt.Errorf("skill %q is not installed in workspace (source: %s) - cannot uninstall", skillName, skill.Source)
+	}
+
+	// Remove the skill directory
+	skillDir := filepath.Join(m.workspaceDir, skillName)
+	if err := os.RemoveAll(skillDir); err != nil {
+		return fmt.Errorf("failed to remove skill directory: %w", err)
+	}
+
+	L_info("skills: uninstalled", "skill", skillName, "path", skillDir)
+
+	// Reload to update the registry
+	if err := m.Reload(); err != nil {
+		L_warn("skills: reload after uninstall failed", "error", err)
+	}
+
+	return nil
 }
 
 // SearchSkills searches for skills in enabled sources.

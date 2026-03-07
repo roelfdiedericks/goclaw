@@ -113,6 +113,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 			return nil, fmt.Errorf("skill name required for 'install' action")
 		}
 		result, err = t.executeInstall(ctx, params.Skill, params.Source)
+	case "uninstall":
+		if params.Skill == "" {
+			return nil, fmt.Errorf("skill name required for 'uninstall' action")
+		}
+		result, err = t.executeUninstall(params.Skill)
 	case "search":
 		result, err = t.executeSearch(params.Query)
 	case "sources":
@@ -120,7 +125,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	case "reload":
 		result, err = t.executeReload()
 	default:
-		return nil, fmt.Errorf("unknown action: %s (valid: list, info, check, install, search, sources, reload)", params.Action)
+		return nil, fmt.Errorf("unknown action: %s (valid: list, info, check, install, uninstall, search, sources, reload)", params.Action)
 	}
 
 	if err != nil {
@@ -672,6 +677,37 @@ func (t *Tool) executeInstall(ctx context.Context, skillName, sourceStr string) 
 	// Convert AuditWarning to strings for output
 	for _, w := range result.Warnings {
 		resp.Warnings = append(resp.Warnings, fmt.Sprintf("[%s] %s: %s (line %d)", w.Severity, w.Pattern, w.Match, w.Line))
+	}
+
+	output, err := json.MarshalIndent(resp, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal response: %w", err)
+	}
+
+	return string(output), nil
+}
+
+func (t *Tool) executeUninstall(skillName string) (string, error) {
+	L_info("skills tool: uninstall", "skill", skillName)
+
+	err := t.manager.UninstallSkill(skillName)
+
+	type uninstallResponse struct {
+		Success bool   `json:"success"`
+		Skill   string `json:"skill"`
+		Message string `json:"message"`
+	}
+
+	resp := uninstallResponse{
+		Skill: skillName,
+	}
+
+	if err != nil {
+		resp.Success = false
+		resp.Message = err.Error()
+	} else {
+		resp.Success = true
+		resp.Message = fmt.Sprintf("skill %q uninstalled", skillName)
 	}
 
 	output, err := json.MarshalIndent(resp, "", "  ")

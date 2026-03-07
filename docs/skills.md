@@ -395,6 +395,29 @@ Install a skill from a source.
 }
 ```
 
+#### uninstall
+
+Remove a skill from the workspace.
+
+**Input:**
+```json
+{
+  "action": "uninstall",
+  "skill": "himalaya"
+}
+```
+
+**Output:**
+```json
+{
+  "success": true,
+  "skill": "himalaya",
+  "message": "skill \"himalaya\" uninstalled"
+}
+```
+
+Only skills installed to the workspace can be uninstalled. Skills from other sources (embedded catalog via extraDirs) cannot be removed via this action.
+
 #### sources
 
 List available skill sources/repositories.
