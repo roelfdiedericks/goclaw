@@ -49,6 +49,9 @@ type XAIProvider struct {
 
 	// Session timing
 	sessionStart time.Time
+
+	// Audio effects processor
+	effects *AudioEffects
 }
 
 // NewXAIProvider creates a new xAI VoiceLLM provider instance
@@ -133,6 +136,7 @@ func (p *XAIProvider) Connect(ctx context.Context) error {
 	p.readDone = make(chan struct{})
 	p.sessionStart = time.Now()
 	p.audioChunksSent = 0
+	p.effects = NewAudioEffects(p.config.Effects, p.config.SampleRate)
 
 	// Record metrics
 	metrics.MetricDuration(p.metricPrefix, "connect", time.Since(connectStart))
@@ -142,7 +146,11 @@ func (p *XAIProvider) Connect(ctx context.Context) error {
 	// Start read loop
 	go p.readLoop()
 
-	L_info("xai voicellm: connected", "endpoint", xaiVoiceEndpoint)
+	if p.effects.IsEnabled() {
+		L_info("xai voicellm: connected", "endpoint", xaiVoiceEndpoint, "effects", p.config.Effects.Mode)
+	} else {
+		L_info("xai voicellm: connected", "endpoint", xaiVoiceEndpoint)
+	}
 
 	return nil
 }
@@ -524,6 +532,9 @@ func (p *XAIProvider) handleEvent(event *xaiEvent) {
 				L_warn("xai voicellm: failed to decode audio delta", "error", err)
 			} else {
 				metrics.MetricAdd(p.metricPrefix, "audio_bytes_out", int64(len(audio)))
+				if p.effects != nil && p.effects.IsEnabled() {
+					audio = p.effects.Process(audio)
+				}
 				p.callbacks.OnAudioDelta(audio)
 			}
 		}

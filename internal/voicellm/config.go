@@ -21,12 +21,32 @@ type Config struct {
 
 // ProviderConfig is the configuration for a specific VoiceLLM provider
 type ProviderConfig struct {
-	Driver      string `json:"driver"` // "xai", "openai"
-	APIKey      string `json:"apiKey"`
-	Voice       string `json:"voice" default:"Eve"`        // Eve, Ara, marin, etc.
-	SampleRate  int    `json:"sampleRate" default:"48000"` // 48kHz matches browser native rate
-	AudioFormat string `json:"audioFormat" default:"pcm"`  // pcm, pcmu, pcma
-	BaseURL     string `json:"baseURL,omitempty"`
+	Driver      string        `json:"driver"` // "xai", "openai"
+	APIKey      string        `json:"apiKey"`
+	Voice       string        `json:"voice" default:"Eve"`        // Eve, Ara, marin, etc.
+	SampleRate  int           `json:"sampleRate" default:"48000"` // 48kHz matches browser native rate
+	AudioFormat string        `json:"audioFormat" default:"pcm"`  // pcm, pcmu, pcma
+	BaseURL     string        `json:"baseURL,omitempty"`
+	Effects     EffectsConfig `json:"effects,omitempty"`
+}
+
+// EffectsConfig configures audio effects applied to voice output
+type EffectsConfig struct {
+	Mode     string          `json:"mode" default:"none"` // "none", "ring", "bitcrush", "both"
+	Ring     RingModConfig   `json:"ring,omitempty"`
+	Bitcrush BitcrushConfig  `json:"bitcrush,omitempty"`
+}
+
+// RingModConfig configures ring modulation (carrier wave multiplication)
+type RingModConfig struct {
+	CarrierFreq float64 `json:"carrierFreq" default:"200"` // Hz: 30=Dalek, 150-200=metallic, 400+=bell
+	Mix         float64 `json:"mix" default:"0.7"`          // 0.0=dry/original, 1.0=full effect
+}
+
+// BitcrushConfig configures bit depth reduction and downsampling
+type BitcrushConfig struct {
+	BitDepth   int `json:"bitDepth" default:"8"`   // target bits: 16=none, 8=crunchy, 4=lo-fi
+	Downsample int `json:"downsample" default:"2"` // rate reduction: 1=none, 2=half, 4=quarter
 }
 
 // PromptConfig contains configurable voice prompt settings

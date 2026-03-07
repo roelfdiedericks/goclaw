@@ -1491,11 +1491,9 @@ func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
 		deepSet(cfg, "voicellm.default", "xai")
 		deepSet(cfg, "voicellm.providers.xai.driver", "xai")
 		deepSet(cfg, "voicellm.providers.xai.apiKey", data.VoiceLLMAPIKey)
-		voice := data.VoiceLLMVoice
-		if voice == "" {
-			voice = "Eve"
+		if data.VoiceLLMVoice != "" {
+			deepSet(cfg, "voicellm.providers.xai.voice", data.VoiceLLMVoice)
 		}
-		deepSet(cfg, "voicellm.providers.xai.voice", voice)
 	}
 
 	return cfg
