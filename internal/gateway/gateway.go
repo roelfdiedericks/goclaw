@@ -1896,6 +1896,18 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		L_debug("RunAgent: skipping message add (already in session)", "session", sessionKey, "source", req.Source)
 	}
 
+	// Re-estimate session tokens BEFORE compaction check.
+	// TotalTokens is normally updated from API response (after the call), but we need
+	// an accurate count now to prevent context overflow. Without this, compaction check
+	// uses stale counts from the previous turn and may miss that we're over the limit.
+	estimator := session.GetTokenEstimator()
+	estimatedTokens := estimator.EstimateSessionTokens(sess)
+	sess.SetTotalTokens(estimatedTokens)
+	L_debug("session: pre-flight token estimate",
+		"estimated", estimatedTokens,
+		"maxTokens", sess.GetMaxTokens(),
+		"messages", sess.MessageCount())
+
 	// Build system prompt
 	var workspaceFiles []gcontext.WorkspaceFile
 	if g.promptCache != nil {
@@ -2109,6 +2121,22 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 							"newTokens", sess.GetTotalTokens(),
 							"newUsage", fmt.Sprintf("%.1f%%", sess.GetContextUsage()*100))
 					}
+				}
+
+				// Re-check after compaction - refuse if still way over context
+				postCompactTokens := sess.GetTotalTokens()
+				postCompactUsage := float64(postCompactTokens) / float64(maxTokens)
+				if postCompactUsage > 1.1 {
+					errMsg := fmt.Sprintf("Context overflow: %d tokens exceeds %d context window (%.0f%%). "+
+						"Message may be too large to process. Try with a shorter message.",
+						postCompactTokens, maxTokens, postCompactUsage*100)
+					L_error("pre-flight: refusing API call due to context overflow",
+						"tokens", postCompactTokens,
+						"maxTokens", maxTokens,
+						"usage", fmt.Sprintf("%.1f%%", postCompactUsage*100))
+					sendEvent(EventAgentError{Error: errMsg})
+					return fmt.Errorf("context overflow: %d tokens (%.0f%% of %d limit)",
+						postCompactTokens, postCompactUsage*100, maxTokens)
 				}
 			}
 		}
