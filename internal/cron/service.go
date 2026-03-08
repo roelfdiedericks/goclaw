@@ -217,7 +217,10 @@ func (s *Service) Start(ctx context.Context) error {
 		s.watcher = watcher
 		// Watch the directory containing jobs.json (fsnotify watches dirs better than files)
 		jobsDir := filepath.Dir(s.store.Path())
-		if err := watcher.Add(jobsDir); err != nil {
+		// Ensure directory exists before watching (fsnotify can't watch non-existent dirs)
+		if err := os.MkdirAll(jobsDir, 0750); err != nil {
+			L_warn("cron: failed to create jobs directory", "dir", jobsDir, "error", err)
+		} else if err := watcher.Add(jobsDir); err != nil {
 			L_warn("cron: failed to watch jobs directory", "dir", jobsDir, "error", err)
 		} else {
 			L_debug("cron: watching for job file changes", "dir", jobsDir)

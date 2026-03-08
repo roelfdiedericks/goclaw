@@ -25,6 +25,11 @@ func LinkDevice() error {
 		return fmt.Errorf("failed to resolve db path: %w", err)
 	}
 
+	// Ensure directory exists before opening database
+	if err := paths.EnsureParentDir(dbPath); err != nil {
+		return fmt.Errorf("failed to create db directory: %w", err)
+	}
+
 	db, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=on&_busy_timeout=5000")
 	if err != nil {
 		return fmt.Errorf("failed to open db: %w", err)

@@ -91,6 +91,11 @@ func New(cfg *config.Config, gw *gateway.Gateway, users *user.Registry) (*Bot, e
 		return nil, fmt.Errorf("failed to resolve whatsapp db path: %w", err)
 	}
 
+	// Ensure directory exists before opening database
+	if err := paths.EnsureParentDir(dbPath); err != nil {
+		return nil, fmt.Errorf("failed to create whatsapp db directory: %w", err)
+	}
+
 	db, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=on&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open whatsapp db: %w", err)
