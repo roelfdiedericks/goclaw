@@ -120,14 +120,16 @@ func pcmToSamples(pcm []byte) []int16 {
 	n := len(pcm) / 2
 	samples := make([]int16, n)
 	for i := 0; i < n; i++ {
-		samples[i] = int16(binary.LittleEndian.Uint16(pcm[i*2:]))
+		// G115: uint16 to int16 is intentional - PCM audio uses signed 16-bit samples
+		samples[i] = int16(binary.LittleEndian.Uint16(pcm[i*2:])) //nolint:gosec
 	}
 	return samples
 }
 
 func samplesToPCM(samples []int16, pcm []byte) {
 	for i, s := range samples {
-		binary.LittleEndian.PutUint16(pcm[i*2:], uint16(s))
+		// G115: int16 to uint16 is intentional - converting signed PCM back to bytes
+		binary.LittleEndian.PutUint16(pcm[i*2:], uint16(s)) //nolint:gosec
 	}
 }
 

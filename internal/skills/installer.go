@@ -8,7 +8,6 @@ import (
 	"strings"
 )
 
-
 // Installer handles skill dependency installation.
 type Installer struct {
 	workDir string // Working directory for installs

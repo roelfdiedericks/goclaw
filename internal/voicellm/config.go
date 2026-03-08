@@ -32,15 +32,15 @@ type ProviderConfig struct {
 
 // EffectsConfig configures audio effects applied to voice output
 type EffectsConfig struct {
-	Mode     string          `json:"mode" default:"none"` // "none", "ring", "bitcrush", "both"
-	Ring     RingModConfig   `json:"ring,omitempty"`
-	Bitcrush BitcrushConfig  `json:"bitcrush,omitempty"`
+	Mode     string         `json:"mode" default:"none"` // "none", "ring", "bitcrush", "both"
+	Ring     RingModConfig  `json:"ring,omitempty"`
+	Bitcrush BitcrushConfig `json:"bitcrush,omitempty"`
 }
 
 // RingModConfig configures ring modulation (carrier wave multiplication)
 type RingModConfig struct {
 	CarrierFreq float64 `json:"carrierFreq" default:"200"` // Hz: 30=Dalek, 150-200=metallic, 400+=bell
-	Mix         float64 `json:"mix" default:"0.7"`          // 0.0=dry/original, 1.0=full effect
+	Mix         float64 `json:"mix" default:"0.7"`         // 0.0=dry/original, 1.0=full effect
 }
 
 // BitcrushConfig configures bit depth reduction and downsampling
@@ -439,11 +439,11 @@ var EffectsPresets = []EffectsPreset{
 		Mix:         0.5,
 	},
 	{
-		Name:        "lofi",
-		Label:       "Lo-Fi Radio",
-		Mode:        "bitcrush",
-		BitDepth:    6,
-		Downsample:  3,
+		Name:       "lofi",
+		Label:      "Lo-Fi Radio",
+		Mode:       "bitcrush",
+		BitDepth:   6,
+		Downsample: 3,
 	},
 	{
 		Name:  "custom",
