@@ -206,7 +206,7 @@ See [Metrics](docs/metrics.md) for details.
 
 ### External Content Protection
 
-GoClaw wraps content from external sources (web fetches, etc.) with cryptographic boundary markers to defend against prompt injection:
+GoClaw wraps content from external sources (web fetches, etc.) with unique randomly-generated boundary markers to defend against prompt injection:
 
 - **Unique markers** — Each external content block gets a random boundary ID
 - **Explicit warnings** — LLM is told to treat content as DATA only, not instructions
