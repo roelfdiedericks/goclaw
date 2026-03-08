@@ -155,3 +155,10 @@ func (r *Registry) GetPromptConfig() PromptConfig {
 	defer r.mu.RUnlock()
 	return r.globalCfg.Prompt
 }
+
+// GetEffectsConfig returns the global audio effects configuration
+func (r *Registry) GetEffectsConfig() EffectsConfig {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.globalCfg.Effects
+}

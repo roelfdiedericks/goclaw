@@ -4,6 +4,7 @@ package setup
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -49,9 +50,24 @@ func (e *VoiceLLMEditor) createMenu() *forms.MenuListResult {
 		enabledStr = "enabled"
 	}
 
+	// Effects status - show preset name, "custom", or "disabled"
+	effectsStr := "disabled"
+	if e.cfg.Effects.Mode != "" && e.cfg.Effects.Mode != "none" {
+		formData := e.cfg.Effects.ToEffectsFormData()
+		presetName := formData.DetectPreset()
+		if presetName == "custom" {
+			effectsStr = "custom"
+		} else if preset := voicellm.GetEffectsPreset(presetName); preset != nil {
+			effectsStr = preset.Label
+		} else {
+			effectsStr = "custom"
+		}
+	}
+
 	items := []forms.MenuItem{
 		{Label: fmt.Sprintf("Providers (%d configured)", providerCount), OnSelect: e.showProviderList},
 		{Label: fmt.Sprintf("Voice Settings (%s)", enabledStr), OnSelect: e.editSettings},
+		{Label: fmt.Sprintf("Audio Effects (%s)", effectsStr), OnSelect: e.editEffects},
 		{Label: "Voice Prompt", OnSelect: e.editPrompt},
 	}
 
@@ -435,4 +451,226 @@ func (e *VoiceLLMEditor) editPrompt() {
 
 	e.app.SetBreadcrumbs([]string{voiceLLMBreadcrumbBase, "VoiceLLM Configuration", "Voice Prompt"})
 	e.app.SetFormContent(content)
+}
+
+// editEffects opens the audio effects form with preset support
+func (e *VoiceLLMEditor) editEffects() {
+	L_info("voicellm editor: editing effects")
+
+	// Convert to form-friendly format
+	data := e.cfg.Effects.ToEffectsFormData()
+
+	e.app.SetBreadcrumbs([]string{voiceLLMBreadcrumbBase, "VoiceLLM Configuration", "Audio Effects"})
+	e.app.SetStatusText(forms.StatusForm)
+
+	form := tview.NewForm()
+	form.SetBorder(false)
+
+	// Field references for in-place updates
+	var modeDropdown *tview.DropDown
+	var carrierField, mixField *tview.InputField
+	var bitDepthField, downsampleField *tview.InputField
+
+	// Color constants
+	activeColor := tcell.ColorWhite
+	inactiveColor := tcell.ColorGray
+
+	// Helper to update field colors based on mode
+	updateFieldColors := func() {
+		ringActive := data.Mode == "ring" || data.Mode == "both"
+		bitcrushActive := data.Mode == "bitcrush" || data.Mode == "both"
+
+		if carrierField != nil {
+			if ringActive {
+				carrierField.SetLabelColor(activeColor)
+				carrierField.SetFieldTextColor(activeColor)
+			} else {
+				carrierField.SetLabelColor(inactiveColor)
+				carrierField.SetFieldTextColor(inactiveColor)
+			}
+		}
+		if mixField != nil {
+			if ringActive {
+				mixField.SetLabelColor(activeColor)
+				mixField.SetFieldTextColor(activeColor)
+			} else {
+				mixField.SetLabelColor(inactiveColor)
+				mixField.SetFieldTextColor(inactiveColor)
+			}
+		}
+		if bitDepthField != nil {
+			if bitcrushActive {
+				bitDepthField.SetLabelColor(activeColor)
+				bitDepthField.SetFieldTextColor(activeColor)
+			} else {
+				bitDepthField.SetLabelColor(inactiveColor)
+				bitDepthField.SetFieldTextColor(inactiveColor)
+			}
+		}
+		if downsampleField != nil {
+			if bitcrushActive {
+				downsampleField.SetLabelColor(activeColor)
+				downsampleField.SetFieldTextColor(activeColor)
+			} else {
+				downsampleField.SetLabelColor(inactiveColor)
+				downsampleField.SetFieldTextColor(inactiveColor)
+			}
+		}
+	}
+
+	// Helper to update all field values from data (for preset changes)
+	updateFieldValues := func() {
+		if modeDropdown != nil {
+			modeValues := []string{"none", "ring", "bitcrush", "both"}
+			for i, v := range modeValues {
+				if v == data.Mode {
+					modeDropdown.SetCurrentOption(i)
+					break
+				}
+			}
+		}
+		if carrierField != nil {
+			carrierField.SetText(fmt.Sprintf("%.0f", data.CarrierFreq))
+		}
+		if mixField != nil {
+			mixField.SetText(fmt.Sprintf("%.1f", data.Mix))
+		}
+		if bitDepthField != nil {
+			bitDepthField.SetText(fmt.Sprintf("%d", data.BitDepth))
+		}
+		if downsampleField != nil {
+			downsampleField.SetText(fmt.Sprintf("%d", data.Downsample))
+		}
+		updateFieldColors()
+	}
+
+	// Build preset options
+	presetOptions := make([]string, len(voicellm.EffectsPresets))
+	presetIndex := 0
+	for i, p := range voicellm.EffectsPresets {
+		presetOptions[i] = p.Label
+		if p.Name == data.Preset {
+			presetIndex = i
+		}
+	}
+
+	// Re-entrancy guard for dropdown callbacks (see forms/AGENTS.md)
+	initializing := true
+
+	// Preset dropdown
+	form.AddDropDown("Preset", presetOptions, presetIndex, func(option string, index int) {
+		if initializing {
+			return
+		}
+		if index >= 0 && index < len(voicellm.EffectsPresets) {
+			selectedPreset := voicellm.EffectsPresets[index].Name
+			if selectedPreset != "custom" {
+				data.ApplyPreset(selectedPreset)
+			} else {
+				data.Preset = "custom"
+			}
+			updateFieldValues()
+		}
+	})
+
+	// Mode dropdown
+	modeOptions := []string{"None", "Ring Modulation", "Bitcrush", "Both"}
+	modeValues := []string{"none", "ring", "bitcrush", "both"}
+	modeIndex := 0
+	for i, v := range modeValues {
+		if v == data.Mode {
+			modeIndex = i
+			break
+		}
+	}
+	form.AddDropDown("Mode", modeOptions, modeIndex, func(option string, index int) {
+		if initializing {
+			return
+		}
+		if index >= 0 && index < len(modeValues) {
+			data.Mode = modeValues[index]
+			data.Preset = "custom"
+			updateFieldColors()
+		}
+	})
+	modeDropdown, _ = form.GetFormItem(form.GetFormItemCount() - 1).(*tview.DropDown)
+
+	// Section: Ring Modulation
+	form.AddTextView("", "── Ring Modulation ──", 30, 1, false, false)
+
+	form.AddInputField("Carrier Freq (Hz)", fmt.Sprintf("%.0f", data.CarrierFreq), 10, nil, func(text string) {
+		if initializing {
+			return
+		}
+		if v, err := strconv.ParseFloat(text, 64); err == nil {
+			data.CarrierFreq = v
+			data.Preset = "custom"
+		}
+	})
+	carrierField, _ = form.GetFormItem(form.GetFormItemCount() - 1).(*tview.InputField)
+
+	form.AddInputField("Mix (0-1)", fmt.Sprintf("%.1f", data.Mix), 10, nil, func(text string) {
+		if initializing {
+			return
+		}
+		if v, err := strconv.ParseFloat(text, 64); err == nil {
+			data.Mix = v
+			data.Preset = "custom"
+		}
+	})
+	mixField, _ = form.GetFormItem(form.GetFormItemCount() - 1).(*tview.InputField)
+
+	// Section: Bitcrush
+	form.AddTextView("", "── Bitcrush ──", 30, 1, false, false)
+
+	form.AddInputField("Bit Depth", fmt.Sprintf("%d", data.BitDepth), 10, nil, func(text string) {
+		if initializing {
+			return
+		}
+		if v, err := strconv.Atoi(text); err == nil {
+			data.BitDepth = v
+			data.Preset = "custom"
+		}
+	})
+	bitDepthField, _ = form.GetFormItem(form.GetFormItemCount() - 1).(*tview.InputField)
+
+	form.AddInputField("Downsample", fmt.Sprintf("%d", data.Downsample), 10, nil, func(text string) {
+		if initializing {
+			return
+		}
+		if v, err := strconv.Atoi(text); err == nil {
+			data.Downsample = v
+			data.Preset = "custom"
+		}
+	})
+	downsampleField, _ = form.GetFormItem(form.GetFormItemCount() - 1).(*tview.InputField)
+
+	// Apply initial colors
+	updateFieldColors()
+
+	// Done initializing - enable callbacks
+	initializing = false
+
+	// Buttons
+	form.AddButton("Save", func() {
+		e.cfg.Effects = data.ToEffectsConfig()
+		e.onSave()
+		L_info("voicellm editor: effects updated", "preset", data.Preset, "mode", e.cfg.Effects.Mode)
+		e.Show()
+	})
+	form.AddButton("Cancel", func() {
+		e.Show()
+	})
+
+	// Wrap in flex with header
+	header := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText("[yellow]Audio Effects[white]\n\nSelect a preset or tweak individual values.\nInactive fields are dimmed based on Mode.")
+	header.SetBorder(false)
+
+	flex := tview.NewFlex().SetDirection(tview.FlexRow).
+		AddItem(header, 5, 0, false).
+		AddItem(form, 0, 1, true)
+
+	e.app.SetContent(flex)
 }

@@ -136,7 +136,13 @@ func (p *XAIProvider) Connect(ctx context.Context) error {
 	p.readDone = make(chan struct{})
 	p.sessionStart = time.Now()
 	p.audioChunksSent = 0
-	p.effects = NewAudioEffects(p.config.Effects, p.config.SampleRate)
+
+	// Get effects config from global registry (effects are provider-agnostic)
+	var effectsCfg EffectsConfig
+	if reg := GetRegistry(); reg != nil {
+		effectsCfg = reg.GetEffectsConfig()
+	}
+	p.effects = NewAudioEffects(effectsCfg, p.config.SampleRate)
 
 	// Record metrics
 	metrics.MetricDuration(p.metricPrefix, "connect", time.Since(connectStart))
@@ -147,7 +153,7 @@ func (p *XAIProvider) Connect(ctx context.Context) error {
 	go p.readLoop()
 
 	if p.effects.IsEnabled() {
-		L_info("xai voicellm: connected", "endpoint", xaiVoiceEndpoint, "effects", p.config.Effects.Mode)
+		L_info("xai voicellm: connected", "endpoint", xaiVoiceEndpoint, "effects", effectsCfg.Mode)
 	} else {
 		L_info("xai voicellm: connected", "endpoint", xaiVoiceEndpoint)
 	}

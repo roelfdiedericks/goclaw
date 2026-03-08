@@ -17,17 +17,17 @@ type Config struct {
 	IdleTimeout int                       `json:"idleTimeout" default:"300"`
 	Enabled     bool                      `json:"enabled"`
 	Prompt      PromptConfig              `json:"prompt,omitempty"`
+	Effects     EffectsConfig             `json:"effects,omitempty"` // Global audio effects (provider-agnostic)
 }
 
 // ProviderConfig is the configuration for a specific VoiceLLM provider
 type ProviderConfig struct {
-	Driver      string        `json:"driver"` // "xai", "openai"
-	APIKey      string        `json:"apiKey"`
-	Voice       string        `json:"voice" default:"Eve"`        // Eve, Ara, marin, etc.
-	SampleRate  int           `json:"sampleRate" default:"48000"` // 48kHz matches browser native rate
-	AudioFormat string        `json:"audioFormat" default:"pcm"`  // pcm, pcmu, pcma
-	BaseURL     string        `json:"baseURL,omitempty"`
-	Effects     EffectsConfig `json:"effects,omitempty"`
+	Driver      string `json:"driver"` // "xai", "openai"
+	APIKey      string `json:"apiKey"`
+	Voice       string `json:"voice" default:"Eve"`        // Eve, Ara, marin, etc.
+	SampleRate  int    `json:"sampleRate" default:"48000"` // 48kHz matches browser native rate
+	AudioFormat string `json:"audioFormat" default:"pcm"`  // pcm, pcmu, pcma
+	BaseURL     string `json:"baseURL,omitempty"`
 }
 
 // EffectsConfig configures audio effects applied to voice output
@@ -300,6 +300,274 @@ func PromptConfigFormDef() forms.FormDef {
 					},
 				},
 			},
+		},
+	}
+}
+
+// EffectsConfigFormDef returns the form definition for audio effects settings.
+// Note: Preset handling requires custom logic in the editor - the form definition
+// just provides the structure. The editor must handle preset changes to populate fields.
+func EffectsConfigFormDef() forms.FormDef {
+	// Build preset options from defined presets
+	presetOptions := make([]forms.Option, len(EffectsPresets))
+	for i, p := range EffectsPresets {
+		presetOptions[i] = forms.Option{Label: p.Label, Value: p.Name}
+	}
+
+	return forms.FormDef{
+		Title:       "Audio Effects",
+		Description: "Apply real-time effects to voice output (robot voice, lo-fi, etc.)",
+		Sections: []forms.Section{
+			{
+				Title: "Preset",
+				Fields: []forms.Field{
+					{
+						Name:    "preset",
+						Title:   "Preset",
+						Desc:    "Select a preset or customize below",
+						Type:    forms.Select,
+						Options: presetOptions,
+					},
+				},
+			},
+			{
+				Title:    "Effect Mode",
+				ShowWhen: "preset=custom",
+				Fields: []forms.Field{
+					{
+						Name:  "mode",
+						Title: "Mode",
+						Desc:  "Which effects to apply",
+						Type:  forms.Select,
+						Options: []forms.Option{
+							{Label: "None (natural voice)", Value: "none"},
+							{Label: "Ring Modulation (metallic/robotic)", Value: "ring"},
+							{Label: "Bitcrush (lo-fi/crunchy)", Value: "bitcrush"},
+							{Label: "Both (full robot)", Value: "both"},
+						},
+					},
+				},
+			},
+			{
+				Title:    "Ring Modulation",
+				ShowWhen: "preset=custom,mode=ring,mode=both",
+				Fields: []forms.Field{
+					{
+						Name:  "carrierFreq",
+						Title: "Carrier Frequency (Hz)",
+						Desc:  "30=Dalek, 150-200=metallic, 400+=bell-like",
+						Type:  forms.Number,
+						Min:   20,
+						Max:   500,
+					},
+					{
+						Name:  "mix",
+						Title: "Mix",
+						Desc:  "0.0=dry/original, 1.0=full effect (0.5-0.7 recommended)",
+						Type:  forms.Number,
+						Min:   0,
+						Max:   1,
+						Step:  0.1,
+					},
+				},
+			},
+			{
+				Title:    "Bitcrush",
+				ShowWhen: "preset=custom,mode=bitcrush,mode=both",
+				Fields: []forms.Field{
+					{
+						Name:  "bitDepth",
+						Title: "Bit Depth",
+						Desc:  "16=clean, 8=crunchy, 4=very lo-fi",
+						Type:  forms.Number,
+						Min:   2,
+						Max:   16,
+					},
+					{
+						Name:  "downsample",
+						Title: "Downsample Factor",
+						Desc:  "1=none, 2=half rate, 4=quarter rate",
+						Type:  forms.Number,
+						Min:   1,
+						Max:   8,
+					},
+				},
+			},
+		},
+	}
+}
+
+// EffectsPreset defines a named preset configuration
+type EffectsPreset struct {
+	Name        string
+	Label       string // Display label
+	Mode        string
+	CarrierFreq float64
+	Mix         float64
+	BitDepth    int
+	Downsample  int
+}
+
+// EffectsPresets defines available effect presets
+var EffectsPresets = []EffectsPreset{
+	{
+		Name:  "none",
+		Label: "None (natural voice)",
+		Mode:  "none",
+	},
+	{
+		Name:        "battlestar",
+		Label:       "Battlestar Galactica",
+		Mode:        "both",
+		CarrierFreq: 200,
+		Mix:         0.7,
+		BitDepth:    8,
+		Downsample:  2,
+	},
+	{
+		Name:        "dalek",
+		Label:       "Dalek",
+		Mode:        "ring",
+		CarrierFreq: 30,
+		Mix:         0.8,
+	},
+	{
+		Name:        "metallic",
+		Label:       "Metallic",
+		Mode:        "ring",
+		CarrierFreq: 180,
+		Mix:         0.5,
+	},
+	{
+		Name:        "lofi",
+		Label:       "Lo-Fi Radio",
+		Mode:        "bitcrush",
+		BitDepth:    6,
+		Downsample:  3,
+	},
+	{
+		Name:  "custom",
+		Label: "Custom",
+		Mode:  "", // special marker
+	},
+}
+
+// GetEffectsPreset returns a preset by name, or nil if not found
+func GetEffectsPreset(name string) *EffectsPreset {
+	for i := range EffectsPresets {
+		if EffectsPresets[i].Name == name {
+			return &EffectsPresets[i]
+		}
+	}
+	return nil
+}
+
+// EffectsFormData is a flattened form-friendly struct for effects editing
+type EffectsFormData struct {
+	Preset      string  `json:"preset"` // Preset name or "custom"
+	Mode        string  `json:"mode"`
+	CarrierFreq float64 `json:"carrierFreq"`
+	Mix         float64 `json:"mix"`
+	BitDepth    int     `json:"bitDepth"`
+	Downsample  int     `json:"downsample"`
+}
+
+// DetectPreset checks if current values match a known preset
+func (f *EffectsFormData) DetectPreset() string {
+	for _, p := range EffectsPresets {
+		if p.Name == "none" && f.Mode == "none" {
+			return "none"
+		}
+		if p.Name == "custom" {
+			continue
+		}
+		if p.Mode != f.Mode {
+			continue
+		}
+
+		// Only compare fields relevant to this mode
+		switch p.Mode {
+		case "ring":
+			if p.CarrierFreq == f.CarrierFreq && p.Mix == f.Mix {
+				return p.Name
+			}
+		case "bitcrush":
+			if p.BitDepth == f.BitDepth && p.Downsample == f.Downsample {
+				return p.Name
+			}
+		case "both":
+			if p.CarrierFreq == f.CarrierFreq && p.Mix == f.Mix &&
+				p.BitDepth == f.BitDepth && p.Downsample == f.Downsample {
+				return p.Name
+			}
+		}
+	}
+	return "custom"
+}
+
+// ApplyPreset applies a preset's values to this form data
+func (f *EffectsFormData) ApplyPreset(presetName string) {
+	p := GetEffectsPreset(presetName)
+	if p == nil || p.Name == "custom" {
+		f.Preset = "custom"
+		return
+	}
+	f.Preset = p.Name
+	f.Mode = p.Mode
+	if p.Mode == "ring" || p.Mode == "both" {
+		f.CarrierFreq = p.CarrierFreq
+		f.Mix = p.Mix
+	}
+	if p.Mode == "bitcrush" || p.Mode == "both" {
+		f.BitDepth = p.BitDepth
+		f.Downsample = p.Downsample
+	}
+}
+
+// ToEffectsFormData converts EffectsConfig to form-friendly format
+func (e *EffectsConfig) ToEffectsFormData() *EffectsFormData {
+	mode := e.Mode
+	if mode == "" {
+		mode = "none"
+	}
+	carrierFreq := e.Ring.CarrierFreq
+	if carrierFreq == 0 {
+		carrierFreq = 200
+	}
+	mix := e.Ring.Mix
+	if mix == 0 {
+		mix = 0.7
+	}
+	bitDepth := e.Bitcrush.BitDepth
+	if bitDepth == 0 {
+		bitDepth = 8
+	}
+	downsample := e.Bitcrush.Downsample
+	if downsample == 0 {
+		downsample = 2
+	}
+	fd := &EffectsFormData{
+		Mode:        mode,
+		CarrierFreq: carrierFreq,
+		Mix:         mix,
+		BitDepth:    bitDepth,
+		Downsample:  downsample,
+	}
+	fd.Preset = fd.DetectPreset()
+	return fd
+}
+
+// ToEffectsConfig converts form data back to EffectsConfig
+func (f *EffectsFormData) ToEffectsConfig() EffectsConfig {
+	return EffectsConfig{
+		Mode: f.Mode,
+		Ring: RingModConfig{
+			CarrierFreq: f.CarrierFreq,
+			Mix:         f.Mix,
+		},
+		Bitcrush: BitcrushConfig{
+			BitDepth:   f.BitDepth,
+			Downsample: f.Downsample,
 		},
 	}
 }
