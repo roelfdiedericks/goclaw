@@ -43,7 +43,9 @@ func NewServer(configPath string) (*Server, error) {
 	// Setup handlers (setupMode = true)
 	handlers, err := NewHandlers(true)
 	if err != nil {
-		listener.Close()
+		if closeErr := listener.Close(); closeErr != nil {
+			L_warn("web: failed to close listener after handler init error", "error", closeErr)
+		}
 		return nil, fmt.Errorf("failed to create handlers: %w", err)
 	}
 
@@ -71,7 +73,8 @@ func NewServer(configPath string) (*Server, error) {
 	srv := &Server{
 		listener: listener,
 		httpServer: &http.Server{
-			Handler: mux,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
 		},
 		done: done,
 	}
@@ -143,13 +146,17 @@ func RunWebWizardWithOptions(configPath string, devMode bool) error {
 	})
 
 	if err != nil {
-		srv.Shutdown(context.Background())
+		if shutdownErr := srv.Shutdown(context.Background()); shutdownErr != nil {
+			L_warn("web: shutdown after failed UI launch", "error", shutdownErr)
+		}
 		return ErrNoUIAvailable
 	}
 
 	if usedWebview {
 		// Webview closed - we're done
-		srv.Shutdown(context.Background())
+		if shutdownErr := srv.Shutdown(context.Background()); shutdownErr != nil {
+			L_warn("web: shutdown after webview close", "error", shutdownErr)
+		}
 		fmt.Println("\nSetup complete! Start GoClaw with:")
 		fmt.Println("  goclaw start       (recommended - runs with supervisor)")
 		fmt.Println("  goclaw gateway     (runs in foreground)")
@@ -167,7 +174,9 @@ func RunWebWizardWithOptions(configPath string, devMode bool) error {
 	// Shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	srv.Shutdown(ctx)
+	if shutdownErr := srv.Shutdown(ctx); shutdownErr != nil {
+		L_warn("web: graceful shutdown after wizard completion failed", "error", shutdownErr)
+	}
 
 	fmt.Println("\nSetup complete! Start GoClaw with:")
 	fmt.Println("  goclaw start       (recommended - runs with supervisor)")
@@ -212,13 +221,17 @@ func RunWebEditorWithOptions(configPath string, devMode bool) error {
 	})
 
 	if err != nil {
-		srv.Shutdown(context.Background())
+		if shutdownErr := srv.Shutdown(context.Background()); shutdownErr != nil {
+			L_warn("web: shutdown after failed editor UI launch", "error", shutdownErr)
+		}
 		return ErrNoUIAvailable
 	}
 
 	if usedWebview {
 		// Webview closed - we're done
-		srv.Shutdown(context.Background())
+		if shutdownErr := srv.Shutdown(context.Background()); shutdownErr != nil {
+			L_warn("web: shutdown after editor webview close", "error", shutdownErr)
+		}
 		fmt.Println("\nConfiguration editor closed.")
 		return nil
 	}
@@ -237,7 +250,9 @@ func RunWebEditorWithOptions(configPath string, devMode bool) error {
 	fmt.Println("\nShutting down editor...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	srv.Shutdown(ctx)
+	if shutdownErr := srv.Shutdown(ctx); shutdownErr != nil {
+		L_warn("web: graceful shutdown after editor completion failed", "error", shutdownErr)
+	}
 
 	return nil
 }

@@ -11,25 +11,25 @@ import (
 	"strings"
 	"time"
 
-	"github.com/roelfdiedericks/goclaw/internal/configapply"
-	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	"github.com/roelfdiedericks/goclaw/internal/config"
+	"github.com/roelfdiedericks/goclaw/internal/config/forms"
+	"github.com/roelfdiedericks/goclaw/internal/configapply"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
 )
 
 // API provides JSON API handlers for the setup wizard and editor
 type API struct {
-	configPath   string
-	applyCaller  configapply.Caller
+	configPath  string
+	applyCaller configapply.Caller
 	contractErr error
 }
 
 // NewAPI creates a new API handler
 func NewAPI(configPath string, applyCaller configapply.Caller) *API {
 	return &API{
-		configPath:   configPath,
-		applyCaller:  applyCaller,
+		configPath:  configPath,
+		applyCaller: applyCaller,
 		contractErr: ValidateAllSectionContractsStrict(),
 	}
 }
@@ -729,4 +729,3 @@ func (a *API) HandleGetPresets(w http.ResponseWriter, r *http.Request) {
 		Data:    map[string]interface{}{"presets": presets},
 	})
 }
-

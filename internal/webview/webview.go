@@ -68,9 +68,12 @@ func tryWebview(url string, opts Options) bool {
 	}
 
 	// Bind closeWebview function for JavaScript: window.closeWebview()
-	w.Bind("closeWebview", func() {
+	if err := w.Bind("closeWebview", func() {
 		w.Terminate()
-	})
+	}); err != nil {
+		L_warn("webview: failed to bind close handler", "error", err)
+		return false
+	}
 
 	w.SetTitle(opts.Title)
 	w.SetSize(opts.Width, opts.Height, webview.HintNone)
@@ -81,22 +84,14 @@ func tryWebview(url string, opts Options) bool {
 
 // openBrowser attempts to open URL in system browser
 func openBrowser(url string) error {
-	var cmd string
-	var args []string
-
 	switch runtime.GOOS {
 	case "windows":
-		cmd = "rundll32"
-		args = []string{"url.dll,FileProtocolHandler", url}
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
 	case "darwin":
-		cmd = "open"
-		args = []string{url}
+		return exec.Command("open", url).Start()
 	default: // linux, freebsd, etc.
-		cmd = "xdg-open"
-		args = []string{url}
+		return exec.Command("xdg-open", url).Start()
 	}
-
-	return exec.Command(cmd, args...).Start()
 }
 
 // CanUseWebview checks if webview (webkit2gtk) is available

@@ -26,6 +26,7 @@ func RenderFormHTML(def forms.FormDef, _ string) (template.HTML, error) {
 		}
 	}
 
+	// #nosec G203 -- This markup is assembled from fixed HTML plus escaped FormDef text.
 	return template.HTML(sb.String()), nil
 }
 

@@ -512,10 +512,10 @@ func stepWorkspace(data *WizardData) forms.WizardStep {
 				data.WorkspacePath = DefaultWorkspacePath()
 			}
 
-		form.AddInputField("Workspace Path", data.WorkspacePath, 50, nil, func(text string) {
-			data.WorkspacePath = text
-			data.MarkDirty("WorkspacePath")
-		})
+			form.AddInputField("Workspace Path", data.WorkspacePath, 50, nil, func(text string) {
+				data.WorkspacePath = text
+				data.MarkDirty("WorkspacePath")
+			})
 
 			return formWithHeader(`The [cyan]workspace[white] is where GoClaw stores your agent's files,
 including memory, transcripts, and project data.`, 3, form)
@@ -592,15 +592,15 @@ func stepTelegram(data *WizardData) forms.WizardStep {
 			form.SetBorder(false)
 			enableFormMouseScroll(form, w)
 
-		form.AddCheckbox("Enable Telegram Bot", data.TelegramEnabled, func(checked bool) {
-			data.TelegramEnabled = checked
-			data.MarkDirty("TelegramEnabled")
-		})
+			form.AddCheckbox("Enable Telegram Bot", data.TelegramEnabled, func(checked bool) {
+				data.TelegramEnabled = checked
+				data.MarkDirty("TelegramEnabled")
+			})
 
-		form.AddInputField("Bot Token", data.TelegramToken, 50, nil, func(text string) {
-			data.TelegramToken = text
-			data.MarkDirty("TelegramToken")
-		})
+			form.AddInputField("Bot Token", data.TelegramToken, 50, nil, func(text string) {
+				data.TelegramToken = text
+				data.MarkDirty("TelegramToken")
+			})
 
 			return formWithHeader(`[cyan]Telegram[white] allows you to chat with GoClaw from your phone.
 Get a bot token from [yellow]@BotFather[white] on Telegram.`, 3, form)
@@ -624,10 +624,10 @@ func stepWhatsApp(data *WizardData) forms.WizardStep {
 			form.SetBorder(false)
 			enableFormMouseScroll(form, w)
 
-		form.AddCheckbox("Enable WhatsApp Channel", data.WhatsAppEnabled, func(checked bool) {
-			data.WhatsAppEnabled = checked
-			data.MarkDirty("WhatsAppEnabled")
-		})
+			form.AddCheckbox("Enable WhatsApp Channel", data.WhatsAppEnabled, func(checked bool) {
+				data.WhatsAppEnabled = checked
+				data.MarkDirty("WhatsAppEnabled")
+			})
 
 			return formWithHeader(`[cyan]WhatsApp[white] allows you to chat with GoClaw from WhatsApp.
 
@@ -667,45 +667,45 @@ func stepHTTP(data *WizardData) forms.WizardStep {
 			inputForm.SetBorder(false)
 			enableFormMouseScroll(inputForm, w)
 
-		// Add input field first so we have the reference
-		inputForm.AddInputField("Listen Address", data.HTTPListen, 30, nil, func(text string) {
-			data.HTTPListen = text
-			data.MarkDirty("HTTPListen")
-			if text != "" {
+			// Add input field first so we have the reference
+			inputForm.AddInputField("Listen Address", data.HTTPListen, 30, nil, func(text string) {
+				data.HTTPListen = text
+				data.MarkDirty("HTTPListen")
+				if text != "" {
+					data.HTTPEnabled = true
+					data.MarkDirty("HTTPEnabled")
+				}
+			})
+			listenInput, _ := inputForm.GetFormItemByLabel("Listen Address").(*tview.InputField)
+
+			// Add buttons
+			buttons.AddButton("Local Only", func() {
 				data.HTTPEnabled = true
-				data.MarkDirty("HTTPEnabled")
-			}
-		})
-		listenInput, _ := inputForm.GetFormItemByLabel("Listen Address").(*tview.InputField)
+				data.HTTPListen = "127.0.0.1:1337"
+				data.MarkDirty("HTTPEnabled", "HTTPListen")
+				listenInput.SetText(data.HTTPListen)
+			})
 
-		// Add buttons
-		buttons.AddButton("Local Only", func() {
-			data.HTTPEnabled = true
-			data.HTTPListen = "127.0.0.1:1337"
-			data.MarkDirty("HTTPEnabled", "HTTPListen")
-			listenInput.SetText(data.HTTPListen)
-		})
+			buttons.AddButton("Network (IPv4)", func() {
+				data.HTTPEnabled = true
+				data.HTTPListen = "0.0.0.0:1337"
+				data.MarkDirty("HTTPEnabled", "HTTPListen")
+				listenInput.SetText(data.HTTPListen)
+			})
 
-		buttons.AddButton("Network (IPv4)", func() {
-			data.HTTPEnabled = true
-			data.HTTPListen = "0.0.0.0:1337"
-			data.MarkDirty("HTTPEnabled", "HTTPListen")
-			listenInput.SetText(data.HTTPListen)
-		})
+			buttons.AddButton("Network (All)", func() {
+				data.HTTPEnabled = true
+				data.HTTPListen = ":1337"
+				data.MarkDirty("HTTPEnabled", "HTTPListen")
+				listenInput.SetText(data.HTTPListen)
+			})
 
-		buttons.AddButton("Network (All)", func() {
-			data.HTTPEnabled = true
-			data.HTTPListen = ":1337"
-			data.MarkDirty("HTTPEnabled", "HTTPListen")
-			listenInput.SetText(data.HTTPListen)
-		})
-
-		buttons.AddButton("Disable", func() {
-			data.HTTPEnabled = false
-			data.HTTPListen = ""
-			data.MarkDirty("HTTPEnabled", "HTTPListen")
-			listenInput.SetText("")
-		})
+			buttons.AddButton("Disable", func() {
+				data.HTTPEnabled = false
+				data.HTTPListen = ""
+				data.MarkDirty("HTTPEnabled", "HTTPListen")
+				listenInput.SetText("")
+			})
 
 			// Explanation text (below buttons)
 			explanation := tview.NewTextView().
@@ -765,10 +765,10 @@ func stepSTT(data *WizardData) forms.WizardStep {
 				data.STTEnabled = true
 			}
 
-		form.AddCheckbox("Enable Speech-to-Text", data.STTEnabled, func(checked bool) {
-			data.STTEnabled = checked
-			data.MarkDirty("STTEnabled", "STTModel")
-		})
+			form.AddCheckbox("Enable Speech-to-Text", data.STTEnabled, func(checked bool) {
+				data.STTEnabled = checked
+				data.MarkDirty("STTEnabled", "STTModel")
+			})
 
 			// Model status with colors (5th param enables dynamic colors)
 			statusText := "[red]Not available[-] - download required"
@@ -866,21 +866,21 @@ You can skip this step and configure voice later via
 				data.VoiceLLMVoice = "Eve"
 			}
 
-		form.AddCheckbox("Enable real-time voice", data.VoiceLLMEnabled, func(checked bool) {
-			data.VoiceLLMEnabled = checked
-			data.MarkDirty("VoiceLLMEnabled")
-		})
-
-		form.AddPasswordField("xAI API Key", data.VoiceLLMAPIKey, 50, '*', func(text string) {
-			data.VoiceLLMAPIKey = text
-			data.MarkDirty("VoiceLLMAPIKey")
-			// Auto-enable when API key is entered
-			if text != "" && !data.VoiceLLMEnabled {
-				data.VoiceLLMEnabled = true
+			form.AddCheckbox("Enable real-time voice", data.VoiceLLMEnabled, func(checked bool) {
+				data.VoiceLLMEnabled = checked
 				data.MarkDirty("VoiceLLMEnabled")
-				w.RefreshCurrentStep()
-			}
-		})
+			})
+
+			form.AddPasswordField("xAI API Key", data.VoiceLLMAPIKey, 50, '*', func(text string) {
+				data.VoiceLLMAPIKey = text
+				data.MarkDirty("VoiceLLMAPIKey")
+				// Auto-enable when API key is entered
+				if text != "" && !data.VoiceLLMEnabled {
+					data.VoiceLLMEnabled = true
+					data.MarkDirty("VoiceLLMEnabled")
+					w.RefreshCurrentStep()
+				}
+			})
 
 			// Voice dropdown
 			voiceOptions := []string{"Eve", "Ara", "Rex", "Sal", "Leo"}
@@ -901,10 +901,10 @@ You can skip this step and configure voice later via
 				}
 			}
 
-		form.AddDropDown("Voice", voiceOptions, voiceIndex, func(option string, index int) {
-			data.VoiceLLMVoice = option
-			data.MarkDirty("VoiceLLMVoice")
-		})
+			form.AddDropDown("Voice", voiceOptions, voiceIndex, func(option string, index int) {
+				data.VoiceLLMVoice = option
+				data.MarkDirty("VoiceLLMVoice")
+			})
 
 			// Add voice description
 			if desc, ok := voiceDescriptions[data.VoiceLLMVoice]; ok {
@@ -995,57 +995,57 @@ The exec and browser tools will run without kernel sandboxing.`)
 			form.SetBorder(false)
 			enableFormMouseScroll(form, w)
 
-		form.AddCheckbox("Enable exec sandboxing", data.ExecBubblewrap, func(checked bool) {
-			if !checked {
-				data.ExecBubblewrap = true
-				sandboxConfirmModal(w, form, 0, func() {
-					data.ExecBubblewrap = false
-					data.MarkDirty("ExecBubblewrap")
-				})
-				return
-			}
-			data.ExecBubblewrap = checked
-			data.MarkDirty("ExecBubblewrap")
-		})
+			form.AddCheckbox("Enable exec sandboxing", data.ExecBubblewrap, func(checked bool) {
+				if !checked {
+					data.ExecBubblewrap = true
+					sandboxConfirmModal(w, form, 0, func() {
+						data.ExecBubblewrap = false
+						data.MarkDirty("ExecBubblewrap")
+					})
+					return
+				}
+				data.ExecBubblewrap = checked
+				data.MarkDirty("ExecBubblewrap")
+			})
 
-		form.AddCheckbox("Enable browser sandboxing", data.BrowserBubblewrap, func(checked bool) {
-			if !checked {
-				data.BrowserBubblewrap = true
-				sandboxConfirmModal(w, form, 1, func() {
-					data.BrowserBubblewrap = false
-					data.MarkDirty("BrowserBubblewrap")
-				})
-				return
-			}
-			data.BrowserBubblewrap = checked
-			data.MarkDirty("BrowserBubblewrap")
-		})
+			form.AddCheckbox("Enable browser sandboxing", data.BrowserBubblewrap, func(checked bool) {
+				if !checked {
+					data.BrowserBubblewrap = true
+					sandboxConfirmModal(w, form, 1, func() {
+						data.BrowserBubblewrap = false
+						data.MarkDirty("BrowserBubblewrap")
+					})
+					return
+				}
+				data.BrowserBubblewrap = checked
+				data.MarkDirty("BrowserBubblewrap")
+			})
 
-		// Skills installation sources
-		form.AddTextView("", "\n─── Skill Installation Sources ───", 50, 2, false, false)
+			// Skills installation sources
+			form.AddTextView("", "\n─── Skill Installation Sources ───", 50, 2, false, false)
 
-		form.AddCheckbox("Allow embedded skills", data.SkillsAllowEmbedded, func(checked bool) {
-			data.SkillsAllowEmbedded = checked
-			data.MarkDirty("SkillsAllowEmbedded")
-		})
+			form.AddCheckbox("Allow embedded skills", data.SkillsAllowEmbedded, func(checked bool) {
+				data.SkillsAllowEmbedded = checked
+				data.MarkDirty("SkillsAllowEmbedded")
+			})
 
-		form.AddCheckbox("Allow ClawHub (public repository)", data.SkillsAllowClawHub, func(checked bool) {
-			data.SkillsAllowClawHub = checked
-			data.MarkDirty("SkillsAllowClawHub")
-		})
+			form.AddCheckbox("Allow ClawHub (public repository)", data.SkillsAllowClawHub, func(checked bool) {
+				data.SkillsAllowClawHub = checked
+				data.MarkDirty("SkillsAllowClawHub")
+			})
 
-		form.AddCheckbox("Allow local paths (⚠ security risk)", data.SkillsAllowLocal, func(checked bool) {
-			if checked {
-				data.SkillsAllowLocal = false
-				localSkillsConfirmModal(w, form, func() {
-					data.SkillsAllowLocal = true
-					data.MarkDirty("SkillsAllowLocal")
-				})
-				return
-			}
-			data.SkillsAllowLocal = checked
-			data.MarkDirty("SkillsAllowLocal")
-		})
+			form.AddCheckbox("Allow local paths (⚠ security risk)", data.SkillsAllowLocal, func(checked bool) {
+				if checked {
+					data.SkillsAllowLocal = false
+					localSkillsConfirmModal(w, form, func() {
+						data.SkillsAllowLocal = true
+						data.MarkDirty("SkillsAllowLocal")
+					})
+					return
+				}
+				data.SkillsAllowLocal = checked
+				data.MarkDirty("SkillsAllowLocal")
+			})
 
 			return formWithHeader(`[cyan]Sandboxing[white] restricts tools to only access files within your workspace,
 preventing accidental or malicious access to system files.

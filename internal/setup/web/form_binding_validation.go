@@ -13,9 +13,9 @@ import (
 // for the section's JSON Pointer root.
 //
 // Rule:
-// - If ConfigPath == "/", fields may reference top-level config keys.
-// - If ConfigPath != "/", fields must be relative to that subtree and must not
-//   start with a top-level config key (gateway, agent, llm, ...).
+//   - If ConfigPath == "/", fields may reference top-level config keys.
+//   - If ConfigPath != "/", fields must be relative to that subtree and must not
+//     start with a top-level config key (gateway, agent, llm, ...).
 func validateSectionFormBinding(section *SectionItem, def *forms.FormDef) error {
 	if section == nil || def == nil || section.Type != SectionTypeFormDef {
 		return nil

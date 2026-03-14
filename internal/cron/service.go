@@ -851,26 +851,6 @@ func (s *Service) deliverAssistantOutput(ctx context.Context, source, content st
 	L_warn("cron: assistant delivery produced no successful channels", "source", source)
 }
 
-func (s *Service) deliverSystemStatus(ctx context.Context, source, title, content string, kind delivery.SystemKind) {
-	if content == "" || s.gateway == nil {
-		return
-	}
-	userID := s.gateway.GetOwnerUserID()
-	if userID == "" {
-		L_warn("cron: no owner user configured for system delivery", "source", source)
-		return
-	}
-	report := s.gateway.DeliverSystemMessage(ctx, userID, delivery.SystemMessage{
-		Kind:    kind,
-		Source:  source,
-		Title:   title,
-		Content: content,
-	})
-	if report.Delivered() {
-		L_debug("cron: system delivery succeeded", "source", source, "deliveredTo", report.DeliveredTo)
-	}
-}
-
 // Store returns the underlying store.
 func (s *Service) Store() *Store {
 	return s.store

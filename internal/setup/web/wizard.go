@@ -9,9 +9,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/roelfdiedericks/goclaw/internal/configapply"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
+	"github.com/roelfdiedericks/goclaw/internal/configapply"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	"github.com/roelfdiedericks/goclaw/internal/setup"
@@ -38,8 +38,8 @@ var WizardSteps = []WizardStep{
 
 // WizardState holds the current wizard session state
 type WizardState struct {
-	Step int                    `json:"step"`
-	Data *setup.WizardData      `json:"data"`
+	Step int               `json:"step"`
+	Data *setup.WizardData `json:"data"`
 	mu   sync.Mutex
 }
 
@@ -399,7 +399,7 @@ func getStepFormDef(stepID string, data *setup.WizardData) *forms.FormDef {
 							Desc:  "Password for web interface login",
 						},
 						{
-							Name: "UserPasswordConf",
+							Name:  "UserPasswordConf",
 							Title: "Confirm Password",
 							Type:  forms.Secret,
 						},

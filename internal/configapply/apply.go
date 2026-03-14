@@ -37,17 +37,17 @@ const (
 type RuntimeMode string
 
 const (
-	RuntimeModeNone            RuntimeMode = "none"
+	RuntimeModeNone              RuntimeMode = "none"
 	RuntimeModeForegroundGateway RuntimeMode = "foreground_gateway"
-	RuntimeModeSupervisedChild RuntimeMode = "supervised_child"
+	RuntimeModeSupervisedChild   RuntimeMode = "supervised_child"
 )
 
 type RestartCapability string
 
 const (
-	RestartCapabilityNone          RestartCapability = "none"
+	RestartCapabilityNone            RestartCapability = "none"
 	RestartCapabilityInstructionOnly RestartCapability = "instruction_only"
-	RestartCapabilityAuto          RestartCapability = "auto"
+	RestartCapabilityAuto            RestartCapability = "auto"
 )
 
 type Action string

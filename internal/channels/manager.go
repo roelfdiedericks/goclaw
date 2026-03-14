@@ -19,8 +19,8 @@ import (
 	whatsappconfig "github.com/roelfdiedericks/goclaw/internal/channels/whatsapp/config"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
-	setupweb "github.com/roelfdiedericks/goclaw/internal/setup/web"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
+	setupweb "github.com/roelfdiedericks/goclaw/internal/setup/web"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 	"github.com/roelfdiedericks/goclaw/internal/voicellm"
 )

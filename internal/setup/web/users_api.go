@@ -544,4 +544,3 @@ func userEntryToResponse(username string, entry *user.UserEntry) UserResponse {
 		Sandbox:       entry.Sandbox,
 	}
 }
-

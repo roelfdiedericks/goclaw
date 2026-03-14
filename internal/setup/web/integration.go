@@ -48,9 +48,9 @@ func RegisterSetupRoutes(srv HTTPServer, configPath string) error {
 	}
 
 	mountSetup(mux, mountOptions{
-		configPath: configPath,
-		handlers:   handlers,
-		wrap:       ownerOnly,
+		configPath:  configPath,
+		handlers:    handlers,
+		wrap:        ownerOnly,
 		applyCaller: configapply.CallerWebIntegrated,
 	})
 
