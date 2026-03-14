@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 
 	"github.com/creasty/defaults"
 	"github.com/roelfdiedericks/goclaw/internal/auth"
@@ -241,6 +243,9 @@ func Load() (*LoadResult, error) {
 
 	// Apply runtime defaults that cannot be struct tags (paths, slices, maps)
 	applyRuntimeDefaults(cfg, goclawDir, home)
+	if err := normalizeTildePaths(cfg); err != nil {
+		return nil, fmt.Errorf("normalize config paths: %w", err)
+	}
 
 	// Log final config summary
 	agentModel := ""
@@ -297,6 +302,9 @@ func LoadFromPath(path string) (*LoadResult, error) {
 	}
 
 	applyRuntimeDefaults(cfg, goclawDir, home)
+	if err := normalizeTildePaths(cfg); err != nil {
+		return nil, fmt.Errorf("normalize config paths: %w", err)
+	}
 
 	return &LoadResult{
 		Config:     cfg,
@@ -368,6 +376,9 @@ func LoadRuntime() (*LoadResult, error) {
 	logging.L_debug("config: loaded from goclaw.json (runtime)", "path", goclawPath)
 
 	applyRuntimeDefaults(cfg, goclawDir, home)
+	if err := normalizeTildePaths(cfg); err != nil {
+		return nil, fmt.Errorf("normalize config paths: %w", err)
+	}
 
 	agentModel := ""
 	if len(cfg.LLM.Agent.Models) > 0 {
@@ -460,6 +471,139 @@ func applyRuntimeDefaults(cfg *Config, goclawDir, home string) {
 			},
 		}
 	}
+}
+
+// normalizeTildePaths expands "~" for path-like configuration fields.
+// This keeps runtime behavior consistent across all subsystems and avoids
+// creating literal "./~/" directories when a caller uses shell-style paths.
+func normalizeTildePaths(cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+	return normalizeTildeValue(reflect.ValueOf(cfg).Elem(), "config")
+}
+
+func normalizeTildeValue(v reflect.Value, fieldPath string) error {
+	if !v.IsValid() {
+		return nil
+	}
+
+	switch v.Kind() {
+	case reflect.Ptr:
+		if v.IsNil() {
+			return nil
+		}
+		return normalizeTildeValue(v.Elem(), fieldPath)
+
+	case reflect.Struct:
+		t := v.Type()
+		for i := 0; i < v.NumField(); i++ {
+			fieldInfo := t.Field(i)
+			if fieldInfo.PkgPath != "" {
+				continue
+			}
+			childPath := fieldPath + "." + configFieldName(fieldInfo)
+			if err := normalizeTildeField(v.Field(i), childPath, fieldInfo); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func normalizeTildeField(v reflect.Value, fieldPath string, fieldInfo reflect.StructField) error {
+	if !v.IsValid() {
+		return nil
+	}
+
+	switch v.Kind() {
+	case reflect.Ptr:
+		if v.IsNil() {
+			return nil
+		}
+		return normalizeTildeField(v.Elem(), fieldPath, fieldInfo)
+
+	case reflect.Struct:
+		return normalizeTildeValue(v, fieldPath)
+
+	case reflect.String:
+		if !isPathLikeField(fieldInfo) {
+			return nil
+		}
+		return expandTildeString(v, fieldPath)
+
+	case reflect.Slice:
+		if v.Type().Elem().Kind() == reflect.String && isPathLikeField(fieldInfo) {
+			for i := 0; i < v.Len(); i++ {
+				if err := expandTildeString(v.Index(i), fmt.Sprintf("%s[%d]", fieldPath, i)); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		for i := 0; i < v.Len(); i++ {
+			if err := normalizeTildeValue(v.Index(i), fmt.Sprintf("%s[%d]", fieldPath, i)); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case reflect.Map:
+		iter := v.MapRange()
+		for iter.Next() {
+			key := iter.Key()
+			value := iter.Value()
+			if !value.IsValid() {
+				continue
+			}
+			copyValue := reflect.New(value.Type()).Elem()
+			copyValue.Set(value)
+			if err := normalizeTildeValue(copyValue, fmt.Sprintf("%s[%v]", fieldPath, key.Interface())); err != nil {
+				return err
+			}
+			v.SetMapIndex(key, copyValue)
+		}
+		return nil
+	}
+
+	return nil
+}
+
+func expandTildeString(v reflect.Value, fieldPath string) error {
+	if !v.CanSet() {
+		return nil
+	}
+	current := v.String()
+	if !strings.HasPrefix(current, "~") {
+		return nil
+	}
+	expanded, err := paths.ExpandTilde(current)
+	if err != nil {
+		return fmt.Errorf("%s: %w", fieldPath, err)
+	}
+	v.SetString(expanded)
+	return nil
+}
+
+func configFieldName(fieldInfo reflect.StructField) string {
+	tag := fieldInfo.Tag.Get("json")
+	if tag != "" {
+		name := strings.Split(tag, ",")[0]
+		if name != "" && name != "-" {
+			return name
+		}
+	}
+	return fieldInfo.Name
+}
+
+func isPathLikeField(fieldInfo reflect.StructField) bool {
+	name := strings.ToLower(configFieldName(fieldInfo))
+	return strings.Contains(name, "path") ||
+		strings.Contains(name, "dir") ||
+		strings.Contains(name, "file") ||
+		name == "script" ||
+		strings.Contains(name, "volume")
 }
 
 // DefaultConfigTemplate is a minimal config struct for template generation.
