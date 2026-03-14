@@ -61,7 +61,7 @@ type PersistParams struct {
 // BroadcastParams contains parameters for broadcasting a conversation turn to other channels.
 // This is the distribution primitive - mirrors user message, delivers agent response.
 type BroadcastParams struct {
-	User             *user.User // The user (for DeliverMessage calls)
+	User             *user.User // The user (for assistant/system delivery calls)
 	Source           string     // Originating channel (will be excluded from delivery)
 	UserMessage      string     // User message to mirror (with source label)
 	AssistantMessage string     // Agent response to deliver (no label)

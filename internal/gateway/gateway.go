@@ -18,6 +18,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	gcontext "github.com/roelfdiedericks/goclaw/internal/context"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
+	"github.com/roelfdiedericks/goclaw/internal/delivery"
 	"github.com/roelfdiedericks/goclaw/internal/embeddings"
 	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
 	"github.com/roelfdiedericks/goclaw/internal/hass"
@@ -59,13 +60,19 @@ type Channel interface {
 	// Batch-only channels (Telegram, TUI) should return false.
 	StreamEvent(u *user.User, event AgentEvent) bool
 
-	// DeliverMessage delivers agent output (tool messages, responses) to the user.
-	// Unlike SendMirror, this has no source label - it's direct agent output.
-	DeliverMessage(ctx context.Context, u *user.User, message string) error
+	// DeliverAssistantMessage delivers final assistant/user-facing output to the user.
+	DeliverAssistantMessage(ctx context.Context, u *user.User, message string) error
+
+	// DeliverSystemMessage delivers non-conversation system/status output to the user.
+	DeliverSystemMessage(ctx context.Context, u *user.User, msg delivery.SystemMessage) error
 
 	// DeliverGhostwrite sends a ghostwritten message with appropriate UX
 	// (typing indicator, delay, etc.). Used for supervision ghostwriting.
 	DeliverGhostwrite(ctx context.Context, u *user.User, message string) error
+}
+
+type deliveryReachability interface {
+	DeliveryReachable(u *user.User) (bool, string)
 }
 
 // Gateway is the central service layer that coordinates the agent loop
@@ -500,10 +507,10 @@ func (g *Gateway) mirrorUserMessage(ctx context.Context, source, userMsg string,
 	}
 }
 
-// deliverAgentMessage sends agent output (no source label) to the specified channels.
-// This is the primitive for delivering agent responses, tool output, etc.
+// deliverAssistantMessage sends assistant/user-facing output (no source label) to the specified channels.
+// This is the primitive for delivering final assistant responses and similar content.
 // Channels filter by HasUser internally if needed.
-func (g *Gateway) deliverAgentMessage(ctx context.Context, u *user.User, message string, channels []Channel) {
+func (g *Gateway) deliverAssistantMessage(ctx context.Context, u *user.User, message string, channels []Channel) {
 	if message == "" {
 		return
 	}
@@ -511,8 +518,8 @@ func (g *Gateway) deliverAgentMessage(ctx context.Context, u *user.User, message
 		if u != nil && !ch.HasUser(u) {
 			continue
 		}
-		L_debug("deliver: sending agent message", "to", ch.Name(), "msgLen", len(message))
-		ch.DeliverMessage(ctx, u, message) //nolint:errcheck // fire-and-forget delivery
+		L_debug("deliver: sending assistant message", "to", ch.Name(), "msgLen", len(message))
+		ch.DeliverAssistantMessage(ctx, u, message) //nolint:errcheck // fire-and-forget delivery
 	}
 }
 
@@ -522,10 +529,10 @@ func (g *Gateway) MirrorUserMessageToOthers(ctx context.Context, source, userMsg
 	g.mirrorUserMessage(ctx, source, userMsg, u, g.channelsExcept(source))
 }
 
-// DeliverAgentMessageToOthers delivers agent output to all channels except the source.
+// DeliverAssistantMessageToOthers delivers assistant output to all channels except the source.
 // Public wrapper for voice channel to call when assistant response is complete.
-func (g *Gateway) DeliverAgentMessageToOthers(ctx context.Context, source string, u *user.User, message string) {
-	g.deliverAgentMessage(ctx, u, message, g.channelsExcept(source))
+func (g *Gateway) DeliverAssistantMessageToOthers(ctx context.Context, source string, u *user.User, message string) {
+	g.deliverAssistantMessage(ctx, u, message, g.channelsExcept(source))
 }
 
 // BroadcastConversationTurn persists a conversation turn and distributes to OTHER channels.
@@ -555,8 +562,8 @@ func (g *Gateway) BroadcastConversationTurn(ctx context.Context, params Broadcas
 	// Mirror user message to other channels (with source label)
 	g.mirrorUserMessage(ctx, params.Source, params.UserMessage, params.User, otherChannels)
 
-	// Deliver agent response to other channels (no label)
-	g.deliverAgentMessage(ctx, params.User, enrichedAssistant, otherChannels)
+	// Deliver assistant response to other channels (no label)
+	g.deliverAssistantMessage(ctx, params.User, enrichedAssistant, otherChannels)
 
 	L_debug("broadcast: conversation turn distributed",
 		"source", params.Source,
@@ -589,7 +596,7 @@ func (g *Gateway) DeliverToolMessage(ctx context.Context, params ToolMessagePara
 
 	// Deliver to ALL channels (including source)
 	allCh := g.allChannels()
-	g.deliverAgentMessage(ctx, params.User, enrichedMsg, allCh)
+	g.deliverAssistantMessage(ctx, params.User, enrichedMsg, allCh)
 
 	L_debug("deliver: tool message distributed",
 		"source", params.Source,
@@ -972,7 +979,7 @@ func (g *Gateway) mirrorOpenClawRecords(ctx context.Context, records []session.R
 			// Use primitives to mirror to all channels (nil user = no HasUser filter)
 			allCh := g.allChannels()
 			g.mirrorUserMessage(ctx, "openclaw", userMsg, nil, allCh)
-			g.deliverAgentMessage(ctx, nil, content, allCh)
+			g.deliverAssistantMessage(ctx, nil, content, allCh)
 		}
 	}
 }
@@ -1139,9 +1146,6 @@ func (g *Gateway) StartCron(ctx context.Context) error {
 	// Create and start service
 	g.cronService = cron.NewService(store, g)
 
-	// Set up channel provider for delivery
-	g.cronService.SetChannelProvider(&gatewayCronChannelProvider{g: g})
-
 	// Set job timeout if configured
 	if g.config.Cron.JobTimeoutMinutes > 0 {
 		g.cronService.SetJobTimeout(g.config.Cron.JobTimeoutMinutes)
@@ -1164,32 +1168,6 @@ func (g *Gateway) StartCron(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// gatewayCronChannelProvider wraps gateway channels for cron delivery.
-type gatewayCronChannelProvider struct {
-	g *Gateway
-}
-
-func (p *gatewayCronChannelProvider) Channels() map[string]cron.Channel {
-	result := make(map[string]cron.Channel)
-	for name, ch := range p.g.channels {
-		result[name] = &cronChannelAdapter{ch: ch}
-	}
-	return result
-}
-
-// cronChannelAdapter wraps a gateway.Channel as a cron.Channel.
-type cronChannelAdapter struct {
-	ch Channel
-}
-
-func (a *cronChannelAdapter) Name() string {
-	return a.ch.Name()
-}
-
-func (a *cronChannelAdapter) Send(ctx context.Context, msg string) error {
-	return a.ch.Send(ctx, msg)
 }
 
 // StopCron stops the cron scheduler.
@@ -1226,9 +1204,12 @@ func (g *Gateway) RunAgentForCron(ctx context.Context, cronReq cron.AgentRequest
 			jobDesc = cronReq.Source
 		}
 		statusMsg := fmt.Sprintf("💭 Running cron: %s...", jobDesc)
-		for _, ch := range g.channels {
-			ch.Send(ctx, statusMsg) //nolint:errcheck // fire-and-forget status broadcast
-		}
+		_ = g.DeliverSystemMessage(ctx, reqUser.ID, delivery.SystemMessage{
+			Kind:    delivery.SystemKindStatus,
+			Source:  "cron-status",
+			Title:   "Cron Status",
+			Content: statusMsg,
+		})
 	}
 
 	// Convert cron request to gateway request
@@ -1262,6 +1243,160 @@ func (g *Gateway) RunAgentForCron(ctx context.Context, cronReq cron.AgentRequest
 
 	// Close the cron events channel when done
 	close(cronEvents)
+}
+
+func (g *Gateway) resolveDeliveryUser(userID string) (*user.User, string) {
+	if strings.TrimSpace(userID) == "" {
+		return nil, delivery.ReasonNoUser
+	}
+	u := g.users.Get(userID)
+	if u == nil {
+		return nil, delivery.ReasonNoUser
+	}
+	return u, ""
+}
+
+func (g *Gateway) deliverToUserChannels(
+	ctx context.Context,
+	u *user.User,
+	exclude map[string]struct{},
+	deliver func(Channel) error,
+) delivery.Report {
+	report := delivery.Report{Generated: true}
+
+	for name, ch := range g.channels {
+		result := delivery.Result{Channel: name}
+		if _, skip := exclude[name]; skip {
+			result.Reason = delivery.ReasonExcluded
+			report.Results = append(report.Results, result)
+			continue
+		}
+		if !ch.HasUser(u) {
+			result.Reason = delivery.ReasonHasNoUser
+			report.Results = append(report.Results, result)
+			continue
+		}
+		if aware, ok := ch.(deliveryReachability); ok {
+			reachable, reason := aware.DeliveryReachable(u)
+			if !reachable {
+				result.Reason = reason
+				if result.Reason == "" {
+					result.Reason = delivery.ReasonUnreachable
+				}
+				report.Results = append(report.Results, result)
+				continue
+			}
+		}
+		result.Attempted = true
+		if err := deliver(ch); err != nil {
+			result.Error = err.Error()
+			result.Reason = delivery.ReasonError
+			L_error("gateway: delivery failed", "channel", name, "user", u.ID, "error", err)
+		} else {
+			result.Delivered = true
+			report.DeliveredTo++
+			L_debug("gateway: delivery succeeded", "channel", name, "user", u.ID)
+		}
+		report.Results = append(report.Results, result)
+	}
+	return report
+}
+
+func (g *Gateway) deliverAssistantToUser(
+	ctx context.Context,
+	userID string,
+	msg delivery.AssistantMessage,
+) delivery.Report {
+	report := delivery.Report{Generated: strings.TrimSpace(msg.Content) != ""}
+	if !report.Generated {
+		return report
+	}
+
+	u, reason := g.resolveDeliveryUser(userID)
+	if u == nil {
+		report.Results = append(report.Results, delivery.Result{Reason: reason})
+		return report
+	}
+
+	exclude := make(map[string]struct{}, len(msg.ExcludeChannels))
+	for _, name := range msg.ExcludeChannels {
+		if trimmed := strings.TrimSpace(name); trimmed != "" {
+			exclude[trimmed] = struct{}{}
+		}
+	}
+
+	report = g.deliverToUserChannels(ctx, u, exclude, func(ch Channel) error {
+		return ch.DeliverAssistantMessage(ctx, u, msg.Content)
+	})
+	if msg.Persist && report.Delivered() {
+		kind := msg.PersistKind
+		if strings.TrimSpace(kind) == "" {
+			kind = "delivered"
+		}
+		persistContent := msg.PersistContent
+		if strings.TrimSpace(persistContent) == "" {
+			persistContent = msg.Content
+		}
+		if err := g.PersistDeliveredMessage(ctx, persistContent, kind); err != nil {
+			L_warn("gateway: failed to persist delivered assistant output", "source", msg.Source, "error", err)
+		} else {
+			report.Persisted = true
+		}
+	}
+	return report
+}
+
+// DeliverAssistantOutput delivers final assistant/user-facing content to the user's
+// channels using the assistant surface, and optionally persists the raw content.
+func (g *Gateway) DeliverAssistantOutput(ctx context.Context, userID string, msg delivery.AssistantMessage) delivery.Report {
+	return g.deliverAssistantToUser(ctx, userID, msg)
+}
+
+// DeliverSystemMessage delivers system/status output to the user's channels using
+// the dedicated system surface, and optionally persists a separate raw content payload.
+func (g *Gateway) DeliverSystemMessage(ctx context.Context, userID string, msg delivery.SystemMessage) delivery.Report {
+	report := delivery.Report{Generated: strings.TrimSpace(msg.Content) != ""}
+	if !report.Generated {
+		return report
+	}
+
+	u, reason := g.resolveDeliveryUser(userID)
+	if u == nil {
+		report.Results = append(report.Results, delivery.Result{Reason: reason})
+		return report
+	}
+
+	report = g.deliverToUserChannels(ctx, u, nil, func(ch Channel) error {
+		return ch.DeliverSystemMessage(ctx, u, msg)
+	})
+	if msg.Persist && report.Delivered() {
+		kind := msg.PersistKind
+		if strings.TrimSpace(kind) == "" {
+			kind = "system"
+		}
+		if err := g.PersistDeliveredMessage(ctx, msg.ContentForPersistence(), kind); err != nil {
+			L_warn("gateway: failed to persist delivered system message", "source", msg.Source, "error", err)
+		} else {
+			report.Persisted = true
+		}
+	}
+	return report
+}
+
+func convertDeliveryResults(results []delivery.Result) []types.DeliveryResult {
+	out := make([]types.DeliveryResult, 0, len(results))
+	for _, result := range results {
+		errText := result.Error
+		if errText == "" && !result.Delivered && result.Reason != "" {
+			errText = result.Reason
+		}
+		out = append(out, types.DeliveryResult{
+			Channel: result.Channel,
+			Success: result.Delivered,
+			Error:   errText,
+		})
+	}
+	return out
 }
 
 // GetOwnerUserID returns the owner user ID for cron jobs.
@@ -1490,20 +1625,14 @@ func (g *Gateway) ProcessMessage(ctx context.Context, msg *types.InboundMessage,
 
 		// Deliver if not suppressed
 		if !suppressed && finalText != "" {
-			for name, ch := range g.channels {
-				if !ch.HasUser(msg.User) {
-					continue
-				}
-				result := types.DeliveryResult{Channel: name}
-				if err := ch.Send(ctx, finalText); err != nil {
-					L_error("gateway: ProcessMessage delivery failed", "channel", name, "error", err)
-					result.Error = err.Error()
-				} else {
-					result.Success = true
-					L_debug("gateway: ProcessMessage delivered", "channel", name)
-				}
-				report.Results = append(report.Results, result)
-			}
+			deliveryReport := g.DeliverAssistantOutput(ctx, msg.User.ID, delivery.AssistantMessage{
+				Source:         msg.Source,
+				Content:        finalText,
+				Persist:        false,
+				PersistKind:    "conversation",
+				PersistContent: finalText,
+			})
+			report.Results = append(report.Results, convertDeliveryResults(deliveryReport.Results)...)
 		}
 
 		return report, nil
@@ -2715,7 +2844,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	if !req.IsGroup && !req.SkipMirror {
 		otherChannels := g.channelsExcept(req.Source)
 		g.mirrorUserMessage(ctx, req.Source, req.UserMsg, req.User, otherChannels)
-		g.deliverAgentMessage(ctx, req.User, finalText, otherChannels)
+		g.deliverAssistantMessage(ctx, req.User, finalText, otherChannels)
 	}
 
 	return nil
@@ -2883,11 +3012,12 @@ func (g *Gateway) SendStatusMessage(ctx context.Context, u *user.User, msg strin
 	if u == nil || msg == "" {
 		return
 	}
-	for _, ch := range g.channels {
-		if ch.HasUser(u) {
-			ch.Send(ctx, msg) //nolint:errcheck // fire-and-forget notification
-		}
-	}
+	_ = g.DeliverSystemMessage(ctx, u.ID, delivery.SystemMessage{
+		Kind:    delivery.SystemKindStatus,
+		Source:  "status",
+		Title:   "Status",
+		Content: msg,
+	})
 }
 
 // GetLLMProviderStatus returns the status of all LLM providers for /llm command
@@ -3368,16 +3498,13 @@ func (g *Gateway) InjectMessage(ctx context.Context, sessionKey, message string,
 
 			// Deliver final text to batch channels (those that didn't stream)
 			if finalText != "" {
-				for name, ch := range g.channels {
-					if !ch.HasUser(u) || streamedChannels[name] {
-						continue // Skip if user not on channel or already streamed
-					}
-					if err := ch.Send(ctx, finalText); err != nil {
-						L_error("gateway: guidance delivery failed", "channel", name, "error", err)
-					} else {
-						L_debug("gateway: guidance delivered", "channel", name)
-					}
+				exclude := make(map[string]struct{}, len(streamedChannels))
+				for name := range streamedChannels {
+					exclude[name] = struct{}{}
 				}
+				g.deliverToUserChannels(ctx, u, exclude, func(ch Channel) error {
+					return ch.DeliverAssistantMessage(ctx, u, finalText)
+				})
 			}
 		}()
 

@@ -17,6 +17,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
 	chtypes "github.com/roelfdiedericks/goclaw/internal/channels/types"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
+	"github.com/roelfdiedericks/goclaw/internal/delivery"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
@@ -1323,8 +1324,8 @@ func (b *Bot) SendMirror(ctx context.Context, source, userMsg string) error {
 	return err
 }
 
-// DeliverMessage sends agent output to the user's Telegram chat
-func (b *Bot) DeliverMessage(ctx context.Context, u *user.User, message string) error {
+// DeliverAssistantMessage sends assistant output to the user's Telegram chat.
+func (b *Bot) DeliverAssistantMessage(ctx context.Context, u *user.User, message string) error {
 	if u == nil || u.TelegramID == "" {
 		return nil
 	}
@@ -1353,6 +1354,11 @@ func (b *Bot) DeliverMessage(ctx context.Context, u *user.User, message string) 
 		logging.L_error("failed to send telegram message", "error", err)
 	}
 	return err
+}
+
+// DeliverSystemMessage sends system/status output to the user's Telegram chat.
+func (b *Bot) DeliverSystemMessage(ctx context.Context, u *user.User, msg delivery.SystemMessage) error {
+	return b.DeliverAssistantMessage(ctx, u, msg.DisplayText())
 }
 
 // HasUser returns true if the user has a Telegram identity

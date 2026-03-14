@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/delivery"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
@@ -162,8 +163,8 @@ func (c *HTTPChannel) SendMirror(ctx context.Context, source, userMsg string) er
 	return nil
 }
 
-// DeliverMessage sends agent output to the user's HTTP session(s)
-func (c *HTTPChannel) DeliverMessage(ctx context.Context, u *user.User, message string) error {
+// DeliverAssistantMessage sends assistant output to the user's HTTP session(s).
+func (c *HTTPChannel) DeliverAssistantMessage(ctx context.Context, u *user.User, message string) error {
 	sessions := c.getSessionsForUser(u)
 	if len(sessions) == 0 {
 		return nil
@@ -182,9 +183,37 @@ func (c *HTTPChannel) DeliverMessage(ctx context.Context, u *user.User, message 
 	return nil
 }
 
+// DeliverSystemMessage sends system/status output to the user's HTTP session(s).
+func (c *HTTPChannel) DeliverSystemMessage(ctx context.Context, u *user.User, msg delivery.SystemMessage) error {
+	sessions := c.getSessionsForUser(u)
+	if len(sessions) == 0 {
+		return nil
+	}
+
+	event := SSEEvent{
+		Event: "system",
+		Data: map[string]string{
+			"message": msg.DisplayText(),
+		},
+	}
+
+	for _, sess := range sessions {
+		sess.SendEvent(event)
+	}
+	return nil
+}
+
 // HasUser returns true if this channel can reach the given user
 func (c *HTTPChannel) HasUser(u *user.User) bool {
 	return u != nil && u.HasHTTPAuth()
+}
+
+// DeliveryReachable reports whether the user currently has an active HTTP session.
+func (c *HTTPChannel) DeliveryReachable(u *user.User) (bool, string) {
+	if len(c.getSessionsForUser(u)) == 0 {
+		return false, delivery.ReasonUnreachable
+	}
+	return true, ""
 }
 
 // getSessionsForUser returns all SSE sessions for a given user
