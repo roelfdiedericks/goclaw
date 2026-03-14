@@ -124,13 +124,13 @@ func (m *Manager) StartAll(ctx context.Context, cfg config.ChannelsConfig, opts 
 // InitVoiceLLM initializes the VoiceLLM registry and voice channel.
 // Must be called after StartAll (requires HTTP server to be running).
 func (m *Manager) InitVoiceLLM(ctx context.Context, cfg voicellm.Config) error {
-	if !cfg.Enabled {
-		logging.L_info("voicellm: disabled by configuration")
-		return nil
-	}
-
-	if len(cfg.Providers) == 0 {
-		logging.L_warn("voicellm: enabled but no providers configured")
+	availability := voicellm.AssessConfig(cfg)
+	if !availability.Available {
+		if cfg.Enabled {
+			logging.L_warn("voicellm: unavailable", "reason", availability.Message)
+		} else {
+			logging.L_info("voicellm: disabled by configuration")
+		}
 		return nil
 	}
 

@@ -9,7 +9,9 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/configapply"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -19,13 +21,15 @@ import (
 // API provides JSON API handlers for the setup wizard and editor
 type API struct {
 	configPath   string
+	applyCaller  configapply.Caller
 	contractErr error
 }
 
 // NewAPI creates a new API handler
-func NewAPI(configPath string) *API {
+func NewAPI(configPath string, applyCaller configapply.Caller) *API {
 	return &API{
 		configPath:   configPath,
+		applyCaller:  applyCaller,
 		contractErr: ValidateAllSectionContractsStrict(),
 	}
 }
@@ -302,6 +306,43 @@ func (a *API) saveSectionConfig(w http.ResponseWriter, r *http.Request, section 
 		Success: true,
 		Message: "Configuration saved",
 	})
+}
+
+// HandleApply determines how saved config should take effect.
+func (a *API) HandleApply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{
+			Success: false,
+			Message: "Method not allowed",
+		})
+		return
+	}
+
+	applyResult := configapply.Decide(a.applyCaller)
+	L_info("api: apply decision",
+		"caller", a.applyCaller,
+		"mode", applyResult.RuntimeMode,
+		"action", applyResult.Action,
+		"restartRequired", applyResult.RestartRequired,
+	)
+
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data: map[string]interface{}{
+			"apply": applyResult,
+		},
+		Message: applyResult.Message,
+	})
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	if applyResult.Action == configapply.ActionSupervisedRestart &&
+		applyResult.RestartCapability == configapply.RestartCapabilityAuto {
+		if err := configapply.ScheduleSupervisorRestart(750 * time.Millisecond); err != nil {
+			L_error("api: failed to schedule supervised restart", "error", err)
+		}
+	}
 }
 
 // extractConfigPath extracts a nested value from config using JSON Pointer.

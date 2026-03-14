@@ -144,6 +144,75 @@
         $alert.find('.js-alert-text').text('');
     }
 
+    function extractApplyResult(data) {
+        if (!data || !data.data || !data.data.apply) return null;
+        return data.data.apply;
+    }
+
+    async function fetchGatewayStatus() {
+        const resp = await fetch('/api/status', { cache: 'no-store' });
+        if (!resp.ok) {
+            throw new Error(`status ${resp.status}`);
+        }
+        return resp.json();
+    }
+
+    async function captureCurrentInstanceID() {
+        try {
+            const status = await fetchGatewayStatus();
+            return status && status.instanceID ? status.instanceID : null;
+        } catch (_err) {
+            return null;
+        }
+    }
+
+    async function waitForGatewayRestart(previousInstanceID, onUpdate) {
+        const start = Date.now();
+        const timeoutMs = 60000;
+        let sawOldInstance = false;
+        let sawOffline = false;
+
+        while (Date.now() - start < timeoutMs) {
+            try {
+                const status = await fetchGatewayStatus();
+                const instanceID = status && status.instanceID;
+                const sameInstance = previousInstanceID && instanceID === previousInstanceID;
+
+                if (!previousInstanceID) {
+                    return { ready: true, status };
+                }
+
+                if (sameInstance) {
+                    sawOldInstance = true;
+                    if (typeof onUpdate === 'function') {
+                        onUpdate({
+                            phase: 'waiting_for_stop',
+                            elapsedMs: Date.now() - start,
+                            status,
+                        });
+                    }
+                } else if (sawOldInstance || sawOffline) {
+                    return { ready: true, status };
+                } else {
+                    // We might have attached after the old process already died.
+                    return { ready: true, status };
+                }
+            } catch (_err) {
+                sawOffline = true;
+                if (typeof onUpdate === 'function') {
+                    onUpdate({
+                        phase: 'waiting_for_start',
+                        elapsedMs: Date.now() - start,
+                    });
+                }
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        return { ready: false };
+    }
+
     class SetupEditorController {
         constructor(root) {
             this.$root = $(root);
@@ -158,6 +227,7 @@
             this.$topActions = $('#editor-top-actions');
             this.$topDirtyLabel = $('#editor-top-dirty-label');
             this.$topSave = $('#editor-top-save');
+            this.$topApply = $('#editor-top-apply');
             this.$topDiscard = $('#editor-top-discard');
 
             this.currentSection = '';
@@ -171,6 +241,8 @@
             this.fieldErrors = {};
             this.loading = false;
             this.saving = false;
+            this.applyPending = false;
+            this.lastKnownInstanceID = null;
 
             this.mcMeta = {};
             this.mcLoading = {};
@@ -204,6 +276,9 @@
             this.userDeleteUsername = '';
             this.userModal = null;
             this.userDeleteModal = null;
+            this.restartModal = new bootstrap.Modal(document.getElementById('editorRestartModal'));
+            this.$restartMessage = $('#editor-restart-message');
+            this.$restartDetail = $('#editor-restart-detail');
         }
 
         init() {
@@ -235,11 +310,11 @@
             });
 
             this.$topSave.on('click', () => this.saveAll());
+            this.$topApply.on('click', () => this.applySaved());
             this.$topDiscard.on('click', () => this.discardAll());
 
             this.$errorAlert.find('.btn-close').on('click', () => hideAlert(this.$errorAlert));
             this.$successAlert.find('.btn-close').on('click', () => hideAlert(this.$successAlert));
-
             this.$formContent.on('input change', '.js-bound-field', (event) => this.handleBoundFieldChange(event));
             this.$formContent.on('click', '.js-model-chain-add', (event) => this.openModelModal($(event.currentTarget).data('field-path')));
             this.$formContent.on('click', '.js-model-remove', (event) => this.removeModel($(event.currentTarget).data('field-path'), Number($(event.currentTarget).data('index'))));
@@ -298,17 +373,23 @@
         }
 
         syncTopBar() {
-            const show = this.hasAnyDirty();
+            const hasDirty = this.hasAnyDirty();
+            const show = hasDirty || this.applyPending;
             this.$topActions.toggleClass('d-none', !show);
-            this.$topSave.prop('disabled', !show || this.saving);
-            this.$topDiscard.prop('disabled', !show || this.saving);
+            this.$topSave.prop('disabled', !hasDirty || this.saving);
+            this.$topApply.prop('disabled', this.saving || hasDirty || !this.applyPending);
+            this.$topDiscard.prop('disabled', !hasDirty || this.saving);
 
             if (!show) {
                 this.$topDirtyLabel.text('');
-            } else if (this.dirtyCount() === 1 && this.currentSection && this.dirtyState[this.currentSection]) {
+            } else if (hasDirty && this.dirtyCount() === 1 && this.currentSection && this.dirtyState[this.currentSection]) {
                 this.$topDirtyLabel.text(this.currentTitle ? `Unsaved: ${this.currentTitle}` : 'Unsaved changes');
-            } else {
+            } else if (hasDirty) {
                 this.$topDirtyLabel.text(`Unsaved: ${this.dirtyCount()} sections`);
+            } else if (this.applyPending) {
+                this.$topDirtyLabel.text('Saved. Apply pending');
+            } else {
+                this.$topDirtyLabel.text('');
             }
 
             $('.js-sidebar-dirty-indicator').each((_, el) => {
@@ -512,14 +593,95 @@
                     }
                 }
 
+                this.applyPending = true;
                 showAlert(this.$successAlert, dirtySections.length === 1
-                    ? 'Configuration saved successfully'
-                    : `Configuration saved successfully (${dirtySections.length} sections)`);
+                    ? 'Configuration saved to disk.'
+                    : `Configuration saved to disk (${dirtySections.length} sections).`);
             } catch (err) {
                 showAlert(this.$errorAlert, err.message || 'Failed to save configuration');
             } finally {
                 this.saving = false;
                 this.syncTopBar();
+            }
+        }
+
+        async applySaved() {
+            if (this.saving || !this.applyPending || this.hasAnyDirty()) return;
+            showAlert(this.$errorAlert, '');
+            showAlert(this.$successAlert, '');
+            this.saving = true;
+            this.syncTopBar();
+            try {
+                this.lastKnownInstanceID = await captureCurrentInstanceID();
+                const applyResp = await fetch('/setup/api/apply', { method: 'POST' });
+                const applyData = await applyResp.json();
+                if (!applyData.success) {
+                    throw new Error(applyData.message || 'Failed to apply configuration');
+                }
+
+                const apply = extractApplyResult(applyData);
+                await this.handleApplyResult(apply, this.lastKnownInstanceID);
+            } catch (err) {
+                showAlert(this.$errorAlert, err.message || 'Failed to apply configuration');
+            } finally {
+                this.saving = false;
+                this.syncTopBar();
+            }
+        }
+
+        async handleApplyResult(apply, previousInstanceID) {
+            const defaultMessage = 'Configuration applied.';
+            if (!apply) {
+                showAlert(this.$successAlert, defaultMessage);
+                this.applyPending = false;
+                this.syncTopBar();
+                return;
+            }
+
+            if (apply.action === 'manual_restart') {
+                this.$restartMessage.text(apply.message || 'Stop and restart the gateway process to apply changes.');
+                this.$restartDetail.text('Waiting for the current GoClaw process to stop...');
+                this.restartModal.show();
+                await this.waitForGatewayAfterRestart(previousInstanceID);
+                return;
+            }
+
+            if (apply.action === 'supervised_restart' && apply.waitForRestart) {
+                this.$restartMessage.text(apply.message || 'Configuration saved. Waiting for GoClaw to restart...');
+                this.$restartDetail.text('Waiting for the current GoClaw process to stop...');
+                this.restartModal.show();
+                await this.waitForGatewayAfterRestart(previousInstanceID);
+                return;
+            }
+
+            showAlert(this.$successAlert, apply.message || defaultMessage);
+            this.applyPending = false;
+            this.syncTopBar();
+        }
+
+        async waitForGatewayAfterRestart(previousInstanceID) {
+            const result = await waitForGatewayRestart(previousInstanceID, (update) => {
+                if (update.phase === 'waiting_for_stop') {
+                    this.$restartDetail.text('Waiting for the current GoClaw process to stop...');
+                } else if (update.phase === 'waiting_for_start') {
+                    this.$restartDetail.text('Waiting for GoClaw to come back online...');
+                }
+                if (update.elapsedMs > 10000) {
+                    if (update.phase === 'waiting_for_stop') {
+                        this.$restartDetail.text('Still waiting for GoClaw to stop...');
+                    } else {
+                        this.$restartDetail.text('Still waiting for GoClaw to restart...');
+                    }
+                }
+            });
+            this.restartModal.hide();
+            if (result.ready) {
+                this.lastKnownInstanceID = result.status && result.status.instanceID ? result.status.instanceID : this.lastKnownInstanceID;
+                this.applyPending = false;
+                this.syncTopBar();
+                showAlert(this.$successAlert, 'GoClaw restarted and configuration is active.');
+            } else {
+                showAlert(this.$errorAlert, 'Configuration saved, but GoClaw did not come back online automatically. Restart it manually if needed.');
             }
         }
 
@@ -1654,6 +1816,10 @@
             this.$nextIcon = $('#wizard-next-icon');
             this.$nextSpinner = $('#wizard-next-spinner');
             this.completeModal = new bootstrap.Modal(document.getElementById('completeModal'));
+            this.restartModal = new bootstrap.Modal(document.getElementById('wizardRestartModal'));
+            this.appliedModal = new bootstrap.Modal(document.getElementById('wizardAppliedModal'));
+            this.$restartMessage = $('#wizard-restart-message');
+            this.$restartDetail = $('#wizard-restart-detail');
 
             this.steps = [];
             this.step = 1;
@@ -1663,6 +1829,8 @@
             this.fieldErrors = {};
             this.loading = false;
             this.saving = false;
+            this.finishSaved = false;
+            this.lastKnownInstanceID = null;
         }
 
         init() {
@@ -1676,6 +1844,7 @@
             this.$next.on('click', () => this.nextStep());
             this.$stepContent.on('input change', '.js-bound-field', (event) => this.handleFieldChange(event));
             $('#wizard-close-btn').on('click', () => this.closeWizard());
+            $('#wizard-apply-btn').on('click', () => this.applyAfterFinish());
         }
 
         async loadState() {
@@ -1913,6 +2082,7 @@
                 resp = await fetch('/setup/api/wizard/finish', { method: 'POST' });
                 data = await resp.json();
                 if (!data.success) throw new Error(data.message || 'Failed to save configuration');
+                this.finishSaved = true;
                 this.completeModal.show();
             } catch (err) {
                 showAlert(this.$errorAlert, err.message || 'Failed to save configuration');
@@ -1920,6 +2090,66 @@
                 this.saving = false;
                 this.syncNav();
             }
+        }
+
+        async applyAfterFinish() {
+            if (!this.finishSaved) return;
+            showAlert(this.$errorAlert, '');
+            try {
+                this.lastKnownInstanceID = await captureCurrentInstanceID();
+                const applyResp = await fetch('/setup/api/apply', { method: 'POST' });
+                const applyData = await applyResp.json();
+                if (!applyData.success) throw new Error(applyData.message || 'Failed to apply configuration');
+                const apply = extractApplyResult(applyData);
+                await this.handleApplyAfterFinish(apply, this.lastKnownInstanceID);
+            } catch (err) {
+                showAlert(this.$errorAlert, err.message || 'Failed to apply configuration');
+            }
+        }
+
+        async handleApplyAfterFinish(apply, previousInstanceID) {
+            if (apply.action === 'manual_restart') {
+                this.completeModal.hide();
+                this.$restartMessage.text(apply.message || 'Stop and restart the gateway process to apply changes.');
+                this.$restartDetail.text('Waiting for the current GoClaw process to stop...');
+                this.restartModal.show();
+                await this.waitForGatewayAfterRestart(previousInstanceID);
+                return;
+            }
+
+            if (apply.action === 'supervised_restart' && apply.waitForRestart) {
+                this.completeModal.hide();
+                this.$restartMessage.text(apply.message || 'Configuration saved. Waiting for GoClaw to restart...');
+                this.$restartDetail.text('Waiting for the current GoClaw process to stop...');
+                this.restartModal.show();
+                await this.waitForGatewayAfterRestart(previousInstanceID);
+                return;
+            }
+
+            this.appliedModal.show();
+        }
+
+        async waitForGatewayAfterRestart(previousInstanceID) {
+            const result = await waitForGatewayRestart(previousInstanceID, (update) => {
+                if (update.phase === 'waiting_for_stop') {
+                    this.$restartDetail.text('Waiting for the current GoClaw process to stop...');
+                } else if (update.phase === 'waiting_for_start') {
+                    this.$restartDetail.text('Waiting for GoClaw to come back online...');
+                }
+                if (update.elapsedMs > 10000) {
+                    if (update.phase === 'waiting_for_stop') {
+                        this.$restartDetail.text('Still waiting for GoClaw to stop...');
+                    } else {
+                        this.$restartDetail.text('Still waiting for GoClaw to restart...');
+                    }
+                }
+            });
+            this.restartModal.hide();
+            if (!result.ready) {
+                throw new Error('Configuration saved, but GoClaw did not come back online automatically.');
+            }
+            this.lastKnownInstanceID = result.status && result.status.instanceID ? result.status.instanceID : this.lastKnownInstanceID;
+            this.appliedModal.show();
         }
 
         async closeWizard() {

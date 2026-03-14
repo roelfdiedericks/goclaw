@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/roelfdiedericks/goclaw/internal/config"
+	"github.com/roelfdiedericks/goclaw/internal/configapply"
 )
 
 func TestSetConfigPathRootMergeIsNonDestructive(t *testing.T) {
@@ -134,7 +135,7 @@ func TestValidateSectionPayloadProviderListAndRolesAndModelChain(t *testing.T) {
 }
 
 func TestAPILoadConfigSeedsDefaultsWhenConfigMissing(t *testing.T) {
-	api := NewAPI(filepath.Join(t.TempDir(), "missing-goclaw.json"))
+	api := NewAPI(filepath.Join(t.TempDir(), "missing-goclaw.json"), configapply.CallerWebStandalone)
 
 	result, err := api.loadConfig()
 	if err != nil {
@@ -156,7 +157,7 @@ func TestAPILoadConfigSeedsDefaultsWhenConfigMissing(t *testing.T) {
 
 func TestAPIResolveSavePathFallsBackToExplicitPath(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "goclaw.json")
-	api := NewAPI(target)
+	api := NewAPI(target, configapply.CallerWebStandalone)
 
 	path := api.resolveSavePath(&config.LoadResult{})
 	if path != target {
@@ -175,7 +176,7 @@ func TestAPIResolveSavePathFallsBackToLoadedDefaultPath(t *testing.T) {
 	}
 	defer os.Chdir(cwd)
 
-	api := NewAPI("")
+	api := NewAPI("", configapply.CallerWebStandalone)
 	path := api.resolveSavePath(&config.LoadResult{})
 	if filepath.Base(path) != "goclaw.json" {
 		t.Fatalf("expected fallback goclaw.json path, got %q", path)

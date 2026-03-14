@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/roelfdiedericks/goclaw/internal/configapply"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -49,7 +50,7 @@ type WizardAPI struct {
 }
 
 // NewWizardAPI creates a new wizard API handler
-func NewWizardAPI(configPath string) *WizardAPI {
+func NewWizardAPI(configPath string, _ configapply.Caller) *WizardAPI {
 	data := setup.NewWizardData()
 
 	// Try to load existing GoClaw config

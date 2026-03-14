@@ -57,13 +57,22 @@
                     <button type="button" class="btn btn-sm btn-outline-secondary" id="clear-history" title="Clear chat history">
                         <i class="bi bi-trash"></i>
                     </button>
-                    <span id="connection-status" class="badge bg-secondary">Disconnected</span>
-                    <button class="btn btn-success btn-sm" id="voiceBtn">
+                    <span id="connection-status" class="badge bg-secondary">Page offline</span>
+                    <button class="btn btn-success btn-sm" id="voiceBtn"{{if not .VoiceAvailable}} disabled title="{{.VoiceStatusMessage}}"{{end}}>
                         <i class="bi bi-telephone-fill me-1"></i> Connect
                     </button>
                 </div>
             </div>
             <div class="card-body">
+                {{if not .VoiceAvailable}}
+                <div class="alert alert-warning d-flex align-items-start gap-2" id="voice-unavailable-banner">
+                    <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+                    <div>
+                        <strong>Voice chat unavailable.</strong><br>
+                        {{.VoiceStatusMessage}}
+                    </div>
+                </div>
+                {{end}}
                 <div class="audio-visualizer mb-3" id="visualizer" style="display: none;">
                     <div class="visualizer-bar" style="height: 10px;"></div>
                     <div class="visualizer-bar" style="height: 15px;"></div>
@@ -90,6 +99,9 @@
 
 <script>
 $(document).ready(function() {
+    var voiceAvailable = {{if .VoiceAvailable}}true{{else}}false{{end}};
+    var voiceStatusMessage = {{printf "%q" .VoiceStatusMessage}};
+
     // === SHARED WITH CHAT.HTML - History & SSE ===
     var eventSource = null;
     var reconnectTimer = null;
@@ -246,11 +258,11 @@ $(document).ready(function() {
             reconnectTimer = null;
         }
         
-        $status.text('Connecting...').removeClass('bg-success bg-danger').addClass('bg-secondary');
+        $status.text('Page connecting...').removeClass('bg-success bg-danger').addClass('bg-secondary');
         eventSource = new EventSource('/api/events');
         
         eventSource.addEventListener('connected', function(e) {
-            $status.text('Connected').removeClass('bg-secondary bg-danger').addClass('bg-success');
+            $status.text('Page online').removeClass('bg-secondary bg-danger').addClass('bg-success');
         });
         
         eventSource.addEventListener('mirror', function(e) {
@@ -269,7 +281,7 @@ $(document).ready(function() {
         });
         
         eventSource.onerror = function(e) {
-            $status.text('Disconnected').removeClass('bg-success bg-secondary').addClass('bg-danger');
+            $status.text('Page offline').removeClass('bg-success bg-secondary').addClass('bg-danger');
             eventSource.close();
             eventSource = null;
             reconnectTimer = setTimeout(connectSSE, 3000);
@@ -322,6 +334,10 @@ $(document).ready(function() {
     var $voiceIndicator = $('#voiceIndicator');
     var $visualizer = $('#visualizer');
     
+    if (!voiceAvailable) {
+        $voiceBtn.removeClass('btn-success').addClass('btn-secondary');
+    }
+    
     function setVoiceState(state) {
         $voiceIndicator.removeClass('disconnected connecting connected').addClass(state);
         
@@ -351,6 +367,11 @@ $(document).ready(function() {
     });
     
     function connectVoice() {
+        if (!voiceAvailable) {
+            renderMessage('error', voiceStatusMessage || 'Voice chat is unavailable.', true);
+            return;
+        }
+
         setVoiceState('connecting');
         
         var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';

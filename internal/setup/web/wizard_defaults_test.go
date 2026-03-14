@@ -3,12 +3,13 @@ package web
 import (
 	"testing"
 
+	"github.com/roelfdiedericks/goclaw/internal/configapply"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	"github.com/roelfdiedericks/goclaw/internal/setup"
 )
 
 func TestNewWizardAPISeedsDefaultsWhenConfigMissing(t *testing.T) {
-	api := NewWizardAPI("/tmp/definitely-missing-goclaw.json")
+	api := NewWizardAPI("/tmp/definitely-missing-goclaw.json", configapply.CallerWebStandalone)
 	if api == nil || api.state == nil || api.state.Data == nil {
 		t.Fatalf("expected wizard api state to be initialized")
 	}

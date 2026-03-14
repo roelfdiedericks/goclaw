@@ -6,13 +6,16 @@ on:
     tags-ignore: ['v*']
   pull_request:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.25'
 
@@ -21,3 +24,35 @@ jobs:
 
       - name: Run linter
         run: make lint
+
+  test-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: darwin-arm64
+            runner: macos-latest
+          - name: darwin-amd64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Install macOS build dependencies
+        run: brew install make cmake libomp
+
+      - name: Enable Homebrew GNU Make
+        run: echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Build whisper dependencies
+        run: gmake deps
+
+      - name: Run tests
+        run: gmake test
+
+      - name: Verify build
+        run: gmake build
