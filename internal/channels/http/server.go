@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/channels/http/config"
 	"github.com/roelfdiedericks/goclaw/internal/channels/types"
@@ -50,10 +51,11 @@ type Server struct {
 	listen string
 
 	// State tracking for ManagedChannel interface
-	mu        sync.RWMutex
-	running   bool
-	startedAt time.Time
-	lastError error
+	mu         sync.RWMutex
+	running    bool
+	startedAt  time.Time
+	instanceID string
+	lastError  error
 
 	// Session store maps session IDs to usernames (for WebSocket auth)
 	sessions   map[string]string // sessionID -> username
@@ -264,6 +266,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.running = true
 	s.startedAt = time.Now()
+	s.instanceID = uuid.NewString()
 	s.lastError = nil
 	return nil
 }

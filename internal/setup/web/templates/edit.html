@@ -105,6 +105,23 @@
     </main>
 </div>
 
+<div class="modal fade" id="editorRestartModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-arrow-repeat me-2"></i>Applying Configuration</h5>
+            </div>
+            <div class="modal-body text-center py-4">
+                <div class="spinner-border text-primary mb-3" role="status">
+                    <span class="visually-hidden">Restarting...</span>
+                </div>
+                <p class="mb-2" id="editor-restart-message">Configuration saved. Waiting for GoClaw to restart...</p>
+                <small class="text-muted d-block" id="editor-restart-detail">Checking gateway status...</small>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- ModelChain Add Model Modal -->
 <div class="modal fade" id="mcModal" tabindex="-1">
     <div class="modal-dialog modal-lg">

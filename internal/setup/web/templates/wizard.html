@@ -79,7 +79,7 @@
                     <code class="d-block bg-light p-2 rounded mb-1">goclaw start</code>
                     <small class="text-muted">or <code>goclaw gateway</code> to run in foreground</small>
                     {{else}}
-                    <p>Changes will take effect after restarting the gateway.</p>
+                    <p>Apply the saved configuration when you're ready.</p>
                     {{end}}
                 </div>
                 <div class="modal-footer justify-content-center flex-column">
@@ -92,10 +92,30 @@
                         <small class="text-muted">The setup server has been stopped.</small>
                     </div>
                     {{else}}
-                    <a href="/" class="btn btn-primary">
-                        <i class="bi bi-house"></i> Go to Dashboard
+                    <button type="button" class="btn btn-success" id="wizard-apply-btn">
+                        <i class="bi bi-check2-circle"></i> Apply Changes
+                    </button>
+                    <a href="/" class="btn btn-outline-secondary">
+                        <i class="bi bi-house"></i> Back to Dashboard
                     </a>
                     {{end}}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="wizardRestartModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-arrow-repeat me-2"></i>Applying Configuration</h5>
+                </div>
+                <div class="modal-body text-center py-4">
+                    <div class="spinner-border text-primary mb-3" role="status">
+                        <span class="visually-hidden">Restarting...</span>
+                    </div>
+                    <p class="mb-2" id="wizard-restart-message">Configuration saved. Waiting for GoClaw to restart...</p>
+                    <small class="text-muted d-block" id="wizard-restart-detail">Checking gateway status...</small>
                 </div>
             </div>
         </div>

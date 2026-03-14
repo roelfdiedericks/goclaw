@@ -3,12 +3,15 @@ package web
 import (
 	"io/fs"
 	"net/http"
+
+	"github.com/roelfdiedericks/goclaw/internal/configapply"
 )
 
 type mountOptions struct {
 	configPath     string
 	wrap           func(http.HandlerFunc) http.HandlerFunc
 	handlers       *Handlers
+	applyCaller    configapply.Caller
 	enableShutdown bool
 	shutdown       http.HandlerFunc
 }
@@ -29,13 +32,14 @@ func mountSetup(mux *http.ServeMux, opts mountOptions) {
 		mux.Handle("/setup/static/", http.StripPrefix("/setup/static/", http.FileServer(http.FS(staticSub))))
 	}
 
-	api := NewAPI(opts.configPath)
+	api := NewAPI(opts.configPath, opts.applyCaller)
 	usersAPI := NewUsersAPI(opts.configPath)
-	wizardAPI := NewWizardAPI(opts.configPath)
+	wizardAPI := NewWizardAPI(opts.configPath, opts.applyCaller)
 
 	mux.HandleFunc("/setup/api/config", wrap(api.HandleGetConfig))
 	mux.HandleFunc("/setup/api/sections", wrap(api.HandleGetSections))
 	mux.HandleFunc("/setup/api/section/", wrap(api.HandleSection))
+	mux.HandleFunc("/setup/api/apply", wrap(api.HandleApply))
 	mux.HandleFunc("/setup/api/providers", wrap(api.HandleGetProviders))
 	mux.HandleFunc("/setup/api/models/", wrap(api.HandleGetModels))
 	mux.HandleFunc("/setup/api/presets", wrap(api.HandleGetPresets))

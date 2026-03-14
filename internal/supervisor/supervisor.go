@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/configapply"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -111,6 +112,12 @@ func (s *Supervisor) Run() error {
 		default:
 		}
 
+		if exitCode == configapply.RestartExitCode {
+			L_info("supervisor: gateway requested restart", "ran_for", runDuration)
+			backoff = initialBackoff
+			continue
+		}
+
 		// Clean exit (exit code 0) → stop supervisor
 		if exitCode == 0 {
 			L_info("supervisor: gateway exited cleanly", "ran_for", runDuration)
@@ -187,6 +194,7 @@ func (s *Supervisor) runGateway() (int, error) {
 	// Build command
 	args := append([]string{"gateway"}, s.args...)
 	cmd := exec.Command(s.binary, args...) //nolint:gosec // G204: binary is from os.Executable() - self-spawning
+	cmd.Env = append(os.Environ(), configapply.EnvSupervisedChild+"=1")
 
 	// Capture stdout/stderr
 	stdout, _ := cmd.StdoutPipe()

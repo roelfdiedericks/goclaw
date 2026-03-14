@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/roelfdiedericks/goclaw/internal/configapply"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/user"
@@ -50,6 +51,7 @@ func RegisterSetupRoutes(srv HTTPServer, configPath string) error {
 		configPath: configPath,
 		handlers:   handlers,
 		wrap:       ownerOnly,
+		applyCaller: configapply.CallerWebIntegrated,
 	})
 
 	L_info("web: setup routes registered")

@@ -658,6 +658,14 @@ func ConfigFormDef() forms.FormDef {
 		{Value: "Leo", Label: "Leo (Male, authoritative)"},
 	}
 
+	providerOptions := []forms.Option{
+		{Value: "xai", Label: "xAI"},
+	}
+
+	driverOptions := []forms.Option{
+		{Value: "xai", Label: "xAI"},
+	}
+
 	modeOptions := []forms.Option{
 		{Value: "none", Label: "None (natural voice)"},
 		{Value: "ring", Label: "Ring Modulation"},
@@ -673,7 +681,7 @@ func ConfigFormDef() forms.FormDef {
 				Title: "General",
 				Fields: []forms.Field{
 					{Name: "enabled", Title: "Enabled", Type: forms.Toggle},
-					{Name: "default", Title: "Default Provider", Desc: "Provider ID (e.g., xai)", Type: forms.Text},
+					{Name: "default", Title: "Default Provider", Desc: "Provider used for browser voice sessions", Type: forms.Select, Options: providerOptions, Default: "xai"},
 					{Name: "serverVAD", Title: "Server VAD", Desc: "Server-side voice detection", Type: forms.Toggle},
 					{Name: "idleTimeout", Title: "Idle Timeout", Desc: "Seconds before disconnect", Type: forms.Number},
 				},
@@ -682,7 +690,7 @@ func ConfigFormDef() forms.FormDef {
 				Title:     "XAI Provider",
 				FieldName: "providers.xai",
 				Fields: []forms.Field{
-					{Name: "driver", Title: "Driver", Type: forms.Text, Default: "xai"},
+					{Name: "driver", Title: "Driver", Type: forms.Select, Options: driverOptions, Default: "xai"},
 					{Name: "apiKey", Title: "API Key", Type: forms.Secret},
 					{Name: "voice", Title: "Voice", Type: forms.Select, Options: voiceOptions, Default: "Eve"},
 					{Name: "sampleRate", Title: "Sample Rate", Type: forms.Number, Default: 48000},

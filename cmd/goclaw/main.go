@@ -32,6 +32,7 @@ import (
 	tuiconfig "github.com/roelfdiedericks/goclaw/internal/channels/tui/config"
 	"github.com/roelfdiedericks/goclaw/internal/channels/whatsapp"
 	"github.com/roelfdiedericks/goclaw/internal/config"
+	"github.com/roelfdiedericks/goclaw/internal/configapply"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/embeddings"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
@@ -2407,6 +2408,11 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	// Stop all channels via manager
 	chanMgr.StopAll()
 
+	if configapply.RestartRequested() {
+		L_info("gateway restart requested")
+		return configapply.ErrRestartRequested
+	}
+
 	return nil
 }
 
@@ -2496,6 +2502,9 @@ func main() {
 		Trace: cli.Trace,
 	})
 	if err != nil {
+		if configapply.IsRestartRequestedError(err) {
+			os.Exit(configapply.RestartExitCode)
+		}
 		// Print user-facing errors cleanly without log formatting
 		errMsg := err.Error()
 		if strings.HasPrefix(errMsg, "no goclaw.json") ||

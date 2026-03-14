@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/configapply"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/webview"
 )
@@ -62,6 +63,7 @@ func NewServer(configPath string) (*Server, error) {
 	mountSetup(mux, mountOptions{
 		configPath:     configPath,
 		handlers:       handlers,
+		applyCaller:    configapply.CallerWebStandalone,
 		enableShutdown: true,
 		shutdown:       shutdownHandler,
 	})

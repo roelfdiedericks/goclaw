@@ -12,12 +12,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/types"
+	"github.com/roelfdiedericks/goclaw/internal/voicellm"
 )
 
 // handleIndex serves the dashboard page
@@ -139,14 +141,20 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	voiceAvailability := s.voiceAvailability()
+
 	data := struct {
-		Title     string
-		User      *UserTemplateData
-		Timestamp time.Time
+		Title              string
+		User               *UserTemplateData
+		Timestamp          time.Time
+		VoiceAvailable     bool
+		VoiceStatusMessage string
 	}{
-		Title:     "GoClaw - Voice",
-		User:      &UserTemplateData{Name: u.Name, Username: u.ID, Role: string(u.Role), IsOwner: u.IsOwner()},
-		Timestamp: time.Now(),
+		Title:              "GoClaw - Voice",
+		User:               &UserTemplateData{Name: u.Name, Username: u.ID, Role: string(u.Role), IsOwner: u.IsOwner()},
+		Timestamp:          time.Now(),
+		VoiceAvailable:     voiceAvailability.Available,
+		VoiceStatusMessage: voiceAvailability.Message,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -154,6 +162,31 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 		logging.L_error("http: template error", "error", err)
 		http.Error(w, "Template error", http.StatusInternalServerError)
 	}
+}
+
+func (s *Server) voiceAvailability() voicellm.Availability {
+	if s.channel == nil || s.channel.gateway == nil {
+		return voicellm.Availability{
+			Available: false,
+			Message:   "Voice chat backend is not attached to the HTTP server.",
+		}
+	}
+
+	gatewayWithConfig, ok := s.channel.gateway.(interface {
+		Config() *config.Config
+	})
+	if !ok || gatewayWithConfig.Config() == nil {
+		registry := voicellm.GetRegistry()
+		if registry == nil {
+			return voicellm.Availability{
+				Available: false,
+				Message:   "Voice chat is not initialized.",
+			}
+		}
+		return voicellm.AssessConfig(registry.GetConfig())
+	}
+
+	return voicellm.AssessConfig(gatewayWithConfig.Config().VoiceLLM)
 }
 
 // handleStaticJS serves static JavaScript files
@@ -588,12 +621,16 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	status := struct {
 		Status          string               `json:"status"`
+		InstanceID      string               `json:"instanceID"`
+		StartedAt       time.Time            `json:"startedAt"`
 		User            string               `json:"user"`
 		IsOwner         bool                 `json:"isOwner"`
 		Sessions        []SessionInfo        `json:"sessions"`
 		GatewaySessions []GatewaySessionInfo `json:"gatewaySessions,omitempty"`
 	}{
 		Status:          "ready",
+		InstanceID:      s.instanceID,
+		StartedAt:       s.startedAt,
 		User:            u.ID,
 		IsOwner:         u.IsOwner(),
 		Sessions:        sessions,
