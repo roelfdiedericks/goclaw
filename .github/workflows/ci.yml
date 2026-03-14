@@ -43,7 +43,10 @@ jobs:
           go-version: '1.25'
 
       - name: Install macOS build dependencies
-        run: brew install make cmake libomp
+        run: |
+          for formula in make cmake libomp; do
+            brew list "$formula" >/dev/null 2>&1 || brew install "$formula"
+          done
 
       - name: Enable Homebrew GNU Make
         run: echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
