@@ -1,414 +1,343 @@
-# Subagent Tool Specification
+# Subagent Specification
 
 ## Overview
 
-The `sessions_spawn` tool allows the main agent to spawn isolated sub-agent runs for delegated tasks. Subagents run in fresh sessions without conversation history, complete their task, and announce results back to the requester.
+This document describes how GoClaw should think about subagents going forward.
 
-**Use cases:**
-- Delegate research/analysis to a cheaper model
-- Parallel background tasks
-- Long-running work that shouldn't block main conversation
-- Tasks that don't need conversation context
+The important update is that GoClaw already has a working delegated-agent pattern in production:
 
-## Architecture
+- isolated cron task execution
+- explicit result routing (`store_only`, `deliver`, `handoff_main`)
+- handoff from an isolated worker result into the main agent chain
+- detached/background execution that is not tied to the triggering request lifecycle
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Main Agent                              │
-│                                                              │
-│  "Research the history of XFS filesystem"                   │
-│           │                                                  │
-│           ▼                                                  │
-│  ┌─────────────────┐                                        │
-│  │ sessions_spawn  │                                        │
-│  │ tool            │                                        │
-│  └────────┬────────┘                                        │
-│           │                                                  │
-└───────────┼──────────────────────────────────────────────────┘
-            │
-            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Subagent Runner                           │
-│                                                              │
-│  Session: agent:main:subagent:<uuid>                        │
-│  Context: Fresh (no history)                                 │
-│  Model: Can be different/cheaper                            │
-│  Lane: Runs parallel to main                                │
-│                                                              │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │ System prompt:                                       │    │
-│  │ "You are a subagent spawned by the main agent.      │    │
-│  │  Task: Research the history of XFS filesystem.       │    │
-│  │  Report your findings concisely."                    │    │
-│  └─────────────────────────────────────────────────────┘    │
-│                                                              │
-└───────────────────────────┬─────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Result Announcement                        │
-│                                                              │
-│  → Main session receives: "[Subagent: research] Complete.   │
-│     XFS was developed by SGI in 1993..."                    │
-│                                                              │
-│  → Optional: Deliver to Telegram/channels                   │
-│  → Optional: Delete subagent session after                  │
-└─────────────────────────────────────────────────────────────┘
-```
+Subagents should be designed as a generalization of that pattern, not as a separate architecture invented from scratch.
 
-## Relationship to Cron
+## Status
 
-Subagents share plumbing with isolated cron jobs:
+**Current reality**
 
-| Aspect | Cron (isolated) | Subagent |
-|--------|-----------------|----------|
-| Session | `cron:<jobId>` | `agent:main:subagent:<uuid>` |
-| Context | Fresh | Fresh |
-| Trigger | Timer | Main agent tool call |
-| Return | Deliver to channels | Announce to requester session |
-| Cleanup | Disable after one-shot | Delete or keep |
+- Cron is the first production implementation of isolated delegated work.
+- `handoff_main` is the first production implementation of a second-stage main-agent decision on top of isolated task output.
+- The delivery model is now explicit enough to reuse for future subagents.
 
-**Implementation strategy:** Reuse the isolated runner from cron, add metadata for subagent-specific behavior (requester tracking, result announcement).
+**Not implemented yet**
 
-## Tool Definition
+- a user-facing subagent tool
+- subagent registries
+- progress streaming
+- token/cost accounting per delegated run
+- cancellation and lifecycle controls
+- parallel subagent orchestration
 
-```json
-{
-  "name": "sessions_spawn",
-  "description": "Spawn a background sub-agent run in an isolated session. Results are announced back when complete.",
-  "input_schema": {
-    "type": "object",
-    "properties": {
-      "task": {
-        "type": "string",
-        "description": "The task for the subagent to complete"
-      },
-      "label": {
-        "type": "string",
-        "description": "Optional label for tracking (e.g., 'research', 'analysis')"
-      },
-      "model": {
-        "type": "string",
-        "description": "Optional model override (e.g., 'claude-sonnet-4-20250514' for cheaper)"
-      },
-      "thinking": {
-        "type": "string",
-        "description": "Optional thinking level ('off', 'low', 'medium', 'high')"
-      },
-      "timeoutSeconds": {
-        "type": "integer",
-        "description": "Max runtime in seconds (0 = no limit)"
-      },
-      "cleanup": {
-        "type": "string",
-        "enum": ["delete", "keep"],
-        "description": "Whether to delete subagent session after completion"
-      }
-    },
-    "required": ["task"]
-  }
-}
+## Why Cron Matters
+
+Cron is no longer just a scheduler. It is the first real implementation of this execution pattern:
+
+1. start an isolated agent run
+2. let it do focused work in a fresh session
+3. collect the final result
+4. choose what happens to that result
+
+That is the exact core needed for subagents.
+
+## Current Mechanisms
+
+### 1. Isolated execution
+
+Cron runs isolated tasks in fresh sessions:
+
+- session key pattern: `cron:<jobId>`
+- fresh context
+- independent task prompt
+- own model-purpose routing
+
+This is our current worker primitive.
+
+### 2. Explicit result routing
+
+Cron jobs already express what happens after the isolated run:
+
+| Mode | Meaning |
+|------|---------|
+| `store_only` | Run task, persist if configured, do not send result anywhere |
+| `deliver` | Run task, then deliver the final assistant result to channels |
+| `handoff_main` | Run task, then hand its result to the main agent for a second-stage decision |
+
+This is the first clean result-policy model in GoClaw.
+
+### 3. Main-agent handoff
+
+`handoff_main` now means:
+
+- the isolated task produces a result
+- that result has not been delivered yet
+- the main agent chain receives the result
+- the main agent decides whether to:
+  - send a user-facing message
+  - take follow-up tool actions
+  - update files or memory
+  - or intentionally return `SILENT_OK`
+
+This is the first implementation of agent-to-agent delegation inside GoClaw.
+
+## Mental Model
+
+Subagents should be treated as generalized delegated runs:
+
+```text
+main agent
+  -> spawn isolated worker
+  -> worker performs task
+  -> worker completes with result
+  -> routing policy decides outcome
+       - keep internal
+       - deliver directly
+       - hand to main agent
+       - later: return to requester / coordinator
 ```
 
-## Session Keys
+## Relationship to Future Subagents
 
-Subagent sessions follow the pattern:
-```
-agent:<agentId>:subagent:<uuid>
-```
+### Cron vs Subagent
 
-Example:
-```
-agent:main:subagent:a1b2c3d4-e5f6-7890-abcd-ef1234567890
-```
+| Aspect | Cron | Future Subagent |
+|--------|------|-----------------|
+| Trigger | Timer / manual run | Main agent tool call |
+| Context | Fresh session | Usually fresh session, sometimes forked context |
+| Purpose | Scheduled automation | Delegated task execution |
+| Result policy | Already implemented | Should reuse same idea |
+| Requester | System / scheduler | Main agent / parent subagent / coordinator |
 
-## Subagent System Prompt
+### Shared primitive
 
-Subagents receive a special system prompt:
+Both cron and future subagents should eventually rely on one shared isolated-run mechanism.
 
-```
-You are a subagent spawned by the main agent.
-
-**Requester:** agent:main:main
-**Session:** agent:main:subagent:abc123
-**Label:** research
-
-**Your task:**
-Research the history of XFS filesystem and summarize key milestones.
-
-**Instructions:**
-- Focus only on the assigned task
-- Be concise but thorough
-- You cannot spawn additional subagents
-- Your response will be announced back to the requester
-```
-
-## Execution Flow
-
-### 1. Main Agent Spawns
+Conceptually:
 
 ```go
-// Main agent calls sessions_spawn
-result := tool.Execute("sessions_spawn", map[string]any{
-    "task": "Research XFS history",
-    "label": "research",
-    "model": "claude-sonnet-4-20250514",
-    "timeoutSeconds": 120,
-    "cleanup": "delete",
-})
-// Returns immediately with:
-// {"status": "accepted", "runId": "abc123", "sessionKey": "agent:main:subagent:..."}
-```
-
-### 2. Subagent Runs (Background)
-
-```go
-type SubagentRun struct {
-    RunID            string
-    SessionKey       string        // agent:main:subagent:<uuid>
-    RequesterKey     string        // agent:main:main
-    Task             string
-    Label            string
-    Model            string        // Optional override
-    Thinking         string        // Optional override
-    TimeoutSeconds   int
-    Cleanup          string        // "delete" or "keep"
-    StartedAt        time.Time
-}
-
-func (g *Gateway) runSubagent(run *SubagentRun) {
-    // Build subagent system prompt
-    systemPrompt := buildSubagentPrompt(run)
-    
-    // Run agent with fresh context
-    result, err := g.RunAgent(ctx, AgentRequest{
-        SessionKey:    run.SessionKey,
-        Message:       run.Task,
-        SystemPrompt:  systemPrompt,
-        Model:         run.Model,
-        Thinking:      run.Thinking,
-        FreshContext:  true,  // No history
-    })
-    
-    // Announce result back
-    g.announceSubagentResult(run, result, err)
-    
-    // Cleanup if requested
-    if run.Cleanup == "delete" {
-        g.deleteSession(run.SessionKey)
-    }
+type DelegatedRun struct {
+    ID              string
+    Source          string // cron, subagent, worker, branch
+    SessionKey      string
+    Prompt          string
+    Purpose         string
+    FreshContext    bool
+    TimeoutSeconds  int
+    ResultMode      string
+    Persist         *bool
+    RequesterKey    string
+    Label           string
 }
 ```
 
-### 3. Result Announcement
+Cron is simply one producer of `DelegatedRun`s.
 
-Results are injected into the requester's session:
+Subagents would be another.
 
-```go
-func (g *Gateway) announceSubagentResult(run *SubagentRun, result string, err error) {
-    var announcement string
-    if err != nil {
-        announcement = fmt.Sprintf("[Subagent: %s] Failed: %s", run.Label, err)
-    } else {
-        announcement = fmt.Sprintf("[Subagent: %s] Complete.\n\n%s", run.Label, result)
-    }
-    
-    // Inject as system event into requester session
-    g.injectSystemEvent(run.RequesterKey, announcement)
-}
-```
+## Result Policies for Subagents
+
+Subagents should not invent an unrelated result model.
+
+The cron model should be the base:
+
+- `store_only`
+- `deliver`
+- `handoff_main`
+
+Future subagent work may add more specialized policies, such as:
+
+- `return_to_requester`
+  - inject or stream the result back to the spawning session
+- `handoff_coordinator`
+  - give result to a designated coordinator agent
+- `stream_progress`
+  - expose live updates while work is still running
+
+But these should extend the same conceptual model, not replace it.
+
+## Session Semantics
+
+### Current delegated session shape
+
+- cron sessions: `cron:<jobId>`
+
+### Future subagent session shape
+
+Recommended pattern:
+
+- `agent:<agentId>:subagent:<uuid>`
+
+Possible later variants:
+
+- `agent:<agentId>:worker:<uuid>`
+- `agent:<agentId>:branch:<uuid>`
+
+The key is that delegated runs must have:
+
+- stable identity
+- isolated transcript/history
+- ownership metadata
+- cleanup policy
+
+## What Subagents Need Beyond Cron
+
+Cron gave us the core runner, but subagents need more plumbing.
+
+### 1. Run registry
+
+We need to track:
+
+- run ID
+- parent/requester
+- current state (`queued`, `running`, `completed`, `failed`, `timeout`, `canceled`)
+- start and finish times
+- model used
+- result mode
+
+### 2. Progress and events
+
+Unlike cron, subagents will need richer visibility:
+
+- start event
+- tool-use progress
+- partial progress messages
+- completion/failure event
+
+This should reuse the assistant/system/event surface split where possible.
+
+### 3. Token and cost accounting
+
+Subagent runs should track:
+
+- input tokens
+- output tokens
+- cache read/write tokens
+- model/provider
+- estimated cost
+
+This will matter for:
+
+- budgeting
+- debugging
+- future swarm coordination
+
+### 4. Cancellation
+
+Subagents should support:
+
+- user cancel
+- parent cancel
+- timeout cancel
+
+Cron mostly does not need rich interactive cancel semantics.
+Subagents will.
+
+### 5. Cleanup policy
+
+Subagent sessions may need options such as:
+
+- keep transcript
+- delete on success
+- delete on completion
+- summarize then delete
+
+## Swarm Direction
+
+If GoClaw later grows into parallel agent swarms, the likely shape is:
+
+1. main agent or coordinator spawns multiple delegated runs
+2. each run executes in isolation
+3. results report back with explicit metadata
+4. a coordinator or main agent synthesizes the outputs
+
+That means cron is effectively the simplest swarm member:
+
+- one delegated run
+- one result
+- one routing policy
+
+Future subagent swarms simply add:
+
+- fan-out
+- progress tracking
+- aggregation
+- coordinator logic
+
+## Suggested Future Architecture
+
+### Phase 1: Shared delegated runner
+
+Extract a reusable internal delegated-run primitive that cron and subagents both use.
+
+### Phase 2: Spawn tool
+
+Add a subagent-spawn tool that:
+
+- launches an isolated delegated run
+- returns a run ID immediately
+- records requester metadata
+
+### Phase 3: Progress reporting
+
+Expose background run state through:
+
+- bus events
+- session events
+- possibly HTTP/TUI views later
+
+### Phase 4: Coordinator patterns
+
+Allow:
+
+- one-to-one delegation
+- one-to-many fan-out
+- result aggregation
 
 ## Constraints
 
-### Subagents Cannot Spawn Subagents
+### No recursive chaos by default
 
-```go
-func (t *SessionsSpawnTool) Execute(ctx context.Context, params map[string]any) (string, error) {
-    sessionKey := getSessionKey(ctx)
-    
-    if isSubagentSession(sessionKey) {
-        return jsonResult(map[string]any{
-            "status": "forbidden",
-            "error": "sessions_spawn is not allowed from sub-agent sessions",
-        })
-    }
-    // ...
-}
+Subagents should not recursively spawn unlimited subagents.
 
-func isSubagentSession(key string) bool {
-    return strings.Contains(key, ":subagent:")
-}
-```
+If nesting is allowed later, it should be:
 
-### Agent Allowlist (Optional)
+- explicit
+- depth-limited
+- rate-limited
 
-Config can restrict which agents are allowed:
+### Result-policy clarity
 
-```json
-{
-  "agents": {
-    "defaults": {
-      "subagents": {
-        "allowAgents": ["main", "research"],
-        "model": "claude-sonnet-4-20250514"
-      }
-    }
-  }
-}
-```
+Every delegated run must answer:
 
-## Registry
+1. what task is running?
+2. where does the final result go?
+3. should the result be persisted?
 
-Track running subagents for monitoring and cleanup:
+That is the main lesson from the cron refactor and should not be lost in future subagent work.
 
-```go
-type SubagentRegistry struct {
-    mu   sync.RWMutex
-    runs map[string]*SubagentRun  // runId -> run
-}
+## Open Design Questions
 
-func (r *SubagentRegistry) Register(run *SubagentRun)
-func (r *SubagentRegistry) Complete(runId string, result string, err error)
-func (r *SubagentRegistry) List() []*SubagentRun
-func (r *SubagentRegistry) Get(runId string) *SubagentRun
-```
+- Should subagent handoff default to the main `agent` purpose or support dedicated per-subagent purposes?
+- Should some subagents fork session history instead of always starting fresh?
+- Should requester return paths use system-surface announcements or explicit assistant replies?
+- How should progress be represented for channels like Telegram versus TUI/HTTP?
+- How much run history should be persisted long-term?
 
-## Storage
+## Recommendation
 
-### Run History (Optional)
+Treat cron as the reference implementation for delegated isolated work.
 
-Log subagent runs for debugging:
+Do not design subagents as a separate special case.
 
-```sql
-CREATE TABLE subagent_runs (
-    id TEXT PRIMARY KEY,
-    session_key TEXT NOT NULL,
-    requester_key TEXT NOT NULL,
-    task TEXT NOT NULL,
-    label TEXT,
-    model TEXT,
-    status TEXT,        -- "running", "completed", "failed", "timeout"
-    result TEXT,
-    error TEXT,
-    started_at INTEGER NOT NULL,
-    finished_at INTEGER,
-    duration_ms INTEGER
-);
-```
+Instead:
 
-## Integration with Cron
-
-The isolated runner can be shared:
-
-```go
-// Unified isolated run
-type IsolatedRun struct {
-    ID            string
-    SessionKey    string        // "cron:<id>" or "agent:main:subagent:<uuid>"
-    Task          string
-    Source        string        // "cron" or "subagent"
-    RequesterKey  string        // For subagent: who to announce to
-    Model         string
-    Thinking      string
-    Timeout       time.Duration
-    Deliver       bool          // Cron: deliver to channels
-    Cleanup       string        // "delete" | "keep" | "disable"
-}
-
-func (g *Gateway) RunIsolated(run *IsolatedRun) {
-    // Same executor for both cron and subagent
-    result, err := g.runWithFreshContext(run)
-    
-    switch run.Source {
-    case "cron":
-        if run.Deliver {
-            g.deliverToChannels(result)
-        }
-        // Update cron job state
-        
-    case "subagent":
-        g.announceSubagentResult(run, result, err)
-        if run.Cleanup == "delete" {
-            g.deleteSession(run.SessionKey)
-        }
-    }
-}
-```
-
-## CLI (Optional)
-
-```bash
-# List running subagents
-goclaw subagent list
-
-# View subagent run details
-goclaw subagent show <runId>
-
-# Cancel running subagent
-goclaw subagent cancel <runId>
-
-# View history
-goclaw subagent history --limit 10
-```
-
-## Implementation Phases
-
-### Phase 1: Basic Spawn
-- [ ] `sessions_spawn` tool definition
-- [ ] Subagent session creation
-- [ ] Fresh context execution
-- [ ] Basic result announcement
-
-### Phase 2: Registry & Tracking
-- [ ] SubagentRegistry for active runs
-- [ ] Timeout handling
-- [ ] Run history logging
-
-### Phase 3: Integration
-- [ ] Share isolated runner with cron
-- [ ] Model/thinking overrides
-- [ ] Cleanup options
-
-### Phase 4: Polish
-- [ ] CLI commands
-- [ ] Agent allowlist config
-- [ ] Rate limiting (max concurrent subagents)
-
-## Example Usage
-
-**Main agent spawning a research task:**
-
-```
-User: "What's the history of XFS? Use a subagent to research it."
-
-Agent: I'll spawn a subagent to research XFS history.
-
-[Tool: sessions_spawn]
-{
-  "task": "Research the history of the XFS filesystem. Cover: origin, key developers, major milestones, adoption.",
-  "label": "xfs-research",
-  "model": "claude-sonnet-4-20250514",
-  "timeoutSeconds": 120,
-  "cleanup": "delete"
-}
-
-[Tool result]
-{"status": "accepted", "runId": "abc123", "sessionKey": "agent:main:subagent:..."}
-
-Agent: I've spawned a research subagent. I'll let you know when it completes.
-
-... (subagent runs in background) ...
-
-[System event]
-[Subagent: xfs-research] Complete.
-
-XFS was developed by Silicon Graphics (SGI) in 1993 for their IRIX operating system...
-
-Agent: The research is complete! Here's what the subagent found:
-[summarizes/presents results]
-```
+- reuse isolated execution
+- reuse explicit result policies
+- extend with requester tracking, progress events, cost tracking, cancellation, and coordination
 
 ## See Also
 
-- [CRON.md](./CRON.md) — Cron system (shares isolated runner)
-- [SESSION_PERSISTENCE.md](./SESSION_PERSISTENCE.md) — Session management
+- `specs/PARALLEL_AGENTS.md` - older concurrency and worker ideas
+- `specs/SUPPORT_AGENT.md` - role/task isolation in multi-session flows
+- `specs/memory-extraction-coordination.md` - another example of background coordination pressure

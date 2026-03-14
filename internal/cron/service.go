@@ -20,8 +20,8 @@ const BackupTickInterval = 5 * time.Minute
 
 // DefaultHeartbeatPrompt is the default prompt sent to the agent during heartbeat.
 const DefaultHeartbeatPrompt = `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats.
-If nothing needs attention, reply exactly: HEARTBEAT_OK
-GoClaw treats "HEARTBEAT_OK" as a heartbeat ack and suppresses delivery. If something needs attention, do NOT include "HEARTBEAT_OK" — reply with the alert text instead.`
+If nothing needs attention, reply exactly: SILENT_OK
+GoClaw treats "SILENT_OK" as a heartbeat no-op and suppresses delivery. If something needs attention, do NOT include "SILENT_OK" — reply with the alert text instead.`
 
 // HeartbeatState holds runtime state for the heartbeat system.
 // Separate from HeartbeatConfig (JSON config) as it includes runtime fields like WorkspaceDir.
@@ -48,6 +48,7 @@ type AgentRequest struct {
 	FreshContext   bool
 	UserID         string // User ID to run as (typically owner for cron jobs)
 	IsHeartbeat    bool   // If true, run is ephemeral - don't persist to session
+	Ephemeral      bool   // If true, skip persistence and roll back in-memory session changes
 	EnableThinking bool   // If true, enable extended thinking for models that support it
 	SkipMirror     bool   // If true, don't mirror to other channels (caller handles delivery)
 	JobName        string // Name of the cron job (for status messages)
@@ -81,6 +82,7 @@ type GatewayRunner interface {
 	InjectSystemEvent(ctx context.Context, text string) error // Inject system event into primary session
 	DeliverAssistantOutput(ctx context.Context, userID string, msg delivery.AssistantMessage) delivery.Report
 	DeliverSystemMessage(ctx context.Context, userID string, msg delivery.SystemMessage) delivery.Report
+	HandoffCronResult(ctx context.Context, jobName, result string) error
 }
 
 // Service manages cron job scheduling and execution.
@@ -88,6 +90,7 @@ type Service struct {
 	store   *Store
 	gateway GatewayRunner
 	history *HistoryManager
+	execJob func(ctx context.Context, job *CronJob)
 
 	mu      sync.Mutex
 	running bool
@@ -362,7 +365,7 @@ func (s *Service) handleRun(cmd bus.Command) bus.CommandResult {
 	}
 
 	// Run the job asynchronously
-	go s.executeJob(context.Background(), job)
+	s.launchJob(context.Background(), job)
 
 	return bus.CommandResult{
 		Success: true,
@@ -382,14 +385,14 @@ func (s *Service) clearOrphanedRunningState() {
 			job.ClearRunning()
 			// Also clear NextRunAtMs - it will be recalculated by initializeNextRuns
 			job.SetNextRun(nil)
-			if err := s.store.UpdateJob(job); err != nil {
-				L_error("cron: failed to clear orphaned state", "job", job.Name, "error", err)
-			}
 			cleared++
 		}
 	}
 
 	if cleared > 0 {
+		if err := s.store.Save(); err != nil {
+			L_error("cron: failed to persist cleared orphaned state", "count", cleared, "error", err)
+		}
 		L_info("cron: cleared orphaned running state", "count", cleared)
 	}
 }
@@ -398,6 +401,7 @@ func (s *Service) clearOrphanedRunningState() {
 func (s *Service) initializeNextRuns() {
 	now := time.Now()
 	jobs := s.store.GetEnabledJobs()
+	changed := false
 
 	L_info("cron: initializing job schedules", "enabledJobs", len(jobs), "totalJobs", s.store.Count())
 
@@ -417,21 +421,38 @@ func (s *Service) initializeNextRuns() {
 			L_error("cron: failed to calculate next run", "job", job.Name, "id", job.ID, "error", err)
 			continue
 		}
-		job.SetNextRun(next)
-		if err := s.store.UpdateJob(job); err != nil {
-			L_error("cron: failed to update job", "job", job.Name, "id", job.ID, "error", err)
+		if nextRunChanged(job.State.NextRunAtMs, next) {
+			changed = true
 		}
+		job.SetNextRun(next)
 		if next != nil {
 			L_trace("cron: job scheduled",
 				"job", job.Name,
 				"schedule", formatScheduleLog(&job.Schedule),
 				"nextRun", next.Format(time.RFC3339),
-				"session", job.SessionTarget)
+				"resultMode", job.ResultMode())
+		}
+	}
+
+	if changed {
+		if err := s.store.Save(); err != nil {
+			L_error("cron: failed to persist initialized schedules", "error", err)
 		}
 	}
 
 	// Extend ignore window after all writes complete
 	s.ignoreWatchUntil = time.Now().Add(200 * time.Millisecond)
+}
+
+func nextRunChanged(current *int64, next *time.Time) bool {
+	switch {
+	case current == nil && next == nil:
+		return false
+	case current == nil || next == nil:
+		return true
+	default:
+		return *current != next.UnixMilli()
+	}
 }
 
 func formatScheduleLog(s *Schedule) string {
@@ -618,10 +639,18 @@ func (s *Service) runDueJobs(ctx context.Context) {
 			continue
 		}
 
-		L_info("cron: starting job execution", "job", job.Name, "id", job.ID, "prompt", truncateLog(job.Payload.GetPrompt(), 100))
+		L_info("cron: starting job execution", "job", job.Name, "id", job.ID, "prompt", truncateLog(job.Prompt, 100))
 		// Execute in goroutine to not block other jobs
-		go s.executeJob(ctx, job)
+		s.launchJob(ctx, job)
 	}
+}
+
+func (s *Service) launchJob(ctx context.Context, job *CronJob) {
+	runner := s.executeJob
+	if s.execJob != nil {
+		runner = s.execJob
+	}
+	go runner(ctx, job)
 }
 
 func truncateLog(s string, max int) string {
@@ -636,26 +665,25 @@ func truncateLog(s string, max int) string {
 func (s *Service) executeJob(ctx context.Context, job *CronJob) {
 	startTime := time.Now()
 
-	// Apply job timeout if configured
-	if s.jobTimeoutMinutes > 0 {
+	timeout := time.Duration(0)
+	if job.Result.TimeoutSeconds > 0 {
+		timeout = time.Duration(job.Result.TimeoutSeconds) * time.Second
+	} else if s.jobTimeoutMinutes > 0 {
+		timeout = time.Duration(s.jobTimeoutMinutes) * time.Minute
+	}
+	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(s.jobTimeoutMinutes)*time.Minute)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 
 	L_info("cron: === JOB START ===",
 		"job", job.Name,
 		"id", job.ID,
-		"session", job.SessionTarget,
-		"isolated", job.IsIsolated(),
-		"timeoutMinutes", s.jobTimeoutMinutes,
-		"prompt", truncateLog(job.Payload.GetPrompt(), 200))
-
-	// Build agent request
-	sessionID := ""
-	if job.IsIsolated() {
-		sessionID = fmt.Sprintf("cron:%s", job.ID)
-	}
+		"resultMode", job.ResultMode(),
+		"persist", job.ShouldPersistResult(),
+		"timeout", timeout,
+		"prompt", truncateLog(job.Prompt, 200))
 
 	// Get owner user for cron jobs
 	userID := s.gateway.GetOwnerUserID()
@@ -669,45 +697,7 @@ func (s *Service) executeJob(ctx context.Context, job *CronJob) {
 		return
 	}
 
-	req := AgentRequest{
-		Source:       "cron",
-		UserMsg:      job.Payload.GetPrompt(),
-		FreshContext: job.IsIsolated(),
-		SessionID:    sessionID,
-		UserID:       userID,
-		SkipMirror:   true,
-		JobName:      job.Name,
-		Purpose:      "cron",
-	}
-
-	L_debug("cron: invoking agent",
-		"job", job.Name,
-		"sessionID", sessionID,
-		"freshContext", req.FreshContext,
-		"userID", userID)
-
-	// Create events channel
-	events := make(chan AgentEvent, 100)
-
-	// Run the agent
-	go s.gateway.RunAgentForCron(ctx, req, events)
-
-	// Collect results
-	var finalContent string
-	var execErr error
-	eventCount := 0
-
-	for event := range events {
-		eventCount++
-		switch e := event.(type) {
-		case AgentEndEvent:
-			finalContent = e.FinalText
-			L_debug("cron: received agent end event", "job", job.Name, "contentLen", len(finalContent))
-		case AgentErrorEvent:
-			execErr = fmt.Errorf("%s", e.Error)
-			L_error("cron: received agent error event", "job", job.Name, "error", e.Error)
-		}
-	}
+	finalContent, eventCount, execErr := s.runAssistantTask(ctx, job, userID)
 
 	duration := time.Since(startTime)
 
@@ -762,14 +752,77 @@ func (s *Service) executeJob(ctx context.Context, job *CronJob) {
 		L_error("cron: failed to save job state", "job", job.Name, "error", err)
 	}
 
-	// Deliver to channels if enabled
-	if job.Payload.Deliver && finalContent != "" {
-		s.deliverAssistantOutput(ctx, "cron", finalContent)
+	if execErr == nil {
+		if err := s.handleResult(ctx, job, finalContent); err != nil {
+			L_error("cron: result handling failed", "job", job.Name, "error", err)
+		}
 	}
 }
 
-func (s *Service) deliverAssistantOutput(ctx context.Context, source, content string) {
-	// Note: Suppression tokens (HEARTBEAT_OK, etc.) are handled centrally in gateway.RunAgent
+func (s *Service) runAssistantTask(ctx context.Context, job *CronJob, userID string) (string, int, error) {
+	req := AgentRequest{
+		Source:       "cron",
+		UserMsg:      job.Prompt,
+		FreshContext: true,
+		SessionID:    fmt.Sprintf("cron:%s", job.ID),
+		UserID:       userID,
+		Ephemeral:    !job.ShouldPersistResult(),
+		SkipMirror:   true,
+		JobName:      job.Name,
+		Purpose:      "cron",
+	}
+
+	L_debug("cron: invoking agent",
+		"job", job.Name,
+		"sessionID", req.SessionID,
+		"freshContext", req.FreshContext,
+		"ephemeral", req.Ephemeral,
+		"userID", userID)
+
+	events := make(chan AgentEvent, 100)
+	go s.gateway.RunAgentForCron(ctx, req, events)
+
+	var finalContent string
+	var execErr error
+	eventCount := 0
+	for event := range events {
+		eventCount++
+		switch e := event.(type) {
+		case AgentEndEvent:
+			finalContent = e.FinalText
+			L_debug("cron: received agent end event", "job", job.Name, "contentLen", len(finalContent))
+		case AgentErrorEvent:
+			execErr = fmt.Errorf("%s", e.Error)
+			L_error("cron: received agent error event", "job", job.Name, "error", e.Error)
+		}
+	}
+	return finalContent, eventCount, execErr
+}
+
+func (s *Service) handleResult(ctx context.Context, job *CronJob, finalContent string) error {
+	switch job.ResultMode() {
+	case ResultModeStoreOnly:
+		L_debug("cron: result stored only", "job", job.Name, "responseLen", len(finalContent))
+		return nil
+	case ResultModeDeliver:
+		s.deliverAssistantOutput(ctx, "cron", finalContent, job.ShouldPersistResult())
+		return nil
+	case ResultModeHandoffMain:
+		if finalContent == "" {
+			L_debug("cron: handoff skipped for empty result", "job", job.Name)
+			return nil
+		}
+		if s.gateway == nil {
+			return fmt.Errorf("gateway unavailable for handoff")
+		}
+		return s.gateway.HandoffCronResult(ctx, job.Name, finalContent)
+	default:
+		return fmt.Errorf("unsupported result mode: %s", job.ResultMode())
+	}
+}
+
+func (s *Service) deliverAssistantOutput(ctx context.Context, source, content string, persist bool) {
+	// Note: silent/no-op tokens are handled centrally in gateway.RunAgent.
 	// If content is empty, nothing to deliver
 	if content == "" {
 		L_debug("cron: empty assistant output, skipping delivery", "source", source)
@@ -787,7 +840,7 @@ func (s *Service) deliverAssistantOutput(ctx context.Context, source, content st
 	report := s.gateway.DeliverAssistantOutput(ctx, userID, delivery.AssistantMessage{
 		Source:         source,
 		Content:        content,
-		Persist:        true,
+		Persist:        persist,
 		PersistKind:    "delivered",
 		PersistContent: content,
 	})
@@ -866,13 +919,15 @@ func (s *Service) RemoveJob(id string) error {
 }
 
 // RunNow triggers immediate execution of a job.
-func (s *Service) RunNow(ctx context.Context, id string) error {
+// The run is detached from the caller context so chat/tool request cancellation
+// does not kill the scheduled task after it has been accepted.
+func (s *Service) RunNow(_ context.Context, id string) error {
 	job := s.store.GetJob(id)
 	if job == nil {
 		return fmt.Errorf("job not found: %s", id)
 	}
 
-	go s.executeJob(ctx, job)
+	s.launchJob(context.Background(), job)
 	return nil
 }
 
@@ -959,12 +1014,12 @@ func (s *Service) runHeartbeat(ctx context.Context) {
 
 	L_info("heartbeat: completed", "responseLen", len(finalContent))
 
-	// Note: Suppression tokens (HEARTBEAT_OK, etc.) are handled centrally in gateway.RunAgent
+	// Note: silent/no-op tokens are handled centrally in gateway.RunAgent.
 	// finalContent will be empty if suppressed
 
 	// Deliver response to channels
 	if finalContent != "" {
-		s.deliverAssistantOutput(ctx, "heartbeat", finalContent)
+		s.deliverAssistantOutput(ctx, "heartbeat", finalContent, true)
 	}
 }
 

@@ -379,7 +379,7 @@ func (c *CronListCmd) Run(ctx *Context) error {
 		}
 		fmt.Printf("%s (%s)\n", job.Name, status)
 		fmt.Printf("  ID: %s\n", job.ID)
-		fmt.Printf("  Session: %s\n", job.SessionTarget)
+		fmt.Printf("  Result: %s\n", job.ResultMode())
 		fmt.Printf("  Schedule: %s\n", formatCronSchedule(&job.Schedule))
 		if job.IsRunning() {
 			runningFor := time.Since(time.UnixMilli(*job.State.RunningAtMs))
@@ -398,14 +398,14 @@ func (c *CronListCmd) Run(ctx *Context) error {
 
 // CronAddCmd adds a new cron job
 type CronAddCmd struct {
-	Name    string `arg:"" help:"Job name"`
-	Message string `arg:"" help:"Prompt message to execute"`
-	Every   string `help:"Run every interval (e.g., 5m, 2h, 1d)" xor:"schedule"`
-	At      string `help:"Run once at time (+5m, 2024-01-01T12:00:00Z)" xor:"schedule"`
-	Cron    string `help:"Run on cron schedule (e.g., '0 9 * * 1-5')" xor:"schedule"`
-	Tz      string `help:"Timezone for cron schedule"`
-	Session string `help:"Session target: main or isolated" default:"main"`
-	Deliver bool   `help:"Deliver output to channels"`
+	Name       string `arg:"" help:"Job name"`
+	Prompt     string `arg:"" help:"Assistant task prompt to execute"`
+	Every      string `help:"Run every interval (e.g., 5m, 2h, 1d)" xor:"schedule"`
+	At         string `help:"Run once at time (+5m, 2024-01-01T12:00:00Z)" xor:"schedule"`
+	Cron       string `help:"Run on cron schedule (e.g., '0 9 * * 1-5')" xor:"schedule"`
+	Tz         string `help:"Timezone for cron schedule"`
+	ResultMode string `help:"What to do with the result: store_only, deliver, handoff_main" default:"store_only"`
+	NoPersist  bool   `help:"Do not persist the cron run result"`
 }
 
 func (c *CronAddCmd) Run(ctx *Context) error {
@@ -419,20 +419,27 @@ func (c *CronAddCmd) Run(ctx *Context) error {
 		return err
 	}
 
-	sessionTarget := cron.SessionTargetMain
-	if c.Session == "isolated" {
-		sessionTarget = cron.SessionTargetIsolated
+	resultMode := cron.ResultMode(c.ResultMode)
+	switch resultMode {
+	case cron.ResultModeStoreOnly, cron.ResultModeDeliver, cron.ResultModeHandoffMain:
+	default:
+		return fmt.Errorf("invalid result mode: %s", c.ResultMode)
+	}
+
+	var persist *bool
+	if c.NoPersist {
+		falseVal := false
+		persist = &falseVal
 	}
 
 	job := &cron.CronJob{
-		Name:          c.Name,
-		Enabled:       true,
-		Schedule:      schedule,
-		SessionTarget: sessionTarget,
-		Payload: cron.Payload{
-			Kind:    cron.PayloadKindAgentTurn,
-			Message: c.Message,
-			Deliver: c.Deliver,
+		Name:     c.Name,
+		Enabled:  true,
+		Schedule: schedule,
+		Prompt:   c.Prompt,
+		Result: cron.ResultPolicy{
+			Mode:    resultMode,
+			Persist: persist,
 		},
 	}
 
@@ -461,7 +468,7 @@ func (c *CronAddCmd) Run(ctx *Context) error {
 type CronEditCmd struct {
 	ID      string  `arg:"" help:"Job ID to edit"`
 	Name    *string `help:"New job name"`
-	Message *string `help:"New prompt message"`
+	Prompt  *string `help:"New prompt message"`
 	Enabled *bool   `help:"Enable or disable job"`
 }
 
@@ -479,8 +486,8 @@ func (c *CronEditCmd) Run(ctx *Context) error {
 	if c.Name != nil {
 		job.Name = *c.Name
 	}
-	if c.Message != nil {
-		job.Payload.Message = *c.Message
+	if c.Prompt != nil {
+		job.Prompt = *c.Prompt
 	}
 	if c.Enabled != nil {
 		job.Enabled = *c.Enabled
@@ -2776,4 +2783,3 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 	L_info("tools: registered", "count", reg.Count())
 	return messageTool, transcriptMgr
 }
-

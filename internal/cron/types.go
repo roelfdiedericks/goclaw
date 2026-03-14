@@ -3,27 +3,27 @@ package cron
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
-// CronJob represents a scheduled task (OpenClaw compatible).
+// CronJob represents a scheduled assistant task.
 type CronJob struct {
-	ID             string     `json:"id"`
-	AgentID        string     `json:"agentId,omitempty"`
-	Name           string     `json:"name"`
-	Description    string     `json:"description,omitempty"`
-	Enabled        bool       `json:"enabled"`
-	CreatedAtMs    int64      `json:"createdAtMs"`
-	UpdatedAtMs    int64      `json:"updatedAtMs"`
-	Schedule       Schedule   `json:"schedule"`
-	SessionTarget  string     `json:"sessionTarget"`      // "main" or "isolated"
-	WakeMode       string     `json:"wakeMode,omitempty"` // Legacy, ignored by GoClaw
-	Payload        Payload    `json:"payload"`
-	DeleteAfterRun bool       `json:"deleteAfterRun,omitempty"`
-	Isolation      *Isolation `json:"isolation,omitempty"`
-	State          JobState   `json:"state"`
+	ID             string       `json:"id"`
+	AgentID        string       `json:"agentId,omitempty"`
+	Name           string       `json:"name"`
+	Description    string       `json:"description,omitempty"`
+	Enabled        bool         `json:"enabled"`
+	CreatedAtMs    int64        `json:"createdAtMs"`
+	UpdatedAtMs    int64        `json:"updatedAtMs"`
+	Schedule       Schedule     `json:"schedule"`
+	Prompt         string       `json:"prompt"`
+	Result         ResultPolicy `json:"result"`
+	DeleteAfterRun bool         `json:"deleteAfterRun,omitempty"`
+	State          JobState     `json:"state"`
 }
 
 // Schedule defines when a job should run.
@@ -35,25 +35,24 @@ type Schedule struct {
 	Tz      string `json:"tz,omitempty"`      // for "cron": IANA timezone
 }
 
-// Payload defines what the job should do.
-type Payload struct {
-	Kind              string `json:"kind"` // "systemEvent" or "agentTurn"
-	Text              string `json:"text,omitempty"`
-	Message           string `json:"message,omitempty"`
-	Model             string `json:"model,omitempty"`
-	Thinking          string `json:"thinking,omitempty"`
-	TimeoutSeconds    int    `json:"timeoutSeconds,omitempty"`
-	Deliver           bool   `json:"deliver,omitempty"`
-	Channel           string `json:"channel,omitempty"`
-	To                string `json:"to,omitempty"`
-	BestEffortDeliver bool   `json:"bestEffortDeliver,omitempty"`
-}
+type ResultMode string
 
-// Isolation controls how isolated job output is posted to main session.
-type Isolation struct {
-	PostToMainPrefix   string `json:"postToMainPrefix,omitempty"`   // Default: "Cron"
-	PostToMainMode     string `json:"postToMainMode,omitempty"`     // "summary" (default) or "full"
-	PostToMainMaxChars int    `json:"postToMainMaxChars,omitempty"` // Default: 8000
+const (
+	ResultModeStoreOnly   ResultMode = "store_only"
+	ResultModeDeliver     ResultMode = "deliver"
+	ResultModeHandoffMain ResultMode = "handoff_main"
+)
+
+// ResultPolicy controls what happens after the assistant task completes.
+type ResultPolicy struct {
+	Mode           ResultMode `json:"mode"`
+	Persist        *bool      `json:"persist,omitempty"` // nil = use smart default
+	Channel        string     `json:"channel,omitempty"`
+	To             string     `json:"to,omitempty"`
+	BestEffort     bool       `json:"bestEffort,omitempty"`
+	TimeoutSeconds int        `json:"timeoutSeconds,omitempty"`
+	Model          string     `json:"model,omitempty"`
+	Thinking       string     `json:"thinking,omitempty"`
 }
 
 // JobState tracks the runtime state of a job.
@@ -88,35 +87,62 @@ const (
 	ScheduleKindCron  = "cron"
 )
 
-// Session target constants
-const (
-	SessionTargetMain     = "main"
-	SessionTargetIsolated = "isolated"
-)
-
-// Payload kind constants
-const (
-	PayloadKindSystemEvent = "systemEvent"
-	PayloadKindAgentTurn   = "agentTurn"
-)
-
 // Job status constants
 const (
 	StatusOK    = "ok"
 	StatusError = "error"
 )
 
-// GetPrompt returns the prompt text from the payload.
-func (p *Payload) GetPrompt() string {
-	if p.Message != "" {
-		return p.Message
+func (j *CronJob) ResultMode() ResultMode {
+	mode := ResultMode(strings.TrimSpace(string(j.Result.Mode)))
+	if mode == "" {
+		return ResultModeStoreOnly
 	}
-	return p.Text
+	return mode
 }
 
-// IsIsolated returns true if the job runs in an isolated session.
-func (j *CronJob) IsIsolated() bool {
-	return j.SessionTarget == SessionTargetIsolated
+func (j *CronJob) ShouldPersistResult() bool {
+	if j.Result.Persist != nil {
+		return *j.Result.Persist
+	}
+	switch j.ResultMode() {
+	case ResultModeStoreOnly, ResultModeDeliver, ResultModeHandoffMain:
+		return true
+	default:
+		return false
+	}
+}
+
+func (j *CronJob) ShouldDeliverResult() bool {
+	return j.ResultMode() == ResultModeDeliver
+}
+
+func (j *CronJob) ShouldHandoffResult() bool {
+	return j.ResultMode() == ResultModeHandoffMain
+}
+
+func (j *CronJob) Validate() error {
+	if strings.TrimSpace(j.Name) == "" {
+		return fmt.Errorf("job name is required")
+	}
+	if strings.TrimSpace(j.Prompt) == "" {
+		return fmt.Errorf("job prompt is required")
+	}
+	switch j.ResultMode() {
+	case ResultModeStoreOnly:
+		if j.Result.Channel != "" || j.Result.To != "" || j.Result.BestEffort {
+			return fmt.Errorf("store_only mode cannot specify delivery targeting")
+		}
+	case ResultModeDeliver:
+		// Channel/To are optional for future use.
+	case ResultModeHandoffMain:
+		if j.Result.Channel != "" || j.Result.To != "" || j.Result.BestEffort {
+			return fmt.Errorf("handoff_main mode cannot specify delivery targeting")
+		}
+	default:
+		return fmt.Errorf("invalid result mode: %q", j.Result.Mode)
+	}
+	return nil
 }
 
 // IsOneShot returns true if this is a one-shot job (at schedule).

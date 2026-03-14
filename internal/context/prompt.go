@@ -125,6 +125,15 @@ func BuildSystemPrompt(params PromptParams) string {
 		}
 	}
 
+	// 7c. Cron handoff guidance (main agent only, channel-specific)
+	if !isMinimal {
+		s := buildCronHandoffSection(params.Channel)
+		if s != "" {
+			staticText += s
+			sections = append(sections, s)
+		}
+	}
+
 	// 8. Time section (only if configured — excluding it enables prompt caching)
 	if params.TimeInSystemPrompt {
 		s := buildTimeSection(params.UserTimezone)
@@ -313,6 +322,26 @@ Keep narration brief and value-dense; avoid repeating obvious steps.
 Use plain human language for narration unless in a technical context.`
 }
 
+func buildCronHandoffSection(channel string) string {
+	if channel != "cron_handoff" {
+		return ""
+	}
+
+	return `## Cron Job Handoffs
+
+You are handling output from a scheduled cron task using result mode "handoff_main".
+
+Important:
+- The cron task already completed successfully and produced content.
+- That content has NOT been delivered to the user yet.
+- If the result is user-relevant, your default action should be to present it naturally to the user.
+- If follow-up tool use is needed before replying, do that work and then respond.
+- Reply exactly SILENT_OK only when no user-facing response, tool action, or file/memory action is warranted.
+
+Do not treat cron handoffs like passive background bulletins by default.
+Treat them as pending delegated outcomes that now require your decision.`
+}
+
 func buildSafetySection() string {
 	// Expanded safety section matching OpenClaw's constitutional AI principles
 	return `## Safety
@@ -450,25 +479,22 @@ func buildCronJobsSection() string {
 
 Cron jobs execute with a specific prompt/task. Respond to the prompt directly.
 
-**Message tool usage:**
-- If you use the message tool to send cron output directly, respond HEARTBEAT_OK to avoid duplicate delivery
-- OR just respond with content and let cron delivery handle it (recommended)
-- Don't do both (results in duplicate messages)
-
-**Delivery:**
-- If delivery is enabled, your response is sent to channels
-- HEARTBEAT_OK suppresses delivery — use when there's nothing worth sending
-- Never append tokens to actual content — they must be the entire response
+Choose one output pattern:
+- If the cron task wants you to produce text for the user, just reply with that text
+- If the cron task wants you to use the message tool to send the output yourself, do that and then reply exactly SILENT_OK
+- Never both send a message with the message tool AND also return the same text as your final reply
 
 **Response rules:**
 - Something to report → just say it
-- Conditional prompt ("alert if X"), condition not met → HEARTBEAT_OK
-- HEARTBEAT_OK is also valid for cron jobs (not just heartbeats) when nothing needs attention
+- Conditional prompt ("alert if X"), condition not met → SILENT_OK
+- If there is no useful result to send or act on, reply exactly SILENT_OK
+- Never append SILENT_OK to real content — it must be your entire reply
 
 **Examples:**
-- Price alert, threshold not met → HEARTBEAT_OK (no message delivered)
-- Price alert, threshold exceeded → "⚠️ XRP/ZAR hit R25.50!"
-- Morning brief → just the brief (no suppression token)`
+- Price alert, threshold not met → SILENT_OK
+- Price alert, threshold exceeded → "XRP/ZAR hit R25.50!"
+- Morning brief → just the brief text
+- Cron task explicitly says "send Telegram message" → use the message tool, then reply SILENT_OK`
 }
 
 func buildMemoryFlushSection() string {

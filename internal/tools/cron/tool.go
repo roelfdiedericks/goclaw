@@ -27,9 +27,9 @@ func (t *Tool) Name() string {
 func (t *Tool) Description() string {
 	return `Manage scheduled tasks (cron jobs). Actions:
 - status: Get cron service status
-- list: List all jobs as JSON (includes full payload)
-- add: Create a new job
-- update: Modify an existing job
+- list: List all jobs as JSON
+- add: Create a new scheduled assistant task
+- update: Modify an existing scheduled assistant task
 - remove: Delete a job
 - run: Execute a job immediately
 - runs: View job execution history
@@ -83,18 +83,34 @@ func (t *Tool) Schema() map[string]interface{} {
 				"type":        "string",
 				"description": "IANA timezone for cron schedule (e.g., 'America/New_York')",
 			},
-			"sessionTarget": map[string]interface{}{
+			"prompt": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{"main", "isolated"},
-				"description": "Session target: 'main' runs in primary session with context, 'isolated' runs fresh",
+				"description": "Assistant task prompt to run on the schedule",
 			},
-			"message": map[string]interface{}{
+			"resultMode": map[string]interface{}{
 				"type":        "string",
-				"description": "The prompt/message to execute when job runs",
+				"enum":        []string{"store_only", "deliver", "handoff_main"},
+				"description": "What should happen to the final assistant result",
 			},
-			"deliver": map[string]interface{}{
+			"persist": map[string]interface{}{
 				"type":        "boolean",
-				"description": "Whether to deliver output to channels",
+				"description": "Whether to persist the cron run result. Omit to use smart defaults.",
+			},
+			"channel": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional delivery channel hint for deliver mode (reserved for future targeting support)",
+			},
+			"to": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional delivery target hint for deliver mode (reserved for future targeting support)",
+			},
+			"bestEffort": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Optional deliver-mode hint for future targeting behavior",
+			},
+			"timeoutSeconds": map[string]interface{}{
+				"type":        "integer",
+				"description": "Optional per-job timeout override in seconds",
 			},
 			"mode": map[string]interface{}{
 				"type":        "string",
@@ -111,21 +127,25 @@ func (t *Tool) Schema() map[string]interface{} {
 }
 
 type cronInput struct {
-	Action        string `json:"action"`
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Description   string `json:"description"`
-	Enabled       *bool  `json:"enabled"`
-	ScheduleType  string `json:"scheduleType"`
-	At            string `json:"at"`
-	Every         string `json:"every"`
-	CronExpr      string `json:"cronExpr"`
-	Timezone      string `json:"timezone"`
-	SessionTarget string `json:"sessionTarget"`
-	Message       string `json:"message"`
-	Deliver       *bool  `json:"deliver"`
-	Mode          string `json:"mode"`
-	Text          string `json:"text"`
+	Action         string `json:"action"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Description    string `json:"description"`
+	Enabled        *bool  `json:"enabled"`
+	ScheduleType   string `json:"scheduleType"`
+	At             string `json:"at"`
+	Every          string `json:"every"`
+	CronExpr       string `json:"cronExpr"`
+	Timezone       string `json:"timezone"`
+	Prompt         string `json:"prompt"`
+	ResultMode     string `json:"resultMode"`
+	Persist        *bool  `json:"persist"`
+	Channel        string `json:"channel"`
+	To             string `json:"to"`
+	BestEffort     *bool  `json:"bestEffort"`
+	TimeoutSeconds *int   `json:"timeoutSeconds"`
+	Mode           string `json:"mode"`
+	Text           string `json:"text"`
 }
 
 func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
@@ -143,8 +163,8 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		"every", in.Every,
 		"at", in.At,
 		"cronExpr", in.CronExpr,
-		"sessionTarget", in.SessionTarget,
-		"message", truncate(in.Message, 100))
+		"resultMode", in.ResultMode,
+		"prompt", truncate(in.Prompt, 100))
 
 	service := cronpkg.GetService()
 	if service == nil {
@@ -215,19 +235,23 @@ func (t *Tool) handleList(service *cronpkg.Service) (string, error) {
 }
 
 func (t *Tool) handleAdd(service *cronpkg.Service, in cronInput) (string, error) {
-	L_debug("cron add: validating input", "name", in.Name, "message", truncate(in.Message, 50), "scheduleType", in.ScheduleType)
+	L_debug("cron add: validating input", "name", in.Name, "prompt", truncate(in.Prompt, 50), "scheduleType", in.ScheduleType, "resultMode", in.ResultMode)
 
 	if in.Name == "" {
 		L_warn("cron add: name is required")
 		return "", fmt.Errorf("name is required")
 	}
-	if in.Message == "" {
-		L_warn("cron add: message is required")
-		return "", fmt.Errorf("message is required")
+	if in.Prompt == "" {
+		L_warn("cron add: prompt is required")
+		return "", fmt.Errorf("prompt is required")
 	}
 	if in.ScheduleType == "" {
 		L_warn("cron add: scheduleType is required")
 		return "", fmt.Errorf("scheduleType is required")
+	}
+	resultMode, err := parseResultMode(in.ResultMode)
+	if err != nil {
+		return "", err
 	}
 
 	L_debug("cron add: building schedule", "type", in.ScheduleType, "every", in.Every, "at", in.At, "cron", in.CronExpr)
@@ -242,26 +266,29 @@ func (t *Tool) handleAdd(service *cronpkg.Service, in cronInput) (string, error)
 		enabled = *in.Enabled
 	}
 
-	sessionTarget := cronpkg.SessionTargetMain
-	if in.SessionTarget == "isolated" {
-		sessionTarget = cronpkg.SessionTargetIsolated
+	bestEffort := false
+	if in.BestEffort != nil {
+		bestEffort = *in.BestEffort
 	}
 
-	deliver := false
-	if in.Deliver != nil {
-		deliver = *in.Deliver
+	timeoutSeconds := 0
+	if in.TimeoutSeconds != nil {
+		timeoutSeconds = *in.TimeoutSeconds
 	}
 
 	job := &cronpkg.CronJob{
-		Name:          in.Name,
-		Description:   in.Description,
-		Enabled:       enabled,
-		Schedule:      schedule,
-		SessionTarget: sessionTarget,
-		Payload: cronpkg.Payload{
-			Kind:    cronpkg.PayloadKindAgentTurn,
-			Message: in.Message,
-			Deliver: deliver,
+		Name:        in.Name,
+		Description: in.Description,
+		Enabled:     enabled,
+		Schedule:    schedule,
+		Prompt:      in.Prompt,
+		Result: cronpkg.ResultPolicy{
+			Mode:           resultMode,
+			Persist:        in.Persist,
+			Channel:        in.Channel,
+			To:             in.To,
+			BestEffort:     bestEffort,
+			TimeoutSeconds: timeoutSeconds,
 		},
 	}
 
@@ -293,18 +320,30 @@ func (t *Tool) handleUpdate(service *cronpkg.Service, in cronInput) (string, err
 	if in.Enabled != nil {
 		job.Enabled = *in.Enabled
 	}
-	if in.SessionTarget != "" {
-		if in.SessionTarget == "isolated" {
-			job.SessionTarget = cronpkg.SessionTargetIsolated
-		} else {
-			job.SessionTarget = cronpkg.SessionTargetMain
+	if in.Prompt != "" {
+		job.Prompt = in.Prompt
+	}
+	if in.ResultMode != "" {
+		resultMode, err := parseResultMode(in.ResultMode)
+		if err != nil {
+			return "", err
 		}
+		job.Result.Mode = resultMode
 	}
-	if in.Message != "" {
-		job.Payload.Message = in.Message
+	if in.Persist != nil {
+		job.Result.Persist = in.Persist
 	}
-	if in.Deliver != nil {
-		job.Payload.Deliver = *in.Deliver
+	if in.Channel != "" {
+		job.Result.Channel = in.Channel
+	}
+	if in.To != "" {
+		job.Result.To = in.To
+	}
+	if in.BestEffort != nil {
+		job.Result.BestEffort = *in.BestEffort
+	}
+	if in.TimeoutSeconds != nil {
+		job.Result.TimeoutSeconds = *in.TimeoutSeconds
 	}
 
 	if in.ScheduleType != "" || in.At != "" || in.Every != "" || in.CronExpr != "" {
@@ -514,5 +553,18 @@ func formatSchedule(s *cronpkg.Schedule) string {
 		return fmt.Sprintf("cron '%s'", s.Expr)
 	default:
 		return "unknown"
+	}
+}
+
+func parseResultMode(raw string) (cronpkg.ResultMode, error) {
+	switch strings.TrimSpace(raw) {
+	case string(cronpkg.ResultModeStoreOnly):
+		return cronpkg.ResultModeStoreOnly, nil
+	case string(cronpkg.ResultModeDeliver):
+		return cronpkg.ResultModeDeliver, nil
+	case string(cronpkg.ResultModeHandoffMain):
+		return cronpkg.ResultModeHandoffMain, nil
+	default:
+		return "", fmt.Errorf("resultMode is required and must be one of: store_only, deliver, handoff_main")
 	}
 }

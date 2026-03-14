@@ -28,6 +28,9 @@ type AgentRequest struct {
 	// Heartbeat-specific fields
 	IsHeartbeat bool // If true, run is ephemeral - don't persist to session
 
+	// Generic ephemeral execution
+	Ephemeral bool // If true, skip normal session persistence and roll back in-memory session changes
+
 	// Supervision-specific fields
 	SkipAddMessage bool // If true, don't add UserMsg to session (already added by supervision)
 

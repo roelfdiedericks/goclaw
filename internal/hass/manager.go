@@ -632,17 +632,17 @@ func (m *Manager) processMatch(sub *Subscription, event *HAEvent, entityID, newS
 		var prompt string
 		if sub.Prompt != "" {
 			prompt = message + "\n\nDo not re-query this entity — the current state is included above." +
-				"\n\nInstructions: " + sub.Prompt + "\n\nReply EVENT_OK if no action needed."
+				"\n\nInstructions: " + sub.Prompt + "\n\nReply SILENT_OK if no action is needed."
 		} else {
 			prompt = message + "\n\nDo not re-query this entity — the current state is included above." +
-				"\n\nProcess this event. Reply EVENT_OK if no action needed."
+				"\n\nProcess this event. Reply SILENT_OK if no action is needed."
 		}
 
 		L_debug("hass: invoking agent", "entity", entityID, "subID", sub.ID, "promptLen", len(prompt), "hasPrompt", sub.Prompt != "")
 
 		// Include entity and state in source for status message
 		source := fmt.Sprintf("hass: %s → %s", entityID, newState)
-		if err := m.injector.InvokeAgent(ctx, source, "hass", prompt, "EVENT_OK"); err != nil {
+		if err := m.injector.InvokeAgent(ctx, source, "hass", prompt, "SILENT_OK"); err != nil {
 			L_error("hass: failed to invoke agent", "error", err, "entity", entityID, "subID", sub.ID)
 			return
 		}

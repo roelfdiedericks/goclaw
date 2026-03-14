@@ -1134,11 +1134,11 @@ func (g *Gateway) StartCron(ctx context.Context) error {
 		return fmt.Errorf("cron service already running")
 	}
 
-	// Determine cron paths based on workspace location
-	// If running side-by-side with OpenClaw, use ~/.openclaw/cron/
-	// Otherwise use ~/.goclaw/cron/
-	cronJobsPath, _ := paths.ContextualDataPath("cron/jobs.json", g.config.Gateway.WorkingDir)
-	cronRunsDir, _ := paths.ContextualDataPath("cron/runs", g.config.Gateway.WorkingDir)
+	// Cron state is always GoClaw-owned.
+	// If no GoClaw cron store exists yet, the store loader may bootstrap from
+	// OpenClaw's jobs.json once, then continue using ~/.goclaw/cron/ thereafter.
+	cronJobsPath, _ := paths.DataPath("cron/jobs.json")
+	cronRunsDir, _ := paths.DataPath("cron/runs")
 
 	// Create store with resolved paths
 	store := cron.NewStore(cronJobsPath, cronRunsDir)
@@ -1221,6 +1221,7 @@ func (g *Gateway) RunAgentForCron(ctx context.Context, cronReq cron.AgentRequest
 		FreshContext:   cronReq.FreshContext,
 		User:           reqUser,
 		IsHeartbeat:    cronReq.IsHeartbeat,
+		Ephemeral:      cronReq.Ephemeral,
 		EnableThinking: cronReq.EnableThinking || reqUser.Thinking, // Use cron setting or user preference
 		SkipMirror:     cronReq.SkipMirror,
 	}
@@ -1416,6 +1417,35 @@ func (g *Gateway) InjectSystemEvent(ctx context.Context, text string) error {
 	return err
 }
 
+// HandoffCronResult implements cron.GatewayRunner interface.
+// It forwards a completed cron task result into the main agent flow.
+func (g *Gateway) HandoffCronResult(ctx context.Context, jobName, result string) error {
+	jobName = strings.TrimSpace(jobName)
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return nil
+	}
+
+	prompt := buildCronHandoffPrompt(jobName, result)
+	return g.InvokeAgent(ctx, "cron_handoff", "agent", prompt, canonicalSilentToken)
+}
+
+func buildCronHandoffPrompt(jobName, result string) string {
+	header := "A scheduled cron task completed and produced the result below."
+	if jobName != "" {
+		header = fmt.Sprintf("%s\nJob: %s", header, jobName)
+	}
+
+	return header + "\n\n" +
+		"This result has NOT been delivered to the user yet.\n" +
+		"Decide what to do next:\n" +
+		"1. Send the user a concise useful message if the result is user-relevant.\n" +
+		"2. Take any necessary follow-up tool actions if action is warranted.\n" +
+		"3. Update files or memory if that is the useful outcome.\n" +
+		"4. Reply exactly SILENT_OK only if no user-facing message, tool action, or file/memory update is warranted.\n\n" +
+		"Result:\n" + result
+}
+
 // PersistDeliveredMessage saves a delivered message to the primary session for transcript indexing.
 // Used by cron and heartbeat to persist messages that were sent to channels.
 func (g *Gateway) PersistDeliveredMessage(ctx context.Context, content, source string) error {
@@ -1609,7 +1639,7 @@ func (g *Gateway) ProcessMessage(ctx context.Context, msg *types.InboundMessage,
 			}
 		}
 
-		// Then central suppression (HEARTBEAT_OK, SILENT_OK, etc.)
+		// Then canonical/alias silent-token suppression.
 		if !suppressed && shouldSuppressResponse(finalText) {
 			suppressed = true
 			L_debug("gateway: central suppression matched")
@@ -1711,26 +1741,24 @@ func (g *Gateway) Shutdown() {
 	}
 }
 
-// suppressionTokens are response markers indicating agent has nothing meaningful to deliver.
-// If a response contains any of these, it should not be sent to the user.
-var suppressionTokens = []string{
-	"SILENT_OK",    // Agent has nothing to say (regular chat)
-	"HEARTBEAT_OK", // Heartbeat/cron - nothing needs attention
-	"NO_REPLY",     // Memory flush - nothing to save
-	"EVENT_OK",     // HASS event - no action needed
+const canonicalSilentToken = "SILENT_OK"
+
+var suppressionAliases = map[string]string{
+	"SILENT_OK":    canonicalSilentToken,
+	"HEARTBEAT_OK": canonicalSilentToken,
+	"EVENT_OK":     canonicalSilentToken,
+	"NO_REPLY":     canonicalSilentToken,
 }
 
-// shouldSuppressResponse returns true if the response contains any suppression token.
-// Agents are instructed to use these tokens as the ENTIRE response, but often add
-// extra text. Using Contains catches "blah blah HEARTBEAT_OK" patterns.
+func normalizeSuppressionToken(response string) (string, bool) {
+	token := strings.ToUpper(strings.TrimSpace(response))
+	canonical, ok := suppressionAliases[token]
+	return canonical, ok
+}
+
 func shouldSuppressResponse(response string) bool {
-	upper := strings.ToUpper(response)
-	for _, token := range suppressionTokens {
-		if strings.Contains(upper, token) {
-			return true
-		}
-	}
-	return false
+	_, ok := normalizeSuppressionToken(response)
+	return ok
 }
 
 // filterToolsForUser returns tool definitions filtered by the user's role permissions.
@@ -1982,14 +2010,16 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		sess.SetMaxTokens(g.llm.ContextTokens())
 	}
 
-	// For heartbeat: snapshot message count so we can rollback after (ephemeral)
+	// For ephemeral runs: snapshot message count so we can roll back after.
 	messageCountBefore := 0
-	if req.IsHeartbeat {
+	if req.IsHeartbeat || req.Ephemeral {
 		messageCountBefore = sess.MessageCount()
 	}
 
 	// Track current message IDs for memory provenance (used by memory_graph_store)
 	var currentMsgIDs []string
+
+	ephemeralRun := req.IsHeartbeat || req.Ephemeral
 
 	// Add user message with content blocks if any (skip if already added by supervision)
 	if !req.SkipAddMessage {
@@ -2006,8 +2036,8 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			supervision.SendEvent(EventUserMessage{Content: req.UserMsg, Source: req.Source})
 		}
 
-		// Persist user message to SQLite (skip for heartbeat - ephemeral)
-		if !req.IsHeartbeat {
+		// Persist user message to SQLite (skip for ephemeral runs)
+		if !ephemeralRun {
 			g.persistMessage(ctx, PersistMessageParams{
 				MsgID:      userMsgID,
 				SessionKey: sessionKey,
@@ -2574,7 +2604,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					})
 					toolUseID := sess.AddToolUse(tc.ID, tc.Name, tc.Input, response.Thinking, responseGroupID)
 					toolResultID := sess.AddToolResult(tc.ID, result, nil, responseGroupID)
-					if !req.IsHeartbeat {
+					if !ephemeralRun {
 						g.persistMessage(ctx, PersistMessageParams{
 							MsgID:           toolUseID,
 							SessionKey:      sessionKey,
@@ -2614,7 +2644,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					})
 					toolUseID := sess.AddToolUse(tc.ID, tc.Name, tc.Input, response.Thinking, responseGroupID)
 					toolResultID := sess.AddToolResult(tc.ID, result, nil, responseGroupID)
-					if !req.IsHeartbeat {
+					if !ephemeralRun {
 						g.persistMessage(ctx, PersistMessageParams{
 							MsgID:           toolUseID,
 							SessionKey:      sessionKey,
@@ -2725,7 +2755,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				}
 
 				// Persist tool use and result to SQLite (skip for heartbeat - ephemeral)
-				if !req.IsHeartbeat {
+				if !ephemeralRun {
 					g.persistMessage(ctx, PersistMessageParams{
 						MsgID:           toolUseID,
 						SessionKey:      sessionKey,
@@ -2772,17 +2802,6 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 		// No tool use - we're done
 		finalText = response.Text
-		assistantMsgID := sess.AddAssistantMessage(finalText)
-		// Persist assistant message (skip for heartbeat - ephemeral)
-		if !req.IsHeartbeat {
-			g.persistMessage(ctx, PersistMessageParams{
-				MsgID:      assistantMsgID,
-				SessionKey: sessionKey,
-				UserID:     userID,
-				Role:       "assistant",
-				Content:    finalText,
-			})
-		}
 		break
 	}
 
@@ -2809,8 +2828,8 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	// Enrich media references: {{media:path}} -> {{media:mime:'path'}}
 	finalText = g.enrichMediaRefs(finalText)
 
-	// For heartbeat: rollback in-memory session to before the run (ephemeral)
-	if req.IsHeartbeat && messageCountBefore > 0 {
+	// For ephemeral runs: rollback in-memory session to before the run.
+	if ephemeralRun && messageCountBefore > 0 {
 		sess.TruncateMessages(messageCountBefore)
 		L_debug("heartbeat: rolled back session messages", "before", messageCountBefore, "after", sess.MessageCount())
 	}
@@ -2818,8 +2837,20 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	// Check for suppression tokens - if response contains any, suppress delivery
 	// These tokens indicate agent has nothing meaningful to say
 	if shouldSuppressResponse(finalText) {
-		L_debug("gateway: response suppressed (contains suppression token)", "session", sessionKey, "responseLen", len(finalText))
+		L_debug("gateway: response suppressed (matched silent token)", "session", sessionKey, "responseLen", len(finalText))
 		finalText = ""
+	} else if finalText != "" {
+		assistantMsgID := sess.AddAssistantMessage(finalText)
+		// Persist assistant message (skip for ephemeral runs)
+		if !ephemeralRun {
+			g.persistMessage(ctx, PersistMessageParams{
+				MsgID:      assistantMsgID,
+				SessionKey: sessionKey,
+				UserID:     userID,
+				Role:       "assistant",
+				Content:    finalText,
+			})
+		}
 	}
 
 	sendEvent(EventAgentEnd{RunID: runID, FinalText: finalText})

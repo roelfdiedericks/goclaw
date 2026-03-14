@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/roelfdiedericks/goclaw/internal/delivery"
@@ -18,12 +19,12 @@ type mockDeliveryChannel struct {
 	systemDeliveries []delivery.SystemMessage
 }
 
-func (m *mockDeliveryChannel) Name() string { return m.name }
+func (m *mockDeliveryChannel) Name() string                               { return m.name }
 func (m *mockDeliveryChannel) Send(ctx context.Context, msg string) error { return nil }
 func (m *mockDeliveryChannel) SendMirror(ctx context.Context, source, userMsg string) error {
 	return nil
 }
-func (m *mockDeliveryChannel) HasUser(u *user.User) bool { return m.hasUser }
+func (m *mockDeliveryChannel) HasUser(u *user.User) bool                       { return m.hasUser }
 func (m *mockDeliveryChannel) StreamEvent(u *user.User, event AgentEvent) bool { return false }
 func (m *mockDeliveryChannel) DeliverAssistantMessage(ctx context.Context, u *user.User, message string) error {
 	if m.deliverErr != nil {
@@ -137,5 +138,23 @@ func TestDeliverSystemMessageUsesSystemSurface(t *testing.T) {
 	}
 	if reachable.systemDeliveries[0].Kind != delivery.SystemKindStatus {
 		t.Fatalf("expected status kind, got %#v", reachable.systemDeliveries[0])
+	}
+}
+
+func TestBuildCronHandoffPromptIsActionOriented(t *testing.T) {
+	prompt := buildCronHandoffPrompt("Morning Brief", "Here is the generated summary.")
+
+	requiredSnippets := []string{
+		"Job: Morning Brief",
+		"This result has NOT been delivered to the user yet.",
+		"Send the user a concise useful message if the result is user-relevant.",
+		"Reply exactly SILENT_OK only if no user-facing message, tool action, or file/memory update is warranted.",
+		"Result:\nHere is the generated summary.",
+	}
+
+	for _, snippet := range requiredSnippets {
+		if !strings.Contains(prompt, snippet) {
+			t.Fatalf("expected prompt to contain %q, got:\n%s", snippet, prompt)
+		}
 	}
 }

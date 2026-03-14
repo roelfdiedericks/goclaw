@@ -113,6 +113,15 @@ func OpenClawBaseDir() (string, error) {
 	return filepath.Join(home, ".openclaw"), nil
 }
 
+// OpenClawDataPath returns a path within the OpenClaw data directory (~/.openclaw/<subpath>).
+func OpenClawDataPath(subpath string) (string, error) {
+	base, err := OpenClawBaseDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, subpath), nil
+}
+
 // IsOpenClawWorkspace checks if a workspace path is inside the OpenClaw directory.
 // Used to determine whether to use ~/.openclaw/ or ~/.goclaw/ for data paths.
 func IsOpenClawWorkspace(workspacePath string) bool {

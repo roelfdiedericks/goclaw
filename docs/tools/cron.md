@@ -7,7 +7,19 @@ weight: 40
 
 # Cron Tool
 
-Schedule tasks to run at specific times or intervals.
+Schedule assistant tasks to run at specific times or intervals.
+
+Each cron job now answers three separate questions:
+
+1. What prompt should run?
+2. What should happen to the result?
+3. Should the result be persisted?
+
+The result handling modes are:
+
+- `store_only` - run the task and keep the result internal
+- `deliver` - run the task and deliver the final assistant result to channels
+- `handoff_main` - run the task, then pass the result into the main agent flow
 
 ## Actions
 
@@ -33,7 +45,7 @@ List all jobs with full details.
 
 ### add
 
-Create a new scheduled job.
+Create a new scheduled assistant task.
 
 ```json
 {
@@ -43,9 +55,8 @@ Create a new scheduled job.
   "scheduleType": "cron",
   "cronExpr": "0 8 * * *",
   "timezone": "America/New_York",
-  "sessionTarget": "main",
-  "message": "Give me a morning briefing: weather, calendar, news",
-  "deliver": true
+  "prompt": "Give me a morning briefing: weather, calendar, news",
+  "resultMode": "deliver"
 }
 ```
 
@@ -54,9 +65,13 @@ Create a new scheduled job.
 | `name` | Yes | Job identifier |
 | `description` | No | Human-readable description |
 | `scheduleType` | Yes | `at`, `every`, or `cron` |
-| `sessionTarget` | No | `main` (with context) or `isolated` (fresh) |
-| `message` | Yes | Prompt to execute |
-| `deliver` | No | Deliver output to channels |
+| `prompt` | Yes | Assistant task prompt to execute |
+| `resultMode` | Yes | `store_only`, `deliver`, or `handoff_main` |
+| `persist` | No | Persist result override. Omit to use smart defaults |
+| `channel` | No | Optional future delivery hint for `deliver` mode |
+| `to` | No | Optional future delivery target hint for `deliver` mode |
+| `bestEffort` | No | Optional future delivery hint for `deliver` mode |
+| `timeoutSeconds` | No | Optional per-job timeout override |
 | `enabled` | No | Enable job (default: true) |
 
 ### update
@@ -122,14 +137,14 @@ Send a wake event to inject text or trigger heartbeat.
 ```json
 {
   "action": "wake",
-  "message": "Check for new emails",
+  "text": "Check for new emails",
   "mode": "now"
 }
 ```
 
 | Parameter | Description |
 |-----------|-------------|
-| `message` | Text to inject |
+| `text` | Text to inject |
 | `mode` | `now` or `next-heartbeat` |
 
 ## Schedule Types
@@ -183,14 +198,34 @@ Examples:
 - `*/15 * * * *` — Every 15 minutes
 - `0 0 1 * *` — First of month at midnight
 
-## Session Targets
+## Result Modes
 
-| Target | Description |
-|--------|-------------|
-| `main` | Runs in primary session with conversation history |
-| `isolated` | Runs in fresh session without context |
+| Mode | Description |
+|------|-------------|
+| `store_only` | Run the task and do not deliver the final result |
+| `deliver` | Run the task and deliver the final assistant result to channels |
+| `handoff_main` | Run the task first, then pass its result into the main agent flow |
 
-Use `main` for tasks that need prior context. Use `isolated` for standalone tasks.
+All cron tasks run as scheduled assistant tasks. The runtime handles isolation and follow-up behavior based on the result mode rather than a persisted `sessionTarget` field.
+
+## Persistence
+
+By default:
+
+- `store_only` persists the result
+- `deliver` persists the result
+- `handoff_main` persists the result
+
+Set `"persist": false` to suppress persistence for noisy jobs such as threshold checks that usually produce nothing interesting.
+
+## Legacy Migration
+
+Older cron files that still use the legacy `payload` / `sessionTarget` schema are migrated automatically on load.
+
+- A backup is written to `jobs.json.bak`
+- The file is rewritten in native format
+- Legacy `systemEvent` jobs are converted to `handoff_main`
+- Malformed legacy jobs fail load loudly instead of being silently skipped
 
 ## Configuration
 
@@ -225,8 +260,8 @@ Use `main` for tasks that need prior context. Use `isolated` for standalone task
   "name": "reminder",
   "scheduleType": "at",
   "at": "+20m",
-  "message": "Reminder: Take a break!",
-  "deliver": true
+  "prompt": "Reminder: Take a break!",
+  "resultMode": "deliver"
 }
 ```
 
@@ -237,8 +272,9 @@ Use `main` for tasks that need prior context. Use `isolated` for standalone task
   "name": "email-check",
   "scheduleType": "every",
   "every": "1h",
-  "sessionTarget": "isolated",
-  "message": "Check for important emails"
+  "prompt": "Check for important emails",
+  "resultMode": "store_only",
+  "persist": false
 }
 ```
 
@@ -250,7 +286,8 @@ Use `main` for tasks that need prior context. Use `isolated` for standalone task
   "scheduleType": "cron",
   "cronExpr": "0 9 * * 1-5",
   "timezone": "America/New_York",
-  "message": "Summarize today's calendar and pending tasks"
+  "prompt": "Summarize today's calendar and pending tasks",
+  "resultMode": "handoff_main"
 }
 ```
 

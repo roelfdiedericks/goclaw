@@ -40,7 +40,7 @@ type InboundMessage struct {
 	EnableThinking bool // Enable extended thinking mode
 
 	// === Suppression ===
-	SuppressDeliveryOn string // If response contains this, suppress delivery (e.g., "EVENT_OK")
+	SuppressDeliveryOn string // If response exactly matches this token (case-insensitive), suppress delivery
 
 	// === Status Message ===
 	StatusMessage string // Optional status to send before processing (caller decides)
@@ -83,8 +83,9 @@ func (m *InboundMessage) WithMeta(key, value string) *InboundMessage {
 	return m
 }
 
-// WithSuppressDeliveryOn sets the suppression match string.
-// If the agent's response contains this string (case-insensitive), delivery is suppressed.
+// WithSuppressDeliveryOn sets the suppression token.
+// If the agent's response exactly matches this token (case-insensitive after trimming),
+// delivery is suppressed.
 func (m *InboundMessage) WithSuppressDeliveryOn(match string) *InboundMessage {
 	m.SuppressDeliveryOn = match
 	return m

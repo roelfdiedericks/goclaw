@@ -79,7 +79,7 @@ In group chats where you receive every message, be **smart about when to contrib
 - Correcting important misinformation
 - Summarizing when asked
 
-**Stay silent (HEARTBEAT_OK) when:**
+**Stay silent (SILENT_OK) when:**
 
 - It's just casual banter between humans
 - Someone already answered the question
@@ -103,7 +103,7 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 
 ## Heartbeats - Be Proactive!
 
-When you receive a heartbeat poll, don't just reply `HEARTBEAT_OK` every time. Use heartbeats productively!
+When you receive a heartbeat poll, don't just reply `SILENT_OK` every time. Use heartbeats productively!
 
 You can edit `HEARTBEAT.md` with a short checklist or reminders. Keep it small to limit token burn.
 
@@ -120,7 +120,7 @@ You can edit `HEARTBEAT.md` with a short checklist or reminders. Keep it small t
 - Something interesting you found
 - It's been >8h since you said anything
 
-**When to stay quiet (HEARTBEAT_OK):**
+**When to stay quiet (SILENT_OK):**
 
 - Late night (23:00-08:00) unless urgent
 - Human is clearly busy
