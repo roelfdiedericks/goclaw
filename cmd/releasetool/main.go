@@ -39,7 +39,9 @@ func runCurrent(args []string) {
 	fs := flag.NewFlagSet("current", flag.ExitOnError)
 	field := fs.String("field", "", "field to print: version, channel, date, next-version, tag")
 	jsonOut := fs.Bool("json", false, "print JSON")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		fatalf("parse flags: %v", err)
+	}
 
 	state := mustState()
 	if *jsonOut {
@@ -73,7 +75,9 @@ func runCurrent(args []string) {
 func runValidate(args []string) {
 	fs := flag.NewFlagSet("validate", flag.ExitOnError)
 	releaseMode := fs.Bool("release", false, "validate for release")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		fatalf("parse flags: %v", err)
+	}
 
 	ch := mustChangelog()
 	state := mustState()
@@ -116,7 +120,9 @@ func runChangelog(args []string) {
 	fs := flag.NewFlagSet("changelog new-entry", flag.ExitOnError)
 	channel := fs.String("channel", "", "override release channel")
 	date := fs.String("date", "", "override release date")
-	fs.Parse(args[1:])
+	if err := fs.Parse(args[1:]); err != nil {
+		fatalf("parse flags: %v", err)
+	}
 
 	ch := mustChangelog()
 	state := mustState()
@@ -146,7 +152,9 @@ func runChangelog(args []string) {
 func runReleaseNotes(args []string) {
 	fs := flag.NewFlagSet("release-notes", flag.ExitOnError)
 	tag := fs.String("tag", "", "git tag (e.g. v0.1.3 or v0.1.3-beta.1)")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		fatalf("parse flags: %v", err)
+	}
 	if *tag == "" {
 		fatalf("--tag is required")
 	}
