@@ -12,13 +12,18 @@ endif
 BINARY := goclaw
 
 # Version info from CHANGELOG.md (format: ## [VERSION] CHANNEL - DATE)
-CHANGELOG_LINE := $(shell rg -m1 '^## \[[0-9]' CHANGELOG.md 2>/dev/null)
-VERSION := $(word 2,$(subst ], ,$(subst [, ,$(CHANGELOG_LINE))))
-CHANNEL := $(word 3,$(CHANGELOG_LINE))
-CHANGELOG_DATE := $(word 5,$(CHANGELOG_LINE))
+get_release_line = $(shell awk '/^## \[[0-9]/{print; exit}' CHANGELOG.md 2>/dev/null)
+get_version = $(shell awk '/^## \[[0-9]/{print $$2; exit}' CHANGELOG.md 2>/dev/null | tr -d '[]')
+get_channel = $(shell awk '/^## \[[0-9]/{print $$3; exit}' CHANGELOG.md 2>/dev/null)
+get_changelog_date = $(shell awk '/^## \[[0-9]/{print $$5; exit}' CHANGELOG.md 2>/dev/null)
+CHANGELOG_LINE := $(call get_release_line)
+VERSION := $(call get_version)
+CHANNEL := $(call get_channel)
+CHANGELOG_DATE := $(call get_changelog_date)
 
 # Compute git tag (stable = vX.Y.Z, beta/rc = vX.Y.Z-channel.N)
-TAG = $(shell sh -c 'if [ "$(CHANNEL)" = "stable" ]; then echo "v$(VERSION)"; else n=1; while git rev-parse "v$(VERSION)-$(CHANNEL).$$n" >/dev/null 2>&1; do n=`expr $$n + 1`; done; echo "v$(VERSION)-$(CHANNEL).$$n"; fi')
+get_tag = $(shell sh -c 'if [ "$(CHANNEL)" = "stable" ]; then echo "v$(VERSION)"; else n=1; while git rev-parse "v$(VERSION)-$(CHANNEL).$$n" >/dev/null 2>&1; do n=`expr $$n + 1`; done; echo "v$(VERSION)-$(CHANNEL).$$n"; fi')
+TAG := $(call get_tag)
 
 # Skills sync from upstream OpenClaw
 OPENCLAW_REPO := https://github.com/openclaw/openclaw.git
@@ -343,7 +348,7 @@ release-monitor:
 # Use when a release failed and you need to retry with the same version
 # Use FORCE=1 to skip confirmation prompt
 re-release:
-	@version=$(call get_tag); \
+	@version="$(call get_tag)"; \
 	echo "=== Re-release $$version ==="; \
 	if [ "$(FORCE)" != "1" ]; then \
 		read -p "Delete and recreate tag $$version? [y/N] " confirm; \

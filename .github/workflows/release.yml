@@ -4,6 +4,9 @@ on:
   push:
     tags: ['v*']
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 permissions:
   contents: write
   packages: write
@@ -13,11 +16,11 @@ jobs:
   build-linux-amd64:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.25'
 
@@ -52,7 +55,7 @@ jobs:
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -69,7 +72,7 @@ jobs:
           GGOOS: linux
           GGOARCH: amd64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: dist-linux-amd64
           path: dist/
@@ -79,11 +82,11 @@ jobs:
   build-linux-arm64:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.25'
 
@@ -118,7 +121,7 @@ jobs:
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -135,7 +138,7 @@ jobs:
           GGOOS: linux
           GGOARCH: arm64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: dist-linux-arm64
           path: dist/
@@ -145,11 +148,11 @@ jobs:
   build-darwin-amd64:
     runs-on: macos-15-intel
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.25'
 
@@ -187,7 +190,7 @@ jobs:
           GGOOS: darwin
           GGOARCH: amd64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: dist-darwin-amd64
           path: dist/
@@ -197,11 +200,11 @@ jobs:
   build-darwin-arm64:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.25'
 
@@ -239,7 +242,7 @@ jobs:
           GGOOS: darwin
           GGOARCH: arm64
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: dist-darwin-arm64
           path: dist/
@@ -250,31 +253,31 @@ jobs:
     needs: [build-linux-amd64, build-linux-arm64, build-darwin-amd64, build-darwin-arm64]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.25'
 
       # Download all build artifacts into dist/
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: dist-linux-amd64
           path: dist/
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: dist-linux-arm64
           path: dist/
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: dist-darwin-amd64
           path: dist/
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: dist-darwin-arm64
           path: dist/
@@ -287,22 +290,25 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Extract release notes from CHANGELOG
-      - name: Read changelog
-        id: changelog
-        uses: mindsers/changelog-reader-action@v2
-        with:
-          path: ./CHANGELOG.md
-
+      # Extract release notes from CHANGELOG for the current tag
       - name: Write release notes
         run: |
-          echo "${{ steps.changelog.outputs.changes }}" > /tmp/release_notes.md
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#v}
+          awk -v version="$VERSION" '
+            $0 ~ "^## \\[" version "\\]" {capture=1; next}
+            capture && /^## \[/ {exit}
+            capture {print}
+          ' CHANGELOG.md > /tmp/release_notes.md
+          if [ ! -s /tmp/release_notes.md ]; then
+            echo "Release ${TAG}" > /tmp/release_notes.md
+          fi
 
       - name: Append auto-generated PR list
         run: |
