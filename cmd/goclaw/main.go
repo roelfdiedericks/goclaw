@@ -44,7 +44,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
-	"github.com/roelfdiedericks/goclaw/internal/sandbox/bwrap"
+	sbruntime "github.com/roelfdiedericks/goclaw/internal/sandbox/runtime"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/setup"
 	setupweb "github.com/roelfdiedericks/goclaw/internal/setup/web"
@@ -2239,32 +2239,42 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		L_info("browser: disabled by configuration")
 	}
 
-	// Check bubblewrap availability for sandboxing
+	// Initialize sandbox manager singleton before checking backend availability.
+	sandbox.InitManager(cfg.Sandbox, cfg.Gateway.WorkingDir)
+
+	// Check sandbox backend availability for managed exec/browser sandboxing.
 	execBwrapEnabled := cfg.Tools.Exec.Bubblewrap.Enabled
 	browserBwrapEnabled := cfg.Tools.Browser.Bubblewrap.Enabled
 	sandboxDisabledReason := "" // Track if sandbox was disabled for later warning
 	if execBwrapEnabled || browserBwrapEnabled {
-		if !bwrap.IsLinux() {
-			L_warn("sandbox: bubblewrap only available on Linux, disabling")
+		backendPath := cfg.Sandbox.Bubblewrap.Path
+		execAvailable := sbruntime.ExecSandboxAvailable(backendPath)
+		browserAvailable := sbruntime.BrowserSandboxAvailable(backendPath)
+		if !execAvailable && !browserAvailable {
+			L_warn("sandbox: managed sandbox backend unavailable, disabling",
+				"backend", sbruntime.SandboxBackendName())
 			cfg.Tools.Exec.Bubblewrap.Enabled = false
 			cfg.Tools.Browser.Bubblewrap.Enabled = false
-			sandboxDisabledReason = "not Linux"
-		} else if !bwrap.IsAvailable(cfg.Sandbox.Bubblewrap.Path) {
-			L_warn("sandbox: bwrap not found, disabling sandboxing",
+			sandboxDisabledReason = sbruntime.SandboxBackendName() + " unavailable"
+		} else {
+			if execBwrapEnabled && !execAvailable {
+				L_warn("sandbox: exec sandbox backend unavailable, disabling exec sandbox",
+					"backend", sbruntime.SandboxBackendName())
+				cfg.Tools.Exec.Bubblewrap.Enabled = false
+			}
+			if browserBwrapEnabled && !browserAvailable {
+				L_warn("sandbox: browser sandbox backend unavailable, disabling browser sandbox",
+					"backend", sbruntime.SandboxBackendName())
+				cfg.Tools.Browser.Bubblewrap.Enabled = false
+			}
+		}
+		if cfg.Tools.Exec.Bubblewrap.Enabled || cfg.Tools.Browser.Bubblewrap.Enabled {
+			L_info("sandbox: backend available",
+				"backend", sbruntime.SandboxBackendName(),
 				"execEnabled", execBwrapEnabled,
 				"browserEnabled", browserBwrapEnabled)
-			cfg.Tools.Exec.Bubblewrap.Enabled = false
-			cfg.Tools.Browser.Bubblewrap.Enabled = false
-			sandboxDisabledReason = "bwrap not installed"
-		} else {
-			L_info("sandbox: bubblewrap available",
-				"execEnabled", cfg.Tools.Exec.Bubblewrap.Enabled,
-				"browserEnabled", cfg.Tools.Browser.Bubblewrap.Enabled)
 		}
 	}
-
-	// Initialize sandbox manager singleton
-	sandbox.InitManager(cfg.Sandbox, cfg.Gateway.WorkingDir)
 
 	// Create tool registry (tools registered after gateway is ready)
 	toolsReg := tools.NewRegistry()

@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || darwin
 
 package exec
 
@@ -8,7 +8,8 @@ import (
 	"os/exec"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
-	"github.com/roelfdiedericks/goclaw/internal/sandbox/bwrap"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox"
+	sbruntime "github.com/roelfdiedericks/goclaw/internal/sandbox/runtime"
 )
 
 // buildSandboxedCommand creates a sandboxed exec.Cmd using bubblewrap.
@@ -19,48 +20,33 @@ func (r *Runner) buildSandboxedCommand(ctx context.Context, command, workDir str
 	}
 
 	home, _ := os.UserHomeDir()
-
-	// Build base sandbox config
-	b := bwrap.ExecSandbox(r.config.WorkingDir, home, r.config.Bubblewrap.AllowNetwork, r.config.Bubblewrap.ClearEnv)
-
-	// Set custom bwrap path if provided
-	if r.config.BubblewrapPath != "" {
-		b.BwrapPath(r.config.BubblewrapPath)
-	}
-
-	// Add extra read-only binds
-	for _, path := range r.config.Bubblewrap.ExtraRoBind {
-		b.RoBind(path)
-	}
-
-	// Add extra read-write binds
-	for _, path := range r.config.Bubblewrap.ExtraBind {
-		b.Bind(path)
-	}
-
-	// Add extra environment variables
-	for k, v := range r.config.Bubblewrap.ExtraEnv {
-		b.SetEnv(k, v)
-	}
-
-	// Set working directory inside sandbox (if different from workspace root)
-	if workDir != "" && workDir != r.config.WorkingDir {
-		b.Bind(workDir)
-		b.Chdir(workDir)
-	}
-
-	// Set the shell command to run
-	b.ShellCommand(command)
-
-	// Build the command
-	cmd, err := b.BuildCommand()
+	mgr := sandbox.GetManager()
+	cmd, err := sbruntime.BuildExecCommand(command, sbruntime.ExecLaunchOptions{
+		BackendPath:   r.config.BubblewrapPath,
+		WorkspaceDir:  r.config.WorkingDir,
+		WorkDir:       workDir,
+		HomeDir:       preferredExecHome(mgr, home),
+		Volumes:       runtimeVolumes(mgr.GetVolumes()),
+		ProtectedDirs: mgr.GetProtectedDirs(),
+		ClearEnv:      r.config.Bubblewrap.ClearEnv,
+		AllowNetwork:  r.config.Bubblewrap.AllowNetwork,
+		ExtraEnv:      r.config.Bubblewrap.ExtraEnv,
+		ExtraBind:     r.config.Bubblewrap.ExtraBind,
+		ExtraRoBind:   r.config.Bubblewrap.ExtraRoBind,
+	})
 	if err != nil {
 		L_error("exec runner: failed to build sandbox command", "error", err)
 		return nil, err
 	}
+	if cmd == nil {
+		return nil, nil
+	}
 
 	// Apply context for timeout handling
-	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...) //nolint:gosec // G204: cmd from bwrap builder - sandboxed execution
+	baseCmd := cmd
+	cmd = exec.CommandContext(ctx, baseCmd.Path, baseCmd.Args[1:]...) //nolint:gosec // G204: sandbox backend provides validated command
+	cmd.Dir = baseCmd.Dir
+	cmd.Env = baseCmd.Env
 
 	L_debug("exec runner: sandbox command built",
 		"command", truncate(command, 50),
@@ -69,6 +55,24 @@ func (r *Runner) buildSandboxedCommand(ctx context.Context, command, workDir str
 	)
 
 	return cmd, nil
+}
+
+func preferredExecHome(mgr *sandbox.Manager, realHome string) string {
+	if mgr != nil && mgr.GetHomeDir() != "" {
+		return mgr.GetHomeDir()
+	}
+	return realHome
+}
+
+func runtimeVolumes(vols []sandbox.SandboxVolume) []sbruntime.SandboxVolume {
+	out := make([]sbruntime.SandboxVolume, 0, len(vols))
+	for _, vol := range vols {
+		out = append(out, sbruntime.SandboxVolume{
+			MountPoint: vol.MountPoint,
+			Source:     vol.Source,
+		})
+	}
+	return out
 }
 
 func truncate(s string, maxLen int) string {

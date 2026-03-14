@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -980,13 +981,11 @@ func stepSandbox(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
 		Title: "Sandboxing",
 		Content: func(w *forms.Wizard) tview.Primitive {
-			isLinux := isLinuxOS()
-
-			if !isLinux {
+			if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 				tv := tview.NewTextView().
 					SetDynamicColors(true).
-					SetText(`[yellow]Note:[white] Bubblewrap sandboxing is only available on Linux.
-The exec and browser tools will run without kernel sandboxing.`)
+					SetText(`[yellow]Note:[white] Managed sandboxing is currently implemented for Linux and macOS.
+On other platforms, the exec and browser tools run without OS sandbox enforcement.`)
 				tv.SetBorder(false)
 				return tv
 			}
@@ -1397,16 +1396,6 @@ func sanitizeUsername(name string) string {
 		result = "user"
 	}
 	return result
-}
-
-func isLinuxOS() bool {
-	// Check GOOS at runtime
-	return os.Getenv("GOOS") == "linux" || fileExists("/proc/version")
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 // formWithHeader creates a layout with colored header text above a form
