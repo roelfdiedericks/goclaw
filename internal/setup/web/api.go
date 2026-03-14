@@ -282,10 +282,7 @@ func (a *API) saveSectionConfig(w http.ResponseWriter, r *http.Request, section 
 	}
 
 	// Save config to the same path it was loaded from
-	savePath := result.SourcePath
-	if savePath == "" {
-		savePath = a.configPath
-	}
+	savePath := a.resolveSavePath(result)
 
 	if err := config.BackupAndWriteJSON(savePath, result.Config, config.DefaultBackupCount); err != nil {
 		L_error("api: failed to save config", "error", err)
@@ -364,10 +361,33 @@ func setConfigPath(cfg *config.Config, pointer string, value interface{}) error 
 }
 
 func (a *API) loadConfig() (*config.LoadResult, error) {
+	var (
+		result *config.LoadResult
+		err    error
+	)
+
 	if strings.TrimSpace(a.configPath) == "" {
-		return config.Load()
+		result, err = config.Load()
+	} else {
+		result, err = config.LoadFromPath(a.configPath)
 	}
-	return config.LoadFromPath(a.configPath)
+	if err == nil {
+		return result, nil
+	}
+	if config.IsMissingOrIncompleteConfigError(err) {
+		return config.LoadDefaults()
+	}
+	return nil, err
+}
+
+func (a *API) resolveSavePath(result *config.LoadResult) string {
+	if result != nil && strings.TrimSpace(result.SourcePath) != "" {
+		return result.SourcePath
+	}
+	if strings.TrimSpace(a.configPath) != "" {
+		return a.configPath
+	}
+	return config.GetLoadedConfigPath()
 }
 
 func projectSectionRootData(sectionData interface{}, formDef *forms.FormDef) interface{} {
