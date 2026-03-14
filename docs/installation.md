@@ -161,11 +161,16 @@ goclaw start         # Daemon mode (background)
 
 - **Go 1.25+** — [golang.org/dl](https://golang.org/dl/)
 - **Git**
-- **GCC** — Required for SQLite with FTS5 (full-text search)
+- **C toolchain** — Required for SQLite with FTS5 and local `whisper.cpp`
 
 ```bash
 # Debian/Ubuntu
 sudo apt install build-essential
+
+# macOS
+xcode-select --install
+brew install make
+brew install cmake libomp
 ```
 
 ### Build Steps
@@ -175,11 +180,17 @@ sudo apt install build-essential
 git clone https://github.com/roelfdiedericks/goclaw.git
 cd goclaw
 
-# Build (uses Makefile with correct CGO flags)
-make build
+# macOS only: use modern GNU Make from Homebrew
+gmake deps
 
-# Or build directly with Go (ensure CGO flags are set)
-CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" go build -o goclaw ./cmd/goclaw
+# Linux
+make deps
+
+# macOS only
+gmake build
+
+# Linux
+make build
 
 # Install to ~/.goclaw/bin/
 mkdir -p ~/.goclaw/bin
@@ -188,6 +199,19 @@ mv goclaw ~/.goclaw/bin/
 # Add to PATH (if not already)
 echo 'export PATH="$PATH:$HOME/.goclaw/bin"' >> ~/.bashrc
 source ~/.bashrc
+```
+
+For local development, run `goclaw setup` before `make debug` or `gmake debug`. The debug target expects a valid `goclaw.json`, `users.json`, and provider configuration to already exist.
+
+On macOS, the system `make` is too old for this project. Use Homebrew GNU Make:
+
+```bash
+# One-off
+gmake build
+gmake debug
+
+# Optional: make Homebrew GNU Make the default in your shell
+export PATH="$(brew --prefix make)/libexec/gnubin:$PATH"
 ```
 
 ### Makefile Targets
@@ -208,7 +232,8 @@ source ~/.bashrc
 
 ### Minimum
 
-- Linux (amd64 or arm64)
+- Linux (amd64 or arm64) for packaged installs and releases
+- macOS for source builds
 - 512 MB RAM
 - 100 MB disk space
 
@@ -396,14 +421,24 @@ chmod +x ~/.goclaw/bin/goclaw
 
 ### CGO / SQLite build errors
 
-GoClaw requires CGO for SQLite with FTS5 support:
+GoClaw requires CGO for SQLite with FTS5 support, and source builds also expect local `whisper.cpp` libraries:
 
 ```bash
-# Ensure GCC is installed
+# Linux: ensure build tools are installed
 sudo apt install build-essential
 
-# Build with explicit CGO flags
-CGO_ENABLED=1 CGO_CFLAGS="-DSQLITE_ENABLE_FTS5" make build
+# macOS: ensure Command Line Tools and Homebrew deps are installed
+xcode-select --install
+brew install make
+brew install cmake libomp
+
+# macOS: use modern GNU Make
+gmake deps
+gmake build
+
+# Linux
+make deps
+make build
 ```
 
 ### Bubblewrap sandbox fails

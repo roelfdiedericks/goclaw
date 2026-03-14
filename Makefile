@@ -1,36 +1,53 @@
 .PHONY: build run debug trace clean install test lint audit install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release deps deps-check metadata
 
+SHELL := /bin/bash
+UNAME_S := $(shell uname -s)
+
+ifeq ($(UNAME_S),Darwin)
+ifeq ($(MAKE_VERSION),3.81)
+$(error modern GNU Make is required on macOS. Install it with 'brew install make' and use 'gmake ...', or add '$(shell brew --prefix make 2>/dev/null)/libexec/gnubin' to your PATH)
+endif
+endif
+
 BINARY := goclaw
 
 # Version info from CHANGELOG.md (format: ## [VERSION] CHANNEL - DATE)
-VERSION := $(shell grep -m1 '^## \[[0-9]' CHANGELOG.md 2>/dev/null | sed 's/## \[\([^]]*\)\].*/\1/' || echo "0.0.0")
-CHANNEL := $(shell grep -m1 '^## \[[0-9]' CHANGELOG.md 2>/dev/null | sed 's/.*\] \([a-z]*\) -.*/\1/' || echo "dev")
-CHANGELOG_DATE := $(shell grep -m1 '^## \[[0-9]' CHANGELOG.md 2>/dev/null | sed 's/.*- //' || echo "")
+CHANGELOG_LINE := $(shell rg -m1 '^## \[[0-9]' CHANGELOG.md 2>/dev/null)
+VERSION := $(word 2,$(subst ], ,$(subst [, ,$(CHANGELOG_LINE))))
+CHANNEL := $(word 3,$(CHANGELOG_LINE))
+CHANGELOG_DATE := $(word 5,$(CHANGELOG_LINE))
 
 # Compute git tag (stable = vX.Y.Z, beta/rc = vX.Y.Z-channel.N)
-define get_tag
-$(shell \
-  if [ "$(CHANNEL)" = "stable" ]; then \
-    echo "v$(VERSION)"; \
-  else \
-    n=1; \
-    while git rev-parse "v$(VERSION)-$(CHANNEL).$$n" >/dev/null 2>&1; do \
-      n=$$((n+1)); \
-    done; \
-    echo "v$(VERSION)-$(CHANNEL).$$n"; \
-  fi)
-endef
-TAG = $(call get_tag)
+TAG = $(shell sh -c 'if [ "$(CHANNEL)" = "stable" ]; then echo "v$(VERSION)"; else n=1; while git rev-parse "v$(VERSION)-$(CHANNEL).$$n" >/dev/null 2>&1; do n=`expr $$n + 1`; done; echo "v$(VERSION)-$(CHANNEL).$$n"; fi')
 
 # Skills sync from upstream OpenClaw
 OPENCLAW_REPO := https://github.com/openclaw/openclaw.git
 SKILLS_TMP := .skills-upstream
 
+# Platform-specific build configuration for local whisper.cpp support.
+CPU_COUNT := $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+BREW := $(shell command -v brew 2>/dev/null)
+LIBOMP_PREFIX := $(shell if [ -n "$(BREW)" ]; then brew --prefix libomp 2>/dev/null || true; fi)
+
 # CGO flags for SQLite FTS5 support (required for memory search)
-# and Whisper.cpp STT support (optional, run 'make deps' first)
+# and Whisper.cpp STT support (run 'make deps' first on developer machines)
 WHISPER_LIB := $(HOME)/.goclaw/lib/whisper
-export CGO_CFLAGS := -DSQLITE_ENABLE_FTS5 -I$(WHISPER_LIB)
-export CGO_LDFLAGS := -L$(WHISPER_LIB) $(WHISPER_LIB)/libwhisper.a $(WHISPER_LIB)/libggml.a $(WHISPER_LIB)/libggml-base.a $(WHISPER_LIB)/libggml-cpu.a -lm -lstdc++ -fopenmp -lpthread
+SQLITE_CGO_CFLAGS := -DSQLITE_ENABLE_FTS5
+WHISPER_LIB_PATHS := -L$(WHISPER_LIB)
+
+ifeq ($(UNAME_S),Darwin)
+WHISPER_CMAKE_ARGS := -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DWHISPER_BUILD_EXAMPLES=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF -DGGML_OPENMP=ON
+ifneq ($(LIBOMP_PREFIX),)
+WHISPER_CMAKE_ARGS += -DCMAKE_PREFIX_PATH=$(LIBOMP_PREFIX) -DOpenMP_ROOT=$(LIBOMP_PREFIX)
+WHISPER_PLATFORM_LIBS := -Wl,-no_warn_duplicate_libraries $(LIBOMP_PREFIX)/lib/libomp.a
+endif
+else
+WHISPER_CMAKE_ARGS := -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+WHISPER_PLATFORM_LIBS := $(WHISPER_LIB_PATHS) -lm -lstdc++ -fopenmp -lpthread
+endif
+
+export CGO_CFLAGS := $(SQLITE_CGO_CFLAGS) -I$(WHISPER_LIB)
+export CGO_LDFLAGS := $(WHISPER_LIB_PATHS) $(WHISPER_PLATFORM_LIBS)
 export C_INCLUDE_PATH := $(WHISPER_LIB)
 export LIBRARY_PATH := $(WHISPER_LIB)
 
@@ -74,19 +91,45 @@ WHISPER_VERSION := 1.8.3
 
 # Build whisper.cpp from source for STT support (static libraries)
 deps:
+	@command -v cmake >/dev/null 2>&1 || { \
+		if [ "$(UNAME_S)" = "Darwin" ]; then \
+			if [ -z "$(BREW)" ]; then \
+				echo "FAIL: Homebrew not found. Install Homebrew from https://brew.sh first."; \
+				exit 1; \
+			fi; \
+			echo "Installing cmake via Homebrew..."; \
+			brew install cmake; \
+		else \
+			echo "FAIL: cmake not found. Install cmake using your package manager."; \
+			exit 1; \
+		fi; \
+	}
+ifeq ($(UNAME_S),Darwin)
+	@if [ -z "$(BREW)" ]; then \
+		echo "FAIL: Homebrew not found. Install Homebrew from https://brew.sh first."; \
+		exit 1; \
+	fi
+	@echo "Checking Homebrew dependencies..."
+	@brew list cmake >/dev/null 2>&1 || brew install cmake
+	@brew list libomp >/dev/null 2>&1 || brew install libomp
+endif
 	@echo "Building whisper.cpp $(WHISPER_VERSION) (static)..."
-	@mkdir -p $(WHISPER_LIB)
-	@if [ ! -f $(WHISPER_LIB)/libwhisper.a ]; then \
+	@mkdir -p "$(WHISPER_LIB)"
+	@if [ ! -f "$(WHISPER_LIB)/libwhisper.a" ]; then \
 		echo "Cloning whisper.cpp..."; \
 		rm -rf /tmp/whisper.cpp; \
 		git clone --depth 1 -b v$(WHISPER_VERSION) https://github.com/ggerganov/whisper.cpp /tmp/whisper.cpp; \
 		echo "Building static libraries (CPU-only)..."; \
-		cd /tmp/whisper.cpp && cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF && cmake --build build -j$$(nproc); \
+		cd /tmp/whisper.cpp && cmake -B build $(WHISPER_CMAKE_ARGS) && cmake --build build -j$(CPU_COUNT); \
 		echo "Installing to $(WHISPER_LIB)..."; \
-		cp /tmp/whisper.cpp/build/src/libwhisper.a $(WHISPER_LIB)/; \
-		cp /tmp/whisper.cpp/build/ggml/src/libggml*.a $(WHISPER_LIB)/; \
-		cp /tmp/whisper.cpp/include/whisper.h $(WHISPER_LIB)/; \
-		cp /tmp/whisper.cpp/ggml/include/*.h $(WHISPER_LIB)/; \
+		cp /tmp/whisper.cpp/build/src/libwhisper.a "$(WHISPER_LIB)/"; \
+		cp /tmp/whisper.cpp/build/ggml/src/libggml*.a "$(WHISPER_LIB)/"; \
+		if [ "$(UNAME_S)" = "Darwin" ]; then \
+			cp /tmp/whisper.cpp/build/ggml/src/ggml-metal/libggml-metal.a "$(WHISPER_LIB)/"; \
+			cp /tmp/whisper.cpp/build/ggml/src/ggml-blas/libggml-blas.a "$(WHISPER_LIB)/"; \
+		fi; \
+		cp /tmp/whisper.cpp/include/whisper.h "$(WHISPER_LIB)/"; \
+		cp /tmp/whisper.cpp/ggml/include/*.h "$(WHISPER_LIB)/"; \
 		rm -rf /tmp/whisper.cpp; \
 		echo "whisper.cpp installed to $(WHISPER_LIB)"; \
 	else \
@@ -99,12 +142,39 @@ deps:
 	@echo "  Small English (466MB): https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin"
 
 deps-check:
-	@if [ -f $(WHISPER_LIB)/libwhisper.a ]; then \
+	@command -v cmake >/dev/null 2>&1 || { \
+		echo "FAIL: cmake not found."; \
+		exit 1; \
+	}
+ifeq ($(UNAME_S),Darwin)
+	@if [ -z "$(BREW)" ]; then \
+		echo "FAIL: Homebrew not found. Install Homebrew from https://brew.sh first."; \
+		exit 1; \
+	fi
+	@brew list cmake >/dev/null 2>&1 || { \
+		echo "FAIL: cmake not found in Homebrew. Run: make deps"; \
+		exit 1; \
+	}
+	@brew list libomp >/dev/null 2>&1 || { \
+		echo "FAIL: libomp not found in Homebrew. Run: make deps"; \
+		exit 1; \
+	}
+	@echo "OK: Homebrew dependencies installed"
+endif
+	@if [ -f "$(WHISPER_LIB)/libwhisper.a" ] && [ -f "$(WHISPER_LIB)/libggml.a" ] && [ -f "$(WHISPER_LIB)/libggml-base.a" ] && [ -f "$(WHISPER_LIB)/libggml-cpu.a" ] && [ -f "$(WHISPER_LIB)/whisper.h" ]; then \
 		echo "OK: whisper.cpp installed at $(WHISPER_LIB)"; \
 	else \
 		echo "FAIL: whisper.cpp not found. Run: make deps"; \
 		exit 1; \
 	fi
+ifeq ($(UNAME_S),Darwin)
+	@if [ -f "$(WHISPER_LIB)/libggml-metal.a" ] && [ -f "$(WHISPER_LIB)/libggml-blas.a" ]; then \
+		echo "OK: macOS ggml backends installed"; \
+	else \
+		echo "FAIL: macOS ggml backend libs not found. Run: make deps"; \
+		exit 1; \
+	fi
+endif
 
 # Daemon shortcuts
 start: build

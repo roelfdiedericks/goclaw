@@ -2025,6 +2025,7 @@ func (s *SetupAutoCmd) Run(ctx *Context) error {
 type SetupWizardCmd struct {
 	Web bool `help:"Force web browser interface"`
 	TUI bool `help:"Force terminal interface"`
+	Dev bool `help:"Enable developer tools (right-click inspect)"`
 }
 
 func (s *SetupWizardCmd) Run(ctx *Context) error {
@@ -2036,7 +2037,7 @@ func (s *SetupWizardCmd) Run(ctx *Context) error {
 
 	if s.Web {
 		// Force web mode - fail with helpful message if not available
-		err := setupweb.RunWebWizard(configPath)
+		err := setupweb.RunWebWizardWithOptions(configPath, s.Dev)
 		if err == setupweb.ErrNoUIAvailable {
 			fmt.Println("\nError: Cannot open web interface.")
 			fmt.Println("\nTo use the web wizard, install one of:")
@@ -2049,7 +2050,7 @@ func (s *SetupWizardCmd) Run(ctx *Context) error {
 	}
 
 	// Auto-detect mode: try web, silently fallback to TUI
-	err := setupweb.RunWebWizard(configPath)
+	err := setupweb.RunWebWizardWithOptions(configPath, s.Dev)
 	if err == setupweb.ErrNoUIAvailable {
 		L_debug("web wizard not available, falling back to TUI")
 		return setup.RunWizard()
