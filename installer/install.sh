@@ -14,6 +14,10 @@ set -e
 REPO="roelfdiedericks/goclaw"
 INSTALL_DIR="$HOME/.goclaw/bin"
 BINARY_NAME="goclaw"
+USER_BIN_DIR=""
+RC_FILE=""
+RC_EXPORT_LINE=""
+PATH_ACTION="none"
 
 # Defaults
 VERSION=""
@@ -169,6 +173,119 @@ verify_checksum() {
     success "Checksum verified"
 }
 
+# Return 0 if a directory is writable by the current user, 1 otherwise.
+is_writable_dir() {
+    dir="$1"
+    [ -n "$dir" ] || return 1
+    [ -d "$dir" ] || return 1
+    [ -w "$dir" ]
+}
+
+# Choose an existing user-owned bin directory already present in PATH.
+choose_user_bin_dir() {
+    OLD_IFS=$IFS
+    IFS=':'
+    for dir in $PATH; do
+        case "$dir" in
+            "$HOME"/*)
+                case "$dir" in
+                    */bin)
+                        if is_writable_dir "$dir"; then
+                            printf '%s\n' "$dir"
+                            IFS=$OLD_IFS
+                            return 0
+                        fi
+                        ;;
+                esac
+                ;;
+        esac
+    done
+    IFS=$OLD_IFS
+    return 1
+}
+
+# Detect the user's preferred shell name.
+detect_shell_name() {
+    if [ -n "$SHELL" ]; then
+        basename "$SHELL"
+        return 0
+    fi
+    return 1
+}
+
+# Determine the most conservative rc file to update for the detected shell.
+select_rc_file() {
+    os="$1"
+    shell_name="$2"
+
+    case "$shell_name" in
+        bash)
+            if [ "$os" = "darwin" ]; then
+                if [ -f "$HOME/.bash_profile" ]; then
+                    printf '%s\n' "$HOME/.bash_profile"
+                elif [ -f "$HOME/.bash_login" ]; then
+                    printf '%s\n' "$HOME/.bash_login"
+                else
+                    printf '%s\n' "$HOME/.bash_profile"
+                fi
+            else
+                if [ -f "$HOME/.bashrc" ]; then
+                    printf '%s\n' "$HOME/.bashrc"
+                else
+                    printf '%s\n' "$HOME/.bashrc"
+                fi
+            fi
+            ;;
+        zsh)
+            printf '%s\n' "$HOME/.zshrc"
+            ;;
+        fish)
+            printf '%s\n' "$HOME/.config/fish/config.fish"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Decide how the installed binary should be exposed to the user's PATH.
+choose_path_strategy() {
+    os="$1"
+
+    if [ "$SKIP_PATH" = true ]; then
+        PATH_ACTION="skip"
+        return
+    fi
+
+    if echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
+        PATH_ACTION="ready"
+        return
+    fi
+
+    if USER_BIN_DIR=$(choose_user_bin_dir); then
+        PATH_ACTION="symlink"
+        return
+    fi
+
+    shell_name=$(detect_shell_name 2>/dev/null || true)
+    if [ -n "$shell_name" ]; then
+        if RC_FILE=$(select_rc_file "$os" "$shell_name" 2>/dev/null); then
+            PATH_ACTION="rc"
+            case "$shell_name" in
+                fish)
+                    RC_EXPORT_LINE="set -gx PATH \$PATH $INSTALL_DIR"
+                    ;;
+                *)
+                    RC_EXPORT_LINE="export PATH=\"\$PATH:$INSTALL_DIR\""
+                    ;;
+            esac
+            return
+        fi
+    fi
+
+    PATH_ACTION="manual"
+}
+
 # Configure PATH
 configure_path() {
     if [ "$SKIP_PATH" = true ]; then
@@ -177,65 +294,37 @@ configure_path() {
     
     os="$1"
     binary_path="$INSTALL_DIR/$BINARY_NAME"
-    
-    # Check if already in PATH
-    if echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
-        info "Install directory already in PATH"
-        return
-    fi
-    
-    # Linux: Try symlink to ~/.local/bin first
-    if [ "$os" = "linux" ]; then
-        local_bin="$HOME/.local/bin"
-        if [ -d "$local_bin" ] && echo "$PATH" | tr ':' '\n' | grep -qx "$local_bin"; then
-            info "Creating symlink in ~/.local/bin..."
-            mkdir -p "$local_bin"
-            ln -sf "$binary_path" "$local_bin/$BINARY_NAME"
-            success "Symlink created: $local_bin/$BINARY_NAME"
-            echo ""
-            success "GoClaw is ready! Run: goclaw setup"
-            return
-        fi
-    fi
-    
-    # Fallback: Modify shell RC file
-    export_line="export PATH=\"\$PATH:$INSTALL_DIR\""
-    
-    # Detect shell and RC file
-    shell_name=$(basename "$SHELL")
-    case "$shell_name" in
-        bash)
-            rc_file="$HOME/.bashrc"
+
+    choose_path_strategy "$os"
+
+    case "$PATH_ACTION" in
+        ready)
+            info "Install directory already in PATH"
             ;;
-        zsh)
-            rc_file="$HOME/.zshrc"
+        symlink)
+            info "Creating symlink in $USER_BIN_DIR..."
+            ln -sf "$binary_path" "$USER_BIN_DIR/$BINARY_NAME"
+            success "Symlink created: $USER_BIN_DIR/$BINARY_NAME"
             ;;
-        fish)
-            rc_file="$HOME/.config/fish/config.fish"
-            export_line="set -gx PATH \$PATH $INSTALL_DIR"
+        rc)
+            if [ -f "$RC_FILE" ] && grep -q "$INSTALL_DIR" "$RC_FILE"; then
+                info "PATH already configured in $RC_FILE"
+            else
+                info "Adding GoClaw to PATH in $RC_FILE..."
+                rc_parent=$(dirname "$RC_FILE")
+                mkdir -p "$rc_parent"
+                if [ ! -f "$RC_FILE" ]; then
+                    : > "$RC_FILE"
+                fi
+                echo "" >> "$RC_FILE"
+                echo "# GoClaw" >> "$RC_FILE"
+                echo "$RC_EXPORT_LINE" >> "$RC_FILE"
+                success "PATH configured in $RC_FILE"
+            fi
             ;;
-        *)
-            rc_file="$HOME/.profile"
+        manual)
             ;;
     esac
-    
-    # Check if already configured
-    if [ -f "$rc_file" ] && grep -q "$INSTALL_DIR" "$rc_file"; then
-        info "PATH already configured in $rc_file"
-    else
-        info "Adding GoClaw to PATH in $rc_file..."
-        echo "" >> "$rc_file"
-        echo "# GoClaw" >> "$rc_file"
-        echo "$export_line" >> "$rc_file"
-        success "PATH configured in $rc_file"
-    fi
-    
-    echo ""
-    warn "To use goclaw in this terminal, run:"
-    echo ""
-    printf "    ${GREEN}source %s${NC}\n" "$rc_file"
-    echo ""
-    echo "Then run: goclaw setup"
 }
 
 # Main installation
@@ -312,6 +401,34 @@ main() {
     
     echo ""
     success "Installation complete!"
+    echo ""
+    case "$PATH_ACTION" in
+        skip)
+            warn "PATH configuration skipped (--no-path)."
+            printf "Run it directly: ${GREEN}%s${NC}\n" "$INSTALL_DIR/$BINARY_NAME"
+            ;;
+        ready)
+            success "GoClaw is ready! Run: goclaw setup"
+            ;;
+        symlink)
+            success "GoClaw is ready! Run: goclaw setup"
+            ;;
+        rc)
+            warn "To use goclaw in this terminal, run:"
+            echo ""
+            printf "    ${GREEN}source %s${NC}\n" "$RC_FILE"
+            echo ""
+            echo "Then run: goclaw setup"
+            ;;
+        manual)
+            warn "Could not determine a safe shell startup file to update."
+            echo "Add this to your shell configuration manually:"
+            echo ""
+            printf "    ${GREEN}export PATH=\"\$PATH:%s\"${NC}\n" "$INSTALL_DIR"
+            echo ""
+            echo "Then run: goclaw setup"
+            ;;
+    esac
 }
 
 # Install runtime dependencies (Linux only)

@@ -21,8 +21,9 @@ curl -fsSL https://goclaw.org/install.sh | sh
 This will:
 - Download the latest stable release for your platform
 - Verify the checksum
-- Install to `~/.goclaw/bin/goclaw`
-- Add to your PATH (via symlink or shell config)
+- Install the binary to `~/.goclaw/bin/goclaw`
+- Prefer an existing user-owned `bin` directory already on your `PATH`
+- Otherwise add `~/.goclaw/bin` to the startup file for your current shell
 
 **Options:**
 
@@ -39,6 +40,8 @@ Verify the installation:
 ```bash
 goclaw version
 ```
+
+The installer never relies on privileged locations like `/usr/local/bin`. It stays in user-owned directories on both Linux and macOS.
 
 ### Install from Debian Package
 
