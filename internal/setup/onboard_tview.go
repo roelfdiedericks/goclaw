@@ -157,7 +157,17 @@ func (d *WizardData) LoadFromExisting(cfg *config.Config, path string) {
 	d.ConfigExists = true
 	d.ConfigPath = path
 	d.ExistingConfig = cfg
+	d.loadFromConfig(cfg)
+}
 
+// LoadFromDefaults seeds WizardData from a fully-defaulted config without
+// marking it as an existing user configuration.
+func (d *WizardData) LoadFromDefaults(cfg *config.Config) {
+	d.ExistingConfig = cfg
+	d.loadFromConfig(cfg)
+}
+
+func (d *WizardData) loadFromConfig(cfg *config.Config) {
 	// Extract values from existing config
 	d.WorkspacePath = cfg.Gateway.WorkingDir
 	d.TelegramEnabled = cfg.Channels.Telegram.Enabled
@@ -170,7 +180,9 @@ func (d *WizardData) LoadFromExisting(cfg *config.Config, path string) {
 	} else {
 		d.HTTPEnabled = true // default
 	}
-	d.HTTPListen = cfg.Channels.HTTP.Listen
+	if cfg.Channels.HTTP.Listen != "" {
+		d.HTTPListen = cfg.Channels.HTTP.Listen
+	}
 
 	// Sandboxing
 	d.ExecBubblewrap = cfg.Tools.Exec.Bubblewrap.Enabled

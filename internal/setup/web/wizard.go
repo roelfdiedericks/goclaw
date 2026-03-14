@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
+	"strings"
 	"sync"
 
 	"github.com/roelfdiedericks/goclaw/internal/config"
@@ -55,6 +57,16 @@ func NewWizardAPI(configPath string) *WizardAPI {
 	if err == nil && loadResult.Config != nil {
 		data.LoadFromExisting(loadResult.Config, loadResult.SourcePath)
 		L_info("wizard: loaded existing config", "path", loadResult.SourcePath)
+	} else if config.IsMissingOrIncompleteConfigError(err) {
+		defaultResult, defaultsErr := config.LoadDefaults()
+		if defaultsErr != nil {
+			L_warn("wizard: failed to seed defaults", "error", defaultsErr)
+		} else if defaultResult.Config != nil {
+			data.LoadFromDefaults(defaultResult.Config)
+			L_info("wizard: seeded from config defaults")
+		}
+	} else if err != nil {
+		L_warn("wizard: failed to load config", "error", err)
 	}
 
 	// Check for OpenClaw installation
@@ -124,6 +136,7 @@ func (w *WizardAPI) HandleGetStep(rw http.ResponseWriter, r *http.Request) {
 
 	var formHTML string
 	if formDef != nil {
+		applyWizardFormDefaults(w.state.Data, formDef)
 		html, err := RenderFormHTML(*formDef, "wizardData")
 		if err != nil {
 			L_warn("wizard: failed to render form", "step", stepDef.ID, "error", err)
@@ -562,6 +575,52 @@ func getStepFormDef(stepID string, data *setup.WizardData) *forms.FormDef {
 
 	default:
 		return nil
+	}
+}
+
+func applyWizardFormDefaults(data *setup.WizardData, def *forms.FormDef) {
+	if data == nil || def == nil {
+		return
+	}
+	rv := reflect.ValueOf(data)
+	if rv.Kind() != reflect.Ptr || rv.IsNil() {
+		return
+	}
+	seedWizardSections(rv.Elem(), data, def.Sections)
+}
+
+func seedWizardSections(rv reflect.Value, data *setup.WizardData, sections []forms.Section) {
+	for _, sec := range sections {
+		for _, field := range sec.Fields {
+			if field.Default == nil || data.IsDirty(field.Name) || strings.Contains(field.Name, ".") {
+				continue
+			}
+			fv := rv.FieldByName(field.Name)
+			if !fv.IsValid() || !fv.CanSet() || !fv.IsZero() {
+				continue
+			}
+			seedWizardFieldDefault(fv, field.Default)
+		}
+		if sec.Nested != nil {
+			seedWizardSections(rv, data, sec.Nested.Sections)
+		}
+	}
+}
+
+func seedWizardFieldDefault(fv reflect.Value, value any) {
+	if value == nil {
+		return
+	}
+	v := reflect.ValueOf(value)
+	if !v.IsValid() {
+		return
+	}
+	if v.Type().AssignableTo(fv.Type()) {
+		fv.Set(v)
+		return
+	}
+	if v.Type().ConvertibleTo(fv.Type()) {
+		fv.Set(v.Convert(fv.Type()))
 	}
 }
 

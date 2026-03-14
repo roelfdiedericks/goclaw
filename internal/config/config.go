@@ -39,6 +39,16 @@ type LoadResult struct {
 	SourcePath string // Path to goclaw.json that was loaded
 }
 
+// IsMissingOrIncompleteConfigError reports whether a config load error means
+// "no usable config exists yet" as opposed to a malformed or otherwise broken config.
+func IsMissingOrIncompleteConfigError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "no goclaw.json") || strings.Contains(msg, "empty or incomplete")
+}
+
 // loadedConfigPath stores the path of the most recently loaded config
 // Set by LoadRuntime() for use by setup/editor components
 var loadedConfigPath string
@@ -309,6 +319,28 @@ func LoadFromPath(path string) (*LoadResult, error) {
 	return &LoadResult{
 		Config:     cfg,
 		SourcePath: absPath,
+	}, nil
+}
+
+// LoadDefaults builds a fully defaulted Config without reading from disk.
+// This is useful for setup flows that need the real config defaults even when
+// no goclaw.json exists yet.
+func LoadDefaults() (*LoadResult, error) {
+	home, _ := os.UserHomeDir()
+	goclawDir, _ := paths.BaseDir()
+
+	cfg := &Config{}
+	if err := defaults.Set(cfg); err != nil {
+		return nil, fmt.Errorf("failed to set config defaults: %w", err)
+	}
+	applyRuntimeDefaults(cfg, goclawDir, home)
+	if err := normalizeTildePaths(cfg); err != nil {
+		return nil, fmt.Errorf("normalize config paths: %w", err)
+	}
+
+	return &LoadResult{
+		Config:     cfg,
+		SourcePath: "",
 	}, nil
 }
 
