@@ -141,72 +141,113 @@ jobs:
           path: dist/
           retention-days: 1
 
-  # Darwin builds commented out - users can build from source
-  # Re-enable when macOS support is needed
-  #
-  # # Build Darwin AMD64 (cross-compile from M1 runner)
-  # build-darwin-amd64:
-  #   runs-on: macos-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         fetch-depth: 0
-  #
-  #     - uses: actions/setup-go@v5
-  #       with:
-  #         go-version: '1.25'
-  #
-  #     - uses: goreleaser/goreleaser-action@v6
-  #       with:
-  #         distribution: goreleaser-pro
-  #         args: release --clean --split
-  #       env:
-  #         GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
-  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #         CGO_ENABLED: 1
-  #         SDKROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
-  #         GGOOS: darwin
-  #         GGOARCH: amd64
-  #
-  #     - uses: actions/upload-artifact@v4
-  #       with:
-  #         name: dist-darwin-amd64
-  #         path: dist/
-  #         retention-days: 1
-  #
-  # # Build Darwin ARM64 natively on M1 runner
-  # build-darwin-arm64:
-  #   runs-on: macos-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         fetch-depth: 0
-  #
-  #     - uses: actions/setup-go@v5
-  #       with:
-  #         go-version: '1.25'
-  #
-  #     - uses: goreleaser/goreleaser-action@v6
-  #       with:
-  #         distribution: goreleaser-pro
-  #         args: release --clean --split
-  #       env:
-  #         GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
-  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #         CGO_ENABLED: 1
-  #         SDKROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
-  #         GGOOS: darwin
-  #         GGOARCH: arm64
-  #
-  #     - uses: actions/upload-artifact@v4
-  #       with:
-  #         name: dist-darwin-arm64
-  #         path: dist/
-  #         retention-days: 1
+  # Build Darwin AMD64 natively on Intel macOS runner
+  build-darwin-amd64:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Install macOS build dependencies
+        run: brew install make cmake libomp
+
+      - name: Enable Homebrew GNU Make
+        run: echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Build whisper.cpp and dependencies
+        run: gmake deps
+
+      - name: Download whisper model for bundling
+        run: |
+          mkdir -p whisper-model
+          curl -L -o whisper-model/ggml-tiny.en.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+
+      - name: Set CGO environment
+        run: |
+          LIBOMP_PREFIX="$(brew --prefix libomp)"
+          echo "CGO_CFLAGS=-DSQLITE_ENABLE_FTS5 -I$HOME/.goclaw/lib/whisper" >> "$GITHUB_ENV"
+          echo "CGO_LDFLAGS=-L$HOME/.goclaw/lib/whisper -Wl,-no_warn_duplicate_libraries $LIBOMP_PREFIX/lib/libomp.a" >> "$GITHUB_ENV"
+          echo "C_INCLUDE_PATH=$HOME/.goclaw/lib/whisper" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=$HOME/.goclaw/lib/whisper" >> "$GITHUB_ENV"
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser-pro
+          args: release --clean --split
+        env:
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CGO_ENABLED: 1
+          GGOOS: darwin
+          GGOARCH: amd64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-darwin-amd64
+          path: dist/
+          retention-days: 1
+
+  # Build Darwin ARM64 natively on Apple Silicon runner
+  build-darwin-arm64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Install macOS build dependencies
+        run: brew install make cmake libomp
+
+      - name: Enable Homebrew GNU Make
+        run: echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Build whisper.cpp and dependencies
+        run: gmake deps
+
+      - name: Download whisper model for bundling
+        run: |
+          mkdir -p whisper-model
+          curl -L -o whisper-model/ggml-tiny.en.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+
+      - name: Set CGO environment
+        run: |
+          LIBOMP_PREFIX="$(brew --prefix libomp)"
+          echo "CGO_CFLAGS=-DSQLITE_ENABLE_FTS5 -I$HOME/.goclaw/lib/whisper" >> "$GITHUB_ENV"
+          echo "CGO_LDFLAGS=-L$HOME/.goclaw/lib/whisper -Wl,-no_warn_duplicate_libraries $LIBOMP_PREFIX/lib/libomp.a" >> "$GITHUB_ENV"
+          echo "C_INCLUDE_PATH=$HOME/.goclaw/lib/whisper" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=$HOME/.goclaw/lib/whisper" >> "$GITHUB_ENV"
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser-pro
+          args: release --clean --split
+        env:
+          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CGO_ENABLED: 1
+          GGOOS: darwin
+          GGOARCH: arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-darwin-arm64
+          path: dist/
+          retention-days: 1
 
   # Merge all builds and create release
   release:
-    needs: [build-linux-amd64, build-linux-arm64]
+    needs: [build-linux-amd64, build-linux-arm64, build-darwin-amd64, build-darwin-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -228,16 +269,15 @@ jobs:
           name: dist-linux-arm64
           path: dist/
 
-      # Darwin artifacts commented out
-      # - uses: actions/download-artifact@v4
-      #   with:
-      #     name: dist-darwin-amd64
-      #     path: dist/
-      #
-      # - uses: actions/download-artifact@v4
-      #   with:
-      #     name: dist-darwin-arm64
-      #     path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-darwin-amd64
+          path: dist/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-darwin-arm64
+          path: dist/
 
       - name: List dist contents
         run: find dist -type f | head -50

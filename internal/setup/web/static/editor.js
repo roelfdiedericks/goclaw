@@ -1817,6 +1817,7 @@
             this.$nextSpinner = $('#wizard-next-spinner');
             this.completeModal = new bootstrap.Modal(document.getElementById('completeModal'));
             this.restartModal = new bootstrap.Modal(document.getElementById('wizardRestartModal'));
+            this.appliedModal = new bootstrap.Modal(document.getElementById('wizardAppliedModal'));
             this.$restartMessage = $('#wizard-restart-message');
             this.$restartDetail = $('#wizard-restart-detail');
 
@@ -2125,7 +2126,7 @@
                 return;
             }
 
-            this.completeModal.show();
+            this.appliedModal.show();
         }
 
         async waitForGatewayAfterRestart(previousInstanceID) {
@@ -2148,7 +2149,7 @@
                 throw new Error('Configuration saved, but GoClaw did not come back online automatically.');
             }
             this.lastKnownInstanceID = result.status && result.status.instanceID ? result.status.instanceID : this.lastKnownInstanceID;
-            this.completeModal.show();
+            this.appliedModal.show();
         }
 
         async closeWizard() {
