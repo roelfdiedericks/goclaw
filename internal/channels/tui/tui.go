@@ -15,6 +15,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/channels/tui/config"
 	"github.com/roelfdiedericks/goclaw/internal/channels/types"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
+	"github.com/roelfdiedericks/goclaw/internal/delivery"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/user"
@@ -64,7 +65,7 @@ type Model struct {
 	// Mirror channel for receiving mirrored messages from other channels
 	mirrorChan chan mirrorMsg
 
-	// Agent message channel for receiving direct agent output (tool messages, etc.)
+	// Assistant message channel for receiving final assistant output
 	agentMsgChan chan string
 
 	// System channel for receiving direct messages (HASS events, etc.)
@@ -85,7 +86,7 @@ type mirrorMsg struct {
 	source  string
 	userMsg string
 }
-type agentDeliverMsg string // Direct agent output (tool messages, etc.)
+type agentDeliverMsg string // Final assistant output
 type systemMsg string
 
 // New creates a new TUI model
@@ -394,7 +395,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.waitForMirror())
 
 	case agentDeliverMsg:
-		// Display direct agent output (tool messages, etc.)
+		// Display direct assistant output
 		m.chatLines = append(m.chatLines,
 			assistantStyle.Render(m.gateway.AgentIdentity().DisplayName()+": ")+string(msg),
 			"",
@@ -819,8 +820,8 @@ func (c *TUIChannel) SendMirror(ctx context.Context, source, userMsg string) err
 	}
 }
 
-// DeliverMessage sends agent output to the TUI
-func (c *TUIChannel) DeliverMessage(ctx context.Context, u *user.User, message string) error {
+// DeliverAssistantMessage sends assistant output to the TUI.
+func (c *TUIChannel) DeliverAssistantMessage(ctx context.Context, u *user.User, message string) error {
 	if c.user == nil || u == nil || c.user.ID != u.ID {
 		return nil // Not the TUI user
 	}
@@ -839,9 +840,37 @@ func (c *TUIChannel) DeliverMessage(ctx context.Context, u *user.User, message s
 	}
 }
 
+// DeliverSystemMessage sends system/status output to the TUI system lane.
+func (c *TUIChannel) DeliverSystemMessage(ctx context.Context, u *user.User, msg delivery.SystemMessage) error {
+	if c.user == nil || u == nil || c.user.ID != u.ID {
+		return nil // Not the TUI user
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	select {
+	case c.systemChan <- msg.DisplayText():
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		logging.L_warn("TUI system channel full, dropping message")
+		return nil
+	}
+}
+
 // HasUser returns true if this TUI is for the given user
 func (c *TUIChannel) HasUser(u *user.User) bool {
 	return c.user != nil && u != nil && c.user.ID == u.ID
+}
+
+// DeliveryReachable reports whether this TUI channel is the active destination for the user.
+func (c *TUIChannel) DeliveryReachable(u *user.User) (bool, string) {
+	if !c.HasUser(u) {
+		return false, delivery.ReasonUnreachable
+	}
+	return true, ""
 }
 
 // InjectMessage handles message injection for supervision (guidance/ghostwriting).
@@ -859,8 +888,8 @@ func (c *TUIChannel) DeliverGhostwrite(ctx context.Context, u *user.User, messag
 
 	logging.L_info("tui: ghostwrite", "user", u.ID, "messageLen", len(message))
 
-	// TUI doesn't need typing delay - use DeliverMessage for agent output
-	return c.DeliverMessage(ctx, u, message)
+	// TUI doesn't need typing delay - use DeliverAssistantMessage for assistant output
+	return c.DeliverAssistantMessage(ctx, u, message)
 }
 
 // Run starts the TUI and returns a Channel that can receive mirrors
@@ -986,10 +1015,18 @@ func (t *TUI) SendMirror(ctx context.Context, source, userMsg string) error {
 	return nil
 }
 
-// DeliverMessage delivers agent output (implements gateway.Channel)
-func (t *TUI) DeliverMessage(ctx context.Context, u *user.User, message string) error {
+// DeliverAssistantMessage delivers assistant output (implements gateway.Channel)
+func (t *TUI) DeliverAssistantMessage(ctx context.Context, u *user.User, message string) error {
 	if t.channel != nil {
-		return t.channel.DeliverMessage(ctx, u, message)
+		return t.channel.DeliverAssistantMessage(ctx, u, message)
+	}
+	return nil
+}
+
+// DeliverSystemMessage delivers system output (implements gateway.Channel)
+func (t *TUI) DeliverSystemMessage(ctx context.Context, u *user.User, msg delivery.SystemMessage) error {
+	if t.channel != nil {
+		return t.channel.DeliverSystemMessage(ctx, u, msg)
 	}
 	return nil
 }

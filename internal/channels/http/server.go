@@ -18,6 +18,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/channels/http/config"
 	"github.com/roelfdiedericks/goclaw/internal/channels/types"
+	"github.com/roelfdiedericks/goclaw/internal/delivery"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/user"
@@ -349,9 +350,14 @@ func (s *Server) SendMirror(ctx context.Context, source, userMsg string) error {
 	return s.channel.SendMirror(ctx, source, userMsg)
 }
 
-// DeliverMessage delivers agent output (implements gateway.Channel)
-func (s *Server) DeliverMessage(ctx context.Context, u *user.User, message string) error {
-	return s.channel.DeliverMessage(ctx, u, message)
+// DeliverAssistantMessage delivers assistant output (implements gateway.Channel)
+func (s *Server) DeliverAssistantMessage(ctx context.Context, u *user.User, message string) error {
+	return s.channel.DeliverAssistantMessage(ctx, u, message)
+}
+
+// DeliverSystemMessage delivers system output (implements gateway.Channel)
+func (s *Server) DeliverSystemMessage(ctx context.Context, u *user.User, msg delivery.SystemMessage) error {
+	return s.channel.DeliverSystemMessage(ctx, u, msg)
 }
 
 // HasUser checks if a user has this channel (implements gateway.Channel)

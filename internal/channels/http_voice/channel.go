@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/roelfdiedericks/goclaw/internal/channels/types"
+	"github.com/roelfdiedericks/goclaw/internal/delivery"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/user"
@@ -157,8 +158,8 @@ func (c *VoiceChannel) SendMirror(ctx context.Context, source, userMsg string) e
 	return nil
 }
 
-// DeliverMessage sends agent output to the user's voice session
-func (c *VoiceChannel) DeliverMessage(ctx context.Context, u *user.User, message string) error {
+// DeliverAssistantMessage sends assistant output to the user's voice session.
+func (c *VoiceChannel) DeliverAssistantMessage(ctx context.Context, u *user.User, message string) error {
 	if u == nil {
 		return nil
 	}
@@ -178,6 +179,12 @@ func (c *VoiceChannel) DeliverMessage(ctx context.Context, u *user.User, message
 	return nil
 }
 
+// DeliverSystemMessage sends system/status output to the user's voice session.
+// Voice has no dedicated system surface yet, so this is currently a no-op.
+func (c *VoiceChannel) DeliverSystemMessage(ctx context.Context, u *user.User, msg delivery.SystemMessage) error {
+	return nil
+}
+
 // HasUser returns true if this channel can reach the given user
 func (c *VoiceChannel) HasUser(u *user.User) bool {
 	if u == nil {
@@ -187,6 +194,14 @@ func (c *VoiceChannel) HasUser(u *user.User) bool {
 	defer c.sessionsMu.RUnlock()
 	_, exists := c.sessions[u.ID]
 	return exists
+}
+
+// DeliveryReachable reports whether the user currently has an active voice session.
+func (c *VoiceChannel) DeliveryReachable(u *user.User) (bool, string) {
+	if !c.HasUser(u) {
+		return false, delivery.ReasonUnreachable
+	}
+	return true, ""
 }
 
 // StreamEvent streams agent events (not used for voice - has its own event model)
@@ -544,7 +559,7 @@ func (c *VoiceChannel) onProviderTurnComplete(ctx context.Context, sess *VoiceSe
 			L_warn("http_voice: failed to persist assistant transcript", "error", err)
 		}
 		// Deliver agent response to other channels
-		c.gw.DeliverAgentMessageToOthers(ctx, "http_voice", sess.User, transcript)
+		c.gw.DeliverAssistantMessageToOthers(ctx, "http_voice", sess.User, transcript)
 	}
 }
 

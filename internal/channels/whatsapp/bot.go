@@ -22,6 +22,7 @@ import (
 	chtypes "github.com/roelfdiedericks/goclaw/internal/channels/types"
 	"github.com/roelfdiedericks/goclaw/internal/channels/whatsapp/config"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
+	"github.com/roelfdiedericks/goclaw/internal/delivery"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -280,8 +281,8 @@ func (b *Bot) SendMirror(ctx context.Context, source, userMsg string) error {
 	return err
 }
 
-// DeliverMessage sends agent output to the user's WhatsApp (implements gateway.Channel)
-func (b *Bot) DeliverMessage(ctx context.Context, u *user.User, message string) error {
+// DeliverAssistantMessage sends assistant output to the user's WhatsApp (implements gateway.Channel)
+func (b *Bot) DeliverAssistantMessage(ctx context.Context, u *user.User, message string) error {
 	if u == nil || u.WhatsAppID == "" {
 		return nil
 	}
@@ -302,6 +303,11 @@ func (b *Bot) DeliverMessage(ctx context.Context, u *user.User, message string) 
 		L_error("whatsapp: failed to send message", "error", err)
 	}
 	return err
+}
+
+// DeliverSystemMessage sends system/status output to the user's WhatsApp.
+func (b *Bot) DeliverSystemMessage(ctx context.Context, u *user.User, msg delivery.SystemMessage) error {
+	return b.DeliverAssistantMessage(ctx, u, msg.DisplayText())
 }
 
 // HasUser returns true if the user has a WhatsApp identity (implements gateway.Channel)

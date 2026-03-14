@@ -11,6 +11,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/roelfdiedericks/goclaw/internal/bus"
+	"github.com/roelfdiedericks/goclaw/internal/delivery"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -78,26 +79,15 @@ type GatewayRunner interface {
 	RunAgentForCron(ctx context.Context, req AgentRequest, events chan<- AgentEvent)
 	GetOwnerUserID() string                                   // Returns the owner user ID for cron jobs
 	InjectSystemEvent(ctx context.Context, text string) error // Inject system event into primary session
-	PersistDeliveredMessage(ctx context.Context, content, source string) error
-}
-
-// Channel is the interface for delivery channels.
-type Channel interface {
-	Name() string
-	Send(ctx context.Context, msg string) error
-}
-
-// ChannelProvider provides access to channels for delivery.
-type ChannelProvider interface {
-	Channels() map[string]Channel
+	DeliverAssistantOutput(ctx context.Context, userID string, msg delivery.AssistantMessage) delivery.Report
+	DeliverSystemMessage(ctx context.Context, userID string, msg delivery.SystemMessage) delivery.Report
 }
 
 // Service manages cron job scheduling and execution.
 type Service struct {
-	store           *Store
-	gateway         GatewayRunner
-	history         *HistoryManager
-	channelProvider ChannelProvider
+	store   *Store
+	gateway GatewayRunner
+	history *HistoryManager
 
 	mu      sync.Mutex
 	running bool
@@ -131,11 +121,6 @@ func NewService(store *Store, gw GatewayRunner) *Service {
 	}
 	defaultService = s
 	return s
-}
-
-// SetChannelProvider sets the channel provider for delivery.
-func (s *Service) SetChannelProvider(cp ChannelProvider) {
-	s.channelProvider = cp
 }
 
 // SetHeartbeatConfig configures the heartbeat system.
@@ -779,49 +764,57 @@ func (s *Service) executeJob(ctx context.Context, job *CronJob) {
 
 	// Deliver to channels if enabled
 	if job.Payload.Deliver && finalContent != "" {
-		s.deliverToChannels(ctx, job, finalContent)
+		s.deliverAssistantOutput(ctx, "cron", finalContent)
 	}
 }
 
-// deliverToChannels sends the job output to all available channels.
-func (s *Service) deliverToChannels(ctx context.Context, job *CronJob, content string) {
-	if s.channelProvider == nil {
-		L_debug("cron: no channel provider, skipping delivery", "job", job.Name)
-		return
-	}
-
+func (s *Service) deliverAssistantOutput(ctx context.Context, source, content string) {
 	// Note: Suppression tokens (HEARTBEAT_OK, etc.) are handled centrally in gateway.RunAgent
 	// If content is empty, nothing to deliver
 	if content == "" {
-		L_debug("cron: empty content, skipping delivery", "job", job.Name)
+		L_debug("cron: empty assistant output, skipping delivery", "source", source)
 		return
 	}
-
-	channels := s.channelProvider.Channels()
-	if len(channels) == 0 {
-		L_debug("cron: no channels available for delivery", "job", job.Name)
+	if s.gateway == nil {
+		L_debug("cron: no gateway available for assistant delivery", "source", source)
 		return
 	}
-
-	// Format the message
-	msg := fmt.Sprintf("**[Cron: %s]**\n\n%s", job.Name, content)
-
-	// Send to all channels
-	delivered := false
-	for name, ch := range channels {
-		if err := ch.Send(ctx, msg); err != nil {
-			L_error("cron: failed to deliver to channel", "job", job.Name, "channel", name, "error", err)
-		} else {
-			L_debug("cron: delivered to channel", "job", job.Name, "channel", name)
-			delivered = true
-		}
+	userID := s.gateway.GetOwnerUserID()
+	if userID == "" {
+		L_warn("cron: no owner user configured for assistant delivery", "source", source)
+		return
 	}
+	report := s.gateway.DeliverAssistantOutput(ctx, userID, delivery.AssistantMessage{
+		Source:         source,
+		Content:        content,
+		Persist:        true,
+		PersistKind:    "delivered",
+		PersistContent: content,
+	})
+	if report.Delivered() {
+		L_info("cron: assistant delivery succeeded", "source", source, "deliveredTo", report.DeliveredTo)
+		return
+	}
+	L_warn("cron: assistant delivery produced no successful channels", "source", source)
+}
 
-	// Persist delivered content to primary session for memory extraction (raw content, not formatted)
-	if delivered && s.gateway != nil {
-		if err := s.gateway.PersistDeliveredMessage(ctx, content, "delivered"); err != nil {
-			L_warn("cron: failed to persist delivered message", "job", job.Name, "error", err)
-		}
+func (s *Service) deliverSystemStatus(ctx context.Context, source, title, content string, kind delivery.SystemKind) {
+	if content == "" || s.gateway == nil {
+		return
+	}
+	userID := s.gateway.GetOwnerUserID()
+	if userID == "" {
+		L_warn("cron: no owner user configured for system delivery", "source", source)
+		return
+	}
+	report := s.gateway.DeliverSystemMessage(ctx, userID, delivery.SystemMessage{
+		Kind:    kind,
+		Source:  source,
+		Title:   title,
+		Content: content,
+	})
+	if report.Delivered() {
+		L_debug("cron: system delivery succeeded", "source", source, "deliveredTo", report.DeliveredTo)
 	}
 }
 
@@ -943,7 +936,7 @@ func (s *Service) runHeartbeat(ctx context.Context) {
 		SessionID:    "",    // Empty = main session
 		UserID:       userID,
 		IsHeartbeat:  true,        // Ephemeral - don't persist to session
-		SkipMirror:   true,        // We handle delivery via ch.Send()
+		SkipMirror:   true,        // Delivery handled via gateway non-conversation seam
 		Purpose:      "heartbeat", // Use heartbeat model chain (falls back to agent)
 	}
 
@@ -970,27 +963,8 @@ func (s *Service) runHeartbeat(ctx context.Context) {
 	// finalContent will be empty if suppressed
 
 	// Deliver response to channels
-	if finalContent != "" && s.channelProvider != nil {
-		channels := s.channelProvider.Channels()
-		if len(channels) > 0 {
-			msg := fmt.Sprintf("**[Heartbeat]**\n\n%s", finalContent)
-			delivered := false
-			for name, ch := range channels {
-				if err := ch.Send(ctx, msg); err != nil {
-					L_error("heartbeat: failed to deliver to channel", "channel", name, "error", err)
-				} else {
-					L_debug("heartbeat: delivered to channel", "channel", name)
-					delivered = true
-				}
-			}
-
-			// Persist delivered content to primary session for memory extraction (raw content, not formatted)
-			if delivered && s.gateway != nil {
-				if err := s.gateway.PersistDeliveredMessage(ctx, finalContent, "delivered"); err != nil {
-					L_warn("heartbeat: failed to persist delivered message", "error", err)
-				}
-			}
-		}
+	if finalContent != "" {
+		s.deliverAssistantOutput(ctx, "heartbeat", finalContent)
 	}
 }
 
