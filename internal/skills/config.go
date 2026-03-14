@@ -51,18 +51,18 @@ func ConfigFormDef() forms.FormDef {
 			{
 				Title: "General",
 				Fields: []forms.Field{
-					{Name: "Enabled", Title: "Enabled", Type: forms.Toggle, Default: true, Desc: "Enable the skills system"},
-					{Name: "Watch", Title: "Watch for Changes", Type: forms.Toggle, Default: true, Desc: "Auto-reload when skill files change"},
-					{Name: "WatchDebounce", Title: "Watch Debounce (ms)", Type: forms.Number, Default: 500, Desc: "Debounce interval for file changes"},
+					{Name: "enabled", Title: "Enabled", Type: forms.Toggle, Default: true, Desc: "Enable the skills system"},
+					{Name: "watch", Title: "Watch for Changes", Type: forms.Toggle, Default: true, Desc: "Auto-reload when skill files change"},
+					{Name: "watchDebounceMs", Title: "Watch Debounce (ms)", Type: forms.Number, Default: 500, Desc: "Debounce interval for file changes"},
 				},
 			},
 			{
 				Title:     "Directories",
 				Collapsed: true,
 				Fields: []forms.Field{
-					{Name: "BundledDir", Title: "Bundled Skills Dir", Type: forms.Text, Desc: "Override bundled skills path"},
-					{Name: "ManagedDir", Title: "Managed Skills Dir", Type: forms.Text, Desc: "Override managed skills path"},
-					{Name: "WorkspaceDir", Title: "Workspace Skills Dir", Type: forms.Text, Desc: "Override workspace skills path"},
+					{Name: "bundledDir", Title: "Bundled Skills Dir", Type: forms.Text, Desc: "Override bundled skills path"},
+					{Name: "managedDir", Title: "Managed Skills Dir", Type: forms.Text, Desc: "Override managed skills path"},
+					{Name: "workspaceDir", Title: "Workspace Skills Dir", Type: forms.Text, Desc: "Override workspace skills path"},
 				},
 			},
 		},

@@ -51,6 +51,9 @@ func BuildFormContent(def FormDef, value any, component string, onResult func(Tv
 		return nil, fmt.Errorf("value must be a pointer to struct, got %T", value)
 	}
 	rv = rv.Elem()
+	if err := ValidateFormDefStrict(rv.Type(), def); err != nil {
+		return nil, fmt.Errorf("strict form contract violation: %w", err)
+	}
 
 	form := tview.NewForm()
 	content := &FormContent{
@@ -274,6 +277,9 @@ func RenderTview(def FormDef, value any, component string) (TviewResult, error) 
 		return ResultError, fmt.Errorf("value must be a pointer to struct, got %T", value)
 	}
 	rv = rv.Elem()
+	if err := ValidateFormDefStrict(rv.Type(), def); err != nil {
+		return ResultError, fmt.Errorf("strict form contract violation: %w", err)
+	}
 
 	app := tview.NewApplication()
 	form := tview.NewForm()
@@ -574,22 +580,22 @@ func populateFormSections(form *tview.Form, sections []Section, rv reflect.Value
 			if fieldName == "" {
 				fieldName = section.Title
 			}
-			nestedField := findFieldByPath(rv, fieldName)
-			if nestedField.IsValid() {
+			nestedField, err := ResolveJSONPathStrict(rv, fieldName)
+			if err == nil && nestedField.IsValid() {
 				addFieldsToForm(form, section.Nested.Sections, nestedField)
 			}
 			continue
 		}
 
 		for _, field := range section.Fields {
-			fv := findFieldByPath(rv, field.Name)
-			if !fv.IsValid() {
+			fv, err := ResolveJSONPathStrict(rv, field.Name)
+			if err != nil || !fv.IsValid() {
 				logging.L_warn("forms: field not found", "field", field.Name)
 				continue
 			}
 
 			var afterSelect func()
-			if rebuild != nil && showWhenFields[strings.ToLower(field.Name)] {
+			if rebuild != nil && showWhenFields[strings.TrimSpace(field.Name)] {
 				afterSelect = rebuild
 			}
 			addFieldToFormInternal(form, field, fv, afterSelect)
@@ -602,9 +608,12 @@ func extractShowWhenFields(sections []Section) map[string]bool {
 	fields := make(map[string]bool)
 	for _, section := range sections {
 		if section.ShowWhen != "" {
-			parts := strings.SplitN(section.ShowWhen, "=", 2)
-			if len(parts) == 2 {
-				fields[strings.ToLower(strings.TrimSpace(parts[0]))] = true
+			clauses, err := ParseShowWhen(section.ShowWhen)
+			if err != nil {
+				continue
+			}
+			for _, clause := range clauses {
+				fields[strings.TrimSpace(clause.FieldPath)] = true
 			}
 		}
 	}
@@ -615,8 +624,8 @@ func extractShowWhenFields(sections []Section) map[string]bool {
 func addFieldsToForm(form *tview.Form, sections []Section, rv reflect.Value) {
 	for _, section := range sections {
 		for _, field := range section.Fields {
-			fv := findFieldByPath(rv, field.Name)
-			if !fv.IsValid() {
+			fv, err := ResolveJSONPathStrict(rv, field.Name)
+			if err != nil || !fv.IsValid() {
 				logging.L_warn("forms: field not found", "field", field.Name)
 				continue
 			}
@@ -801,81 +810,6 @@ func setNumericValue(fv reflect.Value, text string) {
 	}
 }
 
-// findFieldByPath finds a struct field by dotted path (e.g., "Gateway.LogFile").
-// Uses case-insensitive matching for robustness.
-// Falls back to JSON tag matching if field name doesn't match.
-func findFieldByPath(rv reflect.Value, path string) reflect.Value {
-	if rv.Kind() == reflect.Ptr {
-		rv = rv.Elem()
-	}
-
-	// Split dotted path and navigate
-	parts := strings.Split(path, ".")
-	current := rv
-
-	for _, part := range parts {
-		if current.Kind() == reflect.Ptr {
-			if current.IsNil() {
-				return reflect.Value{}
-			}
-			current = current.Elem()
-		}
-		if current.Kind() != reflect.Struct {
-			return reflect.Value{}
-		}
-
-		// Try case-insensitive field name match first
-		field := findFieldCaseInsensitive(current, part)
-		if !field.IsValid() {
-			// Fall back to JSON tag match
-			field = findFieldByJSONTagCaseInsensitive(current, part)
-		}
-		if !field.IsValid() {
-			return reflect.Value{}
-		}
-		current = field
-	}
-
-	return current
-}
-
-// findFieldCaseInsensitive finds a struct field by name, case-insensitive
-func findFieldCaseInsensitive(rv reflect.Value, name string) reflect.Value {
-	if rv.Kind() != reflect.Struct {
-		return reflect.Value{}
-	}
-	rt := rv.Type()
-	nameLower := strings.ToLower(name)
-
-	for i := 0; i < rt.NumField(); i++ {
-		if strings.ToLower(rt.Field(i).Name) == nameLower {
-			return rv.Field(i)
-		}
-	}
-	return reflect.Value{}
-}
-
-// findFieldByJSONTagCaseInsensitive finds a struct field by JSON tag, case-insensitive
-func findFieldByJSONTagCaseInsensitive(rv reflect.Value, jsonName string) reflect.Value {
-	if rv.Kind() != reflect.Struct {
-		return reflect.Value{}
-	}
-	rt := rv.Type()
-	nameLower := strings.ToLower(jsonName)
-
-	for i := 0; i < rt.NumField(); i++ {
-		tag := rt.Field(i).Tag.Get("json")
-		// Handle "name,omitempty" format
-		if idx := strings.Index(tag, ","); idx != -1 {
-			tag = tag[:idx]
-		}
-		if strings.ToLower(tag) == nameLower {
-			return rv.Field(i)
-		}
-	}
-	return reflect.Value{}
-}
-
 // truncate truncates a string to max length
 func truncate(s string, max int) string {
 	if len(s) <= max {
@@ -887,22 +821,5 @@ func truncate(s string, max int) string {
 // evaluateShowWhen checks if a ShowWhen condition is satisfied
 // Format: "fieldName=value" (e.g., "type=xai" or "Gateway.Enabled=true")
 func evaluateShowWhen(condition string, rv reflect.Value) bool {
-	parts := strings.SplitN(condition, "=", 2)
-	if len(parts) != 2 {
-		return true // Invalid condition, show by default
-	}
-
-	fieldName := strings.TrimSpace(parts[0])
-	expectedValue := strings.TrimSpace(parts[1])
-
-	// Find the field (supports dotted paths, case-insensitive)
-	fv := findFieldByPath(rv, fieldName)
-	if !fv.IsValid() {
-		return true // Field not found, show by default
-	}
-
-	// Get current value as string
-	actualValue := fmt.Sprintf("%v", fv.Interface())
-
-	return actualValue == expectedValue
+	return EvaluateShowWhen(condition, rv)
 }

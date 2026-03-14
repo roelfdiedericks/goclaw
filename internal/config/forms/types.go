@@ -6,13 +6,16 @@ package forms
 type FieldType int
 
 const (
-	Toggle     FieldType = iota // Boolean on/off
-	Text                        // Single-line text input
-	Number                      // Numeric input (int or float)
-	Secret                      // Password/token input (masked)
-	Select                      // Dropdown selection
-	TextArea                    // Multi-line text input
-	StringList                  // Comma-separated string list (for []string fields)
+	Toggle       FieldType = iota // Boolean on/off
+	Text                          // Single-line text input
+	Number                        // Numeric input (int or float)
+	Secret                        // Password/token input (masked)
+	Select                        // Dropdown selection
+	TextArea                      // Multi-line text input
+	StringList                    // Comma-separated string list (for []string fields)
+	ModelChain                    // Ordered list of model references with rich UI (drag-drop, details panel)
+	ProviderList                  // Map of LLM provider configs with inline add/edit UI
+	RolesList                     // Map of role permission configs with inline add/edit UI
 )
 
 // FormDef defines a form for editing a config struct
@@ -50,6 +53,9 @@ type Field struct {
 
 	// Select options (for Select type)
 	Options []Option
+
+	// ModelChain-specific
+	Purpose string // For ModelChain: "agent", "summarization", "embeddings" - enables purpose-specific warnings
 }
 
 // Option is a choice for Select fields

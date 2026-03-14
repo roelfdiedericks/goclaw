@@ -48,19 +48,20 @@ type HTTPServer interface {
 	Mux() *http.ServeMux
 	WrapHandler(http.HandlerFunc) http.HandlerFunc
 	Users() *user.Registry
+	GetUserBySession(r *http.Request) *user.User
 }
 
 // RegisterRoutes registers voice channel routes with the HTTP server
 // Only registers the WebSocket endpoint - HTML and JS are served by the main http server
 func (c *VoiceChannel) RegisterRoutes(srv HTTPServer) {
 	mux := srv.Mux()
-	users := srv.Users()
 
 	// Voice WebSocket - NO middleware wrapper (WebSocket needs raw ResponseWriter for Hijacker)
 	// Auth is handled manually inside the handler
 	mux.HandleFunc("/voice/ws", func(w http.ResponseWriter, r *http.Request) {
-		u := c.authenticateRequest(r, users)
+		u := authenticateWebSocket(r, srv)
 		if u == nil {
+			L_warn("http_voice: websocket auth failed", "remote", r.RemoteAddr)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -70,16 +71,30 @@ func (c *VoiceChannel) RegisterRoutes(srv HTTPServer) {
 	L_info("http_voice: websocket route registered")
 }
 
-// authenticateRequest extracts the user from the request (via basic auth header)
-func (c *VoiceChannel) authenticateRequest(r *http.Request, users *user.Registry) *user.User {
-	username, password, ok := r.BasicAuth()
-	if !ok {
-		return nil
+// authenticateWebSocket authenticates WebSocket requests.
+// Tries Basic Auth first (works in Chrome), then falls back to session cookie
+// (needed for webkit2gtk/webview which doesn't forward Basic Auth to WebSocket).
+func authenticateWebSocket(r *http.Request, srv HTTPServer) *user.User {
+	users := srv.Users()
+
+	// Try Basic Auth first (Chrome forwards this to WebSocket)
+	if username, password, ok := r.BasicAuth(); ok {
+		L_debug("http_voice: trying basic auth", "username", username)
+		if u := users.Get(username); u != nil && u.VerifyHTTPPassword(password) {
+			L_debug("http_voice: auth via basic auth", "user", u.ID)
+			return u
+		}
+	} else {
+		L_debug("http_voice: no basic auth header")
 	}
 
-	u := users.Get(username)
-	if u == nil || !u.VerifyHTTPPassword(password) {
-		return nil
+	// Fallback: try session cookie (webkit2gtk/webview)
+	L_debug("http_voice: trying session cookie auth")
+	if u := srv.GetUserBySession(r); u != nil {
+		L_debug("http_voice: auth via session cookie", "user", u.ID)
+		return u
 	}
-	return u
+	L_debug("http_voice: session cookie auth failed")
+
+	return nil
 }

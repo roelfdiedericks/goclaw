@@ -19,6 +19,7 @@ import (
 	whatsappconfig "github.com/roelfdiedericks/goclaw/internal/channels/whatsapp/config"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
+	setupweb "github.com/roelfdiedericks/goclaw/internal/setup/web"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 	"github.com/roelfdiedericks/goclaw/internal/voicellm"
@@ -382,6 +383,13 @@ func (m *Manager) startHTTP(ctx context.Context, cfg *httpconfig.Config) error {
 
 	srv.SetGateway(m.gw)
 	m.gw.RegisterChannel(srv.Channel())
+
+	// Register setup wizard routes (owner-only)
+	configPath := config.GetLoadedConfigPath()
+	if err := setupweb.RegisterSetupRoutes(srv, configPath); err != nil {
+		logging.L_error("http: failed to register setup routes", "error", err)
+		return err
+	}
 
 	if err := srv.Start(ctx); err != nil {
 		return err

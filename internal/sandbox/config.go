@@ -54,7 +54,7 @@ func ConfigFormDef() forms.FormDef {
 				Title: "Bubblewrap",
 				Fields: []forms.Field{
 					{
-						Name:  "Bubblewrap.Mode",
+						Name:  "bubblewrap.mode",
 						Title: "Sandbox Mode",
 						Type:  forms.Select,
 						Desc:  "How home directories are handled inside the sandbox",
@@ -65,19 +65,19 @@ func ConfigFormDef() forms.FormDef {
 						},
 					},
 					{
-						Name:  "Bubblewrap.Path",
+						Name:  "bubblewrap.path",
 						Title: "Bwrap Binary Path",
 						Type:  forms.Text,
 						Desc:  "Custom path to bwrap binary (empty = search PATH)",
 					},
 					{
-						Name:  "Bubblewrap.DataDir",
+						Name:  "bubblewrap.dataDir",
 						Title: "Data Directory",
 						Type:  forms.Text,
 						Desc:  "Backing storage root (default: ~/.goclaw/sandbox)",
 					},
 					{
-						Name:  "Bubblewrap.ExtraPaths",
+						Name:  "bubblewrap.extraPaths",
 						Title: "Extra PATH Entries",
 						Type:  forms.StringList,
 						Desc:  "Additional directories to add to sandbox PATH",
@@ -86,10 +86,10 @@ func ConfigFormDef() forms.FormDef {
 			},
 			{
 				Title:    "Volume Mounts",
-				ShowWhen: "Bubblewrap.Mode=volumes",
+				ShowWhen: "bubblewrap.mode=volumes",
 				Fields: []forms.Field{
 					{
-						Name:  "Bubblewrap.Volumes",
+						Name:  "bubblewrap.volumes",
 						Title: "Sandbox Volumes",
 						Type:  forms.StringList,
 						Desc:  "Home directory paths to persist (e.g., ~/.local, ~/.config)",

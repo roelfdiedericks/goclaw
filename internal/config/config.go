@@ -37,6 +37,20 @@ type LoadResult struct {
 	SourcePath string // Path to goclaw.json that was loaded
 }
 
+// loadedConfigPath stores the path of the most recently loaded config
+// Set by LoadRuntime() for use by setup/editor components
+var loadedConfigPath string
+
+// GetLoadedConfigPath returns the path of the most recently loaded config file
+func GetLoadedConfigPath() string {
+	if loadedConfigPath != "" {
+		return loadedConfigPath
+	}
+	// Fallback to default path
+	path, _ := paths.DefaultConfigPath()
+	return path
+}
+
 // isMinimalJSON checks if JSON content is essentially empty (just {} or whitespace)
 // Returns false for parse errors so we can give better error messages later
 func isMinimalJSON(data []byte) bool {
@@ -246,6 +260,50 @@ func Load() (*LoadResult, error) {
 	}, nil
 }
 
+// LoadFromPath reads configuration from an explicit goclaw.json path.
+// Unlike Load(), this never searches local/global fallback locations.
+func LoadFromPath(path string) (*LoadResult, error) {
+	if path == "" {
+		return nil, fmt.Errorf("config path is required")
+	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolving config path: %w", err)
+	}
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("no goclaw.json found at %s", absPath)
+		}
+		return nil, fmt.Errorf("reading goclaw.json at %s: %w", absPath, err)
+	}
+
+	if isMinimalJSON(data) {
+		return nil, fmt.Errorf("goclaw.json at %s is empty or incomplete. Run 'goclaw setup' to configure", absPath)
+	}
+
+	home, _ := os.UserHomeDir()
+	goclawDir, _ := paths.BaseDir()
+
+	cfg := &Config{}
+	if err := defaults.Set(cfg); err != nil {
+		return nil, fmt.Errorf("failed to set config defaults: %w", err)
+	}
+	if err := json.Unmarshal(data, cfg); err != nil {
+		logging.L_error("config: failed to parse explicit config path", "path", absPath, "error", err)
+		return nil, formatJSONError(data, err)
+	}
+
+	applyRuntimeDefaults(cfg, goclawDir, home)
+
+	return &LoadResult{
+		Config:     cfg,
+		SourcePath: absPath,
+	}, nil
+}
+
 // LoadRuntime reads configuration from goclaw.json with environment variable expansion.
 // Use this for gateway startup and CLI commands that execute functionality.
 // Use Load() instead for setup wizard/editor where ${VAR} placeholders must be preserved.
@@ -321,6 +379,9 @@ func LoadRuntime() (*LoadResult, error) {
 		"telegramEnabled", cfg.Channels.Telegram.Enabled,
 		"workingDir", cfg.Gateway.WorkingDir,
 	)
+
+	// Store loaded path for setup/editor access
+	loadedConfigPath = goclawPath
 
 	return &LoadResult{
 		Config:     cfg,

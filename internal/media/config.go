@@ -18,9 +18,9 @@ func ConfigFormDef() forms.FormDef {
 			{
 				Title: "Settings",
 				Fields: []forms.Field{
-					{Name: "Dir", Title: "Storage Directory", Type: forms.Text, Desc: "Base directory for media files (empty = <workspace>/media/)"},
-					{Name: "TTL", Title: "TTL (seconds)", Type: forms.Number, Default: 600, Desc: "Time-to-live for media files"},
-					{Name: "MaxSize", Title: "Max File Size (bytes)", Type: forms.Number, Default: 5242880, Desc: "Maximum file size in bytes (default: 5MB)"},
+					{Name: "dir", Title: "Storage Directory", Type: forms.Text, Desc: "Base directory for media files (empty = <workspace>/media/)"},
+					{Name: "ttl", Title: "TTL (seconds)", Type: forms.Number, Default: 600, Desc: "Time-to-live for media files"},
+					{Name: "maxSize", Title: "Max File Size (bytes)", Type: forms.Number, Default: 5242880, Desc: "Maximum file size in bytes (default: 5MB)"},
 				},
 			},
 		},

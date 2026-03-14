@@ -672,3 +672,93 @@ func SystemPromptFormDef() forms.FormDef {
 		},
 	}
 }
+
+// ConfigFormDef returns the unified form definition for LLM configuration.
+// This provides a single form view for web-based editing of model chains.
+func ConfigFormDef() forms.FormDef {
+	thinkingOptions := []forms.Option{
+		{Value: "", Label: "Off"},
+		{Value: "minimal", Label: "Minimal"},
+		{Value: "low", Label: "Low"},
+		{Value: "medium", Label: "Medium"},
+		{Value: "high", Label: "High"},
+		{Value: "xhigh", Label: "Extra High"},
+	}
+
+	return forms.FormDef{
+		Title:       "LLM Configuration",
+		Description: "Configure language model chains for different purposes",
+		Sections: []forms.Section{
+			{
+				Title:     "Agent (Main Chat)",
+				FieldName: "agent",
+				Fields: []forms.Field{
+					{Name: "models", Title: "Models", Desc: "Primary model and fallbacks for main chat", Type: forms.ModelChain, Purpose: "agent"},
+					{Name: "autoRebuild", Title: "Auto Rebuild", Desc: "Rebuild chain on failure", Type: forms.Toggle},
+				},
+			},
+			{
+				Title:     "Summarization",
+				FieldName: "summarization",
+				Fields: []forms.Field{
+					{Name: "models", Title: "Models", Desc: "For checkpoint/compaction", Type: forms.ModelChain, Purpose: "summarization"},
+					{Name: "autoRebuild", Title: "Auto Rebuild", Type: forms.Toggle},
+					{Name: "maxInputTokens", Title: "Max Input Tokens", Type: forms.Number},
+				},
+			},
+			{
+				Title:     "Embeddings",
+				FieldName: "embeddings",
+				Fields: []forms.Field{
+					{Name: "models", Title: "Models", Desc: "For vector search", Type: forms.ModelChain, Purpose: "embeddings"},
+					{Name: "autoRebuild", Title: "Auto Rebuild", Type: forms.Toggle},
+				},
+			},
+			{
+				Title:     "Cron",
+				FieldName: "cron",
+				Collapsed: true,
+				Fields: []forms.Field{
+					{Name: "models", Title: "Models", Type: forms.ModelChain, Purpose: "cron"},
+					{Name: "autoRebuild", Title: "Auto Rebuild", Type: forms.Toggle},
+				},
+			},
+			{
+				Title:     "Heartbeat",
+				FieldName: "heartbeat",
+				Collapsed: true,
+				Fields: []forms.Field{
+					{Name: "models", Title: "Models", Type: forms.ModelChain, Purpose: "heartbeat"},
+					{Name: "autoRebuild", Title: "Auto Rebuild", Type: forms.Toggle},
+				},
+			},
+			{
+				Title:     "Home Assistant",
+				FieldName: "hass",
+				Collapsed: true,
+				Fields: []forms.Field{
+					{Name: "models", Title: "Models", Type: forms.ModelChain, Purpose: "hass"},
+					{Name: "autoRebuild", Title: "Auto Rebuild", Type: forms.Toggle},
+				},
+			},
+			{
+				Title:     "Memory Extraction",
+				FieldName: "memoryExtraction",
+				Collapsed: true,
+				Fields: []forms.Field{
+					{Name: "models", Title: "Models", Type: forms.ModelChain, Purpose: "memoryExtraction"},
+					{Name: "autoRebuild", Title: "Auto Rebuild", Type: forms.Toggle},
+				},
+			},
+			{
+				Title:     "Extended Thinking",
+				FieldName: "thinking",
+				Collapsed: true,
+				Fields: []forms.Field{
+					{Name: "budgetTokens", Title: "Budget Tokens", Type: forms.Number, Default: 10000},
+					{Name: "defaultLevel", Title: "Default Level", Type: forms.Select, Options: thinkingOptions},
+				},
+			},
+		},
+	}
+}

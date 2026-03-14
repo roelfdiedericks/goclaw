@@ -1,0 +1,522 @@
+{{define "base"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} - GoClaw</title>
+    
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    
+    <style>
+        body {
+            padding-top: 56px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", sans-serif;
+        }
+        .navbar-brand {
+            font-weight: bold;
+        }
+        .sidebar {
+            width: 250px;
+            flex-shrink: 0;
+            height: calc(100vh - 56px);
+            overflow-y: auto;
+            position: sticky;
+            top: 56px;
+        }
+        .sidebar-category {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: #6c757d;
+            padding: 0.5rem 1rem;
+            margin-top: 0.5rem;
+        }
+        .sidebar-item {
+            display: block;
+            padding: 0.5rem 1rem;
+            color: #212529;
+            text-decoration: none;
+            border-left: 3px solid transparent;
+        }
+        .sidebar-item:hover {
+            background-color: #f8f9fa;
+        }
+        .sidebar-item.active {
+            background-color: #e7f1ff;
+            border-left-color: #0d6efd;
+            color: #0d6efd;
+        }
+        .sidebar-item .badge {
+            font-size: 0.6rem;
+        }
+        .main-content {
+            flex-grow: 1;
+            padding: 1.5rem;
+            min-height: calc(100vh - 56px);
+        }
+        .cursor-pointer {
+            cursor: pointer;
+        }
+        
+        /* ModelChain styling */
+        .model-chain-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .model-chain-item {
+            display: flex;
+            align-items: flex-start;
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            background: #fff;
+            border: 1px solid #dee2e6;
+            border-radius: 0.375rem;
+            transition: box-shadow 0.15s ease-in-out;
+            cursor: grab;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .model-chain-item:active {
+            cursor: grabbing;
+        }
+        .model-chain-item:hover {
+            box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+        }
+        .model-chain-item.mc-dragging {
+            opacity: 0.4;
+            background: #e9ecef;
+        }
+        .model-chain-item.mc-drag-over {
+            border-top: 2px solid #0d6efd;
+        }
+        .model-chain-drag-handle {
+            cursor: grab;
+            padding: 0.25rem 0.5rem;
+            margin-right: 0.5rem;
+            color: #adb5bd;
+        }
+        .model-chain-content {
+            flex: 1;
+            min-width: 0;
+        }
+        .model-chain-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .model-chain-ref {
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 0.875rem;
+            word-break: break-all;
+        }
+        .model-chain-name {
+            font-weight: 500;
+            color: #212529;
+        }
+        .model-chain-meta {
+            font-size: 0.8rem;
+            color: #6c757d;
+            margin-top: 0.25rem;
+        }
+        .model-chain-caps {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.25rem;
+            flex-wrap: wrap;
+        }
+        .model-chain-cap {
+            font-size: 0.7rem;
+            padding: 0.125rem 0.375rem;
+            border-radius: 0.25rem;
+        }
+        .model-chain-cap-ok {
+            background: #d1e7dd;
+            color: #0f5132;
+        }
+        .model-chain-cap-warn {
+            background: #fff3cd;
+            color: #664d03;
+        }
+        .model-chain-cap-missing {
+            background: #f8d7da;
+            color: #842029;
+        }
+        .model-chain-details {
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid #dee2e6;
+            font-size: 0.875rem;
+        }
+        .model-chain-details dt {
+            font-weight: 500;
+            color: #6c757d;
+        }
+        .model-chain-details dd {
+            margin-bottom: 0.25rem;
+        }
+        .model-chain-actions {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.25rem;
+            margin-left: 0.5rem;
+        }
+        .model-chain-btn {
+            padding: 0.25rem 0.5rem;
+            background: none;
+            border: none;
+            color: #6c757d;
+            cursor: pointer;
+            border-radius: 0.25rem;
+        }
+        .model-chain-btn:hover {
+            background: #f8f9fa;
+            color: #212529;
+        }
+        .model-chain-btn-remove:hover {
+            background: #f8d7da;
+            color: #842029;
+        }
+        .model-chain-add {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.75rem;
+            border: 2px dashed #dee2e6;
+            border-radius: 0.375rem;
+            color: #6c757d;
+            cursor: pointer;
+            transition: all 0.15s ease-in-out;
+        }
+        .model-chain-add:hover {
+            border-color: #0d6efd;
+            color: #0d6efd;
+            background: #f8f9fa;
+        }
+        
+        /* Modal model selector */
+        .model-selector-split {
+            display: flex;
+            height: 400px;
+        }
+        .model-selector-list {
+            width: 50%;
+            border-right: 1px solid #dee2e6;
+            overflow-y: auto;
+        }
+        .model-selector-details {
+            width: 50%;
+            padding: 1rem;
+            overflow-y: auto;
+            background: #f8f9fa;
+        }
+        .model-selector-item {
+            display: block;
+            padding: 0.5rem 1rem;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+            cursor: pointer;
+        }
+        .model-selector-item:hover {
+            background: #e9ecef;
+        }
+        .model-selector-item.active {
+            background: #0d6efd;
+            color: #fff;
+        }
+        
+        /* ProviderList styles */
+        .provider-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .provider-item {
+            border: 1px solid #dee2e6;
+            border-radius: 0.375rem;
+            background: #fff;
+        }
+        .provider-item-expanded {
+            border-color: #0d6efd;
+        }
+        .provider-item-new {
+            border-style: dashed;
+            border-color: #0d6efd;
+        }
+        .provider-header {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem;
+            cursor: pointer;
+        }
+        .provider-header:hover {
+            background: #f8f9fa;
+        }
+        .provider-drag-handle {
+            cursor: grab;
+            padding: 0.25rem 0.5rem;
+            margin-right: 0.5rem;
+            color: #adb5bd;
+        }
+        .provider-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .provider-alias {
+            font-family: 'SFMono-Regular', Consolas, monospace;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        .provider-meta {
+            display: flex;
+            gap: 0.75rem;
+            font-size: 0.8rem;
+            color: #6c757d;
+            margin-top: 0.125rem;
+        }
+        .provider-key {
+            font-family: 'SFMono-Regular', Consolas, monospace;
+        }
+        .provider-actions {
+            display: flex;
+            gap: 0.25rem;
+        }
+        .provider-btn {
+            padding: 0.25rem 0.5rem;
+            background: none;
+            border: none;
+            color: #6c757d;
+            cursor: pointer;
+            border-radius: 0.25rem;
+        }
+        .provider-btn:hover {
+            background: #e9ecef;
+            color: #212529;
+        }
+        .provider-btn-remove:hover {
+            background: #f8d7da;
+            color: #842029;
+        }
+        .provider-form {
+            padding: 1rem;
+            border-top: 1px solid #dee2e6;
+            background: #f8f9fa;
+        }
+        .provider-add {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.75rem;
+            border: 2px dashed #dee2e6;
+            border-radius: 0.375rem;
+            color: #6c757d;
+            cursor: pointer;
+            transition: all 0.15s ease-in-out;
+        }
+        .provider-add:hover {
+            border-color: #0d6efd;
+            color: #0d6efd;
+            background: #f8f9fa;
+        }
+        .provider-add-form {
+            border-top: 1px solid #dee2e6;
+        }
+        .provider-preset-list {
+            border-right: 1px solid #dee2e6;
+            background: #fff;
+        }
+        .provider-preset-items {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .provider-preset-item {
+            display: block;
+            width: 100%;
+            padding: 0.5rem 1rem;
+            border: none;
+            background: none;
+            text-align: left;
+            cursor: pointer;
+        }
+        .provider-preset-item:hover {
+            background: #e9ecef;
+        }
+        .provider-preset-item.active {
+            background: #0d6efd;
+            color: #fff;
+        }
+        .provider-preset-name {
+            font-weight: 500;
+        }
+        .provider-preset-meta {
+            font-size: 0.75rem;
+            color: #6c757d;
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        .provider-preset-item.active .provider-preset-meta {
+            color: rgba(255,255,255,0.8);
+        }
+        .provider-new-config {
+            background: #f8f9fa;
+        }
+        
+        /* RolesList styles */
+        .role-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .role-item {
+            border: 1px solid #dee2e6;
+            border-radius: 0.375rem;
+            background: #fff;
+        }
+        .role-item-expanded {
+            border-color: #0d6efd;
+        }
+        .role-item-new {
+            border-style: dashed;
+            border-color: #0d6efd;
+        }
+        .role-header {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem;
+            cursor: pointer;
+        }
+        .role-header:hover {
+            background: #f8f9fa;
+        }
+        .role-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .role-name {
+            font-family: 'SFMono-Regular', Consolas, monospace;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        .role-summary {
+            display: block;
+            font-size: 0.8rem;
+            color: #6c757d;
+            margin-top: 0.125rem;
+        }
+        .role-actions {
+            display: flex;
+            gap: 0.25rem;
+        }
+        .role-btn {
+            padding: 0.25rem 0.5rem;
+            background: none;
+            border: none;
+            color: #6c757d;
+            cursor: pointer;
+            border-radius: 0.25rem;
+        }
+        .role-btn:hover {
+            background: #e9ecef;
+            color: #212529;
+        }
+        .role-btn-remove:hover {
+            background: #f8d7da;
+            color: #842029;
+        }
+        .role-form {
+            padding: 1rem;
+            border-top: 1px solid #dee2e6;
+            background: #f8f9fa;
+        }
+        .role-add {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.75rem;
+            border: 2px dashed #dee2e6;
+            border-radius: 0.375rem;
+            color: #6c757d;
+            cursor: pointer;
+            transition: all 0.15s ease-in-out;
+        }
+        .role-add:hover {
+            border-color: #0d6efd;
+            color: #0d6efd;
+            background: #f8f9fa;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
+        <div class="{{if .StandaloneMode}}container-fluid{{else}}container{{end}}">
+            <a class="navbar-brand" href="{{if .StandaloneMode}}{{if .WizardMode}}/setup/wizard{{else if .EditMode}}/setup/edit{{else}}/{{end}}{{else}}/{{end}}">
+                <i class="bi bi-robot"></i> GoClaw {{if .StandaloneMode}}Setup{{end}}
+            </a>
+            
+            {{if not .StandaloneMode}}
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/"><i class="bi bi-house"></i> Dashboard</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/chat"><i class="bi bi-chat"></i> Chat</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/voice"><i class="bi bi-mic"></i> Voice</a>
+                    </li>
+                </ul>
+                <ul class="navbar-nav">
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle {{if eq .CurrentNav "wizard" "edit"}}active{{end}}" href="#" data-bs-toggle="dropdown">
+                            <i class="bi bi-gear"></i> Setup
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><a class="dropdown-item" href="/setup/wizard"><i class="bi bi-magic"></i> Run Wizard</a></li>
+                            <li><a class="dropdown-item" href="/setup/edit"><i class="bi bi-sliders"></i> Edit Configuration</a></li>
+                        </ul>
+                    </li>
+                </ul>
+            </div>
+            {{end}}
+
+            {{if .EditMode}}
+            <div id="editor-top-actions" class="d-none ms-auto d-flex align-items-center gap-2">
+                <span id="editor-top-dirty-label" class="navbar-text text-warning small mb-0"></span>
+                <button id="editor-top-save" type="button" class="btn btn-sm btn-primary">Save</button>
+                <button id="editor-top-discard" type="button" class="btn btn-sm btn-outline-light">Discard</button>
+            </div>
+            {{end}}
+            
+            {{if .User}}
+            <span class="navbar-text ms-3">
+                <i class="bi bi-person-circle"></i> {{.User.Name}}
+            </span>
+            {{end}}
+        </div>
+    </nav>
+    
+    {{template "content" .}}
+    
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    
+    {{template "scripts" .}}
+</body>
+</html>
+{{end}}
+
+{{define "scripts"}}{{end}}

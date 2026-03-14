@@ -37,17 +37,17 @@ func ConfigFormDef() forms.FormDef {
 			{
 				Title: "General",
 				Fields: []forms.Field{
-					{Name: "Enabled", Title: "Enabled", Type: forms.Toggle, Default: true, Desc: "Enable the cron scheduler"},
-					{Name: "JobTimeoutMinutes", Title: "Job Timeout (minutes)", Type: forms.Number, Default: 30, Desc: "Timeout for job execution (0 = no timeout)"},
+					{Name: "enabled", Title: "Enabled", Type: forms.Toggle, Default: true, Desc: "Enable the cron scheduler"},
+					{Name: "jobTimeoutMinutes", Title: "Job Timeout (minutes)", Type: forms.Number, Default: 30, Desc: "Timeout for job execution (0 = no timeout)"},
 				},
 			},
 			{
 				Title:     "Heartbeat",
 				Collapsed: true,
 				Fields: []forms.Field{
-					{Name: "Heartbeat.Enabled", Title: "Enable Heartbeat", Type: forms.Toggle, Default: true, Desc: "Enable periodic heartbeat"},
-					{Name: "Heartbeat.IntervalMinutes", Title: "Interval (minutes)", Type: forms.Number, Default: 30, Desc: "Heartbeat interval"},
-					{Name: "Heartbeat.Prompt", Title: "Custom Prompt", Type: forms.Text, Desc: "Custom heartbeat prompt (optional)"},
+					{Name: "heartbeat.enabled", Title: "Enable Heartbeat", Type: forms.Toggle, Default: true, Desc: "Enable periodic heartbeat"},
+					{Name: "heartbeat.intervalMinutes", Title: "Interval (minutes)", Type: forms.Number, Default: 30, Desc: "Heartbeat interval"},
+					{Name: "heartbeat.prompt", Title: "Custom Prompt", Type: forms.Text, Desc: "Custom heartbeat prompt (optional)"},
 				},
 			},
 		},

@@ -48,8 +48,8 @@ func ConfigFormDef() forms.FormDef {
 			{
 				Title: "Settings",
 				Fields: []forms.Field{
-					{Name: "Enabled", Title: "Enabled", Type: forms.Toggle, Default: true, Desc: "Enable HTTP server"},
-					{Name: "Listen", Title: "Listen Address", Type: forms.Text, Default: ":1337", Desc: "Address to listen on (e.g., :1337 or 127.0.0.1:1337)"},
+					{Name: "enabled", Title: "Enabled", Type: forms.Toggle, Default: true, Desc: "Enable HTTP server"},
+					{Name: "listen", Title: "Listen Address", Type: forms.Text, Default: ":1337", Desc: "Address to listen on (e.g., :1337 or 127.0.0.1:1337)"},
 				},
 			},
 		},

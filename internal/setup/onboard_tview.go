@@ -104,6 +104,37 @@ type WizardData struct {
 	VoiceLLMEnabled bool
 	VoiceLLMAPIKey  string
 	VoiceLLMVoice   string // Eve, Ara, Rex, Sal, Leo
+
+	// Dirty tracking - only save fields that were actually modified
+	dirty map[string]bool
+}
+
+// MarkDirty marks the specified fields as modified
+func (d *WizardData) MarkDirty(fields ...string) {
+	if d.dirty == nil {
+		d.dirty = make(map[string]bool)
+	}
+	for _, f := range fields {
+		d.dirty[f] = true
+	}
+}
+
+// IsDirty returns true if the field was modified
+func (d *WizardData) IsDirty(field string) bool {
+	if d.dirty == nil {
+		return false
+	}
+	return d.dirty[field]
+}
+
+// HasAnyDirty returns true if any of the specified fields are dirty
+func (d *WizardData) HasAnyDirty(fields ...string) bool {
+	for _, f := range fields {
+		if d.IsDirty(f) {
+			return true
+		}
+	}
+	return false
 }
 
 // NewWizardData creates a new WizardData with defaults
@@ -117,6 +148,7 @@ func NewWizardData() *WizardData {
 		SkillsAllowEmbedded: true,
 		SkillsAllowClawHub:  false,
 		SkillsAllowLocal:    false,
+		dirty:               make(map[string]bool),
 	}
 }
 
@@ -176,6 +208,19 @@ func (d *WizardData) LoadFromExisting(cfg *config.Config, path string) {
 		d.VoiceLLMAPIKey = xai.APIKey
 		d.VoiceLLMVoice = xai.Voice
 	}
+
+	// STT (Speech-to-Text)
+	if cfg.STT.Provider != "" {
+		d.STTEnabled = true
+		if cfg.STT.Provider == "whispercpp" {
+			d.STTModel = cfg.STT.WhisperCpp.Model
+		}
+	}
+
+	// Skills installation sources
+	d.SkillsAllowEmbedded = cfg.Skills.Install.AllowEmbedded
+	d.SkillsAllowClawHub = cfg.Skills.Install.AllowClawHub
+	d.SkillsAllowLocal = cfg.Skills.Install.AllowLocal
 
 	// Load user data from users.json
 	d.loadUserFromUsersJSON()
@@ -455,9 +500,10 @@ func stepWorkspace(data *WizardData) forms.WizardStep {
 				data.WorkspacePath = DefaultWorkspacePath()
 			}
 
-			form.AddInputField("Workspace Path", data.WorkspacePath, 50, nil, func(text string) {
-				data.WorkspacePath = text
-			})
+		form.AddInputField("Workspace Path", data.WorkspacePath, 50, nil, func(text string) {
+			data.WorkspacePath = text
+			data.MarkDirty("WorkspacePath")
+		})
 
 			return formWithHeader(`The [cyan]workspace[white] is where GoClaw stores your agent's files,
 including memory, transcripts, and project data.`, 3, form)
@@ -534,13 +580,15 @@ func stepTelegram(data *WizardData) forms.WizardStep {
 			form.SetBorder(false)
 			enableFormMouseScroll(form, w)
 
-			form.AddCheckbox("Enable Telegram Bot", data.TelegramEnabled, func(checked bool) {
-				data.TelegramEnabled = checked
-			})
+		form.AddCheckbox("Enable Telegram Bot", data.TelegramEnabled, func(checked bool) {
+			data.TelegramEnabled = checked
+			data.MarkDirty("TelegramEnabled")
+		})
 
-			form.AddInputField("Bot Token", data.TelegramToken, 50, nil, func(text string) {
-				data.TelegramToken = text
-			})
+		form.AddInputField("Bot Token", data.TelegramToken, 50, nil, func(text string) {
+			data.TelegramToken = text
+			data.MarkDirty("TelegramToken")
+		})
 
 			return formWithHeader(`[cyan]Telegram[white] allows you to chat with GoClaw from your phone.
 Get a bot token from [yellow]@BotFather[white] on Telegram.`, 3, form)
@@ -564,9 +612,10 @@ func stepWhatsApp(data *WizardData) forms.WizardStep {
 			form.SetBorder(false)
 			enableFormMouseScroll(form, w)
 
-			form.AddCheckbox("Enable WhatsApp Channel", data.WhatsAppEnabled, func(checked bool) {
-				data.WhatsAppEnabled = checked
-			})
+		form.AddCheckbox("Enable WhatsApp Channel", data.WhatsAppEnabled, func(checked bool) {
+			data.WhatsAppEnabled = checked
+			data.MarkDirty("WhatsAppEnabled")
+		})
 
 			return formWithHeader(`[cyan]WhatsApp[white] allows you to chat with GoClaw from WhatsApp.
 
@@ -606,39 +655,45 @@ func stepHTTP(data *WizardData) forms.WizardStep {
 			inputForm.SetBorder(false)
 			enableFormMouseScroll(inputForm, w)
 
-			// Add input field first so we have the reference
-			inputForm.AddInputField("Listen Address", data.HTTPListen, 30, nil, func(text string) {
-				data.HTTPListen = text
-				if text != "" {
-					data.HTTPEnabled = true
-				}
-			})
-			listenInput, _ := inputForm.GetFormItemByLabel("Listen Address").(*tview.InputField)
-
-			// Add buttons
-			buttons.AddButton("Local Only", func() {
+		// Add input field first so we have the reference
+		inputForm.AddInputField("Listen Address", data.HTTPListen, 30, nil, func(text string) {
+			data.HTTPListen = text
+			data.MarkDirty("HTTPListen")
+			if text != "" {
 				data.HTTPEnabled = true
-				data.HTTPListen = "127.0.0.1:1337"
-				listenInput.SetText(data.HTTPListen)
-			})
+				data.MarkDirty("HTTPEnabled")
+			}
+		})
+		listenInput, _ := inputForm.GetFormItemByLabel("Listen Address").(*tview.InputField)
 
-			buttons.AddButton("Network (IPv4)", func() {
-				data.HTTPEnabled = true
-				data.HTTPListen = "0.0.0.0:1337"
-				listenInput.SetText(data.HTTPListen)
-			})
+		// Add buttons
+		buttons.AddButton("Local Only", func() {
+			data.HTTPEnabled = true
+			data.HTTPListen = "127.0.0.1:1337"
+			data.MarkDirty("HTTPEnabled", "HTTPListen")
+			listenInput.SetText(data.HTTPListen)
+		})
 
-			buttons.AddButton("Network (All)", func() {
-				data.HTTPEnabled = true
-				data.HTTPListen = ":1337"
-				listenInput.SetText(data.HTTPListen)
-			})
+		buttons.AddButton("Network (IPv4)", func() {
+			data.HTTPEnabled = true
+			data.HTTPListen = "0.0.0.0:1337"
+			data.MarkDirty("HTTPEnabled", "HTTPListen")
+			listenInput.SetText(data.HTTPListen)
+		})
 
-			buttons.AddButton("Disable", func() {
-				data.HTTPEnabled = false
-				data.HTTPListen = ""
-				listenInput.SetText("")
-			})
+		buttons.AddButton("Network (All)", func() {
+			data.HTTPEnabled = true
+			data.HTTPListen = ":1337"
+			data.MarkDirty("HTTPEnabled", "HTTPListen")
+			listenInput.SetText(data.HTTPListen)
+		})
+
+		buttons.AddButton("Disable", func() {
+			data.HTTPEnabled = false
+			data.HTTPListen = ""
+			data.MarkDirty("HTTPEnabled", "HTTPListen")
+			listenInput.SetText("")
+		})
 
 			// Explanation text (below buttons)
 			explanation := tview.NewTextView().
@@ -698,9 +753,10 @@ func stepSTT(data *WizardData) forms.WizardStep {
 				data.STTEnabled = true
 			}
 
-			form.AddCheckbox("Enable Speech-to-Text", data.STTEnabled, func(checked bool) {
-				data.STTEnabled = checked
-			})
+		form.AddCheckbox("Enable Speech-to-Text", data.STTEnabled, func(checked bool) {
+			data.STTEnabled = checked
+			data.MarkDirty("STTEnabled", "STTModel")
+		})
 
 			// Model status with colors (5th param enables dynamic colors)
 			statusText := "[red]Not available[-] - download required"
@@ -798,18 +854,21 @@ You can skip this step and configure voice later via
 				data.VoiceLLMVoice = "Eve"
 			}
 
-			form.AddCheckbox("Enable real-time voice", data.VoiceLLMEnabled, func(checked bool) {
-				data.VoiceLLMEnabled = checked
-			})
+		form.AddCheckbox("Enable real-time voice", data.VoiceLLMEnabled, func(checked bool) {
+			data.VoiceLLMEnabled = checked
+			data.MarkDirty("VoiceLLMEnabled")
+		})
 
-			form.AddPasswordField("xAI API Key", data.VoiceLLMAPIKey, 50, '*', func(text string) {
-				data.VoiceLLMAPIKey = text
-				// Auto-enable when API key is entered
-				if text != "" && !data.VoiceLLMEnabled {
-					data.VoiceLLMEnabled = true
-					w.RefreshCurrentStep()
-				}
-			})
+		form.AddPasswordField("xAI API Key", data.VoiceLLMAPIKey, 50, '*', func(text string) {
+			data.VoiceLLMAPIKey = text
+			data.MarkDirty("VoiceLLMAPIKey")
+			// Auto-enable when API key is entered
+			if text != "" && !data.VoiceLLMEnabled {
+				data.VoiceLLMEnabled = true
+				data.MarkDirty("VoiceLLMEnabled")
+				w.RefreshCurrentStep()
+			}
+		})
 
 			// Voice dropdown
 			voiceOptions := []string{"Eve", "Ara", "Rex", "Sal", "Leo"}
@@ -830,9 +889,10 @@ You can skip this step and configure voice later via
 				}
 			}
 
-			form.AddDropDown("Voice", voiceOptions, voiceIndex, func(option string, index int) {
-				data.VoiceLLMVoice = option
-			})
+		form.AddDropDown("Voice", voiceOptions, voiceIndex, func(option string, index int) {
+			data.VoiceLLMVoice = option
+			data.MarkDirty("VoiceLLMVoice")
+		})
 
 			// Add voice description
 			if desc, ok := voiceDescriptions[data.VoiceLLMVoice]; ok {
@@ -923,49 +983,57 @@ The exec and browser tools will run without kernel sandboxing.`)
 			form.SetBorder(false)
 			enableFormMouseScroll(form, w)
 
-			form.AddCheckbox("Enable exec sandboxing", data.ExecBubblewrap, func(checked bool) {
-				if !checked {
-					data.ExecBubblewrap = true
-					sandboxConfirmModal(w, form, 0, func() {
-						data.ExecBubblewrap = false
-					})
-					return
-				}
-				data.ExecBubblewrap = checked
-			})
+		form.AddCheckbox("Enable exec sandboxing", data.ExecBubblewrap, func(checked bool) {
+			if !checked {
+				data.ExecBubblewrap = true
+				sandboxConfirmModal(w, form, 0, func() {
+					data.ExecBubblewrap = false
+					data.MarkDirty("ExecBubblewrap")
+				})
+				return
+			}
+			data.ExecBubblewrap = checked
+			data.MarkDirty("ExecBubblewrap")
+		})
 
-			form.AddCheckbox("Enable browser sandboxing", data.BrowserBubblewrap, func(checked bool) {
-				if !checked {
-					data.BrowserBubblewrap = true
-					sandboxConfirmModal(w, form, 1, func() {
-						data.BrowserBubblewrap = false
-					})
-					return
-				}
-				data.BrowserBubblewrap = checked
-			})
+		form.AddCheckbox("Enable browser sandboxing", data.BrowserBubblewrap, func(checked bool) {
+			if !checked {
+				data.BrowserBubblewrap = true
+				sandboxConfirmModal(w, form, 1, func() {
+					data.BrowserBubblewrap = false
+					data.MarkDirty("BrowserBubblewrap")
+				})
+				return
+			}
+			data.BrowserBubblewrap = checked
+			data.MarkDirty("BrowserBubblewrap")
+		})
 
-			// Skills installation sources
-			form.AddTextView("", "\n─── Skill Installation Sources ───", 50, 2, false, false)
+		// Skills installation sources
+		form.AddTextView("", "\n─── Skill Installation Sources ───", 50, 2, false, false)
 
-			form.AddCheckbox("Allow embedded skills", data.SkillsAllowEmbedded, func(checked bool) {
-				data.SkillsAllowEmbedded = checked
-			})
+		form.AddCheckbox("Allow embedded skills", data.SkillsAllowEmbedded, func(checked bool) {
+			data.SkillsAllowEmbedded = checked
+			data.MarkDirty("SkillsAllowEmbedded")
+		})
 
-			form.AddCheckbox("Allow ClawHub (public repository)", data.SkillsAllowClawHub, func(checked bool) {
-				data.SkillsAllowClawHub = checked
-			})
+		form.AddCheckbox("Allow ClawHub (public repository)", data.SkillsAllowClawHub, func(checked bool) {
+			data.SkillsAllowClawHub = checked
+			data.MarkDirty("SkillsAllowClawHub")
+		})
 
-			form.AddCheckbox("Allow local paths (⚠ security risk)", data.SkillsAllowLocal, func(checked bool) {
-				if checked {
-					data.SkillsAllowLocal = false
-					localSkillsConfirmModal(w, form, func() {
-						data.SkillsAllowLocal = true
-					})
-					return
-				}
-				data.SkillsAllowLocal = checked
-			})
+		form.AddCheckbox("Allow local paths (⚠ security risk)", data.SkillsAllowLocal, func(checked bool) {
+			if checked {
+				data.SkillsAllowLocal = false
+				localSkillsConfirmModal(w, form, func() {
+					data.SkillsAllowLocal = true
+					data.MarkDirty("SkillsAllowLocal")
+				})
+				return
+			}
+			data.SkillsAllowLocal = checked
+			data.MarkDirty("SkillsAllowLocal")
+		})
 
 			return formWithHeader(`[cyan]Sandboxing[white] restricts tools to only access files within your workspace,
 preventing accidental or malicious access to system files.
@@ -1059,6 +1127,7 @@ func buildLLMProviderList(data *WizardData, w *forms.Wizard) tview.Primitive {
 			data.LLMAPIKey = ""
 			data.LLMModel = ""
 			data.LLMSkipped = false
+			data.MarkDirty("LLMProviderID", "LLMDriver", "LLMBaseURL", "LLMModel")
 
 			large, _ := meta.GetDefaultModels(providerID)
 			data.LLMModel = large
@@ -1143,9 +1212,11 @@ func buildLLMConfigForm(data *WizardData, w *forms.Wizard) tview.Primitive {
 	if isLocal {
 		form.AddInputField("URL", data.LLMBaseURL, 50, nil, func(text string) {
 			data.LLMBaseURL = text
+			data.MarkDirty("LLMBaseURL")
 		})
 		form.AddInputField("Model", data.LLMModel, 50, nil, func(text string) {
 			data.LLMModel = text
+			data.MarkDirty("LLMModel")
 		})
 	} else {
 		// Model dropdown
@@ -1175,6 +1246,7 @@ func buildLLMConfigForm(data *WizardData, w *forms.Wizard) tview.Primitive {
 			form.AddDropDown("Agent Model", options, selectedIdx, func(option string, index int) {
 				if index >= 0 && index < len(modelIDs) {
 					data.LLMModel = modelIDs[index]
+					data.MarkDirty("LLMModel")
 					updateModelInfo(data.LLMModel)
 				}
 			})
@@ -1187,6 +1259,7 @@ func buildLLMConfigForm(data *WizardData, w *forms.Wizard) tview.Primitive {
 
 		form.AddPasswordField("API Key", data.LLMAPIKey, 60, '*', func(text string) {
 			data.LLMAPIKey = text
+			data.MarkDirty("LLMAPIKey")
 		})
 	}
 
@@ -1397,12 +1470,14 @@ func printWizardConfig(data *WizardData) {
 	fmt.Printf("Users saved to: %s\n", usersPath)
 
 	// Print next steps
-	fmt.Println("\nSetup complete! Next steps:")
+	fmt.Println("\nSetup complete! Start GoClaw with:")
 	if data.LLMSkipped || data.LLMProviderID == "" {
 		fmt.Println("  1. Run 'goclaw setup edit' to configure LLM providers")
-		fmt.Println("  2. Run 'goclaw tui' to start GoClaw")
+		fmt.Println("  2. Run 'goclaw start' (recommended - runs with supervisor)")
+		fmt.Println("     or 'goclaw gateway' to run in foreground")
 	} else {
-		fmt.Println("  1. Run 'goclaw tui' to start GoClaw")
+		fmt.Println("  goclaw start       (recommended - runs with supervisor)")
+		fmt.Println("  goclaw gateway     (runs in foreground)")
 	}
 	fmt.Println("\nOptional:")
 	fmt.Println("  - Run 'goclaw setup edit' to add more providers or fine-tune settings")
@@ -1411,7 +1486,7 @@ func printWizardConfig(data *WizardData) {
 
 // buildConfigFromWizardData creates a config structure from wizard data.
 // When an existing config exists, starts from it to preserve all settings,
-// then overlays only the fields the wizard manages.
+// then overlays ONLY the fields that were actually modified (dirty).
 func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
 	var cfg map[string]interface{}
 
@@ -1425,74 +1500,101 @@ func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
 		cfg = make(map[string]interface{})
 	}
 
-	// Overlay wizard-managed fields
-	deepSet(cfg, "gateway.workingDir", data.WorkspacePath)
+	// Workspace - only if dirty
+	if data.IsDirty("WorkspacePath") {
+		deepSet(cfg, "gateway.workingDir", data.WorkspacePath)
+	}
 
-	deepSet(cfg, "channels.telegram.enabled", data.TelegramEnabled)
-	deepSet(cfg, "channels.telegram.botToken", data.TelegramToken)
-	deepSet(cfg, "channels.whatsapp.enabled", data.WhatsAppEnabled)
-	deepSet(cfg, "channels.http.enabled", data.HTTPEnabled)
-	deepSet(cfg, "channels.http.listen", data.HTTPListen)
+	// Channels - only if any channel field is dirty
+	if data.HasAnyDirty("TelegramEnabled", "TelegramToken") {
+		deepSet(cfg, "channels.telegram.enabled", data.TelegramEnabled)
+		deepSet(cfg, "channels.telegram.botToken", data.TelegramToken)
+	}
+	if data.IsDirty("WhatsAppEnabled") {
+		deepSet(cfg, "channels.whatsapp.enabled", data.WhatsAppEnabled)
+	}
+	if data.HasAnyDirty("HTTPEnabled", "HTTPListen") {
+		deepSet(cfg, "channels.http.enabled", data.HTTPEnabled)
+		deepSet(cfg, "channels.http.listen", data.HTTPListen)
+	}
 
-	storePath, _ := paths.DataPath("sessions.db")
-	deepSet(cfg, "session.storePath", storePath)
+	// Session store path - always set if config is new
+	if data.ExistingConfig == nil {
+		storePath, _ := paths.DataPath("sessions.db")
+		deepSet(cfg, "session.storePath", storePath)
+	}
 
-	deepSet(cfg, "tools.exec.bubblewrap.enabled", data.ExecBubblewrap)
-	deepSet(cfg, "tools.browser.bubblewrap.enabled", data.BrowserBubblewrap)
+	// Security/Sandboxing - only if dirty
+	if data.HasAnyDirty("ExecBubblewrap", "BrowserBubblewrap") {
+		deepSet(cfg, "tools.exec.bubblewrap.enabled", data.ExecBubblewrap)
+		deepSet(cfg, "tools.browser.bubblewrap.enabled", data.BrowserBubblewrap)
+	}
 
-	// Skills installation sources
-	deepSet(cfg, "skills.install.allowEmbedded", data.SkillsAllowEmbedded)
-	deepSet(cfg, "skills.install.allowClawHub", data.SkillsAllowClawHub)
-	deepSet(cfg, "skills.install.allowLocal", data.SkillsAllowLocal)
+	// Skills installation sources - only if dirty
+	if data.HasAnyDirty("SkillsAllowEmbedded", "SkillsAllowClawHub", "SkillsAllowLocal") {
+		deepSet(cfg, "skills.install.allowEmbedded", data.SkillsAllowEmbedded)
+		deepSet(cfg, "skills.install.allowClawHub", data.SkillsAllowClawHub)
+		deepSet(cfg, "skills.install.allowLocal", data.SkillsAllowLocal)
+	}
 
-	// LLM provider
-	if !data.LLMSkipped && data.LLMProviderID != "" {
-		alias := data.LLMProviderID
+	// LLM provider - only if dirty
+	if data.HasAnyDirty("LLMProviderID", "LLMDriver", "LLMAPIKey", "LLMBaseURL", "LLMModel") {
+		if !data.LLMSkipped && data.LLMProviderID != "" {
+			alias := data.LLMProviderID
 
-		deepSet(cfg, "llm.providers."+alias+".driver", data.LLMDriver)
-		deepSet(cfg, "llm.providers."+alias+".subtype", data.LLMProviderID)
+			deepSet(cfg, "llm.providers."+alias+".driver", data.LLMDriver)
+			deepSet(cfg, "llm.providers."+alias+".subtype", data.LLMProviderID)
 
-		if data.LLMAPIKey != "" {
-			deepSet(cfg, "llm.providers."+alias+".apiKey", data.LLMAPIKey)
+			if data.LLMAPIKey != "" {
+				deepSet(cfg, "llm.providers."+alias+".apiKey", data.LLMAPIKey)
+			}
+			if data.LLMDriver == "ollama" {
+				deepSet(cfg, "llm.providers."+alias+".url", data.LLMBaseURL)
+			} else if data.LLMBaseURL != "" {
+				deepSet(cfg, "llm.providers."+alias+".baseURL", data.LLMBaseURL)
+			}
+
+			// Anthropic: auto-enable prompt caching
+			if data.LLMDriver == "anthropic" {
+				deepSet(cfg, "llm.providers."+alias+".promptCaching", true)
+			}
+
+			// Agent chain: replace first model, preserve fallbacks
+			ref := alias + "/" + data.LLMModel
+			agentModels := getStringSlice(cfg, "llm.agent.models")
+			if len(agentModels) > 0 {
+				agentModels[0] = ref
+			} else {
+				agentModels = []string{ref}
+			}
+			deepSet(cfg, "llm.agent.models", agentModels)
 		}
-		if data.LLMDriver == "ollama" {
-			deepSet(cfg, "llm.providers."+alias+".url", data.LLMBaseURL)
-		} else if data.LLMBaseURL != "" {
-			deepSet(cfg, "llm.providers."+alias+".baseURL", data.LLMBaseURL)
-		}
+	}
 
-		// Anthropic: auto-enable prompt caching
-		if data.LLMDriver == "anthropic" {
-			deepSet(cfg, "llm.providers."+alias+".promptCaching", true)
-		}
-
-		// Agent chain: replace first model, preserve fallbacks
-		ref := alias + "/" + data.LLMModel
-		agentModels := getStringSlice(cfg, "llm.agent.models")
-		if len(agentModels) > 0 {
-			agentModels[0] = ref
+	// STT (Speech-to-Text) - only if dirty
+	if data.HasAnyDirty("STTEnabled", "STTModel") {
+		if data.STTEnabled {
+			deepSet(cfg, "stt.enabled", true)
+			deepSet(cfg, "stt.provider", "whispercpp")
+			deepSet(cfg, "stt.whispercpp.model", data.STTModel)
+			deepSet(cfg, "stt.whispercpp.modelsDir", "~/.goclaw/stt/whisper")
 		} else {
-			agentModels = []string{ref}
+			deepSet(cfg, "stt.enabled", false)
 		}
-		deepSet(cfg, "llm.agent.models", agentModels)
 	}
 
-	// STT (Speech-to-Text)
-	if data.STTEnabled {
-		deepSet(cfg, "stt.enabled", true)
-		deepSet(cfg, "stt.provider", "whispercpp")
-		deepSet(cfg, "stt.whispercpp.model", data.STTModel)
-		deepSet(cfg, "stt.whispercpp.modelsDir", "~/.goclaw/stt/whisper")
-	}
-
-	// VoiceLLM (Real-time Voice)
-	if data.VoiceLLMEnabled && data.VoiceLLMAPIKey != "" {
-		deepSet(cfg, "voicellm.enabled", true)
-		deepSet(cfg, "voicellm.default", "xai")
-		deepSet(cfg, "voicellm.providers.xai.driver", "xai")
-		deepSet(cfg, "voicellm.providers.xai.apiKey", data.VoiceLLMAPIKey)
-		if data.VoiceLLMVoice != "" {
-			deepSet(cfg, "voicellm.providers.xai.voice", data.VoiceLLMVoice)
+	// VoiceLLM (Real-time Voice) - only if dirty
+	if data.HasAnyDirty("VoiceLLMEnabled", "VoiceLLMAPIKey", "VoiceLLMVoice") {
+		if data.VoiceLLMEnabled && data.VoiceLLMAPIKey != "" {
+			deepSet(cfg, "voicellm.enabled", true)
+			deepSet(cfg, "voicellm.default", "xai")
+			deepSet(cfg, "voicellm.providers.xai.driver", "xai")
+			deepSet(cfg, "voicellm.providers.xai.apiKey", data.VoiceLLMAPIKey)
+			if data.VoiceLLMVoice != "" {
+				deepSet(cfg, "voicellm.providers.xai.voice", data.VoiceLLMVoice)
+			}
+		} else {
+			deepSet(cfg, "voicellm.enabled", false)
 		}
 	}
 

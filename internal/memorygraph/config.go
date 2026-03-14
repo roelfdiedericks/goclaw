@@ -175,8 +175,13 @@ func (c *Config) Validate() error {
 
 // --- Form Definitions ---
 
-// ConfigFormDef returns the form definition for editing memory graph configuration
-func ConfigFormDef(cfg Config) forms.FormDef {
+// ConfigFormDef returns the form definition for editing memory graph configuration (zero-argument for web)
+func ConfigFormDef() forms.FormDef {
+	return ConfigFormDefWithValues(Config{})
+}
+
+// ConfigFormDefWithValues returns the form definition with config values for nested sections
+func ConfigFormDefWithValues(cfg Config) forms.FormDef {
 	return forms.FormDef{
 		Title:       "Memory Graph",
 		Description: "Configure memory extraction and graph storage for long-term knowledge retention",
@@ -201,13 +206,13 @@ func ConfigFormDef(cfg Config) forms.FormDef {
 			{
 				Title:     "Live Extraction",
 				Collapsed: true,
-				FieldName: "LiveExtraction",
+				FieldName: "liveExtraction",
 				Nested:    ptrFormDef(LiveExtractionFormDef(cfg.LiveExtraction)),
 			},
 			{
 				Title:     "Bulletin Injection",
 				Collapsed: true,
-				FieldName: "Bulletin",
+				FieldName: "bulletin",
 				Nested:    ptrFormDef(BulletinFormDef(cfg.Bulletin)),
 			},
 			{
@@ -215,14 +220,14 @@ func ConfigFormDef(cfg Config) forms.FormDef {
 				Collapsed: false,
 				Fields: []forms.Field{
 					{
-						Name:    "Bulletin.chatContextEnabled",
+						Name:    "bulletin.chatContextEnabled",
 						Title:   "Enabled",
 						Type:    forms.Toggle,
 						Default: true,
 						Desc:    "Query memories relevant to current user message using FTS (not cached)",
 					},
 					{
-						Name:    "Bulletin.chatContextLimit",
+						Name:    "bulletin.chatContextLimit",
 						Title:   "Max Items",
 						Type:    forms.Number,
 						Default: 3,
@@ -231,7 +236,7 @@ func ConfigFormDef(cfg Config) forms.FormDef {
 						Desc:    "Number of relevant memories to surface per turn",
 					},
 					{
-						Name:    "Bulletin.chatContextMaxKeywords",
+						Name:    "bulletin.chatContextMaxKeywords",
 						Title:   "Max Keywords",
 						Type:    forms.Number,
 						Default: 8,
@@ -240,7 +245,7 @@ func ConfigFormDef(cfg Config) forms.FormDef {
 						Desc:    "Max keywords to extract from user message (longest words kept)",
 					},
 					{
-						Name:    "Bulletin.chatContextLanguage",
+						Name:    "bulletin.chatContextLanguage",
 						Title:   "Stopwords Language",
 						Type:    forms.Select,
 						Default: "en",
@@ -282,7 +287,7 @@ func ConfigFormDef(cfg Config) forms.FormDef {
 			{
 				Title:     "Search Weights",
 				Collapsed: true,
-				FieldName: "Search",
+				FieldName: "search",
 				Nested:    ptrFormDef(SearchConfigFormDef(cfg.Search)),
 			},
 		},

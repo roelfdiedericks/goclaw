@@ -46,6 +46,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/sandbox/bwrap"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/setup"
+	setupweb "github.com/roelfdiedericks/goclaw/internal/setup/web"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/stt"
 	"github.com/roelfdiedericks/goclaw/internal/supervisor"
@@ -2021,17 +2022,77 @@ func (s *SetupAutoCmd) Run(ctx *Context) error {
 }
 
 // SetupWizardCmd forces the full wizard
-type SetupWizardCmd struct{}
+type SetupWizardCmd struct {
+	Web bool `help:"Force web browser interface"`
+	TUI bool `help:"Force terminal interface"`
+}
 
 func (s *SetupWizardCmd) Run(ctx *Context) error {
-	return setup.RunWizard()
+	if s.TUI {
+		return setup.RunWizard()
+	}
+
+	configPath := setupweb.DefaultConfigPath()
+
+	if s.Web {
+		// Force web mode - fail with helpful message if not available
+		err := setupweb.RunWebWizard(configPath)
+		if err == setupweb.ErrNoUIAvailable {
+			fmt.Println("\nError: Cannot open web interface.")
+			fmt.Println("\nTo use the web wizard, install one of:")
+			fmt.Println("  - webkit2gtk: sudo apt install libwebkit2gtk-4.1-dev")
+			fmt.Println("  - Or any web browser")
+			fmt.Println("\nAlternatively, run: goclaw setup wizard --tui")
+			return err
+		}
+		return err
+	}
+
+	// Auto-detect mode: try web, silently fallback to TUI
+	err := setupweb.RunWebWizard(configPath)
+	if err == setupweb.ErrNoUIAvailable {
+		L_debug("web wizard not available, falling back to TUI")
+		return setup.RunWizard()
+	}
+	return err
 }
 
 // SetupEditCmd edits existing config
-type SetupEditCmd struct{}
+type SetupEditCmd struct {
+	Web bool `help:"Force web browser interface"`
+	TUI bool `help:"Force terminal interface"`
+	Dev bool `help:"Enable developer tools (right-click inspect)"`
+}
 
 func (s *SetupEditCmd) Run(ctx *Context) error {
-	return setup.RunEdit()
+	if s.TUI {
+		return setup.RunEdit()
+	}
+
+	configPath := setupweb.DefaultConfigPath()
+
+	if s.Web {
+		// Force web mode - fail with helpful message if not available
+		err := setupweb.RunWebEditorWithOptions(configPath, s.Dev)
+		if err == setupweb.ErrNoUIAvailable {
+			fmt.Println("\nCould not open web editor.")
+			fmt.Println("The web-based editor requires either:")
+			fmt.Println("  1. webkit2gtk installed (apt install libwebkit2gtk-4.1-dev)")
+			fmt.Println("  2. A web browser (xdg-open)")
+			fmt.Println("\nUse --tui flag for terminal interface instead:")
+			fmt.Println("  goclaw setup edit --tui")
+			return err
+		}
+		return err
+	}
+
+	// Auto-detect mode: try web, silently fallback to TUI
+	err := setupweb.RunWebEditorWithOptions(configPath, s.Dev)
+	if err == setupweb.ErrNoUIAvailable {
+		L_debug("web editor not available, falling back to TUI")
+		return setup.RunEdit()
+	}
+	return err
 }
 
 // SetupGenerateCmd outputs default config template
@@ -2421,6 +2482,13 @@ func main() {
 		ShowCaller: true,
 	})
 
+	// Hard-stop contract gate: any invalid setup FormDef/ShowWhen path aborts process.
+	if err := setupweb.ValidateAllSectionContractsStrict(); err != nil {
+		L_error("startup: strict setup contract validation failed", "error", err)
+		fmt.Fprintf(os.Stderr, "startup aborted: strict setup contract validation failed: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Run the selected command
 	err := ctx.Run(&Context{
 		Debug: cli.Debug,
@@ -2707,3 +2775,4 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 	L_info("tools: registered", "count", reg.Count())
 	return messageTool, transcriptMgr
 }
+

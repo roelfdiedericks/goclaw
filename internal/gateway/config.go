@@ -31,42 +31,41 @@ func ConfigFormDef() forms.FormDef {
 			{
 				Title: "Gateway",
 				Fields: []forms.Field{
-					{Name: "Gateway.LogFile", Title: "Log File", Type: forms.Text, Desc: "Path to log file"},
-					{Name: "Gateway.PIDFile", Title: "PID File", Type: forms.Text, Desc: "Path to PID file"},
-					{Name: "Gateway.WorkingDir", Title: "Working Directory", Type: forms.Text, Desc: "Working directory for sessions"},
+					{Name: "gateway.logFile", Title: "Log File", Type: forms.Text, Desc: "Path to log file"},
+					{Name: "gateway.pidFile", Title: "PID File", Type: forms.Text, Desc: "Path to PID file"},
+					{Name: "gateway.workingDir", Title: "Working Directory", Type: forms.Text, Desc: "Working directory for sessions"},
 				},
 			},
 			{
 				Title: "Agent Identity",
 				Fields: []forms.Field{
-					{Name: "Agent.Name", Title: "Agent Name", Type: forms.Text, Default: "GoClaw", Desc: "Display name for the agent"},
-					{Name: "Agent.Emoji", Title: "Emoji Prefix", Type: forms.Text, Desc: "Optional emoji prefix for agent name"},
-					{Name: "Agent.Typing", Title: "Typing Text", Type: forms.Text, Desc: "Custom typing indicator text"},
+					{Name: "agent.name", Title: "Agent Name", Type: forms.Text, Default: "GoClaw", Desc: "Display name for the agent"},
+					{Name: "agent.emoji", Title: "Emoji Prefix", Type: forms.Text, Desc: "Optional emoji prefix for agent name"},
+					{Name: "agent.typing", Title: "Typing Text", Type: forms.Text, Desc: "Custom typing indicator text"},
 				},
 			},
 			{
 				Title:     "Prompt Cache",
 				Collapsed: true,
 				Fields: []forms.Field{
-					{Name: "PromptCache.PollInterval", Title: "Poll Interval (seconds)", Type: forms.Number, Default: 60, Desc: "Hash poll interval for prompt cache (0 = disabled)"},
-					{Name: "PromptCache.TimeInUserMessage", Title: "Show Time to Agent", Type: forms.Toggle, Default: true, Desc: "Inject current time before user messages"},
-					{Name: "PromptCache.ShowUptime", Title: "Show Uptime to Agent", Type: forms.Toggle, Default: true, Desc: "Include gateway uptime with time (privacy sensitive)"},
+					{Name: "promptCache.pollInterval", Title: "Poll Interval (seconds)", Type: forms.Number, Default: 60, Desc: "Hash poll interval for prompt cache (0 = disabled)"},
+					{Name: "promptCache.timeInUserMessage", Title: "Show Time to Agent", Type: forms.Toggle, Default: true, Desc: "Inject current time before user messages"},
+					{Name: "promptCache.showUptime", Title: "Show Uptime to Agent", Type: forms.Toggle, Default: true, Desc: "Include gateway uptime with time (privacy sensitive)"},
 				},
 			},
 			{
 				Title:     "Supervision - Guidance",
 				Collapsed: true,
 				Fields: []forms.Field{
-					{Name: "Supervision.Guidance.Prefix", Title: "Guidance Prefix", Type: forms.Text, Default: "[Supervisor]: ", Desc: "Prefix for supervisor guidance messages"},
-					{Name: "Supervision.Guidance.SystemNote", Title: "System Note", Type: forms.Text, Desc: "Note injected into system prompt about supervision"},
+					{Name: "supervision.guidance.prefix", Title: "Guidance Prefix", Type: forms.Text, Default: "[Supervisor]: ", Desc: "Prefix for supervisor guidance messages"},
+					{Name: "supervision.guidance.systemNote", Title: "System Note", Type: forms.Text, Desc: "Note injected into system prompt about supervision"},
 				},
 			},
 			{
 				Title:     "Supervision - Ghostwriting",
 				Collapsed: true,
 				Fields: []forms.Field{
-					{Name: "Supervision.Ghostwriting.Enabled", Title: "Enable Ghostwriting", Type: forms.Toggle, Desc: "Allow supervisor to send messages as the agent"},
-					{Name: "Supervision.Ghostwriting.TypingDelayMs", Title: "Typing Delay (ms)", Type: forms.Number, Default: 500, Desc: "Delay before sending ghostwritten message"},
+					{Name: "supervision.ghostwriting.typingDelayMs", Title: "Typing Delay (ms)", Type: forms.Number, Default: 500, Desc: "Delay before sending ghostwritten message"},
 				},
 			},
 		},

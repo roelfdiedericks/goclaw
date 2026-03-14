@@ -1,0 +1,108 @@
+{{template "base" .}}
+
+{{define "content"}}
+<div id="setup-wizard-root" class="container py-3" style="max-width: 760px;">
+    <!-- Progress bar -->
+    <div class="progress mb-3" style="height: 8px;">
+        <div class="progress-bar" id="wizard-progress-bar" role="progressbar" style="width: 0%" aria-valuenow="0">
+        </div>
+    </div>
+    
+    <!-- Step indicator -->
+    <div class="text-center mb-3">
+        <span class="text-muted">
+            Step <span id="wizard-step-number">1</span> of <span id="wizard-total-steps">1</span>
+        </span>
+    </div>
+    
+    <!-- Error Alert -->
+    <div id="wizard-error-alert" class="alert alert-danger alert-dismissible mb-3 d-none" role="alert">
+        <span class="js-alert-text"></span>
+        <button type="button" class="btn-close" aria-label="Close"></button>
+    </div>
+    
+    <!-- Step Card -->
+    <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white">
+            <h5 class="mb-0" id="wizard-step-title"></h5>
+        </div>
+        <div class="card-body">
+            <!-- Loading -->
+            <div id="wizard-loading" class="text-center py-4 d-none">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+            </div>
+            
+            <!-- Step Content -->
+            <div id="wizard-content">
+                <p id="wizard-step-description" class="text-muted mb-3 d-none"></p>
+                <div id="wizard-step-content"></div>
+                <div id="wizard-review-content" class="mt-3 d-none"></div>
+            </div>
+        </div>
+        <div class="card-footer bg-white d-flex justify-content-between">
+            <button id="wizard-prev-btn"
+                    class="btn btn-outline-secondary"
+                    disabled>
+                <i class="bi bi-arrow-left"></i> Back
+            </button>
+            <button id="wizard-next-btn"
+                    class="btn btn-primary">
+                <span id="wizard-next-spinner" class="spinner-border spinner-border-sm me-1 d-none"></span>
+                <span id="wizard-next-label">Next</span>
+                <i id="wizard-next-icon" class="bi bi-arrow-right"></i>
+            </button>
+        </div>
+    </div>
+    
+    <!-- Help text -->
+    <div class="text-center mt-3">
+        <small class="text-muted">
+            <i class="bi bi-info-circle"></i>
+            Configuration will be saved at the end of the wizard.
+        </small>
+    </div>
+    
+    <div class="modal fade" id="completeModal" tabindex="-1" data-bs-backdrop="static">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title"><i class="bi bi-check-circle"></i> Setup Complete!</h5>
+                </div>
+                <div class="modal-body text-center py-4">
+                    <i class="bi bi-check-circle-fill text-success" style="font-size: 4rem;"></i>
+                    <h4 class="mt-3">GoClaw is ready!</h4>
+                    <p class="text-muted">Your configuration has been saved.</p>
+                    {{if .StandaloneMode}}
+                    <p>Start GoClaw with:</p>
+                    <code class="d-block bg-light p-2 rounded mb-1">goclaw start</code>
+                    <small class="text-muted">or <code>goclaw gateway</code> to run in foreground</small>
+                    {{else}}
+                    <p>Changes will take effect after restarting the gateway.</p>
+                    {{end}}
+                </div>
+                <div class="modal-footer justify-content-center flex-column">
+                    {{if .StandaloneMode}}
+                    <button type="button" class="btn btn-primary" id="wizard-close-btn">
+                        <i class="bi bi-x-lg"></i> Close
+                    </button>
+                    <div class="text-center d-none" id="wizard-close-message">
+                        <p class="text-muted mb-2"><i class="bi bi-info-circle"></i> You can now close this browser tab.</p>
+                        <small class="text-muted">The setup server has been stopped.</small>
+                    </div>
+                    {{else}}
+                    <a href="/" class="btn btn-primary">
+                        <i class="bi bi-house"></i> Go to Dashboard
+                    </a>
+                    {{end}}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "scripts"}}
+<script src="/setup/static/editor.js"></script>
+{{end}}

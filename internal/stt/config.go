@@ -169,8 +169,13 @@ func Close() {
 	}
 }
 
-// ConfigFormDef returns the form definition for STT configuration.
-func ConfigFormDef(currentModelsDir string) forms.FormDef {
+// ConfigFormDef returns the form definition for STT configuration (zero-argument for web)
+func ConfigFormDef() forms.FormDef {
+	return ConfigFormDefWithModelsDir("~/.goclaw/models")
+}
+
+// ConfigFormDefWithModelsDir returns the form definition with a specific models directory
+func ConfigFormDefWithModelsDir(currentModelsDir string) forms.FormDef {
 	// Get all available whisper models from catalog
 	expandedDir, _ := paths.ExpandTilde(currentModelsDir)
 	modelOptions := GetModelOptions(expandedDir)

@@ -40,16 +40,16 @@ func ConfigFormDef() forms.FormDef {
 			{
 				Title: "General",
 				Fields: []forms.Field{
-					{Name: "Enabled", Title: "Enabled", Type: forms.Toggle, Default: false, Desc: "Enable user_auth tool for role elevation"},
-					{Name: "Script", Title: "Auth Script", Type: forms.Text, Desc: "Path to authentication script"},
+					{Name: "enabled", Title: "Enabled", Type: forms.Toggle, Default: false, Desc: "Enable user_auth tool for role elevation"},
+					{Name: "script", Title: "Auth Script", Type: forms.Text, Desc: "Path to authentication script"},
 				},
 			},
 			{
 				Title:     "Security",
 				Collapsed: true,
 				Fields: []forms.Field{
-					{Name: "RateLimit", Title: "Rate Limit", Type: forms.Number, Default: 3, Desc: "Max attempts per minute"},
-					{Name: "Timeout", Title: "Timeout (seconds)", Type: forms.Number, Default: 10, Desc: "Script execution timeout"},
+					{Name: "rateLimit", Title: "Rate Limit", Type: forms.Number, Default: 3, Desc: "Max attempts per minute"},
+					{Name: "timeout", Title: "Timeout (seconds)", Type: forms.Number, Default: 10, Desc: "Script execution timeout"},
 				},
 			},
 		},

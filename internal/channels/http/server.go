@@ -54,6 +54,10 @@ type Server struct {
 	running   bool
 	startedAt time.Time
 	lastError error
+
+	// Session store maps session IDs to usernames (for WebSocket auth)
+	sessions   map[string]string // sessionID -> username
+	sessionsMu sync.RWMutex
 }
 
 // ServerConfig holds HTTP server configuration
@@ -97,6 +101,7 @@ func NewServer(cfg *ServerConfig, users *user.Registry) (*Server, error) {
 		devMode:      cfg.DevMode,
 		mediaRoot:    cfg.MediaRoot,
 		listen:       listen,
+		sessions:     make(map[string]string),
 	}
 
 	// Create HTTP channel

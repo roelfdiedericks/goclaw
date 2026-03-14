@@ -647,3 +647,64 @@ func handleTestConnection(cmd bus.Command) bus.CommandResult {
 		Message: fmt.Sprintf("Configuration valid (%s provider)", cfg.Driver),
 	}
 }
+
+// ConfigFormDef returns the unified form definition for VoiceLLM configuration.
+func ConfigFormDef() forms.FormDef {
+	voiceOptions := []forms.Option{
+		{Value: "Eve", Label: "Eve (Female, energetic)"},
+		{Value: "Ara", Label: "Ara (Female, warm)"},
+		{Value: "Rex", Label: "Rex (Male, confident)"},
+		{Value: "Sal", Label: "Sal (Neutral, balanced)"},
+		{Value: "Leo", Label: "Leo (Male, authoritative)"},
+	}
+
+	modeOptions := []forms.Option{
+		{Value: "none", Label: "None (natural voice)"},
+		{Value: "ring", Label: "Ring Modulation"},
+		{Value: "bitcrush", Label: "Bitcrush"},
+		{Value: "both", Label: "Both"},
+	}
+
+	return forms.FormDef{
+		Title:       "Voice LLM Configuration",
+		Description: "Configure real-time voice interaction",
+		Sections: []forms.Section{
+			{
+				Title: "General",
+				Fields: []forms.Field{
+					{Name: "enabled", Title: "Enabled", Type: forms.Toggle},
+					{Name: "default", Title: "Default Provider", Desc: "Provider ID (e.g., xai)", Type: forms.Text},
+					{Name: "serverVAD", Title: "Server VAD", Desc: "Server-side voice detection", Type: forms.Toggle},
+					{Name: "idleTimeout", Title: "Idle Timeout", Desc: "Seconds before disconnect", Type: forms.Number},
+				},
+			},
+			{
+				Title:     "XAI Provider",
+				FieldName: "providers.xai",
+				Fields: []forms.Field{
+					{Name: "driver", Title: "Driver", Type: forms.Text, Default: "xai"},
+					{Name: "apiKey", Title: "API Key", Type: forms.Secret},
+					{Name: "voice", Title: "Voice", Type: forms.Select, Options: voiceOptions, Default: "Eve"},
+					{Name: "sampleRate", Title: "Sample Rate", Type: forms.Number, Default: 48000},
+				},
+			},
+			{
+				Title:     "Voice Prompt",
+				FieldName: "prompt",
+				Collapsed: true,
+				Fields: []forms.Field{
+					{Name: "language", Title: "Language", Type: forms.Text, Default: "English"},
+					{Name: "maxSentences", Title: "Max Sentences", Type: forms.Number, Default: 3},
+				},
+			},
+			{
+				Title:     "Audio Effects",
+				FieldName: "effects",
+				Collapsed: true,
+				Fields: []forms.Field{
+					{Name: "mode", Title: "Mode", Type: forms.Select, Options: modeOptions, Default: "none"},
+				},
+			},
+		},
+	}
+}

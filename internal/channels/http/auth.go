@@ -75,6 +75,11 @@ func (s *Server) basicAuth(handler http.HandlerFunc) http.HandlerFunc {
 			logging.L_debug("http: new session created", "session", sessionID, "user", username)
 		}
 
+		// Store session → user mapping (for WebSocket auth fallback)
+		s.sessionsMu.Lock()
+		s.sessions[sessionID] = username
+		s.sessionsMu.Unlock()
+
 		logging.L_trace("http: auth success", "username", username, "session", sessionID[:8]+"...", "ip", clientIP)
 
 		// Store user and session in request context
@@ -135,4 +140,28 @@ func getSessionID(r *http.Request) string {
 		return ""
 	}
 	return cookie.Value
+}
+
+// GetUserBySession returns the user associated with a session cookie.
+// This is used for WebSocket auth where browsers may not forward Basic Auth headers.
+func (s *Server) GetUserBySession(r *http.Request) *user.User {
+	sessionID := getSessionID(r)
+	if sessionID == "" {
+		logging.L_debug("http: GetUserBySession - no session cookie")
+		return nil
+	}
+
+	s.sessionsMu.RLock()
+	username, ok := s.sessions[sessionID]
+	sessionCount := len(s.sessions)
+	s.sessionsMu.RUnlock()
+
+	if !ok {
+		logging.L_debug("http: GetUserBySession - session not found in store",
+			"sessionID", sessionID[:8]+"...", "storedSessions", sessionCount)
+		return nil
+	}
+
+	logging.L_debug("http: GetUserBySession - found session", "sessionID", sessionID[:8]+"...", "username", username)
+	return s.users.Get(username)
 }

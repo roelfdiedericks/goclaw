@@ -130,36 +130,41 @@ func LoadUsers() (UsersConfig, error) {
 		goclawUsersPath, // ~/.goclaw/
 	}
 
-	var users UsersConfig
-	var loadedFrom string
-
 	for _, path := range searchPaths {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			logging.L_warn("users: failed to read file", "path", path, "error", err)
-			continue
-		}
-
 		absPath, _ := filepath.Abs(path)
-		logging.L_debug("users: loading from file", "path", absPath, "size", len(data))
-
-		if err := json.Unmarshal(data, &users); err != nil {
-			return nil, fmt.Errorf("failed to parse users.json at %s: %w", absPath, err)
+		if _, err := os.Stat(path); err == nil {
+			return LoadUsersFromPath(absPath)
 		}
+	}
 
-		loadedFrom = absPath
-		break // Use first found file
+	// No file found - return empty config
+	logging.L_warn("users: no users.json found, starting with empty user list")
+	return make(UsersConfig), nil
+}
+
+// LoadUsersFromPath loads users from a specific file path
+func LoadUsersFromPath(path string) (UsersConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logging.L_warn("users: file not found", "path", path)
+			return make(UsersConfig), nil
+		}
+		return nil, fmt.Errorf("failed to read users.json at %s: %w", path, err)
+	}
+
+	logging.L_debug("users: loading from file", "path", path, "size", len(data))
+
+	var users UsersConfig
+	if err := json.Unmarshal(data, &users); err != nil {
+		return nil, fmt.Errorf("failed to parse users.json at %s: %w", path, err)
 	}
 
 	if users == nil {
 		users = make(UsersConfig)
-		logging.L_warn("users: no users.json found, starting with empty user list")
-	} else {
-		logging.L_info("users: loaded", "path", loadedFrom, "count", len(users))
 	}
+
+	logging.L_info("users: loaded", "path", path, "count", len(users))
 
 	// Validate all users and apply defaults
 	ownerCount := 0

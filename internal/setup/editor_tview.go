@@ -177,7 +177,7 @@ func (e *EditorTview) editTranscript() {
 	transcriptCfg := e.cfg.Transcript
 
 	// Get form definition (needs config for nested form initialization)
-	formDef := transcript.ConfigFormDef(transcriptCfg)
+	formDef := transcript.ConfigFormDefWithValues(transcriptCfg)
 
 	// Build inline form content
 	content, err := forms.BuildFormContent(formDef, &transcriptCfg, "transcript", func(result forms.TviewResult) {
@@ -207,7 +207,7 @@ func (e *EditorTview) editMemoryGraph() {
 	memgraphCfg := e.cfg.MemoryGraph
 
 	// Get form definition (needs config for nested form initialization)
-	formDef := memorygraph.ConfigFormDef(memgraphCfg)
+	formDef := memorygraph.ConfigFormDefWithValues(memgraphCfg)
 
 	// Build inline form content
 	content, err := forms.BuildFormContent(formDef, &memgraphCfg, "memorygraph", func(result forms.TviewResult) {
@@ -317,7 +317,7 @@ func (e *EditorTview) editSTT() {
 
 	sttCfg := e.cfg.STT
 	// Pass current modelsDir to scan for available whisper models
-	formDef := stt.ConfigFormDef(sttCfg.WhisperCpp.ModelsDir)
+	formDef := stt.ConfigFormDefWithModelsDir(sttCfg.WhisperCpp.ModelsDir)
 
 	content, err := forms.BuildFormContent(formDef, &sttCfg, "stt", func(result forms.TviewResult) {
 		if result == forms.ResultAccepted {

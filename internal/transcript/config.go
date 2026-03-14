@@ -39,8 +39,13 @@ type TConfig = TranscriptConfig
 // TQueryConfig is an alias for TranscriptQueryConfig
 type TQueryConfig = TranscriptQueryConfig
 
-// ConfigFormDef returns the form definition for editing TranscriptConfig
-func ConfigFormDef(cfg TConfig) forms.FormDef {
+// ConfigFormDef returns the form definition for editing TranscriptConfig (zero-argument for web)
+func ConfigFormDef() forms.FormDef {
+	return ConfigFormDefWithValues(TranscriptConfig{})
+}
+
+// ConfigFormDefWithValues returns the form definition with config values for nested sections
+func ConfigFormDefWithValues(cfg TConfig) forms.FormDef {
 	return forms.FormDef{
 		Title:       "Transcript Indexing",
 		Description: "Configure how conversation transcripts are indexed and searched",
@@ -121,7 +126,7 @@ func ConfigFormDef(cfg TConfig) forms.FormDef {
 				Title:     "Search Settings",
 				Desc:      "Configure transcript search behavior",
 				Collapsed: true,
-				FieldName: "Query",
+				FieldName: "query",
 				Nested:    ptrFormDef(QueryConfigFormDef(cfg.Query)),
 			},
 		},

@@ -19,34 +19,33 @@ func ConfigFormDef() forms.FormDef {
 			{
 				Title: "Storage",
 				Fields: []forms.Field{
-					{Name: "Store", Title: "Storage Backend", Type: forms.Select, Default: "sqlite",
+					{Name: "store", Title: "Storage Backend", Type: forms.Select, Default: "sqlite",
 						Options: []forms.Option{{Label: "SQLite", Value: "sqlite"}},
 						Desc:    "Storage backend for sessions"},
-					{Name: "StorePath", Title: "Store Path", Type: forms.Text, Desc: "Path to storage (DB file or sessions directory)"},
+					{Name: "storePath", Title: "Store Path", Type: forms.Text, Desc: "Path to storage (DB file or sessions directory)"},
 				},
 			},
 			{
 				Title:     "OpenClaw Inheritance",
 				Collapsed: true,
 				Fields: []forms.Field{
-					{Name: "Inherit", Title: "Enable Inheritance", Type: forms.Toggle, Desc: "Inherit context from OpenClaw session"},
-					{Name: "InheritPath", Title: "Sessions Directory", Type: forms.Text, Desc: "Path to OpenClaw sessions directory"},
-					{Name: "InheritFrom", Title: "Inherit From", Type: forms.Text, Desc: "Session key to inherit from (e.g., agent:main:main)"},
+					{Name: "inherit", Title: "Enable Inheritance", Type: forms.Toggle, Desc: "Inherit context from OpenClaw session"},
+					{Name: "inheritPath", Title: "Sessions Directory", Type: forms.Text, Desc: "Path to OpenClaw sessions directory"},
+					{Name: "inheritFrom", Title: "Inherit From", Type: forms.Text, Desc: "Session key to inherit from (e.g., agent:main:main)"},
 				},
 			},
 			{
 				Title:     "Memory Flush",
 				Collapsed: true,
 				Fields: []forms.Field{
-					{Name: "MemoryFlush.Enabled", Title: "Enable Memory Flush", Type: forms.Toggle, Desc: "Prompt for memory writes at context thresholds"},
+					{Name: "memoryFlush.enabled", Title: "Enable Memory Flush", Type: forms.Toggle, Desc: "Prompt for memory writes at context thresholds"},
 				},
 			},
 			{
 				Title:     "Summarization",
 				Collapsed: true,
 				Fields: []forms.Field{
-					{Name: "Summarization.Checkpoint.Enabled", Title: "Enable Checkpoints", Type: forms.Toggle, Desc: "Generate rolling checkpoints"},
-					{Name: "Summarization.Compaction.Enabled", Title: "Enable Compaction", Type: forms.Toggle, Desc: "Compact sessions when context full"},
+					{Name: "summarization.checkpoint.enabled", Title: "Enable Checkpoints", Type: forms.Toggle, Desc: "Generate rolling checkpoints"},
 				},
 			},
 		},
