@@ -5,7 +5,10 @@ All notable changes to GoClaw will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.2]
+## [Unreleased]
+
+
+## [0.1.2] stable - 2026-03-14
 - macOS now properly tested
 - browser based setup and config wizard
 - cron refactoring
@@ -21,3 +24,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Debian package (.deb) distribution
 - Docker images on GHCR
 - user_auth tool update, docs and exampless
+

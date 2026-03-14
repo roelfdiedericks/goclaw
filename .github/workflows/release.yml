@@ -306,12 +306,7 @@ jobs:
       - name: Write release notes
         run: |
           TAG=${GITHUB_REF#refs/tags/}
-          VERSION=${TAG#v}
-          awk -v version="$VERSION" '
-            $0 ~ "^## \\[" version "\\]" {capture=1; next}
-            capture && /^## \[/ {exit}
-            capture {print}
-          ' CHANGELOG.md > /tmp/release_notes.md
+          go run ./cmd/releasetool release-notes --tag "$TAG" > /tmp/release_notes.md
           if [ ! -s /tmp/release_notes.md ]; then
             echo "Release ${TAG}" > /tmp/release_notes.md
           fi

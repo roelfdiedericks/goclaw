@@ -10,20 +10,12 @@ endif
 endif
 
 BINARY := goclaw
+RELEASE_TOOL := go run ./cmd/releasetool
 
-# Version info from CHANGELOG.md (format: ## [VERSION] CHANNEL - DATE)
-get_release_line = $(shell awk '/^## \[[0-9]/{print; exit}' CHANGELOG.md 2>/dev/null)
-get_version = $(shell awk '/^## \[[0-9]/{print $$2; exit}' CHANGELOG.md 2>/dev/null | tr -d '[]')
-get_channel = $(shell awk '/^## \[[0-9]/{print $$3; exit}' CHANGELOG.md 2>/dev/null)
-get_changelog_date = $(shell awk '/^## \[[0-9]/{print $$5; exit}' CHANGELOG.md 2>/dev/null)
-CHANGELOG_LINE := $(call get_release_line)
-VERSION := $(call get_version)
-CHANNEL := $(call get_channel)
-CHANGELOG_DATE := $(call get_changelog_date)
-
-# Compute git tag (stable = vX.Y.Z, beta/rc = vX.Y.Z-channel.N)
-get_tag = $(shell sh -c 'if [ "$(CHANNEL)" = "stable" ]; then echo "v$(VERSION)"; else n=1; while git rev-parse "v$(VERSION)-$(CHANNEL).$$n" >/dev/null 2>&1; do n=`expr $$n + 1`; done; echo "v$(VERSION)-$(CHANNEL).$$n"; fi')
-TAG := $(call get_tag)
+VERSION := $(shell $(RELEASE_TOOL) current --field version 2>/dev/null)
+CHANNEL := $(shell $(RELEASE_TOOL) current --field channel 2>/dev/null)
+CHANGELOG_DATE := $(shell $(RELEASE_TOOL) current --field date 2>/dev/null)
+TAG := $(shell $(RELEASE_TOOL) next-tag 2>/dev/null)
 
 # Skills sync from upstream OpenClaw
 OPENCLAW_REPO := https://github.com/openclaw/openclaw.git
@@ -250,23 +242,18 @@ skills-check:
 # Create new changelog entry (auto-increments patch version, keeps channel)
 # After editing, prompts to commit and push
 changelog:
-	@current_ver=$$(grep -m1 '^## \[[0-9]' CHANGELOG.md | sed 's/## \[\([^]]*\)\].*/\1/'); \
-	current_chan=$$(grep -m1 '^## \[[0-9]' CHANGELOG.md | sed 's/.*\] \([a-z]*\) -.*/\1/'); \
-	if [ -z "$$current_ver" ]; then current_ver="0.0.0"; fi; \
-	if [ -z "$$current_chan" ]; then current_chan="beta"; fi; \
-	major=$$(echo $$current_ver | cut -d. -f1); \
-	minor=$$(echo $$current_ver | cut -d. -f2); \
-	patch=$$(echo $$current_ver | cut -d. -f3); \
-	new_ver="$$major.$$minor.$$((patch+1))"; \
+	@current_ver="$$( $(RELEASE_TOOL) current --field version )"; \
+	current_chan="$$( $(RELEASE_TOOL) current --field channel )"; \
+	next_ver="$$( $(RELEASE_TOOL) next-version )"; \
 	today=$$(date +%Y-%m-%d); \
 	echo "Current: [$$current_ver] $$current_chan"; \
-	echo "New:     [$$new_ver] $$current_chan - $$today"; \
+	echo "New:     [$$next_ver] $$current_chan - $$today"; \
 	echo ""; \
-	sed -i '/^## \[Unreleased\]/a\\n## ['"$$new_ver"'] '"$$current_chan"' - '"$$today"'\n\n- ' CHANGELOG.md; \
+	$(RELEASE_TOOL) changelog new-entry; \
 	echo "Opening editor..."; \
 	$${EDITOR:-vim} +11 CHANGELOG.md; \
 	echo ""; \
-	new_ver=$$(grep -m1 '^## \[[0-9]' CHANGELOG.md | sed 's/## \[\([^]]*\)\].*/\1/'); \
+	new_ver="$$( $(RELEASE_TOOL) current --field version )"; \
 	read -p "Commit and push release $$new_ver? [y/N] " confirm; \
 	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
 		git add CHANGELOG.md; \
@@ -283,6 +270,7 @@ changelog:
 # Pre-release validation
 release-check: lint audit
 	@echo "=== Release Check ==="
+	@$(RELEASE_TOOL) validate --release >/dev/null
 	@# Must be on master branch
 	@branch=$$(git branch --show-current); \
 	if [ "$$branch" != "master" ]; then \
@@ -298,9 +286,6 @@ release-check: lint audit
 	if [ "$$(git rev-parse HEAD)" != "$$(git rev-parse origin/master 2>/dev/null || echo 'no-remote')" ]; then \
 		echo "WARNING: Not synced with origin/master (or no remote). Continuing..."; \
 	fi
-	@# CHANGELOG has valid entry
-	@test -n "$(VERSION)" || (echo "ERROR: No version in CHANGELOG" && exit 1)
-	@test -n "$(CHANNEL)" || (echo "ERROR: No channel in CHANGELOG" && exit 1)
 	@# CHANGELOG date is today
 	@today=$$(date +%Y-%m-%d); \
 	if [ "$(CHANGELOG_DATE)" != "$$today" ]; then \
@@ -348,7 +333,7 @@ release-monitor:
 # Use when a release failed and you need to retry with the same version
 # Use FORCE=1 to skip confirmation prompt
 re-release:
-	@version="$(call get_tag)"; \
+	@version="$(TAG)"; \
 	echo "=== Re-release $$version ==="; \
 	if [ "$(FORCE)" != "1" ]; then \
 		read -p "Delete and recreate tag $$version? [y/N] " confirm; \
