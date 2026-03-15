@@ -1207,7 +1207,7 @@ that powers your agent — it handles conversations, tool use, and reasoning.
 // buildLLMConfigForm shows the API key / URL form for the selected provider.
 func buildLLMConfigForm(data *WizardData, w *forms.Wizard) tview.Primitive {
 	meta := metadata.Get()
-	isLocal := llm.DriverIsLocal(data.LLMDriver) || data.LLMProviderID == "lmstudio"
+	isLocal := llm.DriverOrEndpointIsLocal(data.LLMDriver, data.LLMBaseURL)
 
 	// Provider info header (static)
 	headerInfo := fmt.Sprintf("[cyan]%s[white]\n", data.LLMProviderName)

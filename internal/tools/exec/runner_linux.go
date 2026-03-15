@@ -4,7 +4,6 @@ package exec
 
 import (
 	"context"
-	"os"
 	"os/exec"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
