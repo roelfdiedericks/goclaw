@@ -80,10 +80,12 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		return nil, fmt.Errorf("old_string cannot be empty")
 	}
 
-	// Check if user has sandbox disabled
-	sandboxed := true
-	if sessCtx := types.GetSessionContext(ctx); sessCtx != nil && sessCtx.User != nil {
-		sandboxed = sessCtx.User.Sandbox
+	mgr := sandbox.GetManager()
+	sandboxed := mgr.IsEnabled() && mgr.IsFileToolsSandboxEnabled()
+	if sandboxed {
+		if sessCtx := types.GetSessionContext(ctx); sessCtx != nil && sessCtx.User != nil {
+			sandboxed = sandbox.ApplyUserSandboxOverride(sandboxed, sessCtx.User.Sandbox)
+		}
 	}
 
 	L_debug("edit tool: editing file", "path", params.Path, "oldLen", len(params.OldString), "newLen", len(params.NewString), "sandboxed", sandboxed)

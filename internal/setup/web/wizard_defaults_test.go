@@ -33,6 +33,9 @@ func TestNewWizardAPISeedsDefaultsWhenConfigMissing(t *testing.T) {
 	if data.LLMModel == "" {
 		t.Fatalf("expected LLM model default to be seeded")
 	}
+	if !data.SandboxEnabled || !data.ExecSandboxEnabled || !data.BrowserSandboxEnabled || !data.FileToolsSandboxEnabled {
+		t.Fatalf("expected sandbox defaults to be seeded on missing config")
+	}
 }
 
 func TestApplyWizardFormDefaultsSeedsMissingValuesOnly(t *testing.T) {

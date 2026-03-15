@@ -78,51 +78,27 @@ func expandSandboxPath(filePath string, sandboxHomeDir string) string {
 }
 
 // ValidatePath validates that a path is within allowed roots and contains no symlinks.
-// In "home" mode, ~ paths are expanded to the sandbox home directory and validated against it.
-// Workspace paths are validated against the workspace root.
+// In home-like modes, ~ paths usually expand to the sandbox home directory and
+// autodocs roots remain mapped to the real home.
 func (m *Manager) ValidatePath(inputPath, workingDir string) (string, error) {
-	expanded := expandSandboxPath(inputPath, m.homeDir)
-
-	var resolved string
-	if filepath.IsAbs(expanded) {
-		resolved = filepath.Clean(expanded)
-	} else {
-		resolved = filepath.Clean(filepath.Join(workingDir, expanded))
+	policy := m.ResolvePolicy()
+	resolution, err := policy.ResolvePath(inputPath, workingDir)
+	if err != nil {
+		L_warn("sandbox: path escapes allowed roots", "path", inputPath, "error", err, "workspace", policy.VisibleWorkspace, "home", policy.VisibleHomeDir)
+		return "", fmt.Errorf("path escapes sandbox root: %s", inputPath)
 	}
 
-	// Determine which root to validate against
-	// In home mode, paths under homeDir are valid; paths under workspaceRoot are also valid
-	workspaceResolved := filepath.Clean(m.workspaceRoot)
-	homeResolved := ""
-	if m.homeDir != "" {
-		homeResolved = filepath.Clean(m.homeDir)
-	}
-
-	// Try validating against workspace root first
-	relative, err := filepath.Rel(workspaceResolved, resolved)
-	rootUsed := workspaceResolved
-	if err != nil || strings.HasPrefix(relative, "..") || filepath.IsAbs(relative) {
-		// Not under workspace - try home dir if available
-		if homeResolved != "" {
-			relative, err = filepath.Rel(homeResolved, resolved)
-			rootUsed = homeResolved
-			if err != nil || strings.HasPrefix(relative, "..") || filepath.IsAbs(relative) {
-				L_warn("sandbox: path escapes allowed roots", "path", inputPath, "resolved", resolved, "workspace", workspaceResolved, "home", homeResolved)
-				return "", fmt.Errorf("path escapes sandbox root: %s", inputPath)
-			}
-		} else {
-			L_warn("sandbox: path escapes workspace", "path", inputPath, "resolved", resolved, "root", workspaceResolved)
-			return "", fmt.Errorf("path escapes sandbox root (%s): %s", m.shortPath(workspaceResolved), inputPath)
+	if resolution.Relative != "" && resolution.Relative != "." {
+		rootForSymlink := resolution.RootPath
+		if resolution.RootKind == RootSandboxHome && policy.BackingHomeDir != "" {
+			rootForSymlink = policy.BackingHomeDir
 		}
-	}
-
-	if relative != "" && relative != "." {
-		if err := assertNoSymlink(relative, rootUsed); err != nil {
+		if err := assertNoSymlink(resolution.Relative, rootForSymlink); err != nil {
 			return "", err
 		}
 	}
 
-	filename := filepath.Base(resolved)
+	filename := filepath.Base(resolution.ActualPath)
 	for _, denied := range deniedFiles {
 		if filename == denied {
 			L_warn("sandbox: access to denied file blocked", "path", inputPath, "file", denied)
@@ -130,8 +106,8 @@ func (m *Manager) ValidatePath(inputPath, workingDir string) (string, error) {
 		}
 	}
 
-	L_trace("sandbox: path validated", "input", inputPath, "resolved", resolved, "relative", relative)
-	return resolved, nil
+	L_trace("sandbox: path validated", "input", inputPath, "visible", resolution.VisiblePath, "resolved", resolution.ActualPath, "relative", resolution.Relative, "rootKind", resolution.RootKind)
+	return resolution.ActualPath, nil
 }
 
 func assertNoSymlink(relative, root string) error {
@@ -233,22 +209,38 @@ func (m *Manager) AtomicWriteFile(path string, data []byte, defaultPerm os.FileM
 }
 
 // ValidateWritePath validates a path for write operations.
-// Blocks writes to protected directories.
+// Blocks writes to protected directories and autodocs roots when in read-only mode.
 func (m *Manager) ValidateWritePath(inputPath, workingDir string) (string, error) {
-	resolved, err := m.ValidatePath(inputPath, workingDir)
+	policy := m.ResolvePolicy()
+	resolution, err := policy.ResolvePath(inputPath, workingDir)
 	if err != nil {
 		return "", err
 	}
 
-	rootResolved := filepath.Clean(m.workspaceRoot)
-	relative, _ := filepath.Rel(rootResolved, resolved)
-
-	if m.IsPathProtected(relative) {
-		L_warn("sandbox: write to protected directory blocked", "path", inputPath, "relative", relative)
-		return "", fmt.Errorf("write denied: path is in a protected directory")
+	filename := filepath.Base(resolution.ActualPath)
+	for _, denied := range deniedFiles {
+		if filename == denied {
+			return "", fmt.Errorf("access denied: %s is a protected file", denied)
+		}
 	}
 
-	return resolved, nil
+	switch resolution.RootKind {
+	case RootWorkspace:
+		if m.IsPathProtected(resolution.Relative) {
+			L_warn("sandbox: write to protected directory blocked", "path", inputPath, "relative", resolution.Relative)
+			return "", fmt.Errorf("write denied: path is in a protected directory")
+		}
+		return resolution.ActualPath, nil
+	case RootSandboxHome:
+		return resolution.ActualPath, nil
+	case RootAutoDocs:
+		if policy.AutoDocsWrite {
+			return resolution.ActualPath, nil
+		}
+		return "", fmt.Errorf("write denied: autodocs mode is read-only")
+	default:
+		return "", fmt.Errorf("write denied: path is outside writable sandbox roots")
+	}
 }
 
 // WriteFileValidated validates the path for writes, then writes atomically.

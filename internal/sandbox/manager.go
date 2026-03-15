@@ -50,7 +50,7 @@ func InitManager(cfg Config, workspaceRoot string) *Manager {
 			config:        cfg,
 			workspaceRoot: absRoot,
 			protectedDirs: make(map[string]string),
-			extraPaths:    cfg.Bubblewrap.ExtraPaths,
+			extraPaths:    cfg.GetExtraPaths(),
 		}
 
 		// Register default protected dirs
@@ -61,11 +61,11 @@ func InitManager(cfg Config, workspaceRoot string) *Manager {
 		}
 
 		// Resolve mode
-		m.mode = cfg.Bubblewrap.GetMode()
+		m.mode = cfg.GetMode()
 
 		// Resolve dataDir
-		if cfg.Bubblewrap.DataDir != "" {
-			m.dataDir = expandHomePath(cfg.Bubblewrap.DataDir)
+		if cfg.GetDataDir() != "" {
+			m.dataDir = expandHomePath(cfg.GetDataDir())
 		} else {
 			resolved, err := paths.DataPath("sandbox")
 			if err != nil {
@@ -83,7 +83,7 @@ func InitManager(cfg Config, workspaceRoot string) *Manager {
 
 		// Set up mode-specific state
 		switch m.mode {
-		case ModeHome:
+		case ModeHome, ModeAutoDocsRead, ModeAutoDocsWrite:
 			if m.dataDir != "" {
 				m.homeDir = filepath.Join(m.dataDir, "home")
 				if err := os.MkdirAll(m.homeDir, 0750); err != nil {
@@ -91,7 +91,7 @@ func InitManager(cfg Config, workspaceRoot string) *Manager {
 				}
 			}
 		case ModeVolumes:
-			vols := cfg.Bubblewrap.Volumes
+			vols := cfg.GetVolumes()
 			if len(vols) == 0 {
 				vols = DefaultVolumes()
 			}
@@ -218,9 +218,103 @@ func (m *Manager) GetMode() string {
 	return m.mode
 }
 
+// IsAutoDocsMode reports whether the current mode dynamically exposes top-level home directories.
+func (m *Manager) IsAutoDocsMode() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config.IsAutoDocsMode()
+}
+
+// IsAutoDocsWriteMode reports whether autodocs directories are writable.
+func (m *Manager) IsAutoDocsWriteMode() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config.IsAutoDocsWriteMode()
+}
+
+// IsEnabled returns whether sandboxing is enabled globally.
+func (m *Manager) IsEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config.IsEnabled()
+}
+
+// IsExecSandboxEnabled returns whether exec sandboxing is enabled globally.
+func (m *Manager) IsExecSandboxEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config.IsExecEnabled()
+}
+
+// IsBrowserSandboxEnabled returns whether browser sandboxing is enabled globally.
+func (m *Manager) IsBrowserSandboxEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config.IsBrowserEnabled()
+}
+
+// IsFileToolsSandboxEnabled returns whether file tool sandboxing is enabled globally.
+func (m *Manager) IsFileToolsSandboxEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config.IsFileToolsEnabled()
+}
+
+// GetBackendPath returns the current backend binary path for this platform.
+func (m *Manager) GetBackendPath() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config.GetBackendPath()
+}
+
 // GetWorkspaceRoot returns the workspace root path.
 func (m *Manager) GetWorkspaceRoot() string {
 	return m.workspaceRoot
+}
+
+// GetAutoDocsRoots discovers non-hidden top-level home directories for autodocs modes.
+// Symlinks and non-directories are excluded by default.
+func (m *Manager) GetAutoDocsRoots() []string {
+	m.mu.RLock()
+	enabled := m.config.IsAutoDocsMode()
+	workspaceRoot := m.workspaceRoot
+	m.mu.RUnlock()
+	if !enabled {
+		return nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil
+	}
+
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		L_warn("sandbox: autodocs scan failed", "home", home, "error", err)
+		return nil
+	}
+
+	roots := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "" || strings.HasPrefix(name, ".") {
+			continue
+		}
+		fullPath := filepath.Join(home, name)
+		if filepath.Clean(fullPath) == filepath.Clean(workspaceRoot) {
+			continue
+		}
+		info, err := os.Lstat(fullPath)
+		if err != nil {
+			L_debug("sandbox: autodocs skip unreadable path", "path", fullPath, "error", err)
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			continue
+		}
+		roots = append(roots, filepath.Clean(fullPath))
+	}
+	return roots
 }
 
 // IsRegisteredVolume checks if a home path is covered by sandbox isolation.
@@ -230,6 +324,10 @@ func (m *Manager) IsRegisteredVolume(path string) bool {
 	defer m.mu.RUnlock()
 
 	expanded := expandHomePath(path)
+
+	if pathWithinAnyRoot(expanded, m.GetAutoDocsRoots()) {
+		return true
+	}
 
 	if m.mode == ModeHome {
 		home, _ := os.UserHomeDir()

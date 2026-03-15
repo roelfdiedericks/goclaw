@@ -8,7 +8,7 @@ import (
 
 // ExecSandbox creates a pre-configured builder for the exec tool.
 // Sets up standard system binds, isolated /tmp, /proc, and safe defaults.
-func ExecSandbox(workspace, home string, allowNetwork, clearEnv bool) *Builder {
+func ExecSandbox(workspace, visibleHome, backingHome string, allowNetwork, clearEnv bool) *Builder {
 	b := New()
 	mgr := sandbox.GetManager()
 
@@ -27,8 +27,8 @@ func ExecSandbox(workspace, home string, allowNetwork, clearEnv bool) *Builder {
 
 	// Sandbox home isolation: mount broad home replacement first,
 	// then overlay specific directories on top (bwrap last-mount-wins).
-	if sandboxHome := mgr.GetHomeDir(); sandboxHome != "" {
-		b.BindTo(sandboxHome, home)
+	if backingHome != "" {
+		b.BindTo(backingHome, visibleHome)
 	} else {
 		for _, vol := range mgr.GetVolumes() {
 			if pathExists(vol.Source) {
@@ -58,7 +58,7 @@ func ExecSandbox(workspace, home string, allowNetwork, clearEnv bool) *Builder {
 	// Environment
 	if clearEnv {
 		b.ClearEnv()
-		b.DefaultEnv(home, mgr.BuildSandboxPATH(home))
+		b.DefaultEnv(visibleHome, mgr.BuildSandboxPATH(visibleHome))
 	}
 
 	// Kill sandbox if GoClaw dies

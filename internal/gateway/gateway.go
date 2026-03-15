@@ -2121,6 +2121,8 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	// Build prompt params with bulletin injection based on config
 	promptParams := gcontext.PromptParams{
 		WorkspaceDir:         g.config.Gateway.WorkingDir,
+		VisibleHomeDir:       sandbox.GetManager().ResolvePolicy().VisibleHomeDir,
+		SandboxMode:          sandbox.GetManager().GetMode(),
 		Tools:                g.tools,
 		Model:                g.llm.Model(),
 		Channel:              req.Source,
@@ -3331,6 +3333,8 @@ func (g *Gateway) BuildSystemPromptForVoice(ctx context.Context, params VoicePro
 	// Build base prompt params
 	promptParams := gcontext.PromptParams{
 		WorkspaceDir:         g.config.Gateway.WorkingDir,
+		VisibleHomeDir:       sandbox.GetManager().ResolvePolicy().VisibleHomeDir,
+		SandboxMode:          sandbox.GetManager().GetMode(),
 		Tools:                g.tools,
 		Model:                g.llm.Model(),
 		Channel:              params.Source,

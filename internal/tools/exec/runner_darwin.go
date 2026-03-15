@@ -19,20 +19,27 @@ func (r *Runner) buildSandboxedCommand(ctx context.Context, command, workDir str
 		return nil, nil
 	}
 
-	home, _ := os.UserHomeDir()
 	mgr := sandbox.GetManager()
-	preferredHome := preferredExecHome(mgr, home)
+	policy := mgr.ResolvePolicy()
 	vols := runtimeVolumes(mgr.GetVolumes())
 	protectedDirs := mgr.GetProtectedDirs()
+	autoDocsRoots := mgr.GetAutoDocsRoots()
 	pathValue := os.Getenv("PATH")
 	if mgr != nil {
-		pathValue = mgr.BuildSandboxPATH(preferredHome)
+		pathValue = mgr.BuildSandboxPATH(policy.VisibleHomeDir)
+	}
+	extraBind := append([]string{}, r.config.Bubblewrap.ExtraBind...)
+	extraRoBind := append([]string{}, r.config.Bubblewrap.ExtraRoBind...)
+	if mgr.IsAutoDocsWriteMode() {
+		extraBind = append(extraBind, autoDocsRoots...)
+	} else {
+		extraRoBind = append(extraRoBind, autoDocsRoots...)
 	}
 	L_debug("exec runner: darwin sandbox request",
 		"backendPath", r.config.BubblewrapPath,
 		"workspaceDir", r.config.WorkingDir,
 		"workDir", workDir,
-		"homeDir", preferredHome,
+		"homeDir", policy.VisibleHomeDir,
 		"pathValue", pathValue,
 		"volumes", len(vols),
 		"protectedDirs", len(protectedDirs),
@@ -42,15 +49,16 @@ func (r *Runner) buildSandboxedCommand(ctx context.Context, command, workDir str
 		SandboxMode:   mgr.GetMode(),
 		WorkspaceDir:  r.config.WorkingDir,
 		WorkDir:       workDir,
-		HomeDir:       preferredHome,
+		VisibleHomeDir: policy.VisibleHomeDir,
+		BackingHomeDir: policy.BackingHomeDir,
 		PathValue:     pathValue,
 		Volumes:       vols,
 		ProtectedDirs: protectedDirs,
 		ClearEnv:      r.config.Bubblewrap.ClearEnv,
 		AllowNetwork:  r.config.Bubblewrap.AllowNetwork,
 		ExtraEnv:      r.config.Bubblewrap.ExtraEnv,
-		ExtraBind:     r.config.Bubblewrap.ExtraBind,
-		ExtraRoBind:   r.config.Bubblewrap.ExtraRoBind,
+		ExtraBind:     extraBind,
+		ExtraRoBind:   extraRoBind,
 	})
 	if err != nil {
 		L_error("exec runner: failed to build sandbox command", "error", err)
@@ -72,13 +80,6 @@ func (r *Runner) buildSandboxedCommand(ctx context.Context, command, workDir str
 	)
 
 	return cmd, nil
-}
-
-func preferredExecHome(mgr *sandbox.Manager, realHome string) string {
-	if mgr != nil && mgr.GetHomeDir() != "" {
-		return mgr.GetHomeDir()
-	}
-	return realHome
 }
 
 func runtimeVolumes(vols []sandbox.SandboxVolume) []sbruntime.SandboxVolume {

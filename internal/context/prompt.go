@@ -17,6 +17,8 @@ import (
 // PromptParams contains parameters for building the system prompt
 type PromptParams struct {
 	WorkspaceDir string
+	VisibleHomeDir string
+	SandboxMode string
 	IsSubagent   bool
 	Tools        *tools.Registry
 	Model        string
@@ -104,7 +106,7 @@ func BuildSystemPrompt(params PromptParams) string {
 
 	// 6. Workspace section
 	{
-		s := buildWorkspaceSection(params.WorkspaceDir)
+		s := buildWorkspaceSection(params.WorkspaceDir, params.VisibleHomeDir, params.SandboxMode)
 		staticText += s
 		sections = append(sections, s)
 	}
@@ -368,11 +370,26 @@ To manage the Gateway daemon service (start/stop/restart):
 If unsure, ask the user to run 'goclaw --help' and paste the output.`
 }
 
-func buildWorkspaceSection(workspaceDir string) string {
-	return fmt.Sprintf(`## Workspace
-
-Your working directory is: %s
-Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.`, workspaceDir)
+func buildWorkspaceSection(workspaceDir string, visibleHomeDir string, sandboxMode string) string {
+	lines := []string{
+		"## Workspace",
+		"",
+		fmt.Sprintf("Your working directory is: %s", workspaceDir),
+		"Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.",
+	}
+	if visibleHomeDir != "" {
+		lines = append(lines,
+			"",
+			"## Filesystem View",
+			"",
+			fmt.Sprintf("Your visible HOME directory is: %s", visibleHomeDir),
+			"Use normal host-like absolute paths when reasoning about files.",
+		)
+		if sandboxMode != "" {
+			lines = append(lines, fmt.Sprintf("Sandbox mode: %s", sandboxMode))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func buildUserIdentitySection(u *user.User) string {

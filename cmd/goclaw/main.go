@@ -2204,6 +2204,43 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	llm.SetGlobalRegistry(llmRegistry)
 	L_info("LLM registry created", "providers", len(cfg.LLM.Providers))
 
+	// Initialize sandbox manager singleton before checking backend availability.
+	sandbox.InitManager(cfg.Sandbox, cfg.Gateway.WorkingDir)
+
+	// Check sandbox backend availability for managed exec/browser sandboxing.
+	execSandboxEnabled := cfg.Sandbox.IsExecEnabled()
+	browserSandboxEnabled := cfg.Sandbox.IsBrowserEnabled()
+	sandboxDisabledReason := "" // Track if sandbox was disabled for later warning
+	if execSandboxEnabled || browserSandboxEnabled {
+		backendPath := cfg.Sandbox.GetBackendPath()
+		execAvailable := sbruntime.ExecSandboxAvailable(backendPath)
+		browserAvailable := sbruntime.BrowserSandboxAvailable(backendPath)
+		if !execAvailable && !browserAvailable {
+			L_warn("sandbox: managed sandbox backend unavailable, disabling",
+				"backend", sbruntime.SandboxBackendName())
+			cfg.Sandbox.General.ExecEnabled = false
+			cfg.Sandbox.General.BrowserEnabled = false
+			sandboxDisabledReason = sbruntime.SandboxBackendName() + " unavailable"
+		} else {
+			if execSandboxEnabled && !execAvailable {
+				L_warn("sandbox: exec sandbox backend unavailable, disabling exec sandbox",
+					"backend", sbruntime.SandboxBackendName())
+				cfg.Sandbox.General.ExecEnabled = false
+			}
+			if browserSandboxEnabled && !browserAvailable {
+				L_warn("sandbox: browser sandbox backend unavailable, disabling browser sandbox",
+					"backend", sbruntime.SandboxBackendName())
+				cfg.Sandbox.General.BrowserEnabled = false
+			}
+		}
+		if cfg.Sandbox.IsExecEnabled() || cfg.Sandbox.IsBrowserEnabled() {
+			L_info("sandbox: backend available",
+				"backend", sbruntime.SandboxBackendName(),
+				"execEnabled", execSandboxEnabled,
+				"browserEnabled", browserSandboxEnabled)
+		}
+	}
+
 	// Initialize browser manager for web_fetch fallback and browser tool
 	if cfg.Tools.Browser.Enabled {
 		browserCfg := browser.ToolsConfigAdapter{
@@ -2217,10 +2254,9 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 			Stealth:        cfg.Tools.Browser.Stealth,
 			Device:         cfg.Tools.Browser.Device,
 			ProfileDomains: cfg.Tools.Browser.ProfileDomains,
-			// Bubblewrap sandboxing
 			Workspace:         cfg.Gateway.WorkingDir,
-			BubblewrapEnabled: cfg.Tools.Browser.Bubblewrap.Enabled,
-			BubblewrapPath:    cfg.Sandbox.Bubblewrap.Path,
+			BubblewrapEnabled: cfg.Sandbox.IsBrowserEnabled(),
+			BubblewrapPath:    cfg.Sandbox.GetBackendPath(),
 			BubblewrapGPU:     cfg.Tools.Browser.Bubblewrap.GPU,
 			ExtraRoBind:       cfg.Tools.Browser.Bubblewrap.ExtraRoBind,
 			ExtraBind:         cfg.Tools.Browser.Bubblewrap.ExtraBind,
@@ -2233,47 +2269,10 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 			defer browserMgr.CloseAll()
 			L_info("browser: manager initialized",
 				"headless", cfg.Tools.Browser.Headless,
-				"sandbox", cfg.Tools.Browser.Bubblewrap.Enabled)
+				"sandbox", cfg.Sandbox.IsBrowserEnabled())
 		}
 	} else {
 		L_info("browser: disabled by configuration")
-	}
-
-	// Initialize sandbox manager singleton before checking backend availability.
-	sandbox.InitManager(cfg.Sandbox, cfg.Gateway.WorkingDir)
-
-	// Check sandbox backend availability for managed exec/browser sandboxing.
-	execBwrapEnabled := cfg.Tools.Exec.Bubblewrap.Enabled
-	browserBwrapEnabled := cfg.Tools.Browser.Bubblewrap.Enabled
-	sandboxDisabledReason := "" // Track if sandbox was disabled for later warning
-	if execBwrapEnabled || browserBwrapEnabled {
-		backendPath := cfg.Sandbox.Bubblewrap.Path
-		execAvailable := sbruntime.ExecSandboxAvailable(backendPath)
-		browserAvailable := sbruntime.BrowserSandboxAvailable(backendPath)
-		if !execAvailable && !browserAvailable {
-			L_warn("sandbox: managed sandbox backend unavailable, disabling",
-				"backend", sbruntime.SandboxBackendName())
-			cfg.Tools.Exec.Bubblewrap.Enabled = false
-			cfg.Tools.Browser.Bubblewrap.Enabled = false
-			sandboxDisabledReason = sbruntime.SandboxBackendName() + " unavailable"
-		} else {
-			if execBwrapEnabled && !execAvailable {
-				L_warn("sandbox: exec sandbox backend unavailable, disabling exec sandbox",
-					"backend", sbruntime.SandboxBackendName())
-				cfg.Tools.Exec.Bubblewrap.Enabled = false
-			}
-			if browserBwrapEnabled && !browserAvailable {
-				L_warn("sandbox: browser sandbox backend unavailable, disabling browser sandbox",
-					"backend", sbruntime.SandboxBackendName())
-				cfg.Tools.Browser.Bubblewrap.Enabled = false
-			}
-		}
-		if cfg.Tools.Exec.Bubblewrap.Enabled || cfg.Tools.Browser.Bubblewrap.Enabled {
-			L_info("sandbox: backend available",
-				"backend", sbruntime.SandboxBackendName(),
-				"execEnabled", execBwrapEnabled,
-				"browserEnabled", browserBwrapEnabled)
-		}
 	}
 
 	// Create tool registry (tools registered after gateway is ready)
@@ -2653,9 +2652,9 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 	execRunner := exec.NewRunner(exec.RunnerConfig{
 		WorkingDir:     cfg.Gateway.WorkingDir,
 		Timeout:        execTimeout,
-		BubblewrapPath: cfg.Sandbox.Bubblewrap.Path,
+		BubblewrapPath: cfg.Sandbox.GetBackendPath(),
 		Bubblewrap: exec.BubblewrapConfig{
-			Enabled:      cfg.Tools.Exec.Bubblewrap.Enabled,
+			Enabled:      cfg.Sandbox.IsExecEnabled(),
 			ExtraRoBind:  cfg.Tools.Exec.Bubblewrap.ExtraRoBind,
 			ExtraBind:    cfg.Tools.Exec.Bubblewrap.ExtraBind,
 			ExtraEnv:     cfg.Tools.Exec.Bubblewrap.ExtraEnv,

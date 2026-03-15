@@ -32,8 +32,9 @@ func TestBuildExecProfileDeniesRealHomeWhenUsingSandboxHome(t *testing.T) {
 	workspace := realHome + "/goclaw"
 	sandboxHome := realHome + "/.goclaw/sandbox/home"
 	profile := buildExecProfile(ExecLaunchOptions{
-		WorkspaceDir: workspace,
-		HomeDir:      sandboxHome,
+		WorkspaceDir:   workspace,
+		VisibleHomeDir: realHome,
+		BackingHomeDir: sandboxHome,
 	})
 
 	if !strings.Contains(profile, fmt.Sprintf(`(subpath "%s")`, realHome)) {
@@ -62,8 +63,8 @@ func TestDarwinExecBackendRejectsVolumesMode(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected volumes mode to be rejected")
 	}
-	if !strings.Contains(err.Error(), "use home mode instead") {
-		t.Fatalf("expected home mode guidance, got: %v", err)
+	if !strings.Contains(err.Error(), "autodocs-read") {
+		t.Fatalf("expected autodocs guidance, got: %v", err)
 	}
 }
 
@@ -138,8 +139,14 @@ func TestDarwinBrowserBackendRejectsVolumesMode(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected volumes mode to be rejected")
 	}
-	if !strings.Contains(err.Error(), "use home mode instead") {
-		t.Fatalf("expected home mode guidance, got: %v", err)
+	if !strings.Contains(err.Error(), "autodocs-read") {
+		t.Fatalf("expected autodocs guidance, got: %v", err)
+	}
+}
+
+func TestDarwinBackendRejectsEphemeralMode(t *testing.T) {
+	if err := validateDarwinSandboxMode("ephemeral"); err == nil {
+		t.Fatal("expected ephemeral mode to be rejected on Darwin")
 	}
 }
 
@@ -149,10 +156,11 @@ func TestCreateBrowserLauncherWrapsCleanup(t *testing.T) {
 
 	backend := darwinBrowserBackend{}
 	wrapperPath, err := backend.CreateLauncher("/Applications/Test.app/Contents/MacOS/Test", BrowserLaunchOptions{
-		SandboxMode:  "home",
-		WorkspaceDir: "/workspace",
-		ProfileDir:   "/tmp/browser-profile",
-		HomeDir:      filepath.Join(tmpHome, ".goclaw", "sandbox", "home"),
+		SandboxMode:    "home",
+		WorkspaceDir:   "/workspace",
+		ProfileDir:     "/tmp/browser-profile",
+		VisibleHomeDir: tmpHome,
+		BackingHomeDir: filepath.Join(tmpHome, ".goclaw", "sandbox", "home"),
 	})
 	if err != nil {
 		t.Fatalf("expected wrapper to be created, err=%v", err)

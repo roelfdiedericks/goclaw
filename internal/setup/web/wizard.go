@@ -14,6 +14,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/configapply"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 	"github.com/roelfdiedericks/goclaw/internal/setup"
 )
 
@@ -550,10 +551,12 @@ func getStepFormDef(stepID string, data *setup.WizardData) *forms.FormDef {
 			Sections: []forms.Section{
 				{
 					Title: "Sandboxing",
-					Desc:  "Sandboxing restricts tools to only access files within your workspace, preventing accidental or malicious access to system files.",
+					Desc:  fmt.Sprintf("Sandboxing restricts tools to only access files within your workspace, preventing accidental or malicious access to system files. Managed backend: %s.", sandbox.CurrentBackendDisplayName()),
 					Fields: []forms.Field{
-						{Name: "ExecBubblewrap", Title: "Enable Exec Sandboxing", Type: forms.Toggle, Default: true},
-						{Name: "BrowserBubblewrap", Title: "Enable Browser Sandboxing", Type: forms.Toggle, Default: true},
+						{Name: "SandboxEnabled", Title: "Enable Sandboxing", Type: forms.Toggle, Default: true},
+						{Name: "ExecSandboxEnabled", Title: "Enable Exec Sandboxing", Type: forms.Toggle, Default: true},
+						{Name: "BrowserSandboxEnabled", Title: "Enable Browser Sandboxing", Type: forms.Toggle, Default: true},
+						{Name: "FileToolsSandboxEnabled", Title: "Enable File Tool Sandboxing", Type: forms.Toggle, Default: true},
 					},
 				},
 				{
@@ -657,8 +660,10 @@ func updateWizardData(data *setup.WizardData, payload map[string]interface{}) er
 		VoiceLLMEnabled     bool   `json:"VoiceLLMEnabled"`
 		VoiceLLMAPIKey      string `json:"VoiceLLMAPIKey"`
 		VoiceLLMVoice       string `json:"VoiceLLMVoice"`
-		ExecBubblewrap      bool   `json:"ExecBubblewrap"`
-		BrowserBubblewrap   bool   `json:"BrowserBubblewrap"`
+		SandboxEnabled          bool   `json:"SandboxEnabled"`
+		ExecSandboxEnabled      bool   `json:"ExecSandboxEnabled"`
+		BrowserSandboxEnabled   bool   `json:"BrowserSandboxEnabled"`
+		FileToolsSandboxEnabled bool   `json:"FileToolsSandboxEnabled"`
 		SkillsAllowEmbedded bool   `json:"SkillsAllowEmbedded"`
 		SkillsAllowClawHub  bool   `json:"SkillsAllowClawHub"`
 		SkillsAllowLocal    bool   `json:"SkillsAllowLocal"`
@@ -737,10 +742,14 @@ func updateWizardData(data *setup.WizardData, payload map[string]interface{}) er
 	}
 
 	// Security/sandboxing fields
-	data.ExecBubblewrap = fields.ExecBubblewrap
-	data.MarkDirty("ExecBubblewrap")
-	data.BrowserBubblewrap = fields.BrowserBubblewrap
-	data.MarkDirty("BrowserBubblewrap")
+	data.SandboxEnabled = fields.SandboxEnabled
+	data.MarkDirty("SandboxEnabled")
+	data.ExecSandboxEnabled = fields.ExecSandboxEnabled
+	data.MarkDirty("ExecSandboxEnabled")
+	data.BrowserSandboxEnabled = fields.BrowserSandboxEnabled
+	data.MarkDirty("BrowserSandboxEnabled")
+	data.FileToolsSandboxEnabled = fields.FileToolsSandboxEnabled
+	data.MarkDirty("FileToolsSandboxEnabled")
 	data.SkillsAllowEmbedded = fields.SkillsAllowEmbedded
 	data.MarkDirty("SkillsAllowEmbedded")
 	data.SkillsAllowClawHub = fields.SkillsAllowClawHub

@@ -1773,7 +1773,7 @@
                     has_password: !!user.has_password,
                     thinking: !!user.thinking,
                     thinking_level: user.thinking_level || '',
-                    sandbox: !!user.sandbox
+                    sandbox: user.sandbox !== false
                 };
             } else {
                 this.userForm = {
@@ -1788,7 +1788,7 @@
                     has_password: false,
                     thinking: false,
                     thinking_level: '',
-                    sandbox: false
+                    sandbox: true
                 };
             }
             this.renderUsersSection();

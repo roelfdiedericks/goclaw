@@ -244,6 +244,11 @@ func Load() (*LoadResult, error) {
 		return nil, fmt.Errorf("failed to set config defaults: %w", err)
 	}
 
+	goclawData, err := migrateSandboxConfigJSON(goclawData)
+	if err != nil {
+		return nil, fmt.Errorf("migrate sandbox config: %w", err)
+	}
+
 	// Unmarshal JSON - only overwrites fields actually present in the JSON
 	if err := json.Unmarshal(goclawData, cfg); err != nil {
 		logging.L_error("config: failed to parse goclaw.json", "path", goclawPath, "error", err)
@@ -306,6 +311,10 @@ func LoadFromPath(path string) (*LoadResult, error) {
 	cfg := &Config{}
 	if err := defaults.Set(cfg); err != nil {
 		return nil, fmt.Errorf("failed to set config defaults: %w", err)
+	}
+	data, err = migrateSandboxConfigJSON(data)
+	if err != nil {
+		return nil, fmt.Errorf("migrate sandbox config: %w", err)
 	}
 	if err := json.Unmarshal(data, cfg); err != nil {
 		logging.L_error("config: failed to parse explicit config path", "path", absPath, "error", err)
@@ -403,6 +412,12 @@ func LoadRuntime() (*LoadResult, error) {
 	if err := defaults.Set(cfg); err != nil {
 		return nil, fmt.Errorf("failed to set config defaults: %w", err)
 	}
+
+	migratedData, err := migrateSandboxConfigJSON(goclawData)
+	if err != nil {
+		return nil, fmt.Errorf("migrate sandbox config: %w", err)
+	}
+	goclawData = migratedData
 
 	if err := json.Unmarshal(goclawData, cfg); err != nil {
 		logging.L_error("config: failed to parse goclaw.json", "path", goclawPath, "error", err)
@@ -507,6 +522,84 @@ func applyRuntimeDefaults(cfg *Config, goclawDir, home string) {
 			},
 		}
 	}
+}
+
+func migrateSandboxConfigJSON(data []byte) ([]byte, error) {
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+
+	sandboxNode, ok := raw["sandbox"].(map[string]any)
+	if !ok {
+		return data, nil
+	}
+
+	generalNode, _ := sandboxNode["general"].(map[string]any)
+	if generalNode == nil {
+		generalNode = map[string]any{}
+		sandboxNode["general"] = generalNode
+	}
+
+	bubblewrapNode, _ := sandboxNode["bubblewrap"].(map[string]any)
+	if bubblewrapNode == nil {
+		bubblewrapNode = map[string]any{}
+		sandboxNode["bubblewrap"] = bubblewrapNode
+	}
+
+	seatbeltNode, _ := sandboxNode["seatbelt"].(map[string]any)
+	if seatbeltNode == nil {
+		seatbeltNode = map[string]any{}
+		sandboxNode["seatbelt"] = seatbeltNode
+	}
+
+	moveIfMissing(generalNode, "mode", bubblewrapNode, "mode")
+	moveIfMissing(generalNode, "dataDir", bubblewrapNode, "dataDir")
+	moveIfMissing(generalNode, "extraPaths", bubblewrapNode, "extraPaths")
+
+	if _, ok := generalNode["execEnabled"]; !ok {
+		if enabled, ok := nestedValue(raw, "tools", "exec", "bubblewrap", "enabled"); ok {
+			generalNode["execEnabled"] = enabled
+		}
+	}
+	if _, ok := generalNode["browserEnabled"]; !ok {
+		if enabled, ok := nestedValue(raw, "tools", "browser", "bubblewrap", "enabled"); ok {
+			generalNode["browserEnabled"] = enabled
+		}
+	}
+
+	if _, ok := seatbeltNode["path"]; !ok {
+		if path, ok := bubblewrapNode["path"]; ok {
+			seatbeltNode["path"] = path
+		}
+	}
+
+	raw["sandbox"] = sandboxNode
+	return json.Marshal(raw)
+}
+
+func moveIfMissing(dst map[string]any, dstKey string, src map[string]any, srcKey string) {
+	if _, ok := dst[dstKey]; ok {
+		return
+	}
+	if value, ok := src[srcKey]; ok {
+		dst[dstKey] = value
+	}
+}
+
+func nestedValue(root map[string]any, path ...string) (any, bool) {
+	var current any = root
+	for _, part := range path {
+		node, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = node[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
 }
 
 // normalizeTildePaths expands "~" for path-like configuration fields.

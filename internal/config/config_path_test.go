@@ -32,10 +32,12 @@ func TestNormalizeTildePaths(t *testing.T) {
 			Script: "~/scripts/validate.sh",
 		},
 		Sandbox: sandbox.Config{
-			Bubblewrap: sandbox.BubblewrapConfig{
+			General: sandbox.GeneralConfig{
 				DataDir:    "~/.goclaw/sandbox",
 				ExtraPaths: []string{"~/.local/bin", "/usr/local/bin"},
-				Volumes:    []string{"~/.config", "~/.cache"},
+			},
+			Bubblewrap: sandbox.BubblewrapConfig{
+				Volumes: []string{"~/.config", "~/.cache"},
 			},
 		},
 		Roles: user.RolesConfig{
@@ -56,7 +58,7 @@ func TestNormalizeTildePaths(t *testing.T) {
 		"session.storePath":           cfg.Session.StorePath,
 		"session.inheritPath":         cfg.Session.InheritPath,
 		"auth.script":                 cfg.Auth.Script,
-		"sandbox.bubblewrap.dataDir":  cfg.Sandbox.Bubblewrap.DataDir,
+		"sandbox.general.dataDir":      cfg.Sandbox.General.DataDir,
 		"roles.guest.systemPromptFile": cfg.Roles["guest"].SystemPromptFile,
 	}
 
@@ -69,7 +71,7 @@ func TestNormalizeTildePaths(t *testing.T) {
 		}
 	}
 
-	for i, got := range cfg.Sandbox.Bubblewrap.ExtraPaths {
+	for i, got := range cfg.Sandbox.General.ExtraPaths {
 		if i == 0 {
 			if filepath.IsAbs(got) == false || got[:len(home)] != home {
 				t.Fatalf("extraPaths[%d] not expanded: %q", i, got)
