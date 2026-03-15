@@ -43,6 +43,7 @@ func CreateSandboxedLauncher(browserBin, workspace, profileDir string, cfg Brows
 	mgr := sandbox.GetManager()
 	return sbruntime.CreateBrowserLauncher(browserBin, sbruntime.BrowserLaunchOptions{
 		BackendPath:   cfg.BwrapPath,
+		SandboxMode:   mgr.GetMode(),
 		WorkspaceDir:  workspace,
 		ProfileDir:    profileDir,
 		HomeDir:       preferredBrowserHome(mgr, home),

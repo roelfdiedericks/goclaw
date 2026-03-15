@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox/seatbelt"
 )
@@ -30,6 +31,9 @@ func (darwinExecBackend) Available(customPath string) bool {
 }
 
 func (darwinExecBackend) BuildCommand(command string, opts ExecLaunchOptions) (*exec.Cmd, error) {
+	if err := validateDarwinSandboxMode(opts.SandboxMode); err != nil {
+		return nil, err
+	}
 	sandboxExec, err := seatbelt.FindSandboxExec(opts.BackendPath)
 	if err != nil {
 		return nil, err
@@ -44,17 +48,44 @@ func (darwinExecBackend) BuildCommand(command string, opts ExecLaunchOptions) (*
 		return nil, err
 	}
 
-	cmd := exec.Command(sandboxExec, "-f", profilePath, "/bin/bash", "-c", command)
+	L_debug("seatbelt exec: building command",
+		"backend", "seatbelt",
+		"sandboxExec", sandboxExec,
+		"profilePath", profilePath,
+		"workspaceDir", opts.WorkspaceDir,
+		"workDir", opts.WorkDir,
+		"homeDir", opts.HomeDir,
+		"volumes", len(opts.Volumes),
+		"protectedDirs", len(opts.ProtectedDirs),
+		"clearEnv", opts.ClearEnv,
+		"allowNetwork", opts.AllowNetwork,
+	)
+
+	wrapperPath, err := writeExecWrapper(sandboxExec, profilePath, command)
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := exec.Command(wrapperPath)
 	if opts.WorkDir != "" {
 		cmd.Dir = opts.WorkDir
 	} else {
 		cmd.Dir = opts.WorkspaceDir
 	}
 	if opts.ClearEnv {
-		cmd.Env = BuildMinimalEnv(opts.HomeDir, os.Getenv("PATH"), opts.ExtraEnv)
+		pathValue := opts.PathValue
+		if pathValue == "" {
+			pathValue = os.Getenv("PATH")
+		}
+		cmd.Env = BuildMinimalEnv(opts.HomeDir, pathValue, opts.ExtraEnv)
 	} else if len(opts.ExtraEnv) > 0 {
 		cmd.Env = mergeEnv(os.Environ(), opts.ExtraEnv)
 	}
+	L_debug("seatbelt exec: command prepared",
+		"dir", cmd.Dir,
+		"argv", cmd.Args,
+		"envLen", len(cmd.Env),
+	)
 	return cmd, nil
 }
 
@@ -64,6 +95,9 @@ func (darwinBrowserBackend) Available(customPath string) bool {
 }
 
 func (darwinBrowserBackend) CreateLauncher(browserBin string, opts BrowserLaunchOptions) (string, error) {
+	if err := validateDarwinSandboxMode(opts.SandboxMode); err != nil {
+		return "", err
+	}
 	sandboxExec, err := seatbelt.FindSandboxExec(opts.BackendPath)
 	if err != nil {
 		return "", err
@@ -89,7 +123,14 @@ func (darwinBrowserBackend) CreateLauncher(browserBin string, opts BrowserLaunch
 	wrapperPath := filepath.Join(wrapperDir, "chromium-wrapper.sh")
 	script := "#!/bin/sh\n"
 	script += "# GoClaw browser sandbox wrapper (seatbelt)\n\n"
-	script += "exec " + ShellQuote(sandboxExec) + " -f " + ShellQuote(profilePath) + " " + ShellQuote(browserBin) + " \"$@\"\n"
+	script += "PROFILE_PATH=" + ShellQuote(profilePath) + "\n"
+	script += "cleanup() {\n"
+	script += "  rm -f \"$PROFILE_PATH\"\n"
+	script += "}\n"
+	script += "trap cleanup EXIT INT TERM\n\n"
+	script += ShellQuote(sandboxExec) + " -f \"$PROFILE_PATH\" " + ShellQuote(browserBin) + " \"$@\"\n"
+	script += "status=$?\n"
+	script += "exit \"$status\"\n"
 
 	//nolint:gosec // G306: Executable script needs execute permission
 	if err := os.WriteFile(wrapperPath, []byte(script), 0750); err != nil {
@@ -98,24 +139,63 @@ func (darwinBrowserBackend) CreateLauncher(browserBin string, opts BrowserLaunch
 	return wrapperPath, nil
 }
 
+func writeExecWrapper(sandboxExec string, profilePath string, command string) (string, error) {
+	wrapperDir, err := paths.DataPath("seatbelt")
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(wrapperDir, 0750); err != nil {
+		return "", err
+	}
+
+	file, err := os.CreateTemp(wrapperDir, "exec-wrapper-*.sh")
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	script := "#!/bin/sh\n"
+	script += "# GoClaw exec sandbox wrapper (seatbelt)\n\n"
+	script += "PROFILE_PATH=" + ShellQuote(profilePath) + "\n"
+	script += "cleanup() {\n"
+	script += "  rm -f \"$PROFILE_PATH\" \"$0\"\n"
+	script += "}\n"
+	script += "trap cleanup EXIT INT TERM\n\n"
+	script += ShellQuote(sandboxExec) + " -f \"$PROFILE_PATH\" /bin/bash -c " + ShellQuote(command) + "\n"
+	script += "status=$?\n"
+	script += "exit \"$status\"\n"
+
+	if _, err := file.WriteString(script); err != nil {
+		return "", err
+	}
+	if err := file.Chmod(0750); err != nil {
+		return "", err
+	}
+
+	return filepath.Clean(file.Name()), nil
+}
+
+func validateDarwinSandboxMode(mode string) error {
+	if mode == "volumes" {
+		return fmt.Errorf("darwin seatbelt sandbox does not support volumes mode; use home mode instead")
+	}
+	return nil
+}
+
 func buildExecProfile(opts ExecLaunchOptions) string {
 	readRoots := []string{
-		"/bin",
-		"/usr",
-		"/System",
-		"/Library",
-		"/Applications",
+		opts.WorkspaceDir,
 		"/tmp",
 		"/private/tmp",
-		"/var",
-		"/private/var",
-		"/dev",
-		opts.WorkspaceDir,
 	}
 	writeRoots := []string{
 		opts.WorkspaceDir,
 		"/tmp",
 		"/private/tmp",
+	}
+	if opts.WorkDir != "" {
+		readRoots = append(readRoots, opts.WorkDir)
+		writeRoots = append(writeRoots, opts.WorkDir)
 	}
 	if opts.HomeDir != "" {
 		readRoots = append(readRoots, opts.HomeDir)
@@ -139,9 +219,10 @@ func buildExecProfile(opts ExecLaunchOptions) string {
 		"(allow process*)",
 		"(allow sysctl-read)",
 		"(allow file-read-metadata)",
-		buildSubpathRule("allow file-read*", dedupeRoots(readRoots)),
-		buildSubpathRule("allow file-write*", dedupeRoots(writeRoots)),
 	}
+	rules = append(rules, buildExecReadRules(opts, dedupeRoots(readRoots))...)
+	rules = append(rules, buildWriteRules(dedupeRoots(writeRoots), dedupeRoots(opts.ProtectedDirs))...)
+	rules = append(rules, buildRuntimeDeviceWriteRules()...)
 	if opts.AllowNetwork {
 		rules = append(rules, "(allow network-outbound)", "(allow network-inbound)")
 	} else {
@@ -191,11 +272,45 @@ func buildBrowserProfile(browserBin string, opts BrowserLaunchOptions) string {
 		"(allow sysctl-read)",
 		"(allow file-read-metadata)",
 		buildSubpathRule("allow file-read*", dedupeRoots(readRoots)),
-		buildSubpathRule("allow file-write*", dedupeRoots(writeRoots)),
+	}
+	rules = append(rules, buildWriteRules(dedupeRoots(writeRoots), dedupeRoots(opts.ProtectedDirs))...)
+	rules = append(rules,
 		"(allow network-outbound)",
 		"(allow network-inbound)",
-	}
+	)
 	return strings.Join(rules, "\n")
+}
+
+func buildExecReadRules(opts ExecLaunchOptions, allowRoots []string) []string {
+	realHome, _ := os.UserHomeDir()
+	if shouldDenyRealHome(realHome, opts.HomeDir) {
+		return []string{
+			"(allow file-read*)",
+			buildSubpathRule("deny file-read*", []string{filepath.Clean(realHome)}),
+			buildSubpathRule("allow file-read*", allowRoots),
+		}
+	}
+
+	// Darwin seatbelt read confinement is too brittle for normal process launch
+	// unless we can redirect HOME to a separate sandbox backing directory.
+	return []string{"(allow file-read*)"}
+}
+
+func shouldDenyRealHome(realHome string, sandboxHome string) bool {
+	if realHome == "" || sandboxHome == "" {
+		return false
+	}
+	return filepath.Clean(realHome) != filepath.Clean(sandboxHome)
+}
+
+func buildRuntimeDeviceWriteRules() []string {
+	return []string{
+		"(allow file-write*",
+		"  (require-all",
+		`    (literal "/dev/null")`,
+		"  )",
+		")",
+	}
 }
 
 func buildSubpathRule(verb string, paths []string) string {
@@ -208,6 +323,41 @@ func buildSubpathRule(verb string, paths []string) string {
 	}
 	parts = append(parts, ")")
 	return strings.Join(parts, "\n")
+}
+
+func buildWriteRules(writeRoots []string, protectedDirs []string) []string {
+	if len(writeRoots) == 0 {
+		return []string{"(allow file-write*)"}
+	}
+
+	rules := make([]string, 0, len(writeRoots))
+	for _, root := range writeRoots {
+		if isProtectedRoot(root, protectedDirs) {
+			continue
+		}
+		parts := []string{"(allow file-write*", "  (require-all", fmt.Sprintf(`    (subpath "%s")`, root)}
+		for _, protected := range protectedDirs {
+			if isNestedPath(protected, root) {
+				parts = append(parts, fmt.Sprintf(`    (require-not (subpath "%s"))`, protected))
+			}
+		}
+		parts = append(parts, "  )", ")")
+		rules = append(rules, strings.Join(parts, "\n"))
+	}
+	return rules
+}
+
+func isProtectedRoot(root string, protectedDirs []string) bool {
+	for _, protected := range protectedDirs {
+		if isNestedPath(root, protected) {
+			return true
+		}
+	}
+	return false
+}
+
+func isNestedPath(path string, parent string) bool {
+	return path == parent || strings.HasPrefix(path, parent+string(filepath.Separator))
 }
 
 func dedupeRoots(paths []string) []string {
