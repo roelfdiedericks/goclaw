@@ -21,13 +21,31 @@ func (r *Runner) buildSandboxedCommand(ctx context.Context, command, workDir str
 
 	home, _ := os.UserHomeDir()
 	mgr := sandbox.GetManager()
+	preferredHome := preferredExecHome(mgr, home)
+	vols := runtimeVolumes(mgr.GetVolumes())
+	protectedDirs := mgr.GetProtectedDirs()
+	pathValue := os.Getenv("PATH")
+	if mgr != nil {
+		pathValue = mgr.BuildSandboxPATH(preferredHome)
+	}
+	L_debug("exec runner: darwin sandbox request",
+		"backendPath", r.config.BubblewrapPath,
+		"workspaceDir", r.config.WorkingDir,
+		"workDir", workDir,
+		"homeDir", preferredHome,
+		"pathValue", pathValue,
+		"volumes", len(vols),
+		"protectedDirs", len(protectedDirs),
+	)
 	cmd, err := sbruntime.BuildExecCommand(command, sbruntime.ExecLaunchOptions{
 		BackendPath:   r.config.BubblewrapPath,
+		SandboxMode:   mgr.GetMode(),
 		WorkspaceDir:  r.config.WorkingDir,
 		WorkDir:       workDir,
-		HomeDir:       preferredExecHome(mgr, home),
-		Volumes:       runtimeVolumes(mgr.GetVolumes()),
-		ProtectedDirs: mgr.GetProtectedDirs(),
+		HomeDir:       preferredHome,
+		PathValue:     pathValue,
+		Volumes:       vols,
+		ProtectedDirs: protectedDirs,
 		ClearEnv:      r.config.Bubblewrap.ClearEnv,
 		AllowNetwork:  r.config.Bubblewrap.AllowNetwork,
 		ExtraEnv:      r.config.Bubblewrap.ExtraEnv,

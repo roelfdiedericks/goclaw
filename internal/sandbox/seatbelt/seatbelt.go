@@ -5,11 +5,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
 func FindSandboxExec(customPath string) (string, error) {
 	if customPath != "" {
 		if _, err := os.Stat(customPath); err == nil {
+			L_debug("seatbelt: using custom sandbox-exec path", "path", customPath)
 			return customPath, nil
 		}
 		return "", fmt.Errorf("sandbox-exec not found at custom path %s", customPath)
@@ -18,6 +21,7 @@ func FindSandboxExec(customPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("sandbox-exec not found in PATH")
 	}
+	L_debug("seatbelt: found sandbox-exec", "path", path)
 	return path, nil
 }
 
@@ -38,5 +42,7 @@ func WriteProfile(baseDir, prefix, content string) (string, error) {
 	if _, err := file.WriteString(content); err != nil {
 		return "", err
 	}
-	return filepath.Clean(file.Name()), nil
+	profilePath := filepath.Clean(file.Name())
+	L_trace("seatbelt: wrote profile", "path", profilePath, "content", content)
+	return profilePath, nil
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	sbruntime "github.com/roelfdiedericks/goclaw/internal/sandbox/runtime"
 )
 
 // Runner handles sandboxed command execution.
@@ -59,6 +60,14 @@ func (r *Runner) RunFull(ctx context.Context, command, workDir string, useSandbo
 
 	L_debug("exec runner: running", "cmd", cmdPreview, "workDir", workDir, "sandboxed", useSandbox)
 	L_trace("exec runner: full command", "cmd", command, "timeout", r.config.Timeout)
+	L_debug("exec runner: sandbox config",
+		"useSandbox", useSandbox,
+		"enabled", r.config.Bubblewrap.Enabled,
+		"backend", sbruntime.SandboxBackendName(),
+		"backendPath", r.config.BubblewrapPath,
+		"allowNetwork", r.config.Bubblewrap.AllowNetwork,
+		"clearEnv", r.config.Bubblewrap.ClearEnv,
+	)
 
 	// Create context with timeout
 	execCtx, cancel := context.WithTimeout(ctx, r.config.Timeout)
@@ -79,8 +88,14 @@ func (r *Runner) RunFull(ctx context.Context, command, workDir string, useSandbo
 
 	// Fall back to unsandboxed execution if no sandbox command was built
 	if cmd == nil {
+		L_debug("exec runner: sandbox unavailable, falling back to unsandboxed execution",
+			"useSandbox", useSandbox,
+			"enabled", r.config.Bubblewrap.Enabled,
+			"backend", sbruntime.SandboxBackendName(),
+		)
 		cmd = exec.CommandContext(execCtx, "bash", "-c", command)
 		cmd.Dir = workDir
+		L_trace("exec runner: using unsandboxed command", "dir", cmd.Dir, "argv", cmd.Args)
 	}
 
 	// Capture output
@@ -103,11 +118,29 @@ func (r *Runner) RunFull(ctx context.Context, command, workDir string, useSandbo
 		// Extract exit code from error
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
+			stateStr := ""
+			if exitErr.ProcessState != nil {
+				stateStr = exitErr.ProcessState.String()
+			}
+			L_debug("exec runner: exit error details",
+				"cmd", cmdPreview,
+				"exitCode", exitCode,
+				"processState", stateStr,
+			)
 		} else {
 			// Other error (e.g., command not found)
 			return nil, fmt.Errorf("exec failed: %w", err)
 		}
-		L_debug("exec runner: non-zero exit", "cmd", cmdPreview, "exitCode", exitCode, "elapsed", elapsed)
+		stderrPreview := strings.TrimSpace(stderr.String())
+		if len(stderrPreview) > 500 {
+			stderrPreview = stderrPreview[:500] + "..."
+		}
+		L_debug("exec runner: non-zero exit",
+			"cmd", cmdPreview,
+			"exitCode", exitCode,
+			"elapsed", elapsed,
+			"stderrPreview", stderrPreview,
+		)
 	} else {
 		L_debug("exec runner: completed", "cmd", cmdPreview, "elapsed", elapsed, "stdoutLen", stdout.Len(), "stderrLen", stderr.Len())
 	}

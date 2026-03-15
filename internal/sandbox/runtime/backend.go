@@ -14,9 +14,11 @@ type SandboxVolume struct {
 // ExecLaunchOptions describes a sandboxed exec launch without exposing backend details.
 type ExecLaunchOptions struct {
 	BackendPath   string
+	SandboxMode   string
 	WorkspaceDir  string
 	WorkDir       string
 	HomeDir       string
+	PathValue     string
 	Volumes       []SandboxVolume
 	ProtectedDirs []string
 	ClearEnv      bool
@@ -29,6 +31,7 @@ type ExecLaunchOptions struct {
 // BrowserLaunchOptions describes a managed browser launch without exposing backend details.
 type BrowserLaunchOptions struct {
 	BackendPath   string
+	SandboxMode   string
 	WorkspaceDir  string
 	ProfileDir    string
 	HomeDir       string

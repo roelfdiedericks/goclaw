@@ -23,6 +23,7 @@ func (r *Runner) buildSandboxedCommand(ctx context.Context, command, workDir str
 	mgr := sandbox.GetManager()
 	cmd, err := sbruntime.BuildExecCommand(command, sbruntime.ExecLaunchOptions{
 		BackendPath:   r.config.BubblewrapPath,
+		SandboxMode:   mgr.GetMode(),
 		WorkspaceDir:  r.config.WorkingDir,
 		WorkDir:       workDir,
 		HomeDir:       preferredExecHome(mgr, home),
