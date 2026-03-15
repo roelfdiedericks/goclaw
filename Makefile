@@ -73,6 +73,7 @@ embtest-ort:
 # XLA build/runtime notes:
 # - Requires cgo-enabled build environment
 # - Requires PJRT/XLA runtime plugin installed on the host
+# - Requires the rust tokenizer static library (libtokenizers.a) at build time
 # - go-xla searches PJRT plugins via PJRT_PLUGIN_LIBRARY_PATH (":"-separated on Unix)
 # - Common plugin filenames include pjrt-plugin-*.so, pjrt_plugin_*.so, pjrt_c_api_*_plugin.so
 # - TPU setups may expose libtpu.so instead of a pjrt_plugin_* file
@@ -119,6 +120,21 @@ embtest-xla-deps-check:
 		echo "Set PJRT_PLUGIN_LIBRARY_PATH to the plugin directory or install one, e.g.:"; \
 		echo "  GOPROXY=direct go run github.com/gomlx/go-xla/cmd/pjrt_installer@latest -plugin=linux -version=<VERSION> -path=/usr/local/lib/go-xla"; \
 		exit 1; \
+	fi; \
+	if [ -f "/usr/lib/libtokenizers.a" ]; then \
+		echo "OK: found libtokenizers.a in /usr/lib"; \
+	elif [ -f "/usr/local/lib/libtokenizers.a" ]; then \
+		echo "OK: found libtokenizers.a in /usr/local/lib"; \
+	elif [ -f "/usr/lib/x86_64-linux-gnu/libtokenizers.a" ]; then \
+		echo "OK: found libtokenizers.a in /usr/lib/x86_64-linux-gnu"; \
+	elif [ -f "/usr/lib/aarch64-linux-gnu/libtokenizers.a" ]; then \
+		echo "OK: found libtokenizers.a in /usr/lib/aarch64-linux-gnu"; \
+	else \
+		echo "FAIL: libtokenizers.a not found in standard library paths."; \
+		echo "There is usually no Debian package for Hugot's tokenizer static library."; \
+		echo "Get it from Hugot release assets or build it from https://github.com/daulet/tokenizers"; \
+		echo "Checked: /usr/lib, /usr/local/lib, /usr/lib/x86_64-linux-gnu, /usr/lib/aarch64-linux-gnu"; \
+		exit 1; \
 	fi
 
 # ORT build/runtime notes:
@@ -126,6 +142,7 @@ embtest-xla-deps-check:
 # - Requires ONNX Runtime shared library on the host
 # - Hugot expects an unversioned libonnxruntime shared library in the directory you pass
 # - Common Linux paths include multiarch directories such as /usr/lib/x86_64-linux-gnu
+# - Requires the rust tokenizer static library (libtokenizers.a) at build time
 embtest-ort-deps-check:
 	@if [ -z "$$CGO_ENABLED" ]; then \
 		echo "NOTE: CGO_ENABLED not explicitly set; go build usually defaults to cgo=1 on supported hosts."; \
@@ -154,6 +171,21 @@ embtest-ort-deps-check:
 			echo "Or pass a custom directory at runtime with: -ort-lib-dir /path/to/libdir"; \
 			exit 1; \
 		fi; \
+	fi
+	@if [ -f "/usr/lib/libtokenizers.a" ]; then \
+		echo "OK: found libtokenizers.a in /usr/lib"; \
+	elif [ -f "/usr/local/lib/libtokenizers.a" ]; then \
+		echo "OK: found libtokenizers.a in /usr/local/lib"; \
+	elif [ -f "/usr/lib/x86_64-linux-gnu/libtokenizers.a" ]; then \
+		echo "OK: found libtokenizers.a in /usr/lib/x86_64-linux-gnu"; \
+	elif [ -f "/usr/lib/aarch64-linux-gnu/libtokenizers.a" ]; then \
+		echo "OK: found libtokenizers.a in /usr/lib/aarch64-linux-gnu"; \
+	else \
+		echo "FAIL: libtokenizers.a not found in standard library paths."; \
+		echo "There is usually no Debian package for Hugot's tokenizer static library."; \
+		echo "Get it from Hugot release assets or build it from https://github.com/daulet/tokenizers"; \
+		echo "Checked: /usr/lib, /usr/local/lib, /usr/lib/x86_64-linux-gnu, /usr/lib/aarch64-linux-gnu"; \
+		exit 1; \
 	fi
 
 metadata:
