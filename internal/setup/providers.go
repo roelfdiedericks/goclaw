@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
 )
 
@@ -37,7 +38,7 @@ func BuildPresets() []ProviderPreset {
 			KnownChatModels: meta.GetKnownChatModels(pid),
 		}
 
-		if preset.Driver == "ollama" || pid == "lmstudio" {
+		if llm.DriverOrEndpointIsLocal(preset.Driver, prov.APIEndpoint) {
 			preset.IsLocal = true
 		}
 

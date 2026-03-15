@@ -39,11 +39,10 @@ type ThinkingConfig struct {
 // LLMProviderConfig is the configuration for a single provider instance.
 // This is the canonical type used by both config loading and the LLM registry.
 type LLMProviderConfig struct {
-	Driver         string `json:"driver"`                   // "anthropic", "openai", "ollama", "xai"
+	Driver         string `json:"driver"`                   // "anthropic", "openai", "ollama", "xai", "hugot"
 	Subtype        string `json:"subtype,omitempty"`        // Hint for UI: "openrouter", "lmstudio", etc.
 	APIKey         string `json:"apiKey,omitempty"`         // For cloud providers
-	BaseURL        string `json:"baseURL,omitempty"`        // For OpenAI-compatible endpoints
-	URL            string `json:"url,omitempty"`            // For Ollama
+	BaseURL        string `json:"baseURL,omitempty"`        // Provider endpoint URL
 	MaxTokens      int    `json:"maxTokens,omitempty"`      // Default output limit
 	ContextTokens  int    `json:"contextTokens,omitempty"`  // Context window override (0 = auto-detect)
 	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"` // Request timeout
@@ -81,6 +80,15 @@ type LLMPurposeConfig struct {
 // ProviderConfigFormDef returns the form definition for editing a single LLM provider.
 // subtypeOptions should be built from models.json providers matching the driver type.
 func ProviderConfigFormDef(subtypeOptions []forms.Option) forms.FormDef {
+	driverOptions := make([]forms.Option, 0, len(ListDrivers()))
+	for _, d := range ListDrivers() {
+		label := d.Label
+		if label == "" {
+			label = d.ID
+		}
+		driverOptions = append(driverOptions, forms.Option{Label: label, Value: d.ID})
+	}
+
 	return forms.FormDef{
 		Title:       "LLM Provider",
 		Description: "Configure an LLM provider connection",
@@ -91,16 +99,10 @@ func ProviderConfigFormDef(subtypeOptions []forms.Option) forms.FormDef {
 					{
 						Name:     "driver",
 						Title:    "Driver",
-						Desc:     "The LLM driver (anthropic, openai, ollama, xai, oai-next)",
+						Desc:     "The LLM driver implementation",
 						Type:     forms.Select,
 						Required: true,
-						Options: []forms.Option{
-							{Label: "Anthropic", Value: "anthropic"},
-							{Label: "OpenAI Compatible", Value: "openai"},
-							{Label: "OpenAI (Next)", Value: "oai-next"},
-							{Label: "Ollama", Value: "ollama"},
-							{Label: "xAI", Value: "xai"},
-						},
+						Options:  driverOptions,
 					},
 					{
 						Name:    "subtype",
@@ -118,13 +120,7 @@ func ProviderConfigFormDef(subtypeOptions []forms.Option) forms.FormDef {
 					{
 						Name:  "baseURL",
 						Title: "Base URL",
-						Desc:  "API endpoint (for OpenAI-compatible)",
-						Type:  forms.Text,
-					},
-					{
-						Name:  "url",
-						Title: "URL",
-						Desc:  "Ollama server URL",
+						Desc:  "Provider endpoint URL",
 						Type:  forms.Text,
 					},
 				},

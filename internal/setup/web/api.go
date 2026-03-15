@@ -14,6 +14,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	"github.com/roelfdiedericks/goclaw/internal/configapply"
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
 )
@@ -529,6 +530,34 @@ func joinFieldPathLocal(prefix, name string) string {
 	return prefix + "." + name
 }
 
+func setupPurpose(r *http.Request) string {
+	return strings.ToLower(strings.TrimSpace(r.URL.Query().Get("purpose")))
+}
+
+func isLikelyEmbeddingModelID(modelID string) bool {
+	id := strings.ToLower(strings.TrimSpace(modelID))
+	if id == "" {
+		return false
+	}
+	keywords := []string{
+		"embed",
+		"embedding",
+		"minilm",
+		"nomic-embed",
+		"mxbai",
+		"bge",
+		"e5",
+		"gte",
+		"jina-emb",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(id, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 // HandleGetProviders returns configured LLM provider aliases with metadata
 func (a *API) HandleGetProviders(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -551,6 +580,7 @@ func (a *API) HandleGetProviders(w http.ResponseWriter, r *http.Request) {
 
 	meta := metadata.Get()
 	var providers []map[string]interface{}
+	purpose := setupPurpose(r)
 
 	// Get sorted alias names
 	aliases := make([]string, 0, len(result.Config.LLM.Providers))
@@ -561,6 +591,12 @@ func (a *API) HandleGetProviders(w http.ResponseWriter, r *http.Request) {
 
 	for _, alias := range aliases {
 		provCfg := result.Config.LLM.Providers[alias]
+		if purpose == "embeddings" && !llm.DriverSupportsEmbeddings(provCfg.Driver) {
+			continue
+		}
+		if purpose != "embeddings" && provCfg.EmbeddingOnly {
+			continue
+		}
 
 		// Resolve to metadata provider ID
 		providerID := meta.ResolveProvider(provCfg.Subtype, provCfg.Driver, provCfg.BaseURL)
@@ -630,6 +666,21 @@ func (a *API) HandleGetModels(w http.ResponseWriter, r *http.Request) {
 
 	meta := metadata.Get()
 	providerID := meta.ResolveProvider(provCfg.Subtype, provCfg.Driver, provCfg.BaseURL)
+	purpose := setupPurpose(r)
+
+	if purpose == "embeddings" && !llm.DriverSupportsEmbeddings(provCfg.Driver) {
+		writeJSON(w, http.StatusOK, APIResponse{
+			Success: true,
+			Data: map[string]interface{}{
+				"alias":        alias,
+				"providerID":   providerID,
+				"providerName": alias,
+				"models":       []map[string]interface{}{},
+				"defaultModel": "",
+			},
+		})
+		return
+	}
 
 	// Get provider name
 	providerName := alias
@@ -637,9 +688,59 @@ func (a *API) HandleGetModels(w http.ResponseWriter, r *http.Request) {
 		providerName = prov.Name
 	}
 
-	// Get available chat models
+	// Metadata currently tracks chat models. For embeddings purpose, prefer live model
+	// listing and avoid exposing chat catalogs as embedding options.
 	modelIDs := meta.GetKnownChatModels(providerID)
+	if purpose == "embeddings" {
+		modelIDs = nil
+	}
 	defaultLarge, _ := meta.GetDefaultModels(providerID)
+
+	if len(modelIDs) == 0 {
+		provider, err := llm.NewProvider(alias, provCfg)
+		if err == nil {
+			if lister, ok := provider.(llm.ModelLister); ok {
+				liveModels, listErr := lister.ListModels(r.Context())
+				if listErr == nil && len(liveModels) > 0 {
+					var models []map[string]interface{}
+					defaultSet := false
+					for _, model := range liveModels {
+						if purpose == "embeddings" && alias != llm.BuiltInHugotProviderAlias && !isLikelyEmbeddingModelID(model.ID) {
+							continue
+						}
+						entry := map[string]interface{}{
+							"id":   model.ID,
+							"name": model.DisplayName,
+						}
+						if entry["name"] == "" {
+							entry["name"] = model.ID
+						}
+						if model.ContextTokens > 0 {
+							entry["contextWindow"] = model.ContextTokens
+						}
+						if !defaultSet {
+							entry["isDefault"] = true
+							defaultLarge = model.ID
+							defaultSet = true
+						}
+						models = append(models, entry)
+					}
+
+					writeJSON(w, http.StatusOK, APIResponse{
+						Success: true,
+						Data: map[string]interface{}{
+							"alias":        alias,
+							"providerID":   providerID,
+							"providerName": providerName,
+							"models":       models,
+							"defaultModel": defaultLarge,
+						},
+					})
+					return
+				}
+			}
+		}
+	}
 
 	var models []map[string]interface{}
 	for _, modelID := range modelIDs {
@@ -712,7 +813,7 @@ func (a *API) HandleGetPresets(w http.ResponseWriter, r *http.Request) {
 			"driver":      prov.Driver,
 			"apiEndpoint": prov.APIEndpoint,
 			"modelCount":  len(prov.Models),
-			"isLocal":     prov.Driver == "ollama" || pid == "lmstudio",
+			"isLocal":     llm.DriverOrEndpointIsLocal(prov.Driver, prov.APIEndpoint),
 		}
 
 		// Get default model for this provider
@@ -727,5 +828,35 @@ func (a *API) HandleGetPresets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, APIResponse{
 		Success: true,
 		Data:    map[string]interface{}{"presets": presets},
+	})
+}
+
+// HandleGetDrivers returns supported runtime LLM drivers from the llm registry.
+func (a *API) HandleGetDrivers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{
+			Success: false,
+			Message: "Method not allowed",
+		})
+		return
+	}
+
+	descriptors := llm.ListDrivers()
+	drivers := make([]map[string]interface{}, 0, len(descriptors))
+	for _, d := range descriptors {
+		label := d.Label
+		if strings.TrimSpace(label) == "" {
+			label = d.ID
+		}
+		drivers = append(drivers, map[string]interface{}{
+			"id":                 d.ID,
+			"label":              label,
+			"supportsEmbeddings": d.SupportsEmbeddings,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data:    map[string]interface{}{"drivers": drivers},
 	})
 }

@@ -206,7 +206,17 @@
         .model-selector-list {
             width: 50%;
             border-right: 1px solid #dee2e6;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .model-selector-items {
+            flex: 1;
+            min-height: 0;
             overflow-y: auto;
+        }
+        .model-selector-manual {
+            background: #f8f9fa;
         }
         .model-selector-details {
             width: 50%;

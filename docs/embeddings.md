@@ -18,6 +18,8 @@ GoClaw uses embeddings for:
 - **Transcript search** — Find past conversation segments
 - **Memory Graph** — Semantic similarity for `recall` and `query` tools
 
+By default, GoClaw includes a built-in local embeddings provider named `hugot-local`. New configs and edited configs automatically keep this provider available, so embeddings can work even if your main chat model is something like Anthropic.
+
 ## Configuration
 
 ### Via LLM Purpose Chain (Recommended)
@@ -28,13 +30,13 @@ Configure embeddings using the `embeddings` purpose in your LLM config:
 {
   "llm": {
     "providers": {
-      "ollama-local": {
-        "driver": "ollama",
-        "url": "http://localhost:11434"
+      "hugot-local": {
+        "driver": "hugot",
+        "embeddingOnly": true
       }
     },
     "embeddings": {
-      "models": ["ollama-local/nomic-embed-text"]
+      "models": ["hugot-local/KnightsAnalytics/all-MiniLM-L6-v2"]
     }
   }
 }
@@ -42,9 +44,31 @@ Configure embeddings using the `embeddings` purpose in your LLM config:
 
 The `models` array is a fallback chain — if the first model fails, the next is tried. See [LLM Providers](llm-providers.md#purpose-chains) for details on purpose chains.
 
-### Via memorySearch (Simple)
+### Built-In Default Behavior
 
-For basic setups, configure embeddings directly in `memorySearch`:
+If `llm.embeddings.models` is empty, GoClaw seeds the default local embeddings model automatically:
+
+```json
+{
+  "llm": {
+    "providers": {
+      "hugot-local": {
+        "driver": "hugot",
+        "embeddingOnly": true
+      }
+    },
+    "embeddings": {
+      "models": ["hugot-local/KnightsAnalytics/all-MiniLM-L6-v2"]
+    }
+  }
+}
+```
+
+The `hugot-local` provider is treated as built-in. If it is missing from config later, GoClaw restores it automatically. If you already configured an embeddings chain, GoClaw leaves that chain unchanged.
+
+### Via `memorySearch` (Legacy)
+
+For older setups, you may still see embeddings configured directly in `memorySearch`:
 
 ```json
 {
@@ -58,14 +82,14 @@ For basic setups, configure embeddings directly in `memorySearch`:
 }
 ```
 
-This automatically creates an embedding provider. Use `llm.embeddings` for more control (multiple models, fallback chains).
+This older path still works, but `llm.embeddings` is the preferred configuration surface.
 
 ## Recommended Models
 
 | Model | Provider | Dimensions | Notes |
 |-------|----------|------------|-------|
-| `nomic-embed-text` | Ollama | 768 | Best quality, recommended |
-| `all-minilm` | Ollama | 384 | Faster, smaller vectors |
+| `KnightsAnalytics/all-MiniLM-L6-v2` | Hugot | 384 | Built-in default, recommended |
+| `nomic-embed-text` | Ollama | 768 | Alternative local option |
 | `text-embedding-3-small` | OpenAI | 1536 | Cloud option |
 
 ## Storage
@@ -94,8 +118,8 @@ Embeddings Status
 Session transcripts: 1,234 chunks
 Memory files: 56 chunks
 
-Model: nomic-embed-text
-Provider: ollama
+Model: KnightsAnalytics/all-MiniLM-L6-v2
+Provider: hugot-local
 ```
 
 ### Rebuild Embeddings
@@ -158,17 +182,21 @@ Adjust weights to favor one approach:
 
 1. Verify embeddings are indexed: `/embeddings`
 2. Lower `minScore` to 0.2
-3. Check embedding model is available: `ollama list`
+3. If using the built-in local provider, run a search once and allow the model to download on first use
 
 ### Slow Search
 
-1. Use smaller model (`all-minilm`)
-2. Increase `minScore` to filter weak matches
-3. Reduce indexed paths
+1. Increase `minScore` to filter weak matches
+2. Reduce indexed paths
+3. If you are using a custom provider, try a smaller embeddings model
 
 ### Model Changed
 
 After changing embedding models, run `/embeddings rebuild` to re-index with the new model.
+
+### First Search Downloads a Model
+
+The built-in `hugot-local` provider downloads its model the first time GoClaw needs to use it. This can make the first semantic search slower than later searches. The downloaded model is cached under `~/.goclaw/hugot/models/`.
 
 ---
 

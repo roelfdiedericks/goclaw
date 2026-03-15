@@ -2,13 +2,7 @@
 (function (window, $) {
     'use strict';
 
-    const PROVIDER_DRIVER_OPTIONS = [
-        { value: 'anthropic', label: 'Anthropic' },
-        { value: 'openai', label: 'OpenAI Compatible' },
-        { value: 'oai-next', label: 'OpenAI (Next)' },
-        { value: 'ollama', label: 'Ollama' },
-        { value: 'xai', label: 'xAI' }
-    ];
+    const PROVIDER_DRIVER_OPTIONS = [];
 
     const THINKING_LEVEL_OPTIONS = [
         { value: '', label: '(default)' },
@@ -248,11 +242,14 @@
             this.mcLoading = {};
             this.mcExpanded = {};
             this.mcProviders = [];
-            this.mcProvidersLoaded = false;
+            this.mcProvidersByPurpose = {};
+            this.mcProvidersLoadedByPurpose = {};
             this.mcModalField = '';
+            this.mcModalPurpose = '';
             this.mcModalStep = 1;
             this.mcSelectedProvider = null;
             this.mcSelectedModel = null;
+            this.mcManualModelID = '';
             this.mcAvailableModels = [];
             this.mcModelSearch = '';
             this.mcDrag = null;
@@ -261,6 +258,8 @@
             this.providerUi = {};
             this.providerPresets = [];
             this.providerPresetsLoaded = false;
+            this.providerDriverOptions = [...PROVIDER_DRIVER_OPTIONS];
+            this.providerDriverOptionsLoaded = false;
 
             this.rolesUi = {};
 
@@ -316,7 +315,10 @@
             this.$errorAlert.find('.btn-close').on('click', () => hideAlert(this.$errorAlert));
             this.$successAlert.find('.btn-close').on('click', () => hideAlert(this.$successAlert));
             this.$formContent.on('input change', '.js-bound-field', (event) => this.handleBoundFieldChange(event));
-            this.$formContent.on('click', '.js-model-chain-add', (event) => this.openModelModal($(event.currentTarget).data('field-path')));
+            this.$formContent.on('click', '.js-model-chain-add', (event) => this.openModelModal(
+                $(event.currentTarget).data('field-path'),
+                $(event.currentTarget).data('purpose') || ''
+            ));
             this.$formContent.on('click', '.js-model-remove', (event) => this.removeModel($(event.currentTarget).data('field-path'), Number($(event.currentTarget).data('index'))));
             this.$formContent.on('click', '.js-model-toggle', (event) => this.toggleModelExpanded($(event.currentTarget).data('model-ref')));
             this.$formContent.on('dragstart', '[data-mc-item]', (event) => this.handleModelDragStart(event));
@@ -347,6 +349,13 @@
             $('#mcModalAdd').on('click', () => this.addSelectedModelToChain());
             $('#mcModelSearch').on('input', (event) => {
                 this.mcModelSearch = $(event.currentTarget).val() || '';
+                this.renderModelModal();
+            });
+            $('#mcManualModelID').on('input', (event) => {
+                this.mcManualModelID = ($(event.currentTarget).val() || '').trim();
+                if (this.mcManualModelID) {
+                    this.mcSelectedModel = null;
+                }
                 this.renderModelModal();
             });
             $('#mcProviderList').on('click', '.js-model-provider-select', (event) => {
@@ -703,17 +712,18 @@
         initModelWidgets() {
             this.$formContent.find('.js-model-chain').each((_, el) => {
                 const fieldPath = $(el).data('field-path');
-                this.ensureModelMetaForField(fieldPath);
+                const purpose = $(el).data('purpose') || '';
+                this.ensureModelMetaForField(fieldPath, purpose);
                 this.renderModelChain(fieldPath);
             });
         }
 
-        ensureModelMetaForField(fieldPath) {
+        ensureModelMetaForField(fieldPath, purpose) {
             const models = getByPath(this.formData, fieldPath) || [];
-            models.forEach(modelRef => this.loadModelMeta(modelRef));
+            models.forEach(modelRef => this.loadModelMeta(modelRef, purpose));
         }
 
-        async loadModelMeta(modelRef) {
+        async loadModelMeta(modelRef, purpose = '') {
             if (this.mcMeta[modelRef] || this.mcLoading[modelRef]) return;
             const parts = String(modelRef).split('/');
             if (parts.length < 2) return;
@@ -721,7 +731,8 @@
             const modelID = parts.slice(1).join('/');
             this.mcLoading[modelRef] = true;
             try {
-                const resp = await fetch(`/setup/api/models/${encodeURIComponent(alias)}`);
+                const query = purpose ? `?purpose=${encodeURIComponent(purpose)}` : '';
+                const resp = await fetch(`/setup/api/models/${encodeURIComponent(alias)}${query}`);
                 const data = await resp.json();
                 if (data.success && Array.isArray(data.data.models)) {
                     const model = data.data.models.find(item => item.id === modelID);
@@ -749,22 +760,37 @@
             models.forEach((modelRef, index) => {
                 const meta = this.mcMeta[modelRef];
                 const expanded = !!this.mcExpanded[modelRef];
+                const isHugotEmbeddings = modelRef.startsWith('hugot-local/');
                 html += `<li class="model-chain-item" draggable="true" data-mc-item="1" data-field-path="${escapeHtml(fieldPath)}" data-index="${index}">`;
                 html += `<div class="model-chain-drag-handle"><i class="bi bi-grip-vertical"></i></div>`;
                 html += `<div class="model-chain-content">`;
                 html += `<div class="model-chain-header"><span class="model-chain-ref">${escapeHtml(modelRef)}</span>${index === 0 ? '<span class="badge bg-primary">Primary</span>' : ''}</div>`;
                 if (meta) {
-                    html += `<div class="model-chain-meta"><span class="model-chain-name">${escapeHtml(meta.name || meta.id || modelRef)}</span> <span>${escapeHtml(this.formatContext(meta.contextWindow))}</span> <span>${escapeHtml(this.formatCost(meta.cost))}</span></div>`;
-                    html += `<div class="model-chain-caps">`;
-                    html += this.renderCapabilityBadge(meta, 'vision', 'Vision');
-                    html += this.renderCapabilityBadge(meta, 'toolUse', 'Tools');
-                    html += this.renderCapabilityBadge(meta, 'reasoning', 'Reasoning');
-                    html += `</div>`;
+                    if (isHugotEmbeddings) {
+                        html += `<div class="model-chain-meta"><span class="model-chain-name">${escapeHtml(meta.name || meta.id || modelRef)}</span> <span>Embeddings-only</span> <span>${escapeHtml(this.formatLocalModelState(meta))}</span></div>`;
+                        html += `<div class="model-chain-caps">`;
+                        html += `<span class="model-chain-cap model-chain-cap-ok"><i class="bi bi-check"></i> Recommended</span>`;
+                        html += `<span class="model-chain-cap model-chain-cap-ok"><i class="bi bi-cpu"></i> Local</span>`;
+                        html += `</div>`;
+                    } else {
+                        html += `<div class="model-chain-meta"><span class="model-chain-name">${escapeHtml(meta.name || meta.id || modelRef)}</span> <span>${escapeHtml(this.formatContext(meta.contextWindow))}</span> <span>${escapeHtml(this.formatCost(meta.cost))}</span></div>`;
+                        html += `<div class="model-chain-caps">`;
+                        html += this.renderCapabilityBadge(meta, 'vision', 'Vision');
+                        html += this.renderCapabilityBadge(meta, 'toolUse', 'Tools');
+                        html += this.renderCapabilityBadge(meta, 'reasoning', 'Reasoning');
+                        html += `</div>`;
+                    }
                     html += `<div class="model-chain-details${expanded ? '' : ' d-none'}">`;
                     html += `<dl class="row mb-0 small">`;
-                    html += `<dt class="col-4">Context</dt><dd class="col-8">${escapeHtml(((meta.contextWindow || 0).toLocaleString()) + ' tokens')}</dd>`;
-                    html += `<dt class="col-4">Max Output</dt><dd class="col-8">${escapeHtml(((meta.maxOutputTokens || 0).toLocaleString()) + ' tokens')}</dd>`;
-                    html += `<dt class="col-4">Cost (1M)</dt><dd class="col-8">$${escapeHtml(meta.cost && meta.cost.input ? meta.cost.input.toFixed(2) : '?')} / $${escapeHtml(meta.cost && meta.cost.output ? meta.cost.output.toFixed(2) : '?')}</dd>`;
+                    if (isHugotEmbeddings) {
+                        html += `<dt class="col-4">Type</dt><dd class="col-8">Local embeddings model</dd>`;
+                        html += `<dt class="col-4">Download</dt><dd class="col-8">${escapeHtml(this.formatLocalModelState(meta))}</dd>`;
+                        html += `<dt class="col-4">Use Case</dt><dd class="col-8">Semantic search for memory, transcripts, and Memory Graph</dd>`;
+                    } else {
+                        html += `<dt class="col-4">Context</dt><dd class="col-8">${escapeHtml(((meta.contextWindow || 0).toLocaleString()) + ' tokens')}</dd>`;
+                        html += `<dt class="col-4">Max Output</dt><dd class="col-8">${escapeHtml(((meta.maxOutputTokens || 0).toLocaleString()) + ' tokens')}</dd>`;
+                        html += `<dt class="col-4">Cost (1M)</dt><dd class="col-8">$${escapeHtml(meta.cost && meta.cost.input ? meta.cost.input.toFixed(2) : '?')} / $${escapeHtml(meta.cost && meta.cost.output ? meta.cost.output.toFixed(2) : '?')}</dd>`;
+                    }
                     html += `</dl></div>`;
                 } else if (this.mcLoading[modelRef]) {
                     html += `<div class="model-chain-meta text-muted"><i class="bi bi-hourglass-split"></i> Loading...</div>`;
@@ -776,13 +802,19 @@
                 html += `</div></li>`;
             });
             html += `</ul>`;
-            html += `<div class="model-chain-add js-model-chain-add" data-field-path="${escapeHtml(fieldPath)}"><i class="bi bi-plus-lg me-2"></i> Add Fallback Model</div>`;
+            const purpose = $widget.data('purpose') || '';
+            html += `<div class="model-chain-add js-model-chain-add" data-field-path="${escapeHtml(fieldPath)}" data-purpose="${escapeHtml(purpose)}"><i class="bi bi-plus-lg me-2"></i> Add Fallback Model</div>`;
             $widget.html(html);
         }
 
         renderCapabilityBadge(meta, capabilityKey, label) {
             const enabled = !!(meta.capabilities && meta.capabilities[capabilityKey]);
             return `<span class="model-chain-cap ${enabled ? 'model-chain-cap-ok' : 'model-chain-cap-warn'}"><i class="bi ${enabled ? 'bi-check' : 'bi-x'}"></i> ${escapeHtml(label)}</span>`;
+        }
+
+        formatLocalModelState(meta) {
+            const name = (meta && meta.name) || '';
+            return /\bcached\b/i.test(name) ? 'Cached locally' : 'Downloads on first use';
         }
 
         formatContext(ctx) {
@@ -865,44 +897,55 @@
             this.$formContent.find('.mc-drag-over').removeClass('mc-drag-over');
         }
 
-        async ensureProvidersLoaded() {
-            if (this.mcProvidersLoaded) return;
+        async ensureProvidersLoaded(purpose = '') {
+            const key = String(purpose || '').toLowerCase();
+            if (this.mcProvidersLoadedByPurpose[key]) {
+                this.mcProviders = this.mcProvidersByPurpose[key] || [];
+                return;
+            }
             try {
-                const resp = await fetch('/setup/api/providers');
+                const query = key ? `?purpose=${encodeURIComponent(key)}` : '';
+                const resp = await fetch(`/setup/api/providers${query}`);
                 const data = await resp.json();
                 if (data.success) {
-                    this.mcProviders = data.data.providers || [];
-                    this.mcProvidersLoaded = true;
+                    const providers = data.data.providers || [];
+                    this.mcProvidersByPurpose[key] = providers;
+                    this.mcProvidersLoadedByPurpose[key] = true;
+                    this.mcProviders = providers;
                 }
             } catch (_err) {
                 this.mcProviders = [];
             }
         }
 
-        async openModelModal(fieldPath) {
+        async openModelModal(fieldPath, purpose = '') {
             this.mcModalField = fieldPath;
+            this.mcModalPurpose = String(purpose || '').toLowerCase();
             this.mcModalStep = 1;
             this.mcSelectedProvider = null;
             this.mcSelectedModel = null;
+            this.mcManualModelID = '';
             this.mcAvailableModels = [];
             this.mcModelSearch = '';
             $('#mcModelSearch').val('');
-            await this.ensureProvidersLoaded();
+            $('#mcManualModelID').val('');
+            await this.ensureProvidersLoaded(this.mcModalPurpose);
             this.renderModelModal();
             this.mcModal.show();
         }
 
         renderModelModal() {
+            const hasManualModel = !!this.mcManualModelID;
             $('#mcModalTitle').text(this.mcModalStep === 1 ? 'Select Provider' : 'Select Model');
             $('#mcModalStepProviders').toggleClass('d-none', this.mcModalStep !== 1);
             $('#mcModalStepModels').toggleClass('d-none', this.mcModalStep !== 2);
             $('#mcModalBack').toggleClass('d-none', this.mcModalStep !== 2);
-            $('#mcModalAdd').toggleClass('d-none', this.mcModalStep !== 2).prop('disabled', !this.mcSelectedModel);
+            $('#mcModalAdd').toggleClass('d-none', this.mcModalStep !== 2).prop('disabled', !this.mcSelectedModel && !hasManualModel);
 
             if (this.mcModalStep === 1) {
                 const items = this.mcProviders.map(provider => (
                     `<button type="button" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center js-model-provider-select" data-provider-alias="${escapeHtml(provider.alias)}">` +
-                    `<div><div class="fw-bold">${escapeHtml(provider.name || provider.alias)}</div><small class="text-muted">${escapeHtml(provider.driver + (provider.modelCount ? ' · ' + provider.modelCount + ' models' : ''))}</small></div>` +
+                    `<div><div class="fw-bold">${escapeHtml(provider.alias)}</div><small class="text-muted">${escapeHtml((provider.name || provider.alias) + ' · ' + provider.driver + (provider.modelCount ? ' · ' + provider.modelCount + ' models' : ''))}</small></div>` +
                     `<i class="bi bi-chevron-right"></i></button>`
                 )).join('');
                 $('#mcProviderList').html(items);
@@ -931,7 +974,33 @@
 
         renderModelDetails(model) {
             if (!model) {
+                if (this.mcManualModelID) {
+                    return `<div>
+                        <h6 class="mb-3">${escapeHtml(this.mcManualModelID)}</h6>
+                        <div class="alert alert-info py-2 px-3 mb-0 small">
+                            Manual model ID mode. GoClaw will save this model reference exactly as entered.
+                        </div>
+                    </div>`;
+                }
                 return '<div class="text-center text-muted py-5">Select a model to see details</div>';
+            }
+            const isHugotEmbeddings = !!(this.mcSelectedProvider && this.mcSelectedProvider.alias === 'hugot-local');
+            if (isHugotEmbeddings) {
+                return `<div>
+                    <h6 class="mb-3">${escapeHtml(model.name || model.id)}</h6>
+                    <dl class="row small">
+                        <dt class="col-5">Type</dt><dd class="col-7">Local embeddings model</dd>
+                        <dt class="col-5">Provider</dt><dd class="col-7">Hugot</dd>
+                        <dt class="col-5">Download</dt><dd class="col-7">${escapeHtml(this.formatLocalModelState(model))}</dd>
+                    </dl>
+                    <h6 class="mt-3 mb-2">Use Case</h6>
+                    <div class="d-flex flex-wrap gap-1">
+                        <span class="badge bg-success"><i class="bi bi-check"></i> Embeddings-only</span>
+                        <span class="badge bg-success"><i class="bi bi-check"></i> Recommended</span>
+                        <span class="badge bg-secondary"><i class="bi bi-cpu"></i> Local</span>
+                    </div>
+                    <div class="mt-3"><small class="text-muted">Used for semantic search in memory, transcripts, and Memory Graph.</small></div>
+                </div>`;
             }
             return `<div>
                 <h6 class="mb-3">${escapeHtml(model.name || model.id)}</h6>
@@ -959,6 +1028,8 @@
         showModelProviderStep() {
             this.mcModalStep = 1;
             this.mcSelectedModel = null;
+            this.mcManualModelID = '';
+            $('#mcManualModelID').val('');
             this.renderModelModal();
         }
 
@@ -967,6 +1038,8 @@
             if (!provider) return;
             this.mcSelectedProvider = provider;
             this.mcSelectedModel = null;
+            this.mcManualModelID = '';
+            $('#mcManualModelID').val('');
             this.mcModalStep = 2;
             $('#mcModelLoading').removeClass('d-none');
             $('#mcModelEmpty').addClass('d-none');
@@ -975,7 +1048,8 @@
             this.renderModelModal();
 
             try {
-                const resp = await fetch(`/setup/api/models/${encodeURIComponent(alias)}`);
+                const query = this.mcModalPurpose ? `?purpose=${encodeURIComponent(this.mcModalPurpose)}` : '';
+                const resp = await fetch(`/setup/api/models/${encodeURIComponent(alias)}${query}`);
                 const data = await resp.json();
                 if (data.success) {
                     this.mcAvailableModels = data.data.models || [];
@@ -991,12 +1065,19 @@
 
         selectModelByID(modelID) {
             this.mcSelectedModel = this.mcAvailableModels.find(item => item.id === modelID) || null;
+            this.mcManualModelID = '';
+            $('#mcManualModelID').val('');
             this.renderModelModal();
         }
 
         addSelectedModelToChain() {
-            if (!this.mcSelectedProvider || !this.mcSelectedModel || !this.mcModalField) return;
-            const modelRef = `${this.mcSelectedProvider.alias}/${this.mcSelectedModel.id}`;
+            if (!this.mcSelectedProvider || !this.mcModalField) return;
+            const manualModelID = (this.mcManualModelID || '').trim();
+            const selectedModelID = this.mcSelectedModel ? this.mcSelectedModel.id : '';
+            const modelID = manualModelID || selectedModelID;
+            if (!modelID) return;
+
+            const modelRef = `${this.mcSelectedProvider.alias}/${modelID}`;
             const models = [...(getByPath(this.formData, this.mcModalField) || [])];
             if (models.includes(modelRef)) {
                 window.alert('This model is already in the chain.');
@@ -1004,7 +1085,9 @@
             }
             models.push(modelRef);
             setByPath(this.formData, this.mcModalField, models);
-            this.mcMeta[modelRef] = this.mcSelectedModel;
+            if (this.mcSelectedModel && this.mcSelectedModel.id === modelID) {
+                this.mcMeta[modelRef] = this.mcSelectedModel;
+            }
             this.markCurrentSectionDirty();
             this.renderModelChain(this.mcModalField);
             this.mcModal.hide();
@@ -1039,8 +1122,29 @@
             }
         }
 
+        async ensureProviderDriverOptions() {
+            if (this.providerDriverOptionsLoaded) return;
+            try {
+                const resp = await fetch('/setup/api/drivers');
+                const data = await resp.json();
+                if (data.success && data.data && Array.isArray(data.data.drivers)) {
+                    this.providerDriverOptions = data.data.drivers.map(item => ({
+                        value: item.id,
+                        label: item.label || item.id
+                    }));
+                }
+                this.providerDriverOptionsLoaded = true;
+            } catch (_err) {
+                this.providerDriverOptions = [...PROVIDER_DRIVER_OPTIONS];
+                this.providerDriverOptionsLoaded = true;
+            }
+        }
+
         renderProviderLists() {
-            this.ensureProviderPresets().then(() => {
+            Promise.all([
+                this.ensureProviderPresets(),
+                this.ensureProviderDriverOptions()
+            ]).then(() => {
                 this.$formContent.find('.js-provider-list').each((_, el) => {
                     this.renderProviderList($(el).data('field-path'));
                 });
@@ -1059,7 +1163,7 @@
                 const cfg = providers[alias] || {};
                 const expanded = !!ui.expanded[alias];
                 const showKey = !!ui.showKey[alias];
-                const baseURL = cfg.baseURL || cfg.url || '';
+                const baseURL = cfg.baseURL || '';
                 html += `<div class="provider-item${expanded ? ' provider-item-expanded' : ''}">`;
                 html += `<div class="provider-header"><div class="provider-info"><span class="provider-alias">${escapeHtml(alias)}</span>`;
                 html += `<span class="provider-meta"><span>${escapeHtml(this.providerPresetName(cfg))}</span><span class="provider-key">${escapeHtml(this.maskApiKey(cfg.apiKey))}</span>${cfg.promptCaching ? '<span class="badge bg-info">Cache</span>' : ''}</span></div>`;
@@ -1068,7 +1172,7 @@
                 if (expanded) {
                     html += `<div class="provider-form"><div class="row g-3">`;
                     html += `<div class="col-md-6"><label class="form-label">Alias</label><input type="text" class="form-control form-control-sm" value="${escapeHtml(alias)}" disabled></div>`;
-                    html += `<div class="col-md-6"><label class="form-label">Driver</label><select class="form-select form-select-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="driver">${this.renderOptions(PROVIDER_DRIVER_OPTIONS, cfg.driver || '')}</select></div>`;
+                    html += `<div class="col-md-6"><label class="form-label">Driver</label><select class="form-select form-select-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="driver">${this.renderOptions(this.providerDriverOptions, cfg.driver || '')}</select></div>`;
                     html += `<div class="col-12"><label class="form-label">API Key</label><div class="input-group input-group-sm"><input type="${showKey ? 'text' : 'password'}" class="form-control js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="apiKey" value="${escapeHtml(cfg.apiKey || '')}" placeholder="Enter API key"><button type="button" class="btn btn-outline-secondary js-provider-toggle-key" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}"><i class="bi ${showKey ? 'bi-eye-slash' : 'bi-eye'}"></i></button></div></div>`;
                     html += `<div class="col-12"><label class="form-label">Base URL (optional)</label><input type="text" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="baseURL" value="${escapeHtml(baseURL)}" placeholder="Leave empty for default"></div>`;
                     html += `<div class="col-md-6"><div class="form-check form-switch"><input class="form-check-input js-provider-input" type="checkbox" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="promptCaching"${cfg.promptCaching ? ' checked' : ''}><label class="form-check-label">Prompt Caching</label></div></div>`;
@@ -1097,11 +1201,11 @@
                 if (preset) {
                     const cfg = ui.newConfig || {};
                     html += `<div class="p-3"><div class="mb-3"><label class="form-label">Alias *</label><input type="text" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-provider-field="newAlias" value="${escapeHtml(ui.newAlias)}" placeholder="e.g., anthropic"><div class="form-text">A unique name to identify this provider</div></div>`;
-                    html += `<div class="mb-3"><label class="form-label">API Key *</label><input type="password" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-provider-field="newApiKey" value="${escapeHtml(cfg.apiKey || '')}" placeholder="Enter API key"></div>`;
+                    html += `<div class="mb-3"><label class="form-label">API Key (optional)</label><input type="password" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-provider-field="newApiKey" value="${escapeHtml(cfg.apiKey || '')}" placeholder="Leave empty if not required"></div>`;
                     if (preset.driver === 'anthropic') {
                         html += `<div class="mb-3"><div class="form-check form-switch"><input class="form-check-input js-provider-input" type="checkbox" data-field-path="${escapeHtml(fieldPath)}" data-provider-field="newPromptCaching"${cfg.promptCaching ? ' checked' : ''}><label class="form-check-label">Enable Prompt Caching</label></div></div>`;
                     }
-                    html += `<button type="button" class="btn btn-primary btn-sm js-provider-save-new" data-field-path="${escapeHtml(fieldPath)}"${!ui.newAlias || !cfg.apiKey ? ' disabled' : ''}><i class="bi bi-plus-lg me-1"></i> Add Provider</button></div>`;
+                    html += `<button type="button" class="btn btn-primary btn-sm js-provider-save-new" data-field-path="${escapeHtml(fieldPath)}"${!ui.newAlias ? ' disabled' : ''}><i class="bi bi-plus-lg me-1"></i> Add Provider</button></div>`;
                 } else {
                     html += `<div class="p-4 text-center text-muted">Select a provider preset from the list</div>`;
                 }
@@ -1178,8 +1282,7 @@
                 driver: preset.driver,
                 subtype: preset.id,
                 apiKey: '',
-                baseURL: preset.driver === 'ollama' ? '' : (preset.apiEndpoint || ''),
-                url: preset.driver === 'ollama' ? (preset.apiEndpoint || '') : '',
+                baseURL: preset.apiEndpoint || '',
                 promptCaching: preset.driver === 'anthropic'
             };
             this.renderProviderList(fieldPath);
@@ -1216,23 +1319,16 @@
                 value = value === '' ? 0 : Number(value);
             }
             if (providerField === 'baseURL') {
-                if (providers[alias].driver === 'ollama') {
-                    providers[alias].url = value;
-                } else {
-                    providers[alias].baseURL = value;
-                }
+                providers[alias].baseURL = value;
             } else if (providerField === 'driver') {
                 providers[alias].driver = value;
-                if (value === 'ollama') {
-                    providers[alias].url = providers[alias].url || providers[alias].baseURL || '';
-                    delete providers[alias].baseURL;
-                }
             } else {
                 providers[alias][providerField] = value;
             }
             setByPath(this.formData, fieldPath, providers);
             this.markCurrentSectionDirty();
-            this.mcProvidersLoaded = false;
+            this.mcProvidersByPurpose = {};
+            this.mcProvidersLoadedByPurpose = {};
             this.renderProviderList(fieldPath);
         }
 
@@ -1248,16 +1344,13 @@
             }
 
             const cfg = deepClone(ui.newConfig || {});
-            if (cfg.driver === 'ollama') {
-                cfg.url = cfg.url || cfg.baseURL || '';
-                delete cfg.baseURL;
-            }
 
             providers[ui.newAlias] = cfg;
             setByPath(this.formData, fieldPath, providers);
             ui.expanded[ui.newAlias] = true;
             this.markCurrentSectionDirty();
-            this.mcProvidersLoaded = false;
+            this.mcProvidersByPurpose = {};
+            this.mcProvidersLoadedByPurpose = {};
             this.cancelAddProvider(fieldPath);
         }
 
@@ -1267,7 +1360,8 @@
             delete providers[alias];
             setByPath(this.formData, fieldPath, providers);
             this.markCurrentSectionDirty();
-            this.mcProvidersLoaded = false;
+            this.mcProvidersByPurpose = {};
+            this.mcProvidersLoadedByPurpose = {};
             this.renderProviderList(fieldPath);
         }
 

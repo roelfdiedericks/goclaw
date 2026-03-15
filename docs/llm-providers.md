@@ -1,6 +1,6 @@
 ---
 title: "LLM Providers"
-description: "Configure AI model providers: Anthropic, OpenAI, Ollama, and xAI"
+description: "Configure AI model providers: Anthropic, OpenAI, Ollama, xAI, and built-in Hugot embeddings"
 section: "LLM Providers"
 weight: 1
 landing: true
@@ -18,6 +18,7 @@ GoClaw supports multiple LLM providers through a unified registry system. This e
 | [OpenAI](providers/openai.md) | Cloud/Local | GPT models, OpenAI-compatible APIs (LM Studio, LocalAI) |
 | [Ollama](providers/ollama.md) | Local | Local inference, embeddings, summarization |
 | [xAI](providers/xai.md) | Cloud | Grok models, stateful conversations, server-side tools |
+| Hugot | Local | Built-in embeddings-only provider for semantic search |
 
 ## Quick Setup
 
@@ -42,6 +43,8 @@ For basic usage with Anthropic:
 }
 ```
 
+If you leave the embeddings chain empty, GoClaw automatically restores the built-in `hugot-local` provider and seeds the default local embeddings model.
+
 ### Multi-Provider Setup
 
 For advanced setups with multiple providers and purpose-specific chains:
@@ -51,17 +54,16 @@ For advanced setups with multiple providers and purpose-specific chains:
   "llm": {
     "providers": {
       "claude": {
-        "type": "anthropic",
+        "driver": "anthropic",
         "apiKey": "sk-ant-...",
         "promptCaching": true
       },
       "ollama-qwen": {
-        "type": "ollama",
+        "driver": "ollama",
         "url": "http://localhost:11434"
       },
-      "ollama-embed": {
-        "type": "ollama",
-        "url": "http://localhost:11434",
+      "hugot-local": {
+        "driver": "hugot",
         "embeddingOnly": true
       }
     },
@@ -72,7 +74,7 @@ For advanced setups with multiple providers and purpose-specific chains:
       "models": ["ollama-qwen/qwen2.5:7b", "claude/claude-3-haiku-20240307"]
     },
     "embeddings": {
-      "models": ["ollama-embed/nomic-embed-text"]
+      "models": ["hugot-local/KnightsAnalytics/all-MiniLM-L6-v2"]
     }
   }
 }
@@ -185,7 +187,7 @@ All providers support:
 
 ```json
 {
-  "type": "anthropic",         // Required: provider type
+  "driver": "anthropic",       // Required: provider driver
   "apiKey": "...",             // API key (or env var)
   "maxTokens": 8192,           // Output limit override
   "contextTokens": 200000,     // Context window override
@@ -200,7 +202,7 @@ All providers support:
 **Anthropic:**
 ```json
 {
-  "type": "anthropic",
+  "driver": "anthropic",
   "promptCaching": true        // Enable prompt caching (reduces cost)
 }
 ```
@@ -208,7 +210,7 @@ All providers support:
 **OpenAI:**
 ```json
 {
-  "type": "openai",
+  "driver": "openai",
   "baseURL": "https://api.openai.com/v1"  // Or compatible endpoint
 }
 ```
@@ -216,11 +218,21 @@ All providers support:
 **Ollama:**
 ```json
 {
-  "type": "ollama",
+  "driver": "ollama",
   "url": "http://localhost:11434",
   "embeddingOnly": true        // Skip chat availability check
 }
 ```
+
+**Hugot (embeddings only):**
+```json
+{
+  "driver": "hugot",
+  "embeddingOnly": true
+}
+```
+
+Hugot is the built-in local embeddings provider. It is intended for the `embeddings` purpose, not for `agent` or `summarization`.
 
 **xAI:**
 ```json
@@ -242,6 +254,7 @@ claude/claude-sonnet-4-20250514
 ollama-qwen/qwen2.5:7b
 openai/gpt-4o
 xai/grok-3
+hugot-local/KnightsAnalytics/all-MiniLM-L6-v2
 ```
 
 The provider name is the key from your `providers` config, not the provider type.

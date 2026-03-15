@@ -21,6 +21,18 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
+func init() {
+	RegisterDriver(DriverDescriptor{
+		ID:                 "anthropic",
+		Label:              "Anthropic",
+		Order:              10,
+		SupportsEmbeddings: false,
+		New: func(name string, cfg LLMProviderConfig) (Provider, error) {
+			return NewAnthropicProvider(name, cfg)
+		},
+	})
+}
+
 // thinkingUnsupportedModels caches models that don't support extended thinking.
 // This is populated when a thinking request fails with an unsupported error.
 var thinkingUnsupportedModels sync.Map // map[modelName]bool

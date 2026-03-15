@@ -87,7 +87,7 @@ func TestValidateSectionPayloadProviderListAndRolesAndModelChain(t *testing.T) {
 		"providers": map[string]interface{}{
 			"ollama_local": map[string]interface{}{
 				"driver": "ollama",
-				"url":    "http://127.0.0.1:11434",
+				"baseURL": "http://127.0.0.1:11434",
 			},
 			"anthropic": map[string]interface{}{
 				"driver":        "anthropic",

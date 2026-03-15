@@ -253,6 +253,7 @@ func Load() (*LoadResult, error) {
 
 	// Apply runtime defaults that cannot be struct tags (paths, slices, maps)
 	applyRuntimeDefaults(cfg, goclawDir, home)
+	llm.EnsureBuiltInEmbeddingProvider(&cfg.LLM)
 	if err := normalizeTildePaths(cfg); err != nil {
 		return nil, fmt.Errorf("normalize config paths: %w", err)
 	}
@@ -312,6 +313,7 @@ func LoadFromPath(path string) (*LoadResult, error) {
 	}
 
 	applyRuntimeDefaults(cfg, goclawDir, home)
+	llm.EnsureBuiltInEmbeddingProvider(&cfg.LLM)
 	if err := normalizeTildePaths(cfg); err != nil {
 		return nil, fmt.Errorf("normalize config paths: %w", err)
 	}
@@ -334,6 +336,7 @@ func LoadDefaults() (*LoadResult, error) {
 		return nil, fmt.Errorf("failed to set config defaults: %w", err)
 	}
 	applyRuntimeDefaults(cfg, goclawDir, home)
+	llm.EnsureBuiltInEmbeddingProvider(&cfg.LLM)
 	if err := normalizeTildePaths(cfg); err != nil {
 		return nil, fmt.Errorf("normalize config paths: %w", err)
 	}
@@ -408,6 +411,7 @@ func LoadRuntime() (*LoadResult, error) {
 	logging.L_debug("config: loaded from goclaw.json (runtime)", "path", goclawPath)
 
 	applyRuntimeDefaults(cfg, goclawDir, home)
+	llm.EnsureBuiltInEmbeddingProvider(&cfg.LLM)
 	if err := normalizeTildePaths(cfg); err != nil {
 		return nil, fmt.Errorf("normalize config paths: %w", err)
 	}
@@ -649,8 +653,9 @@ type DefaultConfigTemplate struct {
 }
 
 type DefaultLLMTemplate struct {
-	Providers map[string]llm.LLMProviderConfig `json:"providers"`
-	Agent     llm.LLMPurposeConfig             `json:"agent"`
+	Providers  map[string]llm.LLMProviderConfig `json:"providers"`
+	Agent      llm.LLMPurposeConfig             `json:"agent"`
+	Embeddings llm.LLMPurposeConfig             `json:"embeddings,omitempty"`
 }
 
 type DefaultGatewayTemplate struct {
@@ -677,9 +682,17 @@ func DefaultConfig() *DefaultConfigTemplate {
 					APIKey:        "YOUR_ANTHROPIC_API_KEY",
 					PromptCaching: true,
 				},
+				llm.BuiltInHugotProviderAlias: {
+					Driver:        "hugot",
+					EmbeddingOnly: true,
+					Subtype:       "hugot",
+				},
 			},
 			Agent: llm.LLMPurposeConfig{
 				Models: []string{"anthropic/claude-sonnet-4-20250514"},
+			},
+			Embeddings: llm.LLMPurposeConfig{
+				Models: []string{llm.BuiltInHugotProviderAlias + "/" + llm.DefaultHugotEmbeddingModel},
 			},
 		},
 		Gateway: DefaultGatewayTemplate{

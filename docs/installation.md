@@ -255,10 +255,12 @@ GoClaw is a single static binary. These are optional but enhance functionality:
 | Sandboxed exec | Bubblewrap | `sudo apt install bubblewrap` |
 | Audio processing | FFmpeg | `sudo apt install ffmpeg` |
 | Browser automation | Chromium | Auto-downloaded on first use |
-| Local embeddings | Ollama | [ollama.ai](https://ollama.ai) |
+| Local embeddings (alternative) | Ollama | [ollama.ai](https://ollama.ai) |
 | Local LLM | LM Studio | [lmstudio.ai](https://lmstudio.ai) |
 
 **Note:** The `.deb` package and Docker image include `bubblewrap` and `ffmpeg` automatically.
+
+GoClaw includes a built-in local embeddings provider (`hugot-local`) for semantic search. Ollama is optional if you want to use it as an alternative embeddings backend.
 
 ---
 

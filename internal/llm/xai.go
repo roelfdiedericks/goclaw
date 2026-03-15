@@ -19,6 +19,18 @@ import (
 	"github.com/roelfdiedericks/xai-go"
 )
 
+func init() {
+	RegisterDriver(DriverDescriptor{
+		ID:                 "xai",
+		Label:              "xAI",
+		Order:              60,
+		SupportsEmbeddings: true,
+		New: func(name string, cfg LLMProviderConfig) (Provider, error) {
+			return NewXAIProvider(name, cfg)
+		},
+	})
+}
+
 // safeInt32 converts int to int32 with bounds checking to prevent overflow.
 func safeInt32(n int) int32 {
 	if n > math.MaxInt32 {

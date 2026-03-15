@@ -142,12 +142,21 @@
                         <div class="p-2 border-bottom">
                             <input type="text" class="form-control form-control-sm" id="mcModelSearch" placeholder="Search models...">
                         </div>
-                        <div id="mcModelList"></div>
-                        <div id="mcModelEmpty" class="p-3 text-center text-muted d-none">
-                            No models available for this provider.
+                        <div class="model-selector-items">
+                            <div id="mcModelList"></div>
+                            <div id="mcModelEmpty" class="p-3 text-center text-muted d-none">
+                                No discovered models available for this provider.
+                            </div>
+                            <div id="mcModelLoading" class="p-3 text-center text-muted d-none">
+                                <i class="bi bi-hourglass-split"></i> Loading models...
+                            </div>
                         </div>
-                        <div id="mcModelLoading" class="p-3 text-center text-muted d-none">
-                            <i class="bi bi-hourglass-split"></i> Loading models...
+                        <div class="model-selector-manual p-2 border-top">
+                            <label for="mcManualModelID" class="form-label form-label-sm mb-1">Manual model ID</label>
+                            <input type="text" class="form-control form-control-sm" id="mcManualModelID" placeholder="e.g. llama3.1:8b, nomic-embed-text">
+                            <div class="form-text">
+                                Enter the exact model ID you want to use for this provider (for example with custom/local providers like Ollama).
+                            </div>
                         </div>
                     </div>
                     <div class="model-selector-details" id="mcModelDetails">

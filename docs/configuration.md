@@ -226,13 +226,20 @@ GoClaw is configured via `goclaw.json` in the working directory.
   "llm": {
     "providers": {
       "anthropic": {
-        "type": "anthropic",
+        "driver": "anthropic",
         "apiKey": "sk-ant-...",
         "promptCaching": true
+      },
+      "hugot-local": {
+        "driver": "hugot",
+        "embeddingOnly": true
       }
     },
     "agent": {
       "models": ["anthropic/claude-sonnet-4-20250514"]
+    },
+    "embeddings": {
+      "models": ["hugot-local/KnightsAnalytics/all-MiniLM-L6-v2"]
     }
   }
 }
@@ -244,6 +251,8 @@ GoClaw is configured via `goclaw.json` in the working directory.
 | `agent` | object | Model chain for main conversation |
 | `summarization` | object | Model chain for compaction/checkpoints |
 | `embeddings` | object | Model chain for semantic search |
+
+GoClaw keeps a built-in local embeddings provider named `hugot-local` in `llm.providers`. If `llm.embeddings.models` is empty, GoClaw seeds the default local embeddings model automatically. If you already configured an embeddings chain, GoClaw leaves it unchanged.
 
 See [LLM Providers](llm-providers.md) for full configuration details.
 

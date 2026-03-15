@@ -2,6 +2,7 @@
 package setup
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -160,13 +161,11 @@ func (e *LLMEditor) buildProviderPreview(name string, cfg llm.LLMProviderConfig)
 		lines = append(lines, fmt.Sprintf("[yellow]Subtype:[white] %s", cfg.Subtype))
 	}
 
-	// URL/BaseURL
-	if cfg.URL != "" {
-		lines = append(lines, fmt.Sprintf("[yellow]URL:[white] %s", cfg.URL))
-	} else if cfg.BaseURL != "" {
+	// Base URL
+	if cfg.BaseURL != "" {
 		lines = append(lines, fmt.Sprintf("[yellow]Base URL:[white] %s", cfg.BaseURL))
 	} else {
-		lines = append(lines, "[yellow]URL:[white] (default)")
+		lines = append(lines, "[yellow]Base URL:[white] (default)")
 	}
 
 	lines = append(lines, "")
@@ -390,19 +389,22 @@ func (e *LLMEditor) selectProviderType(cfg *llm.LLMProviderConfig) {
 			Label: prov.Name,
 			OnSelect: func() {
 				cfg.Subtype = providerID
-				if prov.Driver == "ollama" {
-					cfg.Driver = "ollama"
-					cfg.URL = prov.APIEndpoint
-				} else {
-					cfg.Driver = prov.Driver
-					cfg.BaseURL = prov.APIEndpoint
-				}
+				cfg.Driver = prov.Driver
+				cfg.BaseURL = prov.APIEndpoint
 				e.promptProviderName(cfg)
 			},
 		})
 	}
 
 	items = append(items, forms.MenuItem{IsSeparator: true})
+	items = append(items, forms.MenuItem{
+		Label: "Hugot (Local Embeddings)",
+		OnSelect: func() {
+			cfg.Driver = "hugot"
+			cfg.Subtype = "hugot"
+			e.promptProviderName(cfg)
+		},
+	})
 	items = append(items, forms.MenuItem{
 		Label: "Custom Endpoint",
 		OnSelect: func() {
@@ -492,31 +494,9 @@ func (e *LLMEditor) finishAddProvider(name string, cfg *llm.LLMProviderConfig) {
 }
 
 // editPurpose opens the purpose configuration editor.
-// Agent and summarization get the model chain picker; embeddings stays as a form.
 func (e *LLMEditor) editPurpose(name string, cfg *llm.LLMPurposeConfig) {
 	L_info("llm editor: editing purpose", "name", name)
-
-	if name != "embeddings" {
-		e.showModelChain(name, cfg)
-		return
-	}
-
-	// Embeddings: keep the old form-based editor
-	formDef := llm.EmbeddingsPurposeFormDef()
-	content, err := forms.BuildFormContent(formDef, cfg, "llm", func(result forms.TviewResult) {
-		if result == forms.ResultAccepted {
-			e.onSave()
-			L_info("llm editor: purpose updated", "name", name)
-		}
-		e.Show()
-	}, e.app.App())
-	if err != nil {
-		L_error("llm editor: purpose form error", "error", err)
-		return
-	}
-
-	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", name})
-	e.app.SetFormContent(content)
+	e.showModelChain(name, cfg)
 }
 
 // --- Model chain picker (agent/summarization) ---
@@ -579,9 +559,16 @@ func (e *LLMEditor) showModelChain(purpose string, cfg *llm.LLMPurposeConfig, fo
 		},
 	})
 
-	if purpose == "summarization" {
-		settingsLabel := fmt.Sprintf("[settings] Max Input Tokens: %d", cfg.MaxInputTokens)
-		settingsPreview := "Input limit for summarization.\n0 = use model context - buffer."
+	if purpose == "summarization" || purpose == "embeddings" {
+		settingsLabel := "[settings]"
+		settingsPreview := "Edit purpose-specific settings."
+		if purpose == "summarization" {
+			settingsLabel = fmt.Sprintf("[settings] Max Input Tokens: %d", cfg.MaxInputTokens)
+			settingsPreview = "Input limit for summarization.\n0 = use model context - buffer."
+		} else {
+			settingsLabel = fmt.Sprintf("[settings] Auto Rebuild: %v", cfg.AutoRebuild)
+			settingsPreview = "Automatically rebuild embeddings on model mismatch."
+		}
 
 		items = append(items, forms.SplitItem{
 			Label:   settingsLabel,
@@ -689,6 +676,9 @@ func (e *LLMEditor) buildChainEntryPreview(modelRef, purpose string) string {
 	if !ok {
 		return fmt.Sprintf("[red]Unknown provider:[white] %s\nThis provider is not configured.", alias)
 	}
+	if alias == llm.BuiltInHugotProviderAlias || provCfg.Driver == "hugot" {
+		return buildHugotModelPreview(alias, modelID, false)
+	}
 
 	providerID := e.resolveProviderID(alias, &provCfg)
 	return buildModelPreview(providerID, modelID, purpose)
@@ -760,6 +750,48 @@ func buildModelPreview(providerID, modelID, purpose string) string {
 	return strings.Join(lines, "\n")
 }
 
+func buildDynamicModelPreview(alias string, model llm.ModelInfo) string {
+	if alias == llm.BuiltInHugotProviderAlias {
+		return buildHugotModelPreview(alias, model.ID, strings.Contains(strings.ToLower(model.DisplayName), "cached"))
+	}
+
+	title := model.DisplayName
+	if title == "" {
+		title = model.ID
+	}
+
+	var lines []string
+	lines = append(lines, fmt.Sprintf("[green::b]%s[-:-:-]", title))
+	lines = append(lines, fmt.Sprintf("[yellow]Provider:[white] %s", alias))
+	lines = append(lines, fmt.Sprintf("[yellow]Model ID:[white] %s", model.ID))
+	if model.ContextTokens > 0 {
+		lines = append(lines, fmt.Sprintf("[yellow]Context:[white]  %dk tokens", model.ContextTokens/1000))
+	}
+	lines = append(lines, "")
+	lines = append(lines, "Model discovered from provider listing.")
+	lines = append(lines, "Metadata preview is not available for this provider.")
+	return strings.Join(lines, "\n")
+}
+
+func buildHugotModelPreview(alias, modelID string, cached bool) string {
+	state := "Downloads on first use"
+	if cached {
+		state = "Cached locally"
+	}
+
+	var lines []string
+	lines = append(lines, "[green::b]all-MiniLM-L6-v2[-:-:-]")
+	lines = append(lines, "")
+	lines = append(lines, fmt.Sprintf("[yellow]Provider:[white] %s", alias))
+	lines = append(lines, fmt.Sprintf("[yellow]Model ID:[white] %s", modelID))
+	lines = append(lines, "[yellow]Type:[white] Local embeddings model")
+	lines = append(lines, fmt.Sprintf("[yellow]Download:[white] %s", state))
+	lines = append(lines, "")
+	lines = append(lines, "[yellow]Use Case:[white] Semantic search for memory, transcripts, and Memory Graph")
+	lines = append(lines, "[yellow]Status:[white] Recommended, embeddings-only")
+	return strings.Join(lines, "\n")
+}
+
 // addModelToChain shows the provider selection step for adding a model.
 func (e *LLMEditor) addModelToChain(purpose string, cfg *llm.LLMPurposeConfig) {
 	title := cases.Title(language.English).String(purpose)
@@ -787,6 +819,12 @@ func (e *LLMEditor) addModelToChain(purpose string, cfg *llm.LLMPurposeConfig) {
 	for _, name := range providerNames {
 		alias := name
 		provCfg := e.cfg.Providers[alias]
+		if purpose == "embeddings" && !llm.DriverSupportsEmbeddings(provCfg.Driver) {
+			continue
+		}
+		if purpose != "embeddings" && provCfg.EmbeddingOnly {
+			continue
+		}
 		providerID := e.resolveProviderID(alias, &provCfg)
 
 		label := alias
@@ -827,6 +865,9 @@ func (e *LLMEditor) pickModelFromProvider(alias string, provCfg llm.LLMProviderC
 	models := meta.GetModels(providerID)
 
 	if len(models) == 0 {
+		if e.pickDynamicModelFromProvider(alias, provCfg, purpose, cfg, onPick) {
+			return
+		}
 		e.freeTextModelInput(alias, purpose, cfg, onPick)
 		return
 	}
@@ -871,6 +912,59 @@ func (e *LLMEditor) pickModelFromProvider(alias string, provCfg llm.LLMProviderC
 	e.app.SetSplitPaneContent(pane)
 }
 
+func (e *LLMEditor) pickDynamicModelFromProvider(alias string, provCfg llm.LLMProviderConfig, purpose string, cfg *llm.LLMPurposeConfig, onPick func(ref string)) bool {
+	provider, err := llm.NewProvider(alias, provCfg)
+	if err != nil {
+		L_warn("llm editor: failed to create provider for dynamic model listing", "alias", alias, "error", err)
+		return false
+	}
+
+	lister, ok := provider.(llm.ModelLister)
+	if !ok {
+		return false
+	}
+
+	models, err := lister.ListModels(context.Background())
+	if err != nil {
+		L_warn("llm editor: dynamic model listing failed", "alias", alias, "error", err)
+		return false
+	}
+	if len(models) == 0 {
+		return false
+	}
+
+	var items []forms.SplitItem
+	for _, model := range models {
+		modelInfo := model
+		label := modelInfo.DisplayName
+		if label == "" {
+			label = modelInfo.ID
+		}
+
+		items = append(items, forms.SplitItem{
+			Label:   label,
+			Preview: buildDynamicModelPreview(alias, modelInfo),
+			OnSelect: func() {
+				ref := alias + "/" + modelInfo.ID
+				onPick(ref)
+				e.onSave()
+				L_info("llm editor: dynamic model selected", "purpose", purpose, "model", ref)
+				e.showModelChain(purpose, cfg)
+			},
+		})
+	}
+
+	pane := forms.NewSplitPane(forms.SplitPaneConfig{
+		Title:     alias + ": Select Model",
+		Items:     items,
+		OnBack:    func() { e.showModelChain(purpose, cfg) },
+		ListWidth: 40,
+	})
+	pane.SetPreviewTitle("Model Details")
+	e.app.SetSplitPaneContent(pane)
+	return true
+}
+
 // freeTextModelInput shows a text input for typing a model name manually.
 func (e *LLMEditor) freeTextModelInput(alias, purpose string, cfg *llm.LLMPurposeConfig, onPick func(ref string)) {
 	title := cases.Title(language.English).String(purpose)
@@ -913,19 +1007,31 @@ func (e *LLMEditor) editPurposeSettings(purpose string, cfg *llm.LLMPurposeConfi
 	title := cases.Title(language.English).String(purpose)
 	e.app.SetBreadcrumbs([]string{llmBreadcrumbBase, "LLM Configuration", title, "Settings"})
 
+	fields := []forms.Field{
+		{
+			Name:  "maxInputTokens",
+			Title: "Max Input Tokens",
+			Desc:  "Input limit for summarization (0 = context - buffer)",
+			Type:  forms.Number,
+			Min:   0,
+			Max:   2000000,
+		},
+	}
+	if purpose == "embeddings" {
+		fields = []forms.Field{
+			{
+				Name:  "autoRebuild",
+				Title: "Auto Rebuild",
+				Desc:  "Automatically rebuild embeddings on model mismatch",
+				Type:  forms.Toggle,
+			},
+		}
+	}
+
 	formDef := forms.FormDef{
 		Title: title + " Settings",
 		Sections: []forms.Section{{
-			Fields: []forms.Field{
-				{
-					Name:  "maxInputTokens",
-					Title: "Max Input Tokens",
-					Desc:  "Input limit for summarization (0 = context - buffer)",
-					Type:  forms.Number,
-					Min:   0,
-					Max:   2000000,
-				},
-			},
+			Fields: fields,
 		}},
 	}
 

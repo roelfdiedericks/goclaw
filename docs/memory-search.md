@@ -24,28 +24,34 @@ Search combines:
 
 ## Setup
 
-### 1. Configure Ollama for Embeddings
+### 1. Use the Built-In Embeddings Provider
 
-Memory search requires an embedding model. Ollama works well:
+Memory search requires an embedding model. By default, GoClaw uses the built-in local Hugot provider for semantic search:
 
-```bash
-# Install Ollama (if not already)
-curl -fsSL https://ollama.com/install.sh | sh
-
-# Pull an embedding model
-ollama pull nomic-embed-text
+```json
+{
+  "llm": {
+    "providers": {
+      "hugot-local": {
+        "driver": "hugot",
+        "embeddingOnly": true
+      }
+    },
+    "embeddings": {
+      "models": ["hugot-local/KnightsAnalytics/all-MiniLM-L6-v2"]
+    }
+  }
+}
 ```
+
+The first semantic search may take longer because the model downloads on first use and is then cached under `~/.goclaw/hugot/models/`.
 
 ### 2. Enable Memory Search
 
 ```json
 {
   "memorySearch": {
-    "enabled": true,
-    "ollama": {
-      "url": "http://localhost:11434",
-      "model": "nomic-embed-text"
-    }
+    "enabled": true
   }
 }
 ```
@@ -56,10 +62,6 @@ ollama pull nomic-embed-text
 {
   "memorySearch": {
     "enabled": true,
-    "ollama": {
-      "url": "http://localhost:11434",
-      "model": "nomic-embed-text"
-    },
     "query": {
       "maxResults": 6,
       "minScore": 0.35,
@@ -74,6 +76,18 @@ ollama pull nomic-embed-text
 }
 ```
 
+### Alternative: Ollama for Embeddings
+
+If you prefer Ollama for embeddings, configure it explicitly:
+
+```bash
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull an embedding model
+ollama pull nomic-embed-text
+```
+
 ---
 
 ## Configuration Options
@@ -81,8 +95,8 @@ ollama pull nomic-embed-text
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable memory search |
-| `ollama.url` | string | - | Ollama API URL |
-| `ollama.model` | string | - | Embedding model name |
+| `ollama.url` | string | - | Legacy Ollama API URL |
+| `ollama.model` | string | - | Legacy Ollama embedding model name |
 | `query.maxResults` | int | `6` | Maximum results per search |
 | `query.minScore` | float | `0.35` | Minimum similarity score (0-1) |
 | `query.vectorWeight` | float | `0.7` | Weight for semantic search |
@@ -102,7 +116,7 @@ When enabled, GoClaw indexes:
 
 Files are:
 1. Read and chunked into segments
-2. Embedded via Ollama
+2. Embedded via the configured embeddings provider
 3. Stored in an in-memory index
 
 ### Searching
@@ -110,7 +124,7 @@ Files are:
 When the agent uses `memory_search`:
 
 ```
-1. Query → Ollama embedding
+1. Query → embedding
 2. Vector search (cosine similarity)
 3. Keyword search (BM25)
 4. Combine scores: vector * 0.7 + keyword * 0.3
@@ -223,18 +237,14 @@ User mentioned preference for...
 
 ## Embedding Models
 
-Recommended models for `nomic-embed-text`:
+Recommended embeddings choices:
 
 | Model | Dimensions | Speed | Quality |
 |-------|------------|-------|---------|
+| `KnightsAnalytics/all-MiniLM-L6-v2` | 384 | Fast | Good |
 | `nomic-embed-text` | 768 | Fast | Good |
 | `mxbai-embed-large` | 1024 | Medium | Better |
 | `all-minilm` | 384 | Fastest | Basic |
-
-Pull with:
-```bash
-ollama pull nomic-embed-text
-```
 
 ---
 
@@ -262,6 +272,10 @@ For large indexes, consider:
 
 ## Troubleshooting
 
+### "Model download is slow the first time"
+
+The built-in `hugot-local` provider downloads its model on first use. Later searches reuse the cached model.
+
 ### "Ollama not available"
 
 ```bash
@@ -281,9 +295,9 @@ ollama serve
 ### Slow Indexing
 
 Embedding generation can be slow on CPU. Consider:
-- Using GPU-accelerated Ollama
 - Reducing number of files indexed
-- Using a smaller model (`all-minilm`)
+- Using a smaller model
+- Switching to a different embeddings provider if you prefer
 
 ---
 

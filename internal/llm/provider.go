@@ -65,6 +65,12 @@ type ModelValidator interface {
 	ValidateModel(model string) *ModelValidationResult
 }
 
+// EmbeddingModelProvider is implemented by providers that require a specialized
+// clone path when used for embeddings (different transport/model fields).
+type EmbeddingModelProvider interface {
+	WithEmbeddingModel(model string) Provider
+}
+
 // StatefulProvider is implemented by providers that need session-scoped state.
 // The registry automatically calls these methods around StreamMessage calls.
 // Examples: xAI (response_id for context chaining), future providers (cursor tokens, OAuth state).

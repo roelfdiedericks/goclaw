@@ -17,6 +17,18 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
+func init() {
+	RegisterDriver(DriverDescriptor{
+		ID:                 "oai-next",
+		Label:              "OpenAI (Next)",
+		Order:              30,
+		SupportsEmbeddings: false,
+		New: func(name string, cfg LLMProviderConfig) (Provider, error) {
+			return NewOaiNextProvider(name, cfg)
+		},
+	})
+}
+
 // OaiNextProvider implements Provider + StatefulProvider for OpenAI's Responses API
 // over WebSocket. Designed for low-latency agentic workflows with context chaining
 // via previous_response_id.

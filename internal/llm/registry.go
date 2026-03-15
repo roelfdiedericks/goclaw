@@ -140,24 +140,7 @@ func NewRegistry(cfg RegistryConfig) (*Registry, error) {
 
 // initProvider initializes a provider instance
 func (r *Registry) initProvider(name string, cfg LLMProviderConfig) error {
-	var provider interface{}
-	var err error
-
-	switch cfg.Driver {
-	case "anthropic":
-		provider, err = NewAnthropicProvider(name, cfg)
-	case "ollama":
-		provider, err = NewOllamaProvider(name, cfg)
-	case "openai":
-		provider, err = NewOpenAIProvider(name, cfg)
-	case "xai":
-		provider, err = NewXAIProvider(name, cfg)
-	case "oai-next":
-		provider, err = NewOaiNextProvider(name, cfg)
-	default:
-		return fmt.Errorf("unknown provider driver: %s", cfg.Driver)
-	}
-
+	provider, err := NewProvider(name, cfg)
 	if err != nil {
 		return err
 	}
@@ -196,6 +179,20 @@ func (r *Registry) validatePurposeModels(purpose string) error {
 
 		if !ok {
 			kept = append(kept, ref)
+			continue
+		}
+
+		if purpose == "embeddings" && !DriverSupportsEmbeddings(instance.config.Driver) {
+			L_warn("llm: provider driver does not support embeddings, removing from chain",
+				"purpose", purpose, "model", ref, "driver", instance.config.Driver)
+			removed = append(removed, fmt.Sprintf("%s: driver %s does not support embeddings", ref, instance.config.Driver))
+			continue
+		}
+
+		if purpose != "embeddings" && instance.config.EmbeddingOnly {
+			L_warn("llm: embedding-only provider cannot be used for purpose, removing from chain",
+				"purpose", purpose, "model", ref)
+			removed = append(removed, fmt.Sprintf("%s: embedding-only provider", ref))
 			continue
 		}
 
@@ -399,29 +396,19 @@ func (r *Registry) resolveForPurpose(ref, purpose string) (interface{}, error) {
 		return nil, fmt.Errorf("unknown provider: %s", providerName)
 	}
 
-	// Clone provider with specific model
-	switch p := instance.provider.(type) {
-	case *AnthropicProvider:
-		return p.WithModel(modelName), nil
-	case *OllamaProvider:
-		// Use embedding-specific initialization for embeddings purpose
-		if purpose == "embeddings" {
-			return p.WithModelForEmbedding(modelName), nil
-		}
-		return p.WithModel(modelName), nil
-	case *OpenAIProvider:
-		// Use embedding-specific initialization for embeddings purpose
-		if purpose == "embeddings" {
-			return p.WithModelForEmbedding(modelName), nil
-		}
-		return p.WithModel(modelName), nil
-	case *XAIProvider:
-		return p.WithModel(modelName), nil
-	case *OaiNextProvider:
-		return p.WithModel(modelName), nil
-	default:
+	p, ok := instance.provider.(Provider)
+	if !ok {
 		return nil, fmt.Errorf("provider %s has unexpected type", providerName)
 	}
+
+	// Some providers require a dedicated clone path for embeddings.
+	if purpose == "embeddings" {
+		if embeddingProvider, ok := instance.provider.(EmbeddingModelProvider); ok {
+			return embeddingProvider.WithEmbeddingModel(modelName), nil
+		}
+	}
+
+	return p.WithModel(modelName), nil
 }
 
 // GetAnthropicProvider returns an Anthropic provider for a purpose (typed helper)

@@ -12,6 +12,7 @@ import (
 	"github.com/rivo/tview"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
@@ -201,11 +202,7 @@ func (d *WizardData) loadFromConfig(cfg *config.Config) {
 				}
 				d.LLMDriver = provCfg.Driver
 				d.LLMAPIKey = provCfg.APIKey
-				if provCfg.Driver == "ollama" {
-					d.LLMBaseURL = provCfg.URL
-				} else {
-					d.LLMBaseURL = provCfg.BaseURL
-				}
+				d.LLMBaseURL = provCfg.BaseURL
 				d.LLMModel = parts[1]
 
 				if prov, ok := metadata.Get().GetModelProvider(d.LLMProviderID); ok {
@@ -1174,7 +1171,7 @@ that powers your agent — it handles conversations, tool use, and reasoning.
 // buildLLMConfigForm shows the API key / URL form for the selected provider.
 func buildLLMConfigForm(data *WizardData, w *forms.Wizard) tview.Primitive {
 	meta := metadata.Get()
-	isLocal := data.LLMDriver == "ollama" || data.LLMProviderID == "lmstudio"
+	isLocal := llm.DriverIsLocal(data.LLMDriver) || data.LLMProviderID == "lmstudio"
 
 	// Provider info header (static)
 	headerInfo := fmt.Sprintf("[cyan]%s[white]\n", data.LLMProviderName)
@@ -1549,9 +1546,7 @@ func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
 			if data.LLMAPIKey != "" {
 				deepSet(cfg, "llm.providers."+alias+".apiKey", data.LLMAPIKey)
 			}
-			if data.LLMDriver == "ollama" {
-				deepSet(cfg, "llm.providers."+alias+".url", data.LLMBaseURL)
-			} else if data.LLMBaseURL != "" {
+			if data.LLMBaseURL != "" {
 				deepSet(cfg, "llm.providers."+alias+".baseURL", data.LLMBaseURL)
 			}
 
@@ -1599,6 +1594,7 @@ func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
 		}
 	}
 
+	ensureBuiltInHugotConfigMap(cfg)
 	return cfg
 }
 
@@ -1660,4 +1656,17 @@ func getStringSlice(m map[string]interface{}, path string) []string {
 		}
 	}
 	return nil
+}
+
+func ensureBuiltInHugotConfigMap(cfg map[string]interface{}) {
+	deepSet(cfg, "llm.providers."+llm.BuiltInHugotProviderAlias+".driver", "hugot")
+	deepSet(cfg, "llm.providers."+llm.BuiltInHugotProviderAlias+".embeddingOnly", true)
+	deepSet(cfg, "llm.providers."+llm.BuiltInHugotProviderAlias+".subtype", "hugot")
+
+	embeddingModels := getStringSlice(cfg, "llm.embeddings.models")
+	if len(embeddingModels) == 0 {
+		deepSet(cfg, "llm.embeddings.models", []string{
+			llm.BuiltInHugotProviderAlias + "/" + llm.DefaultHugotEmbeddingModel,
+		})
+	}
 }

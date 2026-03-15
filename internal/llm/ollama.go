@@ -19,6 +19,19 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
+func init() {
+	RegisterDriver(DriverDescriptor{
+		ID:                 "ollama",
+		Label:              "Ollama",
+		Order:              40,
+		IsLocal:            true,
+		SupportsEmbeddings: true,
+		New: func(name string, cfg LLMProviderConfig) (Provider, error) {
+			return NewOllamaProvider(name, cfg)
+		},
+	})
+}
+
 // OllamaProvider implements the Provider interface for Ollama.
 // Supports chat completion, embeddings, and summarization tasks.
 type OllamaProvider struct {
@@ -87,7 +100,7 @@ type ollamaChatResponse struct {
 // NewOllamaProvider creates a new Ollama provider from LLMProviderConfig.
 // This is the preferred constructor for the unified provider system.
 func NewOllamaProvider(name string, cfg LLMProviderConfig) (*OllamaProvider, error) {
-	url := strings.TrimSuffix(cfg.URL, "/")
+	url := strings.TrimSuffix(cfg.BaseURL, "/")
 
 	timeoutSeconds := cfg.TimeoutSeconds
 	if timeoutSeconds <= 0 {
@@ -598,6 +611,12 @@ func (p *OllamaProvider) WithModelForEmbedding(model string) *OllamaProvider {
 	return &clone
 }
 
+// WithEmbeddingModel returns a Provider clone configured for embedding-only use.
+// Implements EmbeddingModelProvider.
+func (p *OllamaProvider) WithEmbeddingModel(model string) Provider {
+	return p.WithModelForEmbedding(model)
+}
+
 // WithMaxTokens returns a clone of the provider with a different output limit
 func (p *OllamaProvider) WithMaxTokens(max int) Provider {
 	clone := *p               //nolint:govet // copylocks: mu is reset immediately below
@@ -774,57 +793,123 @@ func (p *OllamaProvider) embedSingle(ctx context.Context, text string) ([]float3
 	return embedding, nil
 }
 
-// ListModels fetches available models from Ollama's /api/tags endpoint.
+// ListModels fetches available models from Ollama-compatible APIs.
+// It prefers Ollama's native /api/tags endpoint, then falls back to OpenAI's
+// /v1/models for compatible local servers (for example LM Studio).
 // Implements ModelLister interface.
 func (p *OllamaProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	if p.url == "" {
 		return nil, fmt.Errorf("Ollama URL required to list models")
 	}
 
-	tagsURL := strings.TrimSuffix(p.url, "/") + "/api/tags"
-
-	req, err := http.NewRequestWithContext(ctx, "GET", tagsURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	models, tagsErr := p.listModelsFromOllamaTags(ctx)
+	if tagsErr == nil && len(models) > 0 {
+		L_debug("ollama: listed models via /api/tags", "url", p.url, "count", len(models))
+		return models, nil
+	}
+	if tagsErr != nil {
+		L_debug("ollama: /api/tags listing failed, trying /v1/models", "url", p.url, "error", tagsErr)
+	} else {
+		L_debug("ollama: /api/tags returned no models, trying /v1/models", "url", p.url)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	v1Models, v1Err := p.listModelsFromOpenAIModels(ctx)
+	if v1Err == nil {
+		L_debug("ollama: listed models via /v1/models", "url", p.url, "count", len(v1Models))
+		return v1Models, nil
+	}
+
+	if tagsErr != nil {
+		return nil, fmt.Errorf("failed to list models via /api/tags (%w) and /v1/models (%v)", tagsErr, v1Err)
+	}
+
+	return models, nil
+}
+
+func (p *OllamaProvider) listModelsFromOllamaTags(ctx context.Context) ([]ModelInfo, error) {
+	tagsURL := strings.TrimSuffix(p.url, "/") + "/api/tags"
+	req, err := http.NewRequestWithContext(ctx, "GET", tagsURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch models: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch models: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var result struct {
 		Models []struct {
 			Name    string `json:"name"`
 			Details struct {
-				ParameterSize   string `json:"parameter_size"`
-				QuantizationLvl string `json:"quantization_level"`
+				ParameterSize string `json:"parameter_size"`
 			} `json:"details"`
 		} `json:"models"`
 	}
-
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	models := make([]ModelInfo, len(result.Models))
-	for i, m := range result.Models {
+	models := make([]ModelInfo, 0, len(result.Models))
+	for _, m := range result.Models {
+		if strings.TrimSpace(m.Name) == "" {
+			continue
+		}
 		displayName := m.Name
 		if m.Details.ParameterSize != "" {
 			displayName = m.Name + " (" + m.Details.ParameterSize + ")"
 		}
-		models[i] = ModelInfo{
+		models = append(models, ModelInfo{
 			ID:          m.Name,
 			DisplayName: displayName,
-		}
+		})
+	}
+	return models, nil
+}
+
+func (p *OllamaProvider) listModelsFromOpenAIModels(ctx context.Context) ([]ModelInfo, error) {
+	modelsURL := strings.TrimSuffix(p.url, "/") + "/v1/models"
+	req, err := http.NewRequestWithContext(ctx, "GET", modelsURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	models := make([]ModelInfo, 0, len(result.Data))
+	for _, m := range result.Data {
+		if strings.TrimSpace(m.ID) == "" {
+			continue
+		}
+		models = append(models, ModelInfo{
+			ID:          m.ID,
+			DisplayName: m.ID,
+		})
+	}
 	return models, nil
 }
 

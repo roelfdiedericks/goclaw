@@ -21,6 +21,18 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+func init() {
+	RegisterDriver(DriverDescriptor{
+		ID:                 "openai",
+		Label:              "OpenAI Compatible",
+		Order:              20,
+		SupportsEmbeddings: true,
+		New: func(name string, cfg LLMProviderConfig) (Provider, error) {
+			return NewOpenAIProvider(name, cfg)
+		},
+	})
+}
+
 // openRouterTransport adds GoClaw attribution headers to OpenRouter requests
 type openRouterTransport struct {
 	base http.RoundTripper
@@ -71,14 +83,9 @@ type OpenAIProvider struct {
 }
 
 // NewOpenAIProvider creates a new OpenAI-compatible provider from LLMProviderConfig.
-// Supports both "baseUrl" (standard) and "url" (for compatibility with Ollama-style configs).
 // API key is optional for local servers like LM Studio.
 func NewOpenAIProvider(name string, cfg LLMProviderConfig) (*OpenAIProvider, error) {
-	// Determine the base URL - accept both "baseUrl" and "url" fields
 	baseURL := cfg.BaseURL
-	if baseURL == "" && cfg.URL != "" {
-		baseURL = cfg.URL
-	}
 
 	// API key is optional for local servers (LM Studio, LocalAI, etc.)
 	apiKey := cfg.APIKey
@@ -398,6 +405,12 @@ func (p *OpenAIProvider) WithModelForEmbedding(model string) *OpenAIProvider {
 	// Initialize synchronously - test that embeddings actually work
 	clone.checkEmbeddingAvailability()
 	return &clone
+}
+
+// WithEmbeddingModel returns a Provider clone configured for embedding-only use.
+// Implements EmbeddingModelProvider.
+func (p *OpenAIProvider) WithEmbeddingModel(model string) Provider {
+	return p.WithModelForEmbedding(model)
 }
 
 // checkEmbeddingAvailability tests if the embedding endpoint works
