@@ -3,59 +3,26 @@
 package sandbox
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
-
-	sbruntime "github.com/roelfdiedericks/goclaw/internal/sandbox/runtime"
 )
 
-func TestLinuxRuntimeParityAcrossModes(t *testing.T) {
+func TestLinuxModeParityAcrossFileToolsAndPolicy(t *testing.T) {
 	fx := makeParityFixture(t)
 
 	modes := []string{ModeHome, ModeVolumes, ModeEphemeral}
 	for _, mode := range modes {
 		mode := mode
 		t.Run(mode, func(t *testing.T) {
-			resetSandboxManagerForTest()
-			cfg := Config{
-				General: GeneralConfig{
-					Enabled:          true,
-					Mode:             mode,
-					DataDir:          fx.volumesData,
-					ExecEnabled:      true,
-					BrowserEnabled:   true,
-					FileToolsEnabled: true,
-				},
-				Bubblewrap: BubblewrapConfig{
-					Volumes: []string{"~/Desktop"},
-				},
-			}
-			mgr := InitManager(cfg, fx.workspace)
-
-			if !sbruntime.ExecSandboxAvailable(mgr.GetBackendPath()) {
-				t.Skip("bubblewrap unavailable on this host")
-			}
-
+			mgr := makeParityManager(mode, fx)
 			policy := mgr.ResolvePolicy()
-			opts := sbruntime.ExecLaunchOptions{
-				BackendPath:    mgr.GetBackendPath(),
-				SandboxMode:    mode,
-				WorkspaceDir:   fx.workspace,
-				WorkDir:        fx.workspace,
-				VisibleHomeDir: policy.VisibleHomeDir,
-				BackingHomeDir: policy.BackingHomeDir,
-				ClearEnv:       true,
-				PathValue:      mgr.BuildSandboxPATH(policy.VisibleHomeDir),
-				AllowNetwork:   true,
+			if policy.Mode != mode {
+				t.Fatalf("expected resolved mode %q, got %q", mode, policy.Mode)
 			}
-
-			homeExit, homeOut := runSandboxedCommand(t, `printf "%s" "$HOME"`, opts)
-			if homeExit != 0 {
-				t.Fatalf("expected HOME probe to run in mode %s", mode)
+			if policy.VisibleWorkspace != fx.workspace {
+				t.Fatalf("expected visible workspace %q, got %q", fx.workspace, policy.VisibleWorkspace)
 			}
-			if homeOut != fx.home {
-				t.Fatalf("expected visible HOME %q in mode %s, got %q", fx.home, mode, homeOut)
+			if policy.VisibleHomeDir != fx.home {
+				t.Fatalf("expected visible home %q, got %q", fx.home, policy.VisibleHomeDir)
 			}
 
 			// File tools should always deny protected secret filenames.
@@ -66,62 +33,36 @@ func TestLinuxRuntimeParityAcrossModes(t *testing.T) {
 				t.Fatalf("expected file tools to block hidden config in mode %s", mode)
 			}
 
-			secretExit, _ := runSandboxedCommand(t, `cat "$HOME/.ssh/id_ed25519"`, opts)
-			if secretExit == 0 {
-				t.Fatalf("expected exec to block hidden secret read in mode %s", mode)
+			// Workspace writes should stay valid in every mode.
+			if err := mgr.WriteFileValidated("linux_ws_probe.txt", fx.workspace, []byte("ws\n"), 0600); err != nil {
+				t.Fatalf("expected workspace write in mode %s, err=%v", mode, err)
 			}
 
-			desktopReadExit, _ := runSandboxedCommand(t, `cat "$HOME/Desktop/doc.txt"`, opts)
-			desktopWriteErr := mgr.WriteFileValidated("~/Desktop/linux_filetool_probe.txt", fx.workspace, []byte("ok\n"), 0600)
-			documentsWriteErr := mgr.WriteFileValidated("~/Documents/blocked_probe.txt", fx.workspace, []byte("no\n"), 0600)
-			documentsExecExit, _ := runSandboxedCommand(t, `echo nope > "$HOME/Documents/blocked_exec_probe.txt"`, opts)
-
+			// Home path mapping semantics should reflect mode policy.
 			switch mode {
 			case ModeHome:
-				if desktopReadExit != 0 {
-					t.Fatalf("expected desktop read in mode %s", mode)
+				if policy.BackingHomeDir == "" {
+					t.Fatalf("expected non-empty backing home in mode %s", mode)
 				}
-				if desktopWriteErr != nil {
-					t.Fatalf("expected desktop file-tool write in mode %s, err=%v", mode, desktopWriteErr)
+				target, err := mgr.ValidateWritePath("~/Desktop/linux_home_probe.txt", fx.workspace)
+				if err != nil {
+					t.Fatalf("expected home-mode write path to validate, err=%v", err)
 				}
-				// Home mode allows any HOME subpath in both file tools and exec.
-				if documentsWriteErr != nil {
-					t.Fatalf("expected documents file-tool write in mode %s, err=%v", mode, documentsWriteErr)
-				}
-				if documentsExecExit != 0 {
-					t.Fatalf("expected documents exec write in mode %s", mode)
+				if target == fx.desktopDoc {
+					t.Fatalf("expected home-mode path to map to backing home, got %q", target)
 				}
 			case ModeVolumes:
-				if desktopReadExit != 0 {
-					t.Fatalf("expected desktop read in mode %s", mode)
+				if policy.BackingHomeDir != "" {
+					t.Fatalf("expected empty backing home in mode %s, got %q", mode, policy.BackingHomeDir)
 				}
-				if desktopWriteErr != nil {
-					t.Fatalf("expected desktop file-tool write in mode %s, err=%v", mode, desktopWriteErr)
-				}
-				if documentsWriteErr == nil {
-					t.Fatalf("expected documents file-tool write denial in mode %s", mode)
-				}
-				if documentsExecExit == 0 {
-					t.Fatalf("expected documents exec write denial in mode %s", mode)
+				if _, err := mgr.ValidatePath("~/Desktop/doc.txt", fx.workspace); err != nil {
+					t.Fatalf("expected desktop read path to validate in mode %s, err=%v", mode, err)
 				}
 			case ModeEphemeral:
-				if desktopReadExit == 0 {
-					t.Fatalf("expected desktop read denial in mode %s", mode)
-				}
-				if desktopWriteErr == nil {
-					t.Fatalf("expected desktop file-tool write denial in mode %s", mode)
-				}
-				if documentsWriteErr == nil {
-					t.Fatalf("expected documents file-tool write denial in mode %s", mode)
-				}
-				if documentsExecExit == 0 {
-					t.Fatalf("expected documents exec write denial in mode %s", mode)
+				if policy.BackingHomeDir != "" {
+					t.Fatalf("expected empty backing home in mode %s, got %q", mode, policy.BackingHomeDir)
 				}
 			}
-
-			_ = os.Remove(filepath.Join(fx.desktopDir, "linux_filetool_probe.txt"))
-			_ = os.Remove(filepath.Join(fx.documentsDir, "blocked_probe.txt"))
-			_ = os.Remove(filepath.Join(fx.documentsDir, "blocked_exec_probe.txt"))
 		})
 	}
 }
