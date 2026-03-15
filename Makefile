@@ -1,4 +1,4 @@
-.PHONY: build embtest embtest-xla embtest-ort embtest-xla-deps-check embtest-ort-deps-check run debug trace clean install test sandbox-test sandbox-test-short lint audit install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release deps deps-check metadata
+.PHONY: build embtest embtest-xla embtest-ort embtest-xla-deps-check embtest-ort-deps-check run debug trace clean install test sandbox-test sandbox-test-short sandbox-test-ci lint audit install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release deps deps-check metadata
 
 SHELL := /bin/bash
 UNAME_S := $(shell uname -s)
@@ -199,6 +199,9 @@ sandbox-test:
 
 sandbox-test-short:
 	go test -v -vet=off ./internal/sandbox -run 'Parity|Validate|ResolvePolicy'
+
+sandbox-test-ci:
+	go test -vet=off ./internal/sandbox/... ./internal/tools/jq
 
 run: build
 	./$(BINARY) gateway

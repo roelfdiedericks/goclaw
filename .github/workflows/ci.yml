@@ -10,6 +10,39 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
+  sandbox-parity:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-latest
+          - name: darwin-arm64
+            runner: macos-latest
+          - name: darwin-amd64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Install macOS GNU Make
+        if: runner.os == 'macOS'
+        run: |
+          brew list make >/dev/null 2>&1 || brew install make
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Run sandbox parity tests
+        run: |
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+            gmake sandbox-test-ci
+          else
+            make sandbox-test-ci
+          fi
+
   test:
     runs-on: ubuntu-latest
     steps:
