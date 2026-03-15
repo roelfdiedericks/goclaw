@@ -51,13 +51,16 @@ Users with `sandbox: false` in `users.json` bypass path validation:
 
 **Warning**: This allows the agent to access any file the GoClaw process can read/write.
 
-## Bubblewrap Sandbox
+## Managed Exec/Browser Sandbox
 
-The exec tool and browser can use [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) for kernel-level isolation on Linux.
+GoClaw can sandbox the `exec` tool and managed browser launches using the platform backend:
+
+- Linux: [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`)
+- macOS: `sandbox-exec` (Seatbelt)
 
 ### Prerequisites
 
-Install bubblewrap:
+Linux (bubblewrap):
 
 ```bash
 # Debian/Ubuntu
@@ -67,29 +70,40 @@ sudo apt install bubblewrap
 sudo pacman -S bubblewrap
 ```
 
-The Debian package and Docker images include bubblewrap.
+macOS uses the system `sandbox-exec` binary.
 
 ### Sandbox Modes
 
-GoClaw supports three sandbox modes:
+GoClaw supports explicit modes. Availability depends on platform backend:
 
-| Mode | Description | Use Case |
-|------|-------------|----------|
-| `home` | Full isolated home directory | Recommended default |
-| `volumes` | Only specific directories persist | Controlled persistence |
-| `ephemeral` | Nothing persists between runs | Maximum security |
+| Mode | Linux (bubblewrap) | macOS (seatbelt) | Description |
+|------|---------------------|------------------|-------------|
+| `home` | Yes | Yes | Full isolated sandbox home |
+| `autodocs-read` | Yes | Yes | Home mode plus top-level non-hidden real-home directories as read-only |
+| `autodocs-write` | Yes | Yes | Home mode plus top-level non-hidden real-home directories as read-write |
+| `volumes` | Yes | No | Only configured volume mount points are persisted |
+| `ephemeral` | Yes | No | Nothing persists between runs |
 
 ### Configuration
 
 ```json
 {
   "sandbox": {
-    "bubblewrap": {
+    "general": {
+      "enabled": true,
       "mode": "home",
-      "path": "",
       "dataDir": "",
-      "volumes": [],
-      "extraPaths": []
+      "extraPaths": [],
+      "execEnabled": true,
+      "browserEnabled": true,
+      "fileToolsEnabled": true
+    },
+    "bubblewrap": {
+      "path": "",
+      "volumes": []
+    },
+    "seatbelt": {
+      "path": ""
     }
   }
 }
@@ -97,11 +111,16 @@ GoClaw supports three sandbox modes:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `mode` | `home` | Sandbox mode: `home`, `volumes`, or `ephemeral` |
-| `path` | (search PATH) | Custom path to bwrap binary |
-| `dataDir` | `~/.goclaw/sandbox` | Backing storage for isolated directories |
-| `volumes` | `~/.local`, `~/.config`, `~/.cache` | Directories to persist (volumes mode only) |
-| `extraPaths` | [] | Additional PATH entries inside sandbox |
+| `sandbox.general.enabled` | `true` | Master sandbox switch |
+| `sandbox.general.mode` | `home` | Active mode |
+| `sandbox.general.dataDir` | `~/.goclaw/sandbox` | Backing storage root |
+| `sandbox.general.extraPaths` | `[]` | Extra PATH entries inside sandboxed exec |
+| `sandbox.general.execEnabled` | `true` | Enable sandbox for exec tool |
+| `sandbox.general.browserEnabled` | `true` | Enable sandbox for managed browser launches |
+| `sandbox.general.fileToolsEnabled` | `true` | Enable file tools path sandboxing |
+| `sandbox.bubblewrap.path` | (search PATH) | Custom `bwrap` binary path (Linux) |
+| `sandbox.bubblewrap.volumes` | `~/.local`, `~/.config`, `~/.cache` | Persisted home paths in `volumes` mode (Linux) |
+| `sandbox.seatbelt.path` | (search PATH) | Custom `sandbox-exec` path (macOS) |
 
 ### Home Mode (Recommended)
 
@@ -110,36 +129,53 @@ The default mode creates a full isolated home directory at `~/.goclaw/sandbox/ho
 ```json
 {
   "sandbox": {
-    "bubblewrap": {
+    "general": {
       "mode": "home"
     }
   }
 }
 ```
 
-### Volumes Mode
+### Autodocs Modes
+
+Autodocs modes keep home-mode isolation but expose selected real-home directories (top-level, non-hidden, non-symlinked) such as `~/Desktop`, `~/Documents`, `~/Pictures`, and similar.
+
+#### `autodocs-read`
+
+- Exposed autodocs directories are read-only
+- Writes to those roots are blocked
+- Hidden directories like `~/.ssh` are not part of autodocs discovery
+
+#### `autodocs-write`
+
+- Same roots as `autodocs-read`
+- Exposed autodocs directories are writable
+
+### Volumes Mode (Linux)
 
 Only specific directories persist. Useful when you want controlled isolation:
 
 ```json
 {
   "sandbox": {
+    "general": {
+      "mode": "volumes"
+    },
     "bubblewrap": {
-      "mode": "volumes",
       "volumes": ["~/.local", "~/.config", "~/.npm-global"]
     }
   }
 }
 ```
 
-### Ephemeral Mode
+### Ephemeral Mode (Linux)
 
 Nothing persists between runs. Maximum security but agent-installed tools are lost:
 
 ```json
 {
   "sandbox": {
-    "bubblewrap": {
+    "general": {
       "mode": "ephemeral"
     }
   }
@@ -162,7 +198,7 @@ Inside the sandbox:
 
 ### What Commands Cannot Access
 
-- Your real home directory (except workspace)
+- Hidden/sensitive home paths outside allowed roots (for example `~/.ssh`, `~/.goclaw`)
 - Other users' files
 - Host environment variables (API keys, tokens)
 - System configuration outside allowed paths
@@ -183,7 +219,7 @@ Add custom paths via `extraPaths`:
 ```json
 {
   "sandbox": {
-    "bubblewrap": {
+    "general": {
       "extraPaths": ["/opt/mytools/bin", "~/.custom/bin"]
     }
   }
@@ -194,11 +230,11 @@ Add custom paths via `extraPaths`:
 
 Run `goclaw setup edit` and select "Sandbox" to configure modes and options.
 
-Or during initial setup, the wizard detects bwrap and offers to enable sandboxing.
+Or during initial setup, the wizard detects the platform sandbox backend and offers to enable sandboxing.
 
 ## Browser URL Safety
 
-The browser tool validates URLs before navigation to prevent SSRF (Server-Side Request Forgery) attacks. This protection is **always active**, regardless of bubblewrap status, because bubblewrap sandboxes the filesystem but not the network.
+The browser tool validates URLs before navigation to prevent SSRF (Server-Side Request Forgery) attacks. This protection is **always active**, regardless of sandbox backend status, because filesystem sandboxing does not restrict outbound network destinations.
 
 ### Blocked Destinations
 
@@ -233,28 +269,29 @@ Only `http://` and `https://` URLs to public internet addresses are allowed.
 The layers complement each other:
 
 1. **File tools sandbox** — Prevents direct file access outside workspace
-2. **Bubblewrap sandbox** — Prevents shell commands from escaping
+2. **Managed exec/browser sandbox** — Prevents shell commands from escaping
 3. **Isolated home** — Agent tools don't mix with your real environment
 
 ### What Sandboxing Does NOT Protect Against
 
 - Network-based attacks (network access is allowed)
 - Side-channel attacks
-- Bugs in bubblewrap itself
+- Bugs in the OS sandbox backend itself
 - Actions within the workspace (agent can still modify workspace files)
 
 ### Recommendations
 
 1. **Use `home` mode** for general use — good balance of security and usability
-2. **Use `ephemeral` mode** for untrusted prompts — nothing persists
-3. **Use `sandbox: false`** sparingly — only for trusted admin users
-4. **Review `extraPaths`** — they become accessible inside sandbox
+2. **Use `autodocs-read`** when the agent needs common user docs/media directories but should not modify them
+3. **Use `ephemeral` mode** for untrusted prompts — nothing persists
+4. **Use `sandbox: false`** sparingly — only for trusted admin users
+5. **Review `extraPaths`** — they become accessible inside sandbox
 
 ## Troubleshooting
 
 ### "bwrap not found"
 
-Install bubblewrap (see Prerequisites above).
+Install bubblewrap on Linux (see Prerequisites above).
 
 ### "namespace operation not permitted"
 

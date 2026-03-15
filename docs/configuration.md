@@ -211,7 +211,7 @@ GoClaw is configured via `goclaw.json` in the working directory.
 | `roles` | Role-based access control definitions | [Roles](roles.md) |
 | `cron` | Scheduled jobs and heartbeat | [Cron](tools/cron.md) |
 | `safety` | Panic stop phrases | [Security](security.md) |
-| `sandbox` | Execution isolation (bubblewrap) | [Sandbox](sandbox.md) |
+| `sandbox` | Execution isolation (bubblewrap/seatbelt) | [Sandbox](sandbox.md) |
 | `supervision` | Ghostwriting and guidance | [Supervision](supervision.md) |
 | `homeassistant` | Home Assistant integration | [Home Assistant](tools/hass.md) |
 

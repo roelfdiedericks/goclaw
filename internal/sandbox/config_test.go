@@ -49,8 +49,13 @@ func TestSupportedModeOptionsReflectPlatform(t *testing.T) {
 			t.Fatalf("expected Darwin seatbelt to expose home and autodocs modes, got %#v", options)
 		}
 	case BackendBubblewrap:
-		if len(options) != 3 {
-			t.Fatalf("expected Linux bubblewrap to expose three modes, got %#v", options)
+		if len(options) != 5 ||
+			options[0].Value != ModeHome ||
+			options[1].Value != ModeAutoDocsRead ||
+			options[2].Value != ModeAutoDocsWrite ||
+			options[3].Value != ModeVolumes ||
+			options[4].Value != ModeEphemeral {
+			t.Fatalf("expected Linux bubblewrap to expose home/autodocs/volumes/ephemeral modes, got %#v", options)
 		}
 	}
 }

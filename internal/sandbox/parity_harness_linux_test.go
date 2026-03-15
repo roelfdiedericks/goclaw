@@ -9,7 +9,7 @@ import (
 func TestLinuxModeParityAcrossFileToolsAndPolicy(t *testing.T) {
 	fx := makeParityFixture(t)
 
-	modes := []string{ModeHome, ModeVolumes, ModeEphemeral}
+	modes := []string{ModeHome, ModeAutoDocsRead, ModeAutoDocsWrite, ModeVolumes, ModeEphemeral}
 	for _, mode := range modes {
 		mode := mode
 		t.Run(mode, func(t *testing.T) {
@@ -50,6 +50,30 @@ func TestLinuxModeParityAcrossFileToolsAndPolicy(t *testing.T) {
 				}
 				if target == fx.desktopDoc {
 					t.Fatalf("expected home-mode path to map to backing home, got %q", target)
+				}
+			case ModeAutoDocsRead:
+				if policy.BackingHomeDir == "" {
+					t.Fatalf("expected non-empty backing home in mode %s", mode)
+				}
+				if resolved, err := mgr.ValidatePath("~/Desktop/doc.txt", fx.workspace); err != nil {
+					t.Fatalf("expected desktop read path to validate in mode %s, err=%v", mode, err)
+				} else if resolved != fx.desktopDoc {
+					t.Fatalf("expected desktop path to resolve to visible home root in mode %s, got %q", mode, resolved)
+				}
+				if _, err := mgr.ValidateWritePath("~/Desktop/linux_autodocs_probe.txt", fx.workspace); err == nil {
+					t.Fatalf("expected desktop write denial in mode %s", mode)
+				}
+			case ModeAutoDocsWrite:
+				if policy.BackingHomeDir == "" {
+					t.Fatalf("expected non-empty backing home in mode %s", mode)
+				}
+				if resolved, err := mgr.ValidatePath("~/Desktop/doc.txt", fx.workspace); err != nil {
+					t.Fatalf("expected desktop read path to validate in mode %s, err=%v", mode, err)
+				} else if resolved != fx.desktopDoc {
+					t.Fatalf("expected desktop path to resolve to visible home root in mode %s, got %q", mode, resolved)
+				}
+				if _, err := mgr.ValidateWritePath("~/Desktop/linux_autodocs_probe.txt", fx.workspace); err != nil {
+					t.Fatalf("expected desktop write in mode %s, err=%v", mode, err)
 				}
 			case ModeVolumes:
 				if policy.BackingHomeDir != "" {

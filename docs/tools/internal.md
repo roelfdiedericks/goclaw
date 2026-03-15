@@ -137,7 +137,7 @@ Execute a shell command.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `timeout` | 1800 | Default timeout (30 minutes) |
-| `bubblewrap.enabled` | false | Enable bubblewrap sandboxing (Linux) |
+| `bubblewrap.enabled` | false | Enable managed exec sandboxing (platform backend) |
 | `bubblewrap.extraRoBind` | [] | Additional read-only paths |
 | `bubblewrap.extraBind` | [] | Additional writable paths |
 | `bubblewrap.extraEnv` | {} | Additional environment variables |

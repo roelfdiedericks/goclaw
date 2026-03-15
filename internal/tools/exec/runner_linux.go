@@ -20,6 +20,14 @@ func (r *Runner) buildSandboxedCommand(ctx context.Context, command, workDir str
 
 	mgr := sandbox.GetManager()
 	policy := mgr.ResolvePolicy()
+	autoDocsRoots := mgr.GetAutoDocsRoots()
+	extraBind := append([]string{}, r.config.Bubblewrap.ExtraBind...)
+	extraRoBind := append([]string{}, r.config.Bubblewrap.ExtraRoBind...)
+	if mgr.IsAutoDocsWriteMode() {
+		extraBind = append(extraBind, autoDocsRoots...)
+	} else {
+		extraRoBind = append(extraRoBind, autoDocsRoots...)
+	}
 	cmd, err := sbruntime.BuildExecCommand(command, sbruntime.ExecLaunchOptions{
 		BackendPath:   r.config.BubblewrapPath,
 		SandboxMode:   mgr.GetMode(),
@@ -32,8 +40,8 @@ func (r *Runner) buildSandboxedCommand(ctx context.Context, command, workDir str
 		ClearEnv:      r.config.Bubblewrap.ClearEnv,
 		AllowNetwork:  r.config.Bubblewrap.AllowNetwork,
 		ExtraEnv:      r.config.Bubblewrap.ExtraEnv,
-		ExtraBind:     r.config.Bubblewrap.ExtraBind,
-		ExtraRoBind:   r.config.Bubblewrap.ExtraRoBind,
+		ExtraBind:     extraBind,
+		ExtraRoBind:   extraRoBind,
 	})
 	if err != nil {
 		L_error("exec runner: failed to build sandbox command", "error", err)
