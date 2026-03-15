@@ -46,18 +46,25 @@ func (m *Manager) ResolvePolicy() ResolvedPolicy {
 	m.mu.RLock()
 	mode := m.mode
 	workspace := filepath.Clean(m.workspaceRoot)
-	backingHome := filepath.Clean(m.homeDir)
+	backingHome := cleanPathIfSet(m.homeDir)
 	autoDocsWrite := m.config.IsAutoDocsWriteMode()
 	m.mu.RUnlock()
 
 	return ResolvedPolicy{
 		Mode:             mode,
-		VisibleHomeDir:   filepath.Clean(realHome),
+		VisibleHomeDir:   cleanPathIfSet(realHome),
 		BackingHomeDir:   backingHome,
 		VisibleWorkspace: workspace,
 		AutoDocsRoots:    m.GetAutoDocsRoots(),
 		AutoDocsWrite:    autoDocsWrite,
 	}
+}
+
+func cleanPathIfSet(path string) string {
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
 }
 
 // ResolvePath maps a user-facing path into the backing filesystem path while

@@ -286,7 +286,10 @@ func buildBrowserProfile(browserBin string, opts BrowserLaunchOptions) string {
 }
 
 func buildExecReadRules(opts ExecLaunchOptions, allowRoots []string) []string {
-	realHome, _ := os.UserHomeDir()
+	realHome := filepath.Clean(opts.VisibleHomeDir)
+	if realHome == "" || realHome == "." {
+		realHome, _ = os.UserHomeDir()
+	}
 	if shouldDenyRealHome(realHome, opts.BackingHomeDir) {
 		return []string{
 			"(allow file-read*)",
