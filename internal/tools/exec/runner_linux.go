@@ -19,14 +19,15 @@ func (r *Runner) buildSandboxedCommand(ctx context.Context, command, workDir str
 		return nil, nil
 	}
 
-	home, _ := os.UserHomeDir()
 	mgr := sandbox.GetManager()
+	policy := mgr.ResolvePolicy()
 	cmd, err := sbruntime.BuildExecCommand(command, sbruntime.ExecLaunchOptions{
 		BackendPath:   r.config.BubblewrapPath,
 		SandboxMode:   mgr.GetMode(),
 		WorkspaceDir:  r.config.WorkingDir,
 		WorkDir:       workDir,
-		HomeDir:       preferredExecHome(mgr, home),
+		VisibleHomeDir: policy.VisibleHomeDir,
+		BackingHomeDir: policy.BackingHomeDir,
 		Volumes:       runtimeVolumes(mgr.GetVolumes()),
 		ProtectedDirs: mgr.GetProtectedDirs(),
 		ClearEnv:      r.config.Bubblewrap.ClearEnv,
@@ -56,13 +57,6 @@ func (r *Runner) buildSandboxedCommand(ctx context.Context, command, workDir str
 	)
 
 	return cmd, nil
-}
-
-func preferredExecHome(mgr *sandbox.Manager, realHome string) string {
-	if mgr != nil && mgr.GetHomeDir() != "" {
-		return mgr.GetHomeDir()
-	}
-	return realHome
 }
 
 func runtimeVolumes(vols []sandbox.SandboxVolume) []sbruntime.SandboxVolume {

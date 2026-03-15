@@ -8,9 +8,10 @@ package bwrap
 // Parameters:
 //   - workspace: the workspace directory (for media downloads, writable)
 //   - browserProfile: the browser profile directory (writable)
-//   - home: the home directory to expose inside sandbox
+//   - visibleHome: the home directory to expose inside sandbox
+//   - backingHome: the backing directory for sandbox-managed home content
 //   - gpu: whether to enable GPU acceleration (/dev/dri)
-func BrowserSandbox(workspace, browserProfile, home string, gpu bool) *Builder {
+func BrowserSandbox(workspace, browserProfile, visibleHome, backingHome string, gpu bool) *Builder {
 	b := New()
 
 	// Core system binds
@@ -18,6 +19,10 @@ func BrowserSandbox(workspace, browserProfile, home string, gpu bool) *Builder {
 	b.EtcBinds()
 	b.SSLCerts()
 	b.Fonts()
+
+	if backingHome != "" {
+		b.BindTo(backingHome, visibleHome)
+	}
 
 	// Workspace writable (for screenshot/media downloads)
 	b.Bind(workspace)
@@ -27,8 +32,8 @@ func BrowserSandbox(workspace, browserProfile, home string, gpu bool) *Builder {
 
 	// Chromium needs writable ~/.cache and ~/.config for various temp files
 	// Use tmpfs so it can write but nothing persists outside profile
-	b.Tmpfs(home + "/.cache")
-	b.Tmpfs(home + "/.config")
+	b.Tmpfs(visibleHome + "/.cache")
+	b.Tmpfs(visibleHome + "/.config")
 
 	// Isolated /tmp
 	b.Tmpfs("/tmp")
@@ -50,7 +55,7 @@ func BrowserSandbox(workspace, browserProfile, home string, gpu bool) *Builder {
 
 	// Environment - clearenv MUST come before any setenv calls
 	b.ClearEnv()
-	b.DefaultEnv(home, "")
+	b.DefaultEnv(visibleHome, "")
 
 	// Display access (X11 or Wayland) - after clearenv so DISPLAY is preserved
 	b.Display()

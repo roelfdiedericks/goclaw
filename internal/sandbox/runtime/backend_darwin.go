@@ -54,7 +54,8 @@ func (darwinExecBackend) BuildCommand(command string, opts ExecLaunchOptions) (*
 		"profilePath", profilePath,
 		"workspaceDir", opts.WorkspaceDir,
 		"workDir", opts.WorkDir,
-		"homeDir", opts.HomeDir,
+		"visibleHomeDir", opts.VisibleHomeDir,
+		"backingHomeDir", opts.BackingHomeDir,
 		"volumes", len(opts.Volumes),
 		"protectedDirs", len(opts.ProtectedDirs),
 		"clearEnv", opts.ClearEnv,
@@ -77,7 +78,7 @@ func (darwinExecBackend) BuildCommand(command string, opts ExecLaunchOptions) (*
 		if pathValue == "" {
 			pathValue = os.Getenv("PATH")
 		}
-		cmd.Env = BuildMinimalEnv(opts.HomeDir, pathValue, opts.ExtraEnv)
+		cmd.Env = BuildMinimalEnv(opts.VisibleHomeDir, pathValue, opts.ExtraEnv)
 	} else if len(opts.ExtraEnv) > 0 {
 		cmd.Env = mergeEnv(os.Environ(), opts.ExtraEnv)
 	}
@@ -200,9 +201,9 @@ func buildExecProfile(opts ExecLaunchOptions) string {
 		readRoots = append(readRoots, opts.WorkDir)
 		writeRoots = append(writeRoots, opts.WorkDir)
 	}
-	if opts.HomeDir != "" {
-		readRoots = append(readRoots, opts.HomeDir)
-		writeRoots = append(writeRoots, opts.HomeDir)
+	if opts.BackingHomeDir != "" {
+		readRoots = append(readRoots, opts.BackingHomeDir)
+		writeRoots = append(writeRoots, opts.BackingHomeDir)
 	}
 	for _, vol := range opts.Volumes {
 		readRoots = append(readRoots, vol.Source)
@@ -257,8 +258,8 @@ func buildBrowserProfile(browserBin string, opts BrowserLaunchOptions) string {
 		"/tmp",
 		"/private/tmp",
 	}
-	if opts.HomeDir != "" {
-		readRoots = append(readRoots, opts.HomeDir)
+	if opts.BackingHomeDir != "" {
+		readRoots = append(readRoots, opts.BackingHomeDir)
 	}
 	for _, path := range opts.ExtraBind {
 		readRoots = append(readRoots, path)
@@ -286,7 +287,7 @@ func buildBrowserProfile(browserBin string, opts BrowserLaunchOptions) string {
 
 func buildExecReadRules(opts ExecLaunchOptions, allowRoots []string) []string {
 	realHome, _ := os.UserHomeDir()
-	if shouldDenyRealHome(realHome, opts.HomeDir) {
+	if shouldDenyRealHome(realHome, opts.BackingHomeDir) {
 		return []string{
 			"(allow file-read*)",
 			buildSubpathRule("deny file-read*", []string{filepath.Clean(realHome)}),

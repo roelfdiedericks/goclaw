@@ -39,14 +39,15 @@ func CreateSandboxedLauncher(browserBin, workspace, profileDir string, cfg Brows
 		return browserBin, nil
 	}
 
-	home, _ := os.UserHomeDir()
 	mgr := sandbox.GetManager()
+	policy := mgr.ResolvePolicy()
 	return sbruntime.CreateBrowserLauncher(browserBin, sbruntime.BrowserLaunchOptions{
 		BackendPath:   cfg.BwrapPath,
 		SandboxMode:   mgr.GetMode(),
 		WorkspaceDir:  workspace,
 		ProfileDir:    profileDir,
-		HomeDir:       preferredBrowserHome(mgr, home),
+		VisibleHomeDir: policy.VisibleHomeDir,
+		BackingHomeDir: policy.BackingHomeDir,
 		ProtectedDirs: mgr.GetProtectedDirs(),
 		AllowGPU:      cfg.GPU,
 		ClearEnv:      true,
@@ -141,14 +142,6 @@ func CreatePassthroughLauncher(browserBin string) (string, error) {
 	)
 
 	return wrapperPath, nil
-}
-
-// shellQuote properly quotes a string for shell use
-func preferredBrowserHome(mgr *sandbox.Manager, realHome string) string {
-	if mgr != nil && mgr.GetHomeDir() != "" {
-		return mgr.GetHomeDir()
-	}
-	return realHome
 }
 
 // CleanupSandboxWrapper removes the sandbox wrapper script

@@ -17,7 +17,8 @@ type ExecLaunchOptions struct {
 	SandboxMode   string
 	WorkspaceDir  string
 	WorkDir       string
-	HomeDir       string
+	VisibleHomeDir string
+	BackingHomeDir string
 	PathValue     string
 	Volumes       []SandboxVolume
 	ProtectedDirs []string
@@ -34,7 +35,8 @@ type BrowserLaunchOptions struct {
 	SandboxMode   string
 	WorkspaceDir  string
 	ProfileDir    string
-	HomeDir       string
+	VisibleHomeDir string
+	BackingHomeDir string
 	ProtectedDirs []string
 	Headless      bool
 	AllowGPU      bool

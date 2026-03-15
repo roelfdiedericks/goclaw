@@ -150,3 +150,27 @@ func TestValidateWritePathBlocksAutoDocsInReadMode(t *testing.T) {
 		t.Fatalf("expected autodocs write mode to allow writes, err=%v", err)
 	}
 }
+
+func TestResolvePolicySeparatesVisibleAndBackingHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	workspace := filepath.Join(home, "workspace")
+	backing := filepath.Join(home, ".goclaw", "sandbox", "home")
+	m := &Manager{
+		config:        Config{General: GeneralConfig{Mode: ModeHome}},
+		workspaceRoot: workspace,
+		homeDir:       backing,
+	}
+
+	policy := m.ResolvePolicy()
+	if policy.VisibleHomeDir != filepath.Clean(home) {
+		t.Fatalf("expected visible home %q, got %q", filepath.Clean(home), policy.VisibleHomeDir)
+	}
+	if policy.BackingHomeDir != filepath.Clean(backing) {
+		t.Fatalf("expected backing home %q, got %q", filepath.Clean(backing), policy.BackingHomeDir)
+	}
+	if policy.VisibleWorkspace != filepath.Clean(workspace) {
+		t.Fatalf("expected visible workspace %q, got %q", filepath.Clean(workspace), policy.VisibleWorkspace)
+	}
+}

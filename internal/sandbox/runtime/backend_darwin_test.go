@@ -32,8 +32,9 @@ func TestBuildExecProfileDeniesRealHomeWhenUsingSandboxHome(t *testing.T) {
 	workspace := realHome + "/goclaw"
 	sandboxHome := realHome + "/.goclaw/sandbox/home"
 	profile := buildExecProfile(ExecLaunchOptions{
-		WorkspaceDir: workspace,
-		HomeDir:      sandboxHome,
+		WorkspaceDir:   workspace,
+		VisibleHomeDir: realHome,
+		BackingHomeDir: sandboxHome,
 	})
 
 	if !strings.Contains(profile, fmt.Sprintf(`(subpath "%s")`, realHome)) {
@@ -155,10 +156,11 @@ func TestCreateBrowserLauncherWrapsCleanup(t *testing.T) {
 
 	backend := darwinBrowserBackend{}
 	wrapperPath, err := backend.CreateLauncher("/Applications/Test.app/Contents/MacOS/Test", BrowserLaunchOptions{
-		SandboxMode:  "home",
-		WorkspaceDir: "/workspace",
-		ProfileDir:   "/tmp/browser-profile",
-		HomeDir:      filepath.Join(tmpHome, ".goclaw", "sandbox", "home"),
+		SandboxMode:    "home",
+		WorkspaceDir:   "/workspace",
+		ProfileDir:     "/tmp/browser-profile",
+		VisibleHomeDir: tmpHome,
+		BackingHomeDir: filepath.Join(tmpHome, ".goclaw", "sandbox", "home"),
 	})
 	if err != nil {
 		t.Fatalf("expected wrapper to be created, err=%v", err)

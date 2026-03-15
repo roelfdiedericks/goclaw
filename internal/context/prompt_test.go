@@ -64,3 +64,21 @@ func TestBuildSystemPromptUsesModelFacingCronInstructions(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildSystemPromptIncludesVisibleHomeWithoutBackingLeak(t *testing.T) {
+	prompt := BuildSystemPrompt(PromptParams{
+		WorkspaceDir:   "/Users/rodent/.goclaw/workspace",
+		VisibleHomeDir: "/Users/rodent",
+		SandboxMode:    "home",
+		Channel:        "telegram",
+		WorkspaceFiles: []WorkspaceFile{},
+		IncludeMemory:  true,
+	})
+
+	if !strings.Contains(prompt, "Your visible HOME directory is: /Users/rodent") {
+		t.Fatalf("expected visible home guidance, prompt: %s", prompt)
+	}
+	if strings.Contains(prompt, ".goclaw/sandbox/home") {
+		t.Fatalf("did not expect backing sandbox path leak, prompt: %s", prompt)
+	}
+}
