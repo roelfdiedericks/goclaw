@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/knights-analytics/hugot"
+	"github.com/knights-analytics/hugot/options"
 	"github.com/knights-analytics/hugot/pipelines"
 )
 
@@ -22,6 +23,8 @@ type config struct {
 	Model        string
 	ModelPath    string
 	ModelsDir    string
+	OrtLibDir    string
+	XLAPluginDir string
 	OnnxFilename string
 	File         string
 	Query        string
@@ -135,6 +138,8 @@ func parseFlags() config {
 	flag.StringVar(&cfg.Model, "model", defaultModel, "Hugging Face model repo to download when -model-path is empty")
 	flag.StringVar(&cfg.ModelPath, "model-path", "", "Existing local model directory; skips downloading when set")
 	flag.StringVar(&cfg.ModelsDir, "models-dir", defaultModelsDir, "Directory where downloaded models are stored")
+	flag.StringVar(&cfg.OrtLibDir, "ort-lib-dir", "", "Directory containing the ONNX Runtime shared library for the ORT backend")
+	flag.StringVar(&cfg.XLAPluginDir, "xla-plugin-dir", "", "Directory containing the PJRT/XLA plugin for the XLA backend")
 	flag.StringVar(&cfg.OnnxFilename, "onnx-filename", "model.onnx", "ONNX filename inside the model directory")
 	flag.StringVar(&cfg.File, "file", defaultFile, "Markdown file to ingest")
 	flag.StringVar(&cfg.Query, "query", "", "Semantic query to run against embedded chunks")
@@ -167,6 +172,21 @@ func prepareEmbeddings(cfg config) (*setupResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("expand models dir: %w", err)
 	}
+	cfg.ModelsDir = modelsDir
+
+	if cfg.OrtLibDir != "" {
+		cfg.OrtLibDir, err = expandPath(cfg.OrtLibDir)
+		if err != nil {
+			return nil, fmt.Errorf("expand ort lib dir: %w", err)
+		}
+	}
+
+	if cfg.XLAPluginDir != "" {
+		cfg.XLAPluginDir, err = expandPath(cfg.XLAPluginDir)
+		if err != nil {
+			return nil, fmt.Errorf("expand xla plugin dir: %w", err)
+		}
+	}
 
 	content, err := os.ReadFile(inputPath)
 	if err != nil {
@@ -179,7 +199,7 @@ func prepareEmbeddings(cfg config) (*setupResult, error) {
 	}
 
 	sessionStart := time.Now()
-	session, err := createSession(cfg.Backend)
+	session, err := createSession(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create %s backend session: %w", cfg.Backend, err)
 	}
@@ -231,16 +251,26 @@ func prepareEmbeddings(cfg config) (*setupResult, error) {
 	}, nil
 }
 
-func createSession(backend string) (*hugot.Session, error) {
-	switch strings.ToLower(strings.TrimSpace(backend)) {
+func createSession(cfg config) (*hugot.Session, error) {
+	backend := strings.ToLower(strings.TrimSpace(cfg.Backend))
+	switch backend {
 	case "go":
 		return hugot.NewGoSession()
 	case "ort":
-		return hugot.NewORTSession()
+		var opts []options.WithOption
+		if cfg.OrtLibDir != "" {
+			opts = append(opts, options.WithOnnxLibraryPath(cfg.OrtLibDir))
+		}
+		return hugot.NewORTSession(opts...)
 	case "xla":
+		if cfg.XLAPluginDir != "" {
+			if err := os.Setenv("PJRT_PLUGIN_LIBRARY_PATH", cfg.XLAPluginDir); err != nil {
+				return nil, fmt.Errorf("set PJRT_PLUGIN_LIBRARY_PATH: %w", err)
+			}
+		}
 		return hugot.NewXLASession()
 	default:
-		return nil, fmt.Errorf("unsupported backend %q (want go, ort, xla)", backend)
+		return nil, fmt.Errorf("unsupported backend %q (want go, ort, xla)", cfg.Backend)
 	}
 }
 
@@ -530,6 +560,12 @@ func printHeader(cfg config, setup *setupResult) {
 	fmt.Printf("model path:   %s\n", setup.ModelPath)
 	fmt.Printf("input file:   %s\n", setup.InputPath)
 	fmt.Printf("chunks:       %d\n", len(setup.Chunks))
+	if cfg.OrtLibDir != "" {
+		fmt.Printf("ort lib dir:  %s\n", cfg.OrtLibDir)
+	}
+	if cfg.XLAPluginDir != "" {
+		fmt.Printf("xla plugin:   %s\n", cfg.XLAPluginDir)
+	}
 	fmt.Printf("normalize:    %v\n", cfg.Normalize)
 	fmt.Printf("session init: %s\n", setup.SessionElapsed.Round(time.Millisecond))
 	fmt.Printf("pipeline init:%s\n", setup.PipelineElapsed.Round(time.Millisecond))

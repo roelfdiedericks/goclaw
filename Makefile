@@ -73,25 +73,50 @@ embtest-ort:
 # XLA build/runtime notes:
 # - Requires cgo-enabled build environment
 # - Requires PJRT/XLA runtime plugin installed on the host
-# - Typical CPU plugin location from Hugot docs:
-#   /usr/local/lib/go-xla
-# - Set PJRT_PLUGIN_LIBRARY_PATH to the directory containing the plugin when needed
+# - go-xla searches PJRT plugins via PJRT_PLUGIN_LIBRARY_PATH (":"-separated on Unix)
+# - Common plugin filenames include pjrt-plugin-*.so, pjrt_plugin_*.so, pjrt_c_api_*_plugin.so
+# - TPU setups may expose libtpu.so instead of a pjrt_plugin_* file
 embtest-xla-deps-check:
 	@if [ -z "$$CGO_ENABLED" ]; then \
 		echo "NOTE: CGO_ENABLED not explicitly set; go build usually defaults to cgo=1 on supported hosts."; \
 	fi
-	@if [ -n "$$PJRT_PLUGIN_LIBRARY_PATH" ]; then \
-		if [ -d "$$PJRT_PLUGIN_LIBRARY_PATH" ]; then \
-			echo "OK: PJRT_PLUGIN_LIBRARY_PATH=$$PJRT_PLUGIN_LIBRARY_PATH"; \
-		else \
-			echo "FAIL: PJRT_PLUGIN_LIBRARY_PATH is set but directory does not exist: $$PJRT_PLUGIN_LIBRARY_PATH"; \
-			exit 1; \
+	@found=""; \
+	check_dir() { \
+		dir="$$1"; \
+		[ -d "$$dir" ] || return 1; \
+		compgen -G "$$dir/pjrt-plugin-*.so" >/dev/null || \
+		compgen -G "$$dir/pjrt_plugin_*.so" >/dev/null || \
+		compgen -G "$$dir/pjrt_c_api_*_plugin.so" >/dev/null || \
+		[ -f "$$dir/libtpu.so" ]; \
+	}; \
+	if [ -n "$$PJRT_PLUGIN_LIBRARY_PATH" ]; then \
+		IFS=':' read -r -a pjrt_paths <<< "$$PJRT_PLUGIN_LIBRARY_PATH"; \
+		for dir in "$${pjrt_paths[@]}"; do \
+			if check_dir "$$dir"; then \
+				found="$$dir"; \
+				break; \
+			fi; \
+		done; \
+		if [ -n "$$found" ]; then \
+			echo "OK: found XLA/PJRT plugin in PJRT_PLUGIN_LIBRARY_PATH at $$found"; \
+			exit 0; \
 		fi; \
-	elif [ -d "/usr/local/lib/go-xla" ]; then \
-		echo "OK: found likely XLA plugin directory at /usr/local/lib/go-xla"; \
+		echo "FAIL: PJRT_PLUGIN_LIBRARY_PATH is set, but no plugin files were found in: $$PJRT_PLUGIN_LIBRARY_PATH"; \
+		echo "Expected patterns: pjrt-plugin-*.so, pjrt_plugin_*.so, pjrt_c_api_*_plugin.so, or libtpu.so"; \
+		exit 1; \
+	fi; \
+	for dir in /usr/local/lib/go-xla /usr/lib/go-xla /usr/local/lib /usr/lib; do \
+		if check_dir "$$dir"; then \
+			found="$$dir"; \
+			break; \
+		fi; \
+	done; \
+	if [ -n "$$found" ]; then \
+		echo "OK: found XLA/PJRT plugin files in $$found"; \
 	else \
-		echo "FAIL: XLA runtime plugin not found."; \
-		echo "Set PJRT_PLUGIN_LIBRARY_PATH or install a plugin, e.g.:"; \
+		echo "FAIL: XLA runtime plugin not found in standard locations."; \
+		echo "Checked: /usr/local/lib/go-xla, /usr/lib/go-xla, /usr/local/lib, /usr/lib"; \
+		echo "Set PJRT_PLUGIN_LIBRARY_PATH to the plugin directory or install one, e.g.:"; \
 		echo "  GOPROXY=direct go run github.com/gomlx/go-xla/cmd/pjrt_installer@latest -plugin=linux -version=<VERSION> -path=/usr/local/lib/go-xla"; \
 		exit 1; \
 	fi
@@ -99,7 +124,8 @@ embtest-xla-deps-check:
 # ORT build/runtime notes:
 # - Requires cgo-enabled build environment
 # - Requires ONNX Runtime shared library on the host
-# - Hugot defaults to /usr/lib/libonnxruntime.so on Linux and /usr/local/lib/libonnxruntime.dylib on macOS
+# - Hugot expects an unversioned libonnxruntime shared library in the directory you pass
+# - Common Linux paths include multiarch directories such as /usr/lib/x86_64-linux-gnu
 embtest-ort-deps-check:
 	@if [ -z "$$CGO_ENABLED" ]; then \
 		echo "NOTE: CGO_ENABLED not explicitly set; go build usually defaults to cgo=1 on supported hosts."; \
@@ -113,11 +139,19 @@ embtest-ort-deps-check:
 			exit 1; \
 		fi; \
 	else \
-		if [ -f "/usr/lib/libonnxruntime.so" ] || [ -f "/usr/local/lib/libonnxruntime.so" ]; then \
-			echo "OK: found libonnxruntime.so"; \
+		if [ -f "/usr/lib/libonnxruntime.so" ]; then \
+			echo "OK: found libonnxruntime.so in /usr/lib"; \
+		elif [ -f "/usr/local/lib/libonnxruntime.so" ]; then \
+			echo "OK: found libonnxruntime.so in /usr/local/lib"; \
+		elif [ -f "/usr/lib/x86_64-linux-gnu/libonnxruntime.so" ]; then \
+			echo "OK: found libonnxruntime.so in /usr/lib/x86_64-linux-gnu"; \
+		elif [ -f "/usr/lib/aarch64-linux-gnu/libonnxruntime.so" ]; then \
+			echo "OK: found libonnxruntime.so in /usr/lib/aarch64-linux-gnu"; \
 		else \
-			echo "FAIL: libonnxruntime.so not found in /usr/lib or /usr/local/lib"; \
-			echo "Install ONNX Runtime shared libraries before using embtest-ort."; \
+			echo "FAIL: libonnxruntime.so not found in standard Linux library paths."; \
+			echo "Checked: /usr/lib, /usr/local/lib, /usr/lib/x86_64-linux-gnu, /usr/lib/aarch64-linux-gnu"; \
+			echo "On Debian/Ubuntu, install: libonnxruntime-dev"; \
+			echo "Or pass a custom directory at runtime with: -ort-lib-dir /path/to/libdir"; \
 			exit 1; \
 		fi; \
 	fi
