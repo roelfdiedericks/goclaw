@@ -62,8 +62,8 @@ func TestDarwinExecBackendRejectsVolumesMode(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected volumes mode to be rejected")
 	}
-	if !strings.Contains(err.Error(), "use home mode instead") {
-		t.Fatalf("expected home mode guidance, got: %v", err)
+	if !strings.Contains(err.Error(), "autodocs-read") {
+		t.Fatalf("expected autodocs guidance, got: %v", err)
 	}
 }
 
@@ -138,8 +138,14 @@ func TestDarwinBrowserBackendRejectsVolumesMode(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected volumes mode to be rejected")
 	}
-	if !strings.Contains(err.Error(), "use home mode instead") {
-		t.Fatalf("expected home mode guidance, got: %v", err)
+	if !strings.Contains(err.Error(), "autodocs-read") {
+		t.Fatalf("expected autodocs guidance, got: %v", err)
+	}
+}
+
+func TestDarwinBackendRejectsEphemeralMode(t *testing.T) {
+	if err := validateDarwinSandboxMode("ephemeral"); err == nil {
+		t.Fatal("expected ephemeral mode to be rejected on Darwin")
 	}
 }
 

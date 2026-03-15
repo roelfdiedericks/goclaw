@@ -109,10 +109,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		return nil, errors.New("must specify one of: 'file', 'input', or 'exec'")
 	}
 
-	// Check if user has sandbox disabled
-	sandboxed := true
+	mgr := sandbox.GetManager()
+	fileSandboxed := mgr.IsEnabled() && mgr.IsFileToolsSandboxEnabled()
+	execSandboxed := mgr.IsEnabled() && mgr.IsExecSandboxEnabled()
 	if sessCtx := types.GetSessionContext(ctx); sessCtx != nil && sessCtx.User != nil {
-		sandboxed = sessCtx.User.Sandbox
+		fileSandboxed, execSandboxed = resolveSandboxModes(fileSandboxed, execSandboxed, sessCtx.User.Sandbox)
 	}
 
 	// Get JSON data from the appropriate source
@@ -121,17 +122,17 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	isExecMode := false
 
 	if params.File != "" {
-		data, err = t.readFile(params.File, sandboxed)
+		data, err = t.readFile(params.File, fileSandboxed)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read file: %w", err)
 		}
-		L_debug("jq tool: read file", "file", params.File, "bytes", len(data), "sandboxed", sandboxed)
+		L_debug("jq tool: read file", "file", params.File, "bytes", len(data), "sandboxed", fileSandboxed)
 	} else if params.Input != "" {
 		data = []byte(params.Input)
 		L_debug("jq tool: using inline input", "bytes", len(data))
 	} else if params.Exec != "" {
 		isExecMode = true
-		data, err = t.execCommand(ctx, params.Exec, sandboxed)
+		data, err = t.execCommand(ctx, params.Exec, execSandboxed)
 		if err != nil {
 			var execErr *exec.Error
 			if errors.As(err, &execErr) {
@@ -153,6 +154,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		return types.ExternalTextResult(result, "exec"), nil
 	}
 	return types.TextResult(result), nil
+}
+
+func resolveSandboxModes(fileToolsEnabled bool, execEnabled bool, userSandbox bool) (bool, bool) {
+	return sandbox.ApplyUserSandboxOverride(fileToolsEnabled, userSandbox),
+		sandbox.ApplyUserSandboxOverride(execEnabled, userSandbox)
 }
 
 // readFile reads a JSON file, respecting sandbox settings

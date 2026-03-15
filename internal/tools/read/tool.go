@@ -70,10 +70,12 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		return nil, fmt.Errorf("invalid input: %w", err)
 	}
 
-	// Check if user has sandbox disabled
-	sandboxed := true
-	if sessCtx := types.GetSessionContext(ctx); sessCtx != nil && sessCtx.User != nil {
-		sandboxed = sessCtx.User.Sandbox
+	mgr := sandbox.GetManager()
+	sandboxed := mgr.IsEnabled() && mgr.IsFileToolsSandboxEnabled()
+	if sandboxed {
+		if sessCtx := types.GetSessionContext(ctx); sessCtx != nil && sessCtx.User != nil {
+			sandboxed = sandbox.ApplyUserSandboxOverride(sandboxed, sessCtx.User.Sandbox)
+		}
 	}
 
 	L_debug("read tool: reading file", "path", params.Path, "startLine", params.StartLine, "endLine", params.EndLine, "sandboxed", sandboxed)

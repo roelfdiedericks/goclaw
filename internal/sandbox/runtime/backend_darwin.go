@@ -177,7 +177,10 @@ func writeExecWrapper(sandboxExec string, profilePath string, command string) (s
 
 func validateDarwinSandboxMode(mode string) error {
 	if mode == "volumes" {
-		return fmt.Errorf("darwin seatbelt sandbox does not support volumes mode; use home mode instead")
+		return fmt.Errorf("darwin seatbelt sandbox does not support volumes mode; use home, autodocs-read, or autodocs-write instead")
+	}
+	if mode == "ephemeral" {
+		return fmt.Errorf("darwin seatbelt sandbox does not support ephemeral mode; use home, autodocs-read, or autodocs-write instead")
 	}
 	return nil
 }

@@ -24,9 +24,17 @@ func (r *Runner) buildSandboxedCommand(ctx context.Context, command, workDir str
 	preferredHome := preferredExecHome(mgr, home)
 	vols := runtimeVolumes(mgr.GetVolumes())
 	protectedDirs := mgr.GetProtectedDirs()
+	autoDocsRoots := mgr.GetAutoDocsRoots()
 	pathValue := os.Getenv("PATH")
 	if mgr != nil {
 		pathValue = mgr.BuildSandboxPATH(preferredHome)
+	}
+	extraBind := append([]string{}, r.config.Bubblewrap.ExtraBind...)
+	extraRoBind := append([]string{}, r.config.Bubblewrap.ExtraRoBind...)
+	if mgr.IsAutoDocsWriteMode() {
+		extraBind = append(extraBind, autoDocsRoots...)
+	} else {
+		extraRoBind = append(extraRoBind, autoDocsRoots...)
 	}
 	L_debug("exec runner: darwin sandbox request",
 		"backendPath", r.config.BubblewrapPath,
@@ -49,8 +57,8 @@ func (r *Runner) buildSandboxedCommand(ctx context.Context, command, workDir str
 		ClearEnv:      r.config.Bubblewrap.ClearEnv,
 		AllowNetwork:  r.config.Bubblewrap.AllowNetwork,
 		ExtraEnv:      r.config.Bubblewrap.ExtraEnv,
-		ExtraBind:     r.config.Bubblewrap.ExtraBind,
-		ExtraRoBind:   r.config.Bubblewrap.ExtraRoBind,
+		ExtraBind:     extraBind,
+		ExtraRoBind:   extraRoBind,
 	})
 	if err != nil {
 		L_error("exec runner: failed to build sandbox command", "error", err)

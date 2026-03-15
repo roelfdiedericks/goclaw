@@ -8,6 +8,7 @@ import (
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
@@ -89,12 +90,14 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		workDir = t.runner.Config().WorkingDir
 	}
 
-	// Check if user has sandbox disabled
-	useSandbox := t.runner.Config().Bubblewrap.Enabled
-	if sessCtx := types.GetSessionContext(ctx); sessCtx != nil && sessCtx.User != nil {
-		if !sessCtx.User.Sandbox {
-			useSandbox = false
-			L_debug("exec tool: sandbox disabled for user", "user", sessCtx.User.Name)
+	mgr := sandbox.GetManager()
+	useSandbox := mgr.IsEnabled() && mgr.IsExecSandboxEnabled() && t.runner.Config().Bubblewrap.Enabled
+	if useSandbox {
+		if sessCtx := types.GetSessionContext(ctx); sessCtx != nil && sessCtx.User != nil {
+			useSandbox = sandbox.ApplyUserSandboxOverride(useSandbox, sessCtx.User.Sandbox)
+			if !useSandbox {
+				L_debug("exec tool: sandbox disabled for user", "user", sessCtx.User.Name)
+			}
 		}
 	}
 

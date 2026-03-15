@@ -30,9 +30,8 @@ func ConfigFormDef() forms.FormDef {
 				},
 			},
 			{
-				Title: "Sandbox (Linux only)",
+				Title: "Sandbox Runtime",
 				Fields: []forms.Field{
-					{Name: "Bubblewrap.Enabled", Title: "Enable Sandbox", Type: forms.Toggle},
 					{Name: "Bubblewrap.AllowNetwork", Title: "Allow Network", Type: forms.Toggle},
 					{Name: "Bubblewrap.ClearEnv", Title: "Clear Environment", Type: forms.Toggle},
 				},

@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"runtime"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
@@ -10,31 +11,104 @@ import (
 
 // Sandbox modes
 const (
-	ModeEphemeral = "ephemeral" // No persistent home dirs - maximum security
-	ModeVolumes   = "volumes"   // Specific directories persisted via isolated mounts
-	ModeHome      = "home"      // Full isolated home directory - everything persists
+	ModeEphemeral      = "ephemeral"      // No persistent home dirs - maximum security
+	ModeVolumes        = "volumes"        // Specific directories persisted via isolated mounts
+	ModeHome           = "home"           // Full isolated home directory - everything persists
+	ModeAutoDocsRead   = "autodocs-read"  // Sandbox home plus dynamic read-only non-hidden home directories
+	ModeAutoDocsWrite  = "autodocs-write" // Sandbox home plus dynamic read-write non-hidden home directories
 )
 
 // Config holds top-level sandbox configuration.
 type Config struct {
+	General    GeneralConfig    `json:"general"`
 	Bubblewrap BubblewrapConfig `json:"bubblewrap"`
+	Seatbelt   SeatbeltConfig   `json:"seatbelt"`
 }
 
-// BubblewrapConfig holds global bubblewrap settings shared by all sandboxed tools.
-type BubblewrapConfig struct {
-	Path       string   `json:"path"`                // Custom bwrap binary path (empty = search PATH)
+// GeneralConfig holds shared sandbox policy across backends.
+type GeneralConfig struct {
+	Enabled          bool     `json:"enabled" default:"true"`
 	Mode       string   `json:"mode" default:"home"` // "ephemeral", "volumes", "home"
 	DataDir    string   `json:"dataDir"`             // Backing directory root (default: ~/.goclaw/sandbox)
-	Volumes    []string `json:"volumes"`             // Isolated mount points (runtime default)
 	ExtraPaths []string `json:"extraPaths"`          // Additional PATH entries for sandbox
+	ExecEnabled       bool     `json:"execEnabled" default:"true"`
+	BrowserEnabled    bool     `json:"browserEnabled" default:"true"`
+	FileToolsEnabled  bool     `json:"fileToolsEnabled" default:"true"`
+}
+
+// BubblewrapConfig holds Linux-specific bubblewrap settings.
+type BubblewrapConfig struct {
+	Path    string   `json:"path"`    // Custom bwrap binary path (empty = search PATH)
+	Volumes []string `json:"volumes"` // Isolated mount points (runtime default)
+}
+
+// SeatbeltConfig holds Darwin-specific seatbelt settings.
+type SeatbeltConfig struct {
+	Path string `json:"path"` // Custom sandbox-exec path (empty = search PATH)
 }
 
 // GetMode returns the configured mode with default fallback.
-func (c *BubblewrapConfig) GetMode() string {
-	if c.Mode == "" {
+func (c *Config) GetMode() string {
+	if c.General.Mode == "" {
 		return ModeHome
 	}
-	return c.Mode
+	return c.General.Mode
+}
+
+// IsAutoDocsMode reports whether the config uses one of the autodocs variants.
+func (c *Config) IsAutoDocsMode() bool {
+	mode := c.GetMode()
+	return mode == ModeAutoDocsRead || mode == ModeAutoDocsWrite
+}
+
+// IsAutoDocsWriteMode reports whether autodocs directories are writable.
+func (c *Config) IsAutoDocsWriteMode() bool {
+	return c.GetMode() == ModeAutoDocsWrite
+}
+
+// IsEnabled returns whether sandboxing is enabled globally.
+func (c *Config) IsEnabled() bool {
+	return c.General.Enabled
+}
+
+// IsExecEnabled returns whether exec sandboxing is enabled.
+func (c *Config) IsExecEnabled() bool {
+	return c.General.Enabled && c.General.ExecEnabled
+}
+
+// IsBrowserEnabled returns whether browser sandboxing is enabled.
+func (c *Config) IsBrowserEnabled() bool {
+	return c.General.Enabled && c.General.BrowserEnabled
+}
+
+// IsFileToolsEnabled returns whether file tool sandboxing is enabled.
+func (c *Config) IsFileToolsEnabled() bool {
+	return c.General.Enabled && c.General.FileToolsEnabled
+}
+
+// GetDataDir returns the shared sandbox data directory.
+func (c *Config) GetDataDir() string {
+	return c.General.DataDir
+}
+
+// GetExtraPaths returns shared extra PATH entries.
+func (c *Config) GetExtraPaths() []string {
+	return c.General.ExtraPaths
+}
+
+// GetVolumes returns Linux bubblewrap volume mappings.
+func (c *Config) GetVolumes() []string {
+	return c.Bubblewrap.Volumes
+}
+
+// GetBackendPath returns the configured backend binary path for the current platform.
+func (c *Config) GetBackendPath() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return c.Seatbelt.Path
+	default:
+		return c.Bubblewrap.Path
+	}
 }
 
 // DefaultVolumes returns the built-in sandbox volume mount points.
@@ -46,47 +120,78 @@ const configPath = "sandbox"
 
 // ConfigFormDef returns the form definition for sandbox configuration.
 func ConfigFormDef() forms.FormDef {
-	return forms.FormDef{
-		Title:       "Sandbox",
-		Description: "Configure agent sandboxing and filesystem isolation",
-		Sections: []forms.Section{
-			{
-				Title: "Bubblewrap",
+	modeOptions := SupportedModeOptions()
+	backendLabel := CurrentBackendDisplayName()
+	backendPathFieldName := BackendPathFieldName()
+	backendPathDesc := BackendPathDescription()
+	sections := []forms.Section{
+		{
+			Title: "General",
+			Fields: []forms.Field{
+				{
+					Name:  "general.enabled",
+					Title: "Enable Sandboxing",
+					Type:  forms.Toggle,
+					Desc:  "Master switch for sandboxing across exec, browser, and file tools",
+				},
+				{
+					Name:  "general.mode",
+					Title: "Sandbox Mode",
+					Type:  forms.Select,
+					Desc:  "How home directories are handled inside the sandbox",
+					Options: modeOptions,
+				},
+				{
+					Name:  "general.dataDir",
+					Title: "Data Directory",
+					Type:  forms.Text,
+					Desc:  "Backing storage root (default: ~/.goclaw/sandbox)",
+				},
+				{
+					Name:  "general.extraPaths",
+					Title: "Extra PATH Entries",
+					Type:  forms.StringList,
+					Desc:  "Additional directories to add to sandbox PATH",
+				},
+				{
+					Name:  "general.execEnabled",
+					Title: "Enable Exec Sandboxing",
+					Type:  forms.Toggle,
+					Desc:  "Apply OS sandboxing to exec tool commands",
+				},
+				{
+					Name:  "general.browserEnabled",
+					Title: "Enable Browser Sandboxing",
+					Type:  forms.Toggle,
+					Desc:  "Apply OS sandboxing to managed browser launches",
+				},
+				{
+					Name:  "general.fileToolsEnabled",
+					Title: "Enable File Tool Sandboxing",
+					Type:  forms.Toggle,
+					Desc:  "Restrict read, write, edit, and jq file-mode to sandboxed paths",
+				},
+			},
+		},
+	}
+
+	switch CurrentSandboxBackend() {
+	case BackendBubblewrap:
+		sections = append(sections,
+			forms.Section{
+				Title: backendLabel,
 				Fields: []forms.Field{
 					{
-						Name:  "bubblewrap.mode",
-						Title: "Sandbox Mode",
-						Type:  forms.Select,
-						Desc:  "How home directories are handled inside the sandbox",
-						Options: []forms.Option{
-							{Label: "Home (full isolated home - recommended)", Value: ModeHome},
-							{Label: "Volumes (specific dirs only)", Value: ModeVolumes},
-							{Label: "Ephemeral (nothing persists)", Value: ModeEphemeral},
-						},
-					},
-					{
-						Name:  "bubblewrap.path",
-						Title: "Bwrap Binary Path",
+						Name:  backendPathFieldName,
+						Title: "Bubblewrap Binary Path",
 						Type:  forms.Text,
-						Desc:  "Custom path to bwrap binary (empty = search PATH)",
-					},
-					{
-						Name:  "bubblewrap.dataDir",
-						Title: "Data Directory",
-						Type:  forms.Text,
-						Desc:  "Backing storage root (default: ~/.goclaw/sandbox)",
-					},
-					{
-						Name:  "bubblewrap.extraPaths",
-						Title: "Extra PATH Entries",
-						Type:  forms.StringList,
-						Desc:  "Additional directories to add to sandbox PATH",
+						Desc:  backendPathDesc,
 					},
 				},
 			},
-			{
+			forms.Section{
 				Title:    "Volume Mounts",
-				ShowWhen: "bubblewrap.mode=volumes",
+				ShowWhen: "general.mode=volumes",
 				Fields: []forms.Field{
 					{
 						Name:  "bubblewrap.volumes",
@@ -96,7 +201,31 @@ func ConfigFormDef() forms.FormDef {
 					},
 				},
 			},
-		},
+		)
+	case BackendSeatbelt:
+		sections = append(sections, forms.Section{
+			Title: backendLabel,
+			Desc:  "macOS supports Home and Autodocs modes for managed sandboxing. Volumes and Ephemeral are not available.",
+			Fields: []forms.Field{
+				{
+					Name:  backendPathFieldName,
+					Title: "Seatbelt Binary Path",
+					Type:  forms.Text,
+					Desc:  backendPathDesc,
+				},
+			},
+		})
+	default:
+		sections = append(sections, forms.Section{
+			Title: backendLabel,
+			Desc:  "No managed sandbox backend is available on this platform.",
+		})
+	}
+
+	return forms.FormDef{
+		Title:       "Sandbox",
+		Description: "Configure agent sandboxing and filesystem isolation",
+		Sections: sections,
 		Actions: []forms.ActionDef{
 			{Name: "apply", Label: "Apply"},
 		},
@@ -122,7 +251,12 @@ func handleApply(cmd bus.Command) bus.CommandResult {
 		}
 	}
 
-	L_info("sandbox: config applied", "bwrapPath", cfg.Bubblewrap.Path, "volumes", len(cfg.Bubblewrap.Volumes))
+	L_info("sandbox: config applied",
+		"backend", CurrentSandboxBackend(),
+		"enabled", cfg.General.Enabled,
+		"mode", cfg.GetMode(),
+		"backendPath", cfg.GetBackendPath(),
+		"volumes", len(cfg.Bubblewrap.Volumes))
 	bus.PublishEvent(configPath+".config.applied", cfg)
 
 	return bus.CommandResult{Success: true, Message: "Config applied"}

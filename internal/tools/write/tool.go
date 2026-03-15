@@ -67,10 +67,12 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		return nil, fmt.Errorf("path is required")
 	}
 
-	// Check if user has sandbox disabled
-	sandboxed := true
-	if sessCtx := types.GetSessionContext(ctx); sessCtx != nil && sessCtx.User != nil {
-		sandboxed = sessCtx.User.Sandbox
+	mgr := sandbox.GetManager()
+	sandboxed := mgr.IsEnabled() && mgr.IsFileToolsSandboxEnabled()
+	if sandboxed {
+		if sessCtx := types.GetSessionContext(ctx); sessCtx != nil && sessCtx.User != nil {
+			sandboxed = sandbox.ApplyUserSandboxOverride(sandboxed, sessCtx.User.Sandbox)
+		}
 	}
 
 	L_debug("write tool: writing file", "path", params.Path, "bytes", len(params.Content), "sandboxed", sandboxed)

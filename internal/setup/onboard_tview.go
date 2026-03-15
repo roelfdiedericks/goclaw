@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"runtime"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -15,6 +14,7 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
+	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 	"github.com/roelfdiedericks/goclaw/internal/stt"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -79,8 +79,10 @@ type WizardData struct {
 	BrowserSetup bool
 
 	// Sandboxing
-	ExecBubblewrap    bool
-	BrowserBubblewrap bool
+	SandboxEnabled          bool
+	ExecSandboxEnabled      bool
+	BrowserSandboxEnabled   bool
+	FileToolsSandboxEnabled bool
 
 	// Skills Installation
 	SkillsAllowEmbedded bool
@@ -144,8 +146,10 @@ func NewWizardData() *WizardData {
 		UserRole:            "owner",
 		HTTPEnabled:         true,
 		HTTPListen:          "127.0.0.1:1337",
-		ExecBubblewrap:      true,
-		BrowserBubblewrap:   true,
+		SandboxEnabled:          true,
+		ExecSandboxEnabled:      true,
+		BrowserSandboxEnabled:   true,
+		FileToolsSandboxEnabled: true,
 		SkillsAllowEmbedded: true,
 		SkillsAllowClawHub:  false,
 		SkillsAllowLocal:    false,
@@ -186,8 +190,10 @@ func (d *WizardData) loadFromConfig(cfg *config.Config) {
 	}
 
 	// Sandboxing
-	d.ExecBubblewrap = cfg.Tools.Exec.Bubblewrap.Enabled
-	d.BrowserBubblewrap = cfg.Tools.Browser.Bubblewrap.Enabled
+	d.SandboxEnabled = cfg.Sandbox.IsEnabled()
+	d.ExecSandboxEnabled = cfg.Sandbox.General.ExecEnabled
+	d.BrowserSandboxEnabled = cfg.Sandbox.General.BrowserEnabled
+	d.FileToolsSandboxEnabled = cfg.Sandbox.General.FileToolsEnabled
 
 	// LLM: load from first agent chain entry
 	if len(cfg.LLM.Agent.Models) > 0 {
@@ -981,7 +987,7 @@ func stepSandbox(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
 		Title: "Sandboxing",
 		Content: func(w *forms.Wizard) tview.Primitive {
-			if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+			if sandbox.CurrentSandboxBackend() == sandbox.BackendNone {
 				tv := tview.NewTextView().
 					SetDynamicColors(true).
 					SetText(`[yellow]Note:[white] Managed sandboxing is currently implemented for Linux and macOS.
@@ -994,30 +1000,56 @@ On other platforms, the exec and browser tools run without OS sandbox enforcemen
 			form.SetBorder(false)
 			enableFormMouseScroll(form, w)
 
-			form.AddCheckbox("Enable exec sandboxing", data.ExecBubblewrap, func(checked bool) {
+			form.AddCheckbox("Enable sandboxing", data.SandboxEnabled, func(checked bool) {
 				if !checked {
-					data.ExecBubblewrap = true
+					data.SandboxEnabled = true
 					sandboxConfirmModal(w, form, 0, func() {
-						data.ExecBubblewrap = false
-						data.MarkDirty("ExecBubblewrap")
+						data.SandboxEnabled = false
+						data.MarkDirty("SandboxEnabled")
 					})
 					return
 				}
-				data.ExecBubblewrap = checked
-				data.MarkDirty("ExecBubblewrap")
+				data.SandboxEnabled = checked
+				data.MarkDirty("SandboxEnabled")
 			})
 
-			form.AddCheckbox("Enable browser sandboxing", data.BrowserBubblewrap, func(checked bool) {
+			form.AddCheckbox("Enable exec sandboxing", data.ExecSandboxEnabled, func(checked bool) {
 				if !checked {
-					data.BrowserBubblewrap = true
+					data.ExecSandboxEnabled = true
 					sandboxConfirmModal(w, form, 1, func() {
-						data.BrowserBubblewrap = false
-						data.MarkDirty("BrowserBubblewrap")
+						data.ExecSandboxEnabled = false
+						data.MarkDirty("ExecSandboxEnabled")
 					})
 					return
 				}
-				data.BrowserBubblewrap = checked
-				data.MarkDirty("BrowserBubblewrap")
+				data.ExecSandboxEnabled = checked
+				data.MarkDirty("ExecSandboxEnabled")
+			})
+
+			form.AddCheckbox("Enable browser sandboxing", data.BrowserSandboxEnabled, func(checked bool) {
+				if !checked {
+					data.BrowserSandboxEnabled = true
+					sandboxConfirmModal(w, form, 2, func() {
+						data.BrowserSandboxEnabled = false
+						data.MarkDirty("BrowserSandboxEnabled")
+					})
+					return
+				}
+				data.BrowserSandboxEnabled = checked
+				data.MarkDirty("BrowserSandboxEnabled")
+			})
+
+			form.AddCheckbox("Enable file tool sandboxing", data.FileToolsSandboxEnabled, func(checked bool) {
+				if !checked {
+					data.FileToolsSandboxEnabled = true
+					sandboxConfirmModal(w, form, 3, func() {
+						data.FileToolsSandboxEnabled = false
+						data.MarkDirty("FileToolsSandboxEnabled")
+					})
+					return
+				}
+				data.FileToolsSandboxEnabled = checked
+				data.MarkDirty("FileToolsSandboxEnabled")
 			})
 
 			// Skills installation sources
@@ -1049,7 +1081,7 @@ On other platforms, the exec and browser tools run without OS sandbox enforcemen
 			return formWithHeader(`[cyan]Sandboxing[white] restricts tools to only access files within your workspace,
 preventing accidental or malicious access to system files.
 
-[green]Highly recommended.[white] Disabling gives the agent unrestricted filesystem access.
+[green]Highly recommended.[white] Disabling general sandboxing gives the agent unrestricted filesystem access.
 
 [yellow]Skill Installation Sources[white] control where the agent can install skills from.
 Embedded skills are bundled with GoClaw. ClawHub is a public skill repository.`, 7, form)
@@ -1068,9 +1100,13 @@ func sandboxConfirmModal(w *forms.Wizard, form *tview.Form, checkboxIndex int, o
 		func(buttonIndex int, buttonLabel string) {
 			if buttonLabel == "Yes" {
 				onConfirm()
-				cb := form.GetFormItemByLabel("Enable exec sandboxing")
+				cb := form.GetFormItemByLabel("Enable sandboxing")
 				if checkboxIndex == 1 {
+					cb = form.GetFormItemByLabel("Enable exec sandboxing")
+				} else if checkboxIndex == 2 {
 					cb = form.GetFormItemByLabel("Enable browser sandboxing")
+				} else if checkboxIndex == 3 {
+					cb = form.GetFormItemByLabel("Enable file tool sandboxing")
 				}
 				if checkbox, ok := cb.(*tview.Checkbox); ok {
 					checkbox.SetChecked(false)
@@ -1318,7 +1354,7 @@ Telegram:     %s
 WhatsApp:     %s
 HTTP:         %s
 STT:          %s
-Sandboxing:   exec=%v, browser=%v
+Sandboxing:   enabled=%v, exec=%v, browser=%v, fileTools=%v
 LLM:          %s
 
 Press [yellow]Finish[white] to complete setup.`,
@@ -1329,8 +1365,10 @@ Press [yellow]Finish[white] to complete setup.`,
 				boolToEnabled(data.WhatsAppEnabled),
 				formatHTTP(data),
 				sttInfo,
-				data.ExecBubblewrap,
-				data.BrowserBubblewrap,
+				data.SandboxEnabled,
+				data.ExecSandboxEnabled,
+				data.BrowserSandboxEnabled,
+				data.FileToolsSandboxEnabled,
 				llmInfo,
 			)
 
@@ -1526,9 +1564,11 @@ func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
 	}
 
 	// Security/Sandboxing - only if dirty
-	if data.HasAnyDirty("ExecBubblewrap", "BrowserBubblewrap") {
-		deepSet(cfg, "tools.exec.bubblewrap.enabled", data.ExecBubblewrap)
-		deepSet(cfg, "tools.browser.bubblewrap.enabled", data.BrowserBubblewrap)
+	if data.HasAnyDirty("SandboxEnabled", "ExecSandboxEnabled", "BrowserSandboxEnabled", "FileToolsSandboxEnabled") {
+		deepSet(cfg, "sandbox.general.enabled", data.SandboxEnabled)
+		deepSet(cfg, "sandbox.general.execEnabled", data.ExecSandboxEnabled)
+		deepSet(cfg, "sandbox.general.browserEnabled", data.BrowserSandboxEnabled)
+		deepSet(cfg, "sandbox.general.fileToolsEnabled", data.FileToolsSandboxEnabled)
 	}
 
 	// Skills installation sources - only if dirty
