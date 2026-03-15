@@ -88,6 +88,7 @@ func makeParityManager(mode string, fx parityFixture) *Manager {
 			},
 		},
 		workspaceRoot: fx.workspace,
+		mode:          mode,
 		homeDir:       homeDir,
 		protectedDirs: map[string]string{},
 	}
