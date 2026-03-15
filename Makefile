@@ -1,4 +1,4 @@
-.PHONY: build run debug trace clean install test lint audit install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release deps deps-check metadata
+.PHONY: build embtest embtest-xla embtest-ort embtest-xla-deps-check embtest-ort-deps-check run debug trace clean install test lint audit install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release deps deps-check metadata
 
 SHELL := /bin/bash
 UNAME_S := $(shell uname -s)
@@ -50,6 +50,77 @@ export LIBRARY_PATH := $(WHISPER_LIB)
 
 build:
 	go build -o $(BINARY) ./cmd/goclaw
+
+embtest:
+	go build -o embtest ./cmd/embtest
+
+# =============================================================================
+# embtest backend builds
+# =============================================================================
+
+# Default embtest build: Hugot + GoMLX simplego backend (portable CPU baseline)
+
+embtest-xla:
+	go build -tags XLA -o embtest-xla ./cmd/embtest
+
+embtest-ort:
+	go build -tags ORT -o embtest-ort ./cmd/embtest
+
+# =============================================================================
+# embtest backend dependency checks
+# =============================================================================
+
+# XLA build/runtime notes:
+# - Requires cgo-enabled build environment
+# - Requires PJRT/XLA runtime plugin installed on the host
+# - Typical CPU plugin location from Hugot docs:
+#   /usr/local/lib/go-xla
+# - Set PJRT_PLUGIN_LIBRARY_PATH to the directory containing the plugin when needed
+embtest-xla-deps-check:
+	@if [ -z "$$CGO_ENABLED" ]; then \
+		echo "NOTE: CGO_ENABLED not explicitly set; go build usually defaults to cgo=1 on supported hosts."; \
+	fi
+	@if [ -n "$$PJRT_PLUGIN_LIBRARY_PATH" ]; then \
+		if [ -d "$$PJRT_PLUGIN_LIBRARY_PATH" ]; then \
+			echo "OK: PJRT_PLUGIN_LIBRARY_PATH=$$PJRT_PLUGIN_LIBRARY_PATH"; \
+		else \
+			echo "FAIL: PJRT_PLUGIN_LIBRARY_PATH is set but directory does not exist: $$PJRT_PLUGIN_LIBRARY_PATH"; \
+			exit 1; \
+		fi; \
+	elif [ -d "/usr/local/lib/go-xla" ]; then \
+		echo "OK: found likely XLA plugin directory at /usr/local/lib/go-xla"; \
+	else \
+		echo "FAIL: XLA runtime plugin not found."; \
+		echo "Set PJRT_PLUGIN_LIBRARY_PATH or install a plugin, e.g.:"; \
+		echo "  GOPROXY=direct go run github.com/gomlx/go-xla/cmd/pjrt_installer@latest -plugin=linux -version=<VERSION> -path=/usr/local/lib/go-xla"; \
+		exit 1; \
+	fi
+
+# ORT build/runtime notes:
+# - Requires cgo-enabled build environment
+# - Requires ONNX Runtime shared library on the host
+# - Hugot defaults to /usr/lib/libonnxruntime.so on Linux and /usr/local/lib/libonnxruntime.dylib on macOS
+embtest-ort-deps-check:
+	@if [ -z "$$CGO_ENABLED" ]; then \
+		echo "NOTE: CGO_ENABLED not explicitly set; go build usually defaults to cgo=1 on supported hosts."; \
+	fi
+	@if [ "$(UNAME_S)" = "Darwin" ]; then \
+		if [ -f "/usr/local/lib/libonnxruntime.dylib" ] || [ -f "/opt/homebrew/lib/libonnxruntime.dylib" ]; then \
+			echo "OK: found libonnxruntime.dylib"; \
+		else \
+			echo "FAIL: libonnxruntime.dylib not found in /usr/local/lib or /opt/homebrew/lib"; \
+			echo "Install ONNX Runtime and/or pass a custom path at runtime if needed."; \
+			exit 1; \
+		fi; \
+	else \
+		if [ -f "/usr/lib/libonnxruntime.so" ] || [ -f "/usr/local/lib/libonnxruntime.so" ]; then \
+			echo "OK: found libonnxruntime.so"; \
+		else \
+			echo "FAIL: libonnxruntime.so not found in /usr/lib or /usr/local/lib"; \
+			echo "Install ONNX Runtime shared libraries before using embtest-ort."; \
+			exit 1; \
+		fi; \
+	fi
 
 metadata:
 	go run ./cmd/metamerge --format
