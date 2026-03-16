@@ -81,9 +81,15 @@ type WizardData struct {
 
 	// Sandboxing
 	SandboxEnabled          bool
+	SandboxMode             string
 	ExecSandboxEnabled      bool
 	BrowserSandboxEnabled   bool
 	FileToolsSandboxEnabled bool
+	SandboxPreset           string
+	SandboxAdvanced         bool
+	SandboxConsentPermissive bool
+	SandboxConsentAssistant  bool
+	SandboxConsentHardened   bool
 
 	// Skills Installation
 	SkillsAllowEmbedded bool
@@ -143,19 +149,18 @@ func (d *WizardData) HasAnyDirty(fields ...string) bool {
 
 // NewWizardData creates a new WizardData with defaults
 func NewWizardData() *WizardData {
-	return &WizardData{
+	d := &WizardData{
 		UserRole:            "owner",
 		HTTPEnabled:         true,
 		HTTPListen:          "127.0.0.1:1337",
-		SandboxEnabled:          true,
-		ExecSandboxEnabled:      true,
-		BrowserSandboxEnabled:   true,
-		FileToolsSandboxEnabled: true,
 		SkillsAllowEmbedded: true,
 		SkillsAllowClawHub:  false,
 		SkillsAllowLocal:    false,
 		dirty:               make(map[string]bool),
 	}
+	ApplySandboxPreset(d, SandboxPresetAssistant)
+	d.SandboxAdvanced = false
+	return d
 }
 
 // LoadFromExisting populates WizardData from existing config
@@ -171,6 +176,16 @@ func (d *WizardData) LoadFromExisting(cfg *config.Config, path string) {
 func (d *WizardData) LoadFromDefaults(cfg *config.Config) {
 	d.ExistingConfig = cfg
 	d.loadFromConfig(cfg)
+	ApplySandboxPreset(d, SandboxPresetAssistant)
+	d.SandboxAdvanced = false
+	d.MarkDirty(
+		"SandboxPreset",
+		"SandboxEnabled",
+		"SandboxMode",
+		"ExecSandboxEnabled",
+		"BrowserSandboxEnabled",
+		"FileToolsSandboxEnabled",
+	)
 }
 
 func (d *WizardData) loadFromConfig(cfg *config.Config) {
@@ -192,9 +207,17 @@ func (d *WizardData) loadFromConfig(cfg *config.Config) {
 
 	// Sandboxing
 	d.SandboxEnabled = cfg.Sandbox.IsEnabled()
+	d.SandboxMode = cfg.Sandbox.GetMode()
 	d.ExecSandboxEnabled = cfg.Sandbox.General.ExecEnabled
 	d.BrowserSandboxEnabled = cfg.Sandbox.General.BrowserEnabled
 	d.FileToolsSandboxEnabled = cfg.Sandbox.General.FileToolsEnabled
+	d.SandboxPreset, d.SandboxAdvanced = DetectSandboxPreset(
+		d.SandboxEnabled,
+		d.SandboxMode,
+		d.ExecSandboxEnabled,
+		d.BrowserSandboxEnabled,
+		d.FileToolsSandboxEnabled,
+	)
 
 	// LLM: load from first agent chain entry
 	if len(cfg.LLM.Agent.Models) > 0 {
@@ -997,54 +1020,102 @@ On other platforms, the exec and browser tools run without OS sandbox enforcemen
 			form.SetBorder(false)
 			enableFormMouseScroll(form, w)
 
-			form.AddCheckbox("Enable sandboxing", data.SandboxEnabled, func(checked bool) {
-				if !checked {
-					data.SandboxEnabled = true
-					sandboxConfirmModal(w, form, 0, func() {
-						data.SandboxEnabled = false
-						data.MarkDirty("SandboxEnabled")
-					})
+			presetLabels := []string{"Assistant (recommended)", "Permissive", "Hardened"}
+			presetValues := []string{SandboxPresetAssistant, SandboxPresetPermissive, SandboxPresetHardened}
+			presetIndex := 0
+			for i, value := range presetValues {
+				if value == NormalizeSandboxPreset(data.SandboxPreset) {
+					presetIndex = i
+					break
+				}
+			}
+
+			form.AddDropDown("Security preset", presetLabels, presetIndex, func(option string, optionIndex int) {
+				if optionIndex < 0 || optionIndex >= len(presetValues) {
 					return
 				}
+				selectedPreset := presetValues[optionIndex]
+				warning := SandboxPresetWarningText(selectedPreset)
+				previousPreset := NormalizeSandboxPreset(data.SandboxPreset)
+				sandboxPresetConsentModal(w, warning, func() {
+					data.SandboxPreset = selectedPreset
+					data.MarkDirty("SandboxPreset")
+					data.MarkDirty("SandboxConsentPermissive")
+					data.MarkDirty("SandboxConsentAssistant")
+					data.MarkDirty("SandboxConsentHardened")
+					data.SandboxConsentPermissive = selectedPreset == SandboxPresetPermissive
+					data.SandboxConsentAssistant = selectedPreset == SandboxPresetAssistant
+					data.SandboxConsentHardened = selectedPreset == SandboxPresetHardened
+					refreshSandboxConsentCheckbox(form, data)
+					if !data.SandboxAdvanced {
+						ApplySandboxPreset(data, selectedPreset)
+						refreshSandboxAdvancedControls(form, data)
+					}
+				}, func() {
+					if dd, ok := form.GetFormItemByLabel("Security preset").(*tview.DropDown); ok {
+						dd.SetCurrentOption(presetDropDownIndex(previousPreset))
+					}
+				})
+			})
+
+			form.AddCheckbox("I acknowledge the selected preset warning", false, func(checked bool) {
+				data.SandboxConsentPermissive = false
+				data.SandboxConsentAssistant = false
+				data.SandboxConsentHardened = false
+				if checked {
+					switch NormalizeSandboxPreset(data.SandboxPreset) {
+					case SandboxPresetPermissive:
+						data.SandboxConsentPermissive = true
+					case SandboxPresetHardened:
+						data.SandboxConsentHardened = true
+					default:
+						data.SandboxConsentAssistant = true
+					}
+				}
+				data.MarkDirty("SandboxConsentPermissive")
+				data.MarkDirty("SandboxConsentAssistant")
+				data.MarkDirty("SandboxConsentHardened")
+			})
+			refreshSandboxConsentCheckbox(form, data)
+
+			form.AddCheckbox("Show advanced sandbox settings", data.SandboxAdvanced, func(checked bool) {
+				data.SandboxAdvanced = checked
+				data.MarkDirty("SandboxAdvanced")
+				if !checked {
+					ApplySandboxPreset(data, data.SandboxPreset)
+					refreshSandboxAdvancedControls(form, data)
+				}
+			})
+
+			modeOptions := sandbox.SupportedModeOptions()
+			modeLabels := make([]string, 0, len(modeOptions))
+			for _, mode := range modeOptions {
+				modeLabels = append(modeLabels, mode.Label)
+			}
+			form.AddDropDown("Sandbox mode", modeLabels, modeDropDownIndex(data.SandboxMode, modeOptions), func(_ string, optionIndex int) {
+				if optionIndex < 0 || optionIndex >= len(modeOptions) {
+					return
+				}
+				data.SandboxMode = modeOptions[optionIndex].Value
+				data.MarkDirty("SandboxMode")
+			})
+
+			form.AddCheckbox("Enable sandboxing", data.SandboxEnabled, func(checked bool) {
 				data.SandboxEnabled = checked
 				data.MarkDirty("SandboxEnabled")
 			})
 
 			form.AddCheckbox("Enable exec sandboxing", data.ExecSandboxEnabled, func(checked bool) {
-				if !checked {
-					data.ExecSandboxEnabled = true
-					sandboxConfirmModal(w, form, 1, func() {
-						data.ExecSandboxEnabled = false
-						data.MarkDirty("ExecSandboxEnabled")
-					})
-					return
-				}
 				data.ExecSandboxEnabled = checked
 				data.MarkDirty("ExecSandboxEnabled")
 			})
 
 			form.AddCheckbox("Enable browser sandboxing", data.BrowserSandboxEnabled, func(checked bool) {
-				if !checked {
-					data.BrowserSandboxEnabled = true
-					sandboxConfirmModal(w, form, 2, func() {
-						data.BrowserSandboxEnabled = false
-						data.MarkDirty("BrowserSandboxEnabled")
-					})
-					return
-				}
 				data.BrowserSandboxEnabled = checked
 				data.MarkDirty("BrowserSandboxEnabled")
 			})
 
 			form.AddCheckbox("Enable file tool sandboxing", data.FileToolsSandboxEnabled, func(checked bool) {
-				if !checked {
-					data.FileToolsSandboxEnabled = true
-					sandboxConfirmModal(w, form, 3, func() {
-						data.FileToolsSandboxEnabled = false
-						data.MarkDirty("FileToolsSandboxEnabled")
-					})
-					return
-				}
 				data.FileToolsSandboxEnabled = checked
 				data.MarkDirty("FileToolsSandboxEnabled")
 			})
@@ -1075,42 +1146,106 @@ On other platforms, the exec and browser tools run without OS sandbox enforcemen
 				data.MarkDirty("SkillsAllowLocal")
 			})
 
-			return formWithHeader(`[cyan]Sandboxing[white] restricts tools to only access files within your workspace,
-preventing accidental or malicious access to system files.
+			return formWithHeader(`[cyan]Sandboxing presets[white] provide a safer starting point.
+Pick a preset, review the warning, and confirm.
 
-[green]Highly recommended.[white] Disabling general sandboxing gives the agent unrestricted filesystem access.
+Use [yellow]advanced sandbox settings[white] only when you need custom mode/toggle control.
 
 [yellow]Skill Installation Sources[white] control where the agent can install skills from.
 Embedded skills are bundled with GoClaw. ClawHub is a public skill repository.`, 7, form)
 		},
+		OnExit: func(_ *forms.Wizard) error {
+			switch NormalizeSandboxPreset(data.SandboxPreset) {
+			case SandboxPresetPermissive:
+				if !data.SandboxConsentPermissive {
+					return fmt.Errorf("please acknowledge the Permissive warning before continuing")
+				}
+			case SandboxPresetHardened:
+				if !data.SandboxConsentHardened {
+					return fmt.Errorf("please acknowledge the Hardened warning before continuing")
+				}
+			default:
+				if !data.SandboxConsentAssistant {
+					return fmt.Errorf("please acknowledge the Assistant warning before continuing")
+				}
+			}
+			return nil
+		},
 	}
 }
 
-// sandboxConfirmModal pops a modal asking the user to confirm disabling sandbox.
-// If confirmed, onConfirm is called and the checkbox is unchecked visually.
-// If cancelled, the checkbox stays checked (data was already reverted by caller).
-func sandboxConfirmModal(w *forms.Wizard, form *tview.Form, checkboxIndex int, onConfirm func()) {
+func sandboxPresetConsentModal(w *forms.Wizard, warning SandboxPresetWarning, onConfirm func(), onCancel func()) {
 	w.App().ShowModal(
-		"Disabling sandbox gives the agent unrestricted filesystem access.\n\n"+
-			"Only recommended if you trust all installed skills and prompts.\n\nContinue?",
+		warning.Title+"\n\n"+warning.Body+"\n\n"+warning.Consent+"\n\nContinue?",
 		[]string{"No", "Yes"},
 		func(buttonIndex int, buttonLabel string) {
 			if buttonLabel == "Yes" {
 				onConfirm()
-				cb := form.GetFormItemByLabel("Enable sandboxing")
-				if checkboxIndex == 1 {
-					cb = form.GetFormItemByLabel("Enable exec sandboxing")
-				} else if checkboxIndex == 2 {
-					cb = form.GetFormItemByLabel("Enable browser sandboxing")
-				} else if checkboxIndex == 3 {
-					cb = form.GetFormItemByLabel("Enable file tool sandboxing")
-				}
-				if checkbox, ok := cb.(*tview.Checkbox); ok {
-					checkbox.SetChecked(false)
-				}
+				return
+			}
+			if onCancel != nil {
+				onCancel()
 			}
 		},
 	)
+}
+
+func presetDropDownIndex(preset string) int {
+	switch NormalizeSandboxPreset(preset) {
+	case SandboxPresetPermissive:
+		return 1
+	case SandboxPresetHardened:
+		return 2
+	default:
+		return 0
+	}
+}
+
+func modeDropDownIndex(mode string, options []forms.Option) int {
+	for i, option := range options {
+		if option.Value == mode {
+			return i
+		}
+	}
+	for i, option := range options {
+		if option.Value == sandbox.ModeHome {
+			return i
+		}
+	}
+	return 0
+}
+
+func refreshSandboxAdvancedControls(form *tview.Form, data *WizardData) {
+	if modeDropdown, ok := form.GetFormItemByLabel("Sandbox mode").(*tview.DropDown); ok {
+		modeDropdown.SetCurrentOption(modeDropDownIndex(data.SandboxMode, sandbox.SupportedModeOptions()))
+	}
+	if sandboxEnabled, ok := form.GetFormItemByLabel("Enable sandboxing").(*tview.Checkbox); ok {
+		sandboxEnabled.SetChecked(data.SandboxEnabled)
+	}
+	if execEnabled, ok := form.GetFormItemByLabel("Enable exec sandboxing").(*tview.Checkbox); ok {
+		execEnabled.SetChecked(data.ExecSandboxEnabled)
+	}
+	if browserEnabled, ok := form.GetFormItemByLabel("Enable browser sandboxing").(*tview.Checkbox); ok {
+		browserEnabled.SetChecked(data.BrowserSandboxEnabled)
+	}
+	if fileToolsEnabled, ok := form.GetFormItemByLabel("Enable file tool sandboxing").(*tview.Checkbox); ok {
+		fileToolsEnabled.SetChecked(data.FileToolsSandboxEnabled)
+	}
+}
+
+func refreshSandboxConsentCheckbox(form *tview.Form, data *WizardData) {
+	if consent, ok := form.GetFormItemByLabel("I acknowledge the selected preset warning").(*tview.Checkbox); ok {
+		checked := false
+		switch NormalizeSandboxPreset(data.SandboxPreset) {
+		case SandboxPresetPermissive:
+			checked = data.SandboxConsentPermissive
+		case SandboxPresetHardened:
+			checked = data.SandboxConsentHardened
+		default:
+			checked = data.SandboxConsentAssistant
+		}
+		consent.SetChecked(checked)
+	}
 }
 
 // localSkillsConfirmModal warns about the security risks of enabling local path skills.
@@ -1351,7 +1486,7 @@ Telegram:     %s
 WhatsApp:     %s
 HTTP:         %s
 STT:          %s
-Sandboxing:   enabled=%v, exec=%v, browser=%v, fileTools=%v
+Sandboxing:   preset=%s, mode=%s, enabled=%v, exec=%v, browser=%v, fileTools=%v
 LLM:          %s
 
 Press [yellow]Finish[white] to complete setup.`,
@@ -1362,6 +1497,8 @@ Press [yellow]Finish[white] to complete setup.`,
 				boolToEnabled(data.WhatsAppEnabled),
 				formatHTTP(data),
 				sttInfo,
+				data.SandboxPreset,
+				data.SandboxMode,
 				data.SandboxEnabled,
 				data.ExecSandboxEnabled,
 				data.BrowserSandboxEnabled,
@@ -1561,11 +1698,39 @@ func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
 	}
 
 	// Security/Sandboxing - only if dirty
-	if data.HasAnyDirty("SandboxEnabled", "ExecSandboxEnabled", "BrowserSandboxEnabled", "FileToolsSandboxEnabled") {
-		deepSet(cfg, "sandbox.general.enabled", data.SandboxEnabled)
-		deepSet(cfg, "sandbox.general.execEnabled", data.ExecSandboxEnabled)
-		deepSet(cfg, "sandbox.general.browserEnabled", data.BrowserSandboxEnabled)
-		deepSet(cfg, "sandbox.general.fileToolsEnabled", data.FileToolsSandboxEnabled)
+	if data.HasAnyDirty(
+		"SandboxPreset",
+		"SandboxAdvanced",
+		"SandboxMode",
+		"SandboxEnabled",
+		"ExecSandboxEnabled",
+		"BrowserSandboxEnabled",
+		"FileToolsSandboxEnabled",
+		"SandboxConsentPermissive",
+		"SandboxConsentAssistant",
+		"SandboxConsentHardened",
+	) {
+		enabled := data.SandboxEnabled
+		mode := data.SandboxMode
+		execEnabled := data.ExecSandboxEnabled
+		browserEnabled := data.BrowserSandboxEnabled
+		fileToolsEnabled := data.FileToolsSandboxEnabled
+
+		if !data.SandboxAdvanced {
+			presetData := *data
+			ApplySandboxPreset(&presetData, data.SandboxPreset)
+			enabled = presetData.SandboxEnabled
+			mode = presetData.SandboxMode
+			execEnabled = presetData.ExecSandboxEnabled
+			browserEnabled = presetData.BrowserSandboxEnabled
+			fileToolsEnabled = presetData.FileToolsSandboxEnabled
+		}
+
+		deepSet(cfg, "sandbox.general.enabled", enabled)
+		deepSet(cfg, "sandbox.general.mode", mode)
+		deepSet(cfg, "sandbox.general.execEnabled", execEnabled)
+		deepSet(cfg, "sandbox.general.browserEnabled", browserEnabled)
+		deepSet(cfg, "sandbox.general.fileToolsEnabled", fileToolsEnabled)
 	}
 
 	// Skills installation sources - only if dirty
