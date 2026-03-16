@@ -16,7 +16,7 @@ The Ollama provider connects GoClaw to locally-running Ollama for inference, emb
   "llm": {
     "providers": {
       "ollama": {
-        "type": "ollama",
+        "driver": "ollama",
         "url": "http://localhost:11434"
       }
     },
@@ -51,11 +51,11 @@ Ollama is commonly used for compaction summaries to avoid cloud API costs:
   "llm": {
     "providers": {
       "ollama-summarize": {
-        "type": "ollama",
+        "driver": "ollama",
         "url": "http://localhost:11434"
       },
       "claude": {
-        "type": "anthropic",
+        "driver": "anthropic",
         "apiKey": "YOUR_API_KEY"
       }
     },
@@ -73,15 +73,15 @@ This uses Ollama for summarization (free, local) with Anthropic as fallback.
 
 ### Embeddings
 
-For semantic search (memory_search, transcript_search):
+For semantic search (memory_search and transcript):
 
 ```json
 {
-  "memorySearch": {
+  "memory": {
     "enabled": true,
-    "ollama": {
-      "url": "http://localhost:11434",
-      "model": "nomic-embed-text"
+    "query": {
+      "maxResults": 6,
+      "minScore": 0.35
     }
   }
 }
@@ -94,7 +94,7 @@ Or via the LLM config:
   "llm": {
     "providers": {
       "ollama-embed": {
-        "type": "ollama",
+        "driver": "ollama",
         "url": "http://localhost:11434",
         "embeddingOnly": true
       }
@@ -115,7 +115,7 @@ For fully local operation:
   "llm": {
     "providers": {
       "ollama": {
-        "type": "ollama",
+        "driver": "ollama",
         "url": "http://localhost:11434",
         "contextTokens": 131072
       }
@@ -151,7 +151,7 @@ Ollama queries the model's context size automatically. Override with `contextTok
 {
   "providers": {
     "ollama": {
-      "type": "ollama",
+      "driver": "ollama",
       "url": "http://localhost:11434",
       "contextTokens": 131072
     }
@@ -181,7 +181,7 @@ Increase timeout or use a smaller model:
 {
   "providers": {
     "ollama": {
-      "type": "ollama",
+      "driver": "ollama",
       "url": "http://localhost:11434",
       "timeoutSeconds": 600
     }

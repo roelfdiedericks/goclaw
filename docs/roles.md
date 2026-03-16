@@ -94,7 +94,7 @@ Define custom role permissions in `goclaw.json`:
       "commands": true
     },
     "user": {
-      "tools": ["read", "memory_search", "transcript_search"],
+      "tools": ["read", "memory_search", "transcript"],
       "skills": "*",
       "memory": "full",
       "transcripts": "own",

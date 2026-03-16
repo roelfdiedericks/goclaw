@@ -73,7 +73,9 @@ Fetch a web page and extract readable text content.
 {
   "tools": {
     "web": {
-      "useJina": false
+      "useBrowser": "auto",
+      "profile": "default",
+      "headless": true
     }
   }
 }
@@ -82,7 +84,9 @@ Fetch a web page and extract readable text content.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `braveApiKey` | - | Brave Search API key |
-| `useJina` | false | Use Jina for content extraction |
+| `useBrowser` | `"auto"` | Browser fallback mode for `web_fetch` (`auto`, `always`, `never`) |
+| `profile` | `"default"` | Browser profile used for fetch fallback |
+| `headless` | `true` | Run browser fallback in headless mode |
 
 ### Parameters
 

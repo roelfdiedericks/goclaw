@@ -21,15 +21,15 @@ GoClaw implements a layered memory system that combines file-based memory, seman
 │  │ Workspace Memory│  │ Semantic Search │  │  Memory Graph   │  │
 │  │ (File-Based)    │  │ (Embeddings)    │  │  (Knowledge)    │  │
 │  │                 │  │                 │  │                 │  │
-│  │ MEMORY.md       │  │ memory_search   │  │ recall, query   │  │
-│  │ memory/*.md     │  │ transcript_     │  │ store, update   │  │
-│  │ USER.md, SOUL.md│  │ search          │  │ forget          │  │
+│  │ MEMORY.md       │  │ memory_search   │  │ memory_graph_   │  │
+│  │ memory/*.md     │  │ transcript      │  │ recall/query    │  │
+│  │ USER.md, SOUL.md│  │                 │  │ store/update/...│  │
 │  │                 │  │                 │  │                 │  │
 │  │ Human-readable  │  │ SQLite+Ollama   │  │ Entities &      │  │
 │  │ Markdown files  │  │ Vector search   │  │ Relationships   │  │
 │  └─────────────────┘  └─────────────────┘  └─────────────────┘  │
 │                                                                   │
-│        Legacy/Compat          Hybrid Search         Future        │
+│        Compatibility          Hybrid Search         Future        │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -79,7 +79,7 @@ Embeddings-based search over memory files and conversation transcripts.
 | Component | Description |
 |-----------|-------------|
 | [memory_search](memory-search.md) | Search memory files by meaning |
-| [transcript_search](transcript-search.md) | Search past conversations |
+| [transcript](transcript-search.md) | Search/query past conversations |
 | [Embeddings](embeddings.md) | Shared embedding infrastructure |
 
 ### How It Works
@@ -99,11 +99,11 @@ Embeddings-based search over memory files and conversation transcripts.
 }
 ```
 
-**transcript_search** — Search conversation history:
+**transcript** — Search conversation history:
 ```json
 {
+  "action": "search",
   "query": "when did we discuss deployment",
-  "sessionKey": "main",
   "maxResults": 5
 }
 ```
@@ -114,7 +114,7 @@ Embeddings-based search over memory files and conversation transcripts.
 |--------|--------------|-------------|
 | Source | Agent-written markdown | Conversation history |
 | Persistence | Until deleted | Compacted over time |
-| Search | memory_search | transcript_search |
+| Search | memory_search | transcript |
 | Content | Curated, organized | Raw conversation |
 | Use case | Long-term knowledge | Recent context recovery |
 
@@ -124,12 +124,8 @@ Embeddings-based search over memory files and conversation transcripts.
 
 ```json
 {
-  "memorySearch": {
+  "memory": {
     "enabled": true,
-    "ollama": {
-      "url": "http://localhost:11434",
-      "model": "nomic-embed-text"
-    },
     "query": {
       "maxResults": 6,
       "minScore": 0.35,
@@ -151,7 +147,7 @@ See [Embeddings](embeddings.md) for embedding model configuration.
 
 When context is compacted during long sessions, recent conversation history is lost. The agent can recover using:
 
-1. **transcript_search** — Find relevant past conversation chunks
+1. **transcript** — Find relevant past conversation chunks
 2. **memory_search** — Check if context was saved to memory files
 3. **Daily notes** — Read `memory/YYYY-MM-DD.md` for recent context
 
@@ -188,11 +184,11 @@ The Memory Graph is a semantic knowledge graph that provides structured, queryab
 
 | Tool | Description |
 |------|-------------|
-| `recall` | Retrieve relevant memories for current context |
-| `query` | Search/filter with more control |
-| `store` | Add new memory |
-| `update` | Modify existing memory |
-| `forget` | Remove memory |
+| `memory_graph_recall` | Retrieve relevant memories for current context |
+| `memory_graph_query` | Search/filter with more control |
+| `memory_graph_store` | Add new memory |
+| `memory_graph_update` | Modify existing memory |
+| `memory_graph_forget` | Remove memory |
 
 ### When to Use
 
@@ -224,6 +220,6 @@ This enables running GoClaw alongside OpenClaw with a unified workspace. Memory 
 
 - [Memory Graph](memory-graph.md) — Structured knowledge graph (beta)
 - [Memory Search](memory-search.md) — memory_search tool
-- [Transcript Search](transcript-search.md) — transcript_search tool
+- [Transcript Search](transcript-search.md) — transcript tool
 - [Embeddings](embeddings.md) — Embedding infrastructure
 - [Session Management](session-management.md) — Compaction and memory flush

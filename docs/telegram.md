@@ -64,7 +64,7 @@ Alternatively, edit `users.json` directly:
 
 ## Commands
 
-All channel commands are available via Telegram:
+Telegram supports all global channel commands plus a Telegram-specific `/start` command:
 
 | Command | Description |
 |---------|-------------|
@@ -171,22 +171,13 @@ The agent's responses support Telegram formatting:
 
 ## Multi-User Support
 
-Each Telegram user gets their own session. Sessions are keyed by:
-```
-telegram:<user_id>
-```
+Each Telegram user gets their own session.
 
-### Shared Sessions (Optional)
+In the gateway, session keys are user-centric:
 
-To share a session across users, configure:
-
-```json
-{
-  "session": {
-    "writeToKey": "shared"
-  }
-}
-```
+- Owner users default to `primary`.
+- Non-owner users default to `user:<id>`.
+- Some flows can pass an explicit session ID, which becomes the session key for that request.
 
 ---
 

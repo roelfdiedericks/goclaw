@@ -22,8 +22,7 @@ GoClaw is configured via `goclaw.json` in the working directory.
       }
     },
     "agent": {
-      "models": ["anthropic/claude-sonnet-4-20250514"],
-      "maxTokens": 8192
+      "models": ["anthropic/claude-sonnet-4-20250514"]
     }
   },
 
@@ -137,7 +136,9 @@ GoClaw is configured via `goclaw.json` in the working directory.
     },
     "web": {
       "braveApiKey": "",
-      "useJina": false
+      "useBrowser": "auto",
+      "profile": "default",
+      "headless": true
     }
   },
 
@@ -305,7 +306,7 @@ WhatsApp uses the linked device protocol (no business API required). On first ru
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable HTTP/Web UI |
+| `enabled` | bool | `true` when unset | Enable HTTP/Web UI |
 | `listen` | string | `:1337` | Listen address (`:port` or `host:port`) |
 
 ### Session Storage
@@ -326,7 +327,7 @@ WhatsApp uses the linked device protocol (no business API required). On first ru
 |-------|------|---------|-------------|
 | `store` | string | `"sqlite"` | Storage backend (always sqlite) |
 | `storePath` | string | `~/.goclaw/sessions.db` | SQLite database path |
-| `inherit` | bool | `false` | Enable OpenClaw session inheritance |
+| `inherit` | bool | `true` | Enable OpenClaw session inheritance |
 | `inheritPath` | string | - | Path to OpenClaw sessions directory |
 | `inheritFrom` | string | - | Session key to inherit from |
 

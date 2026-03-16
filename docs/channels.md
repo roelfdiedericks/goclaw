@@ -46,7 +46,7 @@ Channels are communication interfaces that connect users to the GoClaw agent. Ea
 
 **Text channels** (Telegram, WhatsApp, HTTP, TUI, Cron) use the main Gateway and LLM Registry.
 
-**Voice channel** (HTTP Voice) uses a separate VoiceLLM Registry with per-session WebSocket connections to xAI or OpenAI real-time voice APIs.
+**Voice channel** (HTTP Voice) uses a separate VoiceLLM Registry with per-session WebSocket connections to the configured real-time voice provider.
 
 All channels:
 1. Receive user input (messages, commands, scheduled triggers)
@@ -142,7 +142,7 @@ HTTP Voice is enabled via `voicellm` configuration (not `channels`):
 }
 ```
 
-When enabled, the `/voice` endpoint is available on the HTTP server. Voice uses a separate VoiceLLM Registry with per-session WebSocket connections.
+The `/voice` page route is available on the HTTP server. When VoiceLLM is enabled and initialized, the WebSocket route `/voice/ws` is registered for real-time audio.
 
 See [Configuration](configuration.md#voice-llm-real-time-voice) for full VoiceLLM options.
 
@@ -185,16 +185,11 @@ Cron jobs are defined separately (not under `channels`):
 
 ## Session Keys
 
-Each channel creates sessions with a specific key format:
+Session keys are user-centric in the gateway:
 
-| Channel | Session Key Format | Example |
-|---------|-------------------|---------|
-| Telegram | `telegram:<user_id>` | `telegram:123456789` |
-| WhatsApp | `whatsapp:<jid>` | `whatsapp:1234567890@s.whatsapp.net` |
-| HTTP | `http:<session_id>` | `http:abc123` |
-| HTTP Voice | `voice:<session_id>` | `voice:abc123` |
-| TUI | `main` | `main` |
-| Cron | `cron:<job_name>` | `cron:morning-briefing` |
+- Owner users default to the primary session key (`primary`).
+- Non-owner users default to `user:<id>`.
+- Channels may pass an explicit session ID in some flows, which then becomes the session key for that request.
 
 ## Message Tool
 
@@ -271,7 +266,6 @@ Browser/Client                   GoClaw                    Voice Provider
 | Provider | Driver | Features |
 |----------|--------|----------|
 | xAI Voice | `xai` | Grok-based real-time voice |
-| OpenAI Realtime | `openai-realtime` | GPT-4o real-time audio |
 
 ### VoiceLLM vs LLM Registry
 

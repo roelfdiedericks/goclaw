@@ -18,7 +18,7 @@ The OpenAI provider connects GoClaw to OpenAI models and any OpenAI-compatible A
   "llm": {
     "providers": {
       "openai": {
-        "type": "openai",
+        "driver": "openai",
         "apiKey": "YOUR_API_KEY"
       }
     },
@@ -36,7 +36,7 @@ The OpenAI provider connects GoClaw to OpenAI models and any OpenAI-compatible A
   "llm": {
     "providers": {
       "lmstudio": {
-        "type": "openai",
+        "driver": "openai",
         "baseURL": "http://localhost:1234"
       }
     },
@@ -56,7 +56,7 @@ API key is optional for local servers.
   "llm": {
     "providers": {
       "openrouter": {
-        "type": "openai",
+        "driver": "openai",
         "apiKey": "YOUR_OPENROUTER_KEY",
         "baseURL": "https://openrouter.ai/api"
       }
@@ -113,7 +113,7 @@ Can be used for embeddings with models like `text-embedding-3-small`:
   "llm": {
     "providers": {
       "openai-embed": {
-        "type": "openai",
+        "driver": "openai",
         "apiKey": "YOUR_API_KEY",
         "embeddingOnly": true
       }

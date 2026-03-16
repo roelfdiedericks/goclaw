@@ -2026,7 +2026,30 @@ type SetupCmd struct {
 type SetupAutoCmd struct{}
 
 func (s *SetupAutoCmd) Run(ctx *Context) error {
-	return setup.RunAuto()
+	// Match the same web-first semantics as `setup wizard` and `setup edit`.
+	// If config exists, open editor; otherwise open wizard. Fall back to TUI if no UI is available.
+	existingConfigPath, err := paths.ConfigPath()
+	if err != nil {
+		return fmt.Errorf("failed to check config path: %w", err)
+	}
+
+	configPath := setupweb.DefaultConfigPath()
+
+	if existingConfigPath != "" {
+		err := setupweb.RunWebEditorWithOptions(configPath, false)
+		if err == setupweb.ErrNoUIAvailable {
+			L_debug("web editor not available, falling back to TUI")
+			return setup.RunEdit()
+		}
+		return err
+	}
+
+	err = setupweb.RunWebWizardWithOptions(configPath, false)
+	if err == setupweb.ErrNoUIAvailable {
+		L_debug("web wizard not available, falling back to TUI")
+		return setup.RunWizard()
+	}
+	return err
 }
 
 // SetupWizardCmd forces the full wizard

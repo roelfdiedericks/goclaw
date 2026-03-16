@@ -455,7 +455,7 @@ Extraction runs in the background and doesn't interrupt conversations.
 
 1. Check that bulletin injection is enabled
 2. Verify the memory was stored with correct entities
-3. Try a direct `recall` query to test retrieval
+3. Try a direct `memory_graph_recall` query to test retrieval
 
 ### Extraction not working
 

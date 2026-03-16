@@ -95,7 +95,7 @@ Click the microphone button and start talking.
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `driver` | - | `xai` (OpenAI planned) |
+| `driver` | - | `xai` |
 | `apiKey` | - | xAI API key |
 | `voice` | `Eve` | Voice to use |
 | `sampleRate` | `48000` | Audio sample rate in Hz |

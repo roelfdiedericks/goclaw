@@ -50,7 +50,7 @@ The first semantic search may take longer because the model downloads on first u
 
 ```json
 {
-  "memorySearch": {
+  "memory": {
     "enabled": true
   }
 }
@@ -60,7 +60,7 @@ The first semantic search may take longer because the model downloads on first u
 
 ```json
 {
-  "memorySearch": {
+  "memory": {
     "enabled": true,
     "query": {
       "maxResults": 6,
@@ -94,9 +94,7 @@ ollama pull nomic-embed-text
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable memory search |
-| `ollama.url` | string | - | Legacy Ollama API URL |
-| `ollama.model` | string | - | Legacy Ollama embedding model name |
+| `enabled` | bool | `true` | Enable memory search |
 | `query.maxResults` | int | `6` | Maximum results per search |
 | `query.minScore` | float | `0.35` | Minimum similarity score (0-1) |
 | `query.vectorWeight` | float | `0.7` | Weight for semantic search |

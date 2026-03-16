@@ -125,7 +125,7 @@ Enable request dumps for API debugging:
   "llm": {
     "providers": {
       "claude": {
-        "type": "anthropic",
+        "driver": "anthropic",
         "dumpOnSuccess": true
       }
     }
@@ -240,10 +240,7 @@ Reduce disk I/O with longer cache intervals:
 Use faster embedding model for quick searches:
 ```json
 {
-  "memorySearch": {
-    "ollama": {
-      "model": "all-minilm"
-    },
+  "memory": {
     "query": {
       "minScore": 0.4
     }

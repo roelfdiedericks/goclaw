@@ -27,7 +27,7 @@ The xAI provider connects GoClaw to Grok models via xAI's gRPC API. It's built o
   "llm": {
     "providers": {
       "xai": {
-        "type": "xai",
+        "driver": "xai",
         "apiKey": "YOUR_XAI_API_KEY"
       }
     },
@@ -89,7 +89,7 @@ All tools are enabled by default. To restrict:
 {
   "providers": {
     "xai": {
-      "type": "xai",
+      "driver": "xai",
       "apiKey": "YOUR_XAI_API_KEY",
       "serverToolsAllowed": ["web_search", "code_execution"]
     }
@@ -140,7 +140,7 @@ This dramatically reduces token usage for long conversations.
 {
   "providers": {
     "xai": {
-      "type": "xai",
+      "driver": "xai",
       "apiKey": "YOUR_XAI_API_KEY",
       "incrementalContext": true
     }
@@ -187,7 +187,7 @@ GoClaw includes the `xai_imagine` tool for generating images:
 ```json
 {
   "tools": {
-    "xai_imagine": {
+    "xaiImagine": {
       "enabled": true,
       "apiKey": "YOUR_XAI_API_KEY"
     }
@@ -205,7 +205,7 @@ Limit how many turns the model can take when using server-side tools:
 {
   "providers": {
     "xai": {
-      "type": "xai",
+      "driver": "xai",
       "apiKey": "YOUR_XAI_API_KEY",
       "maxTurns": 5
     }

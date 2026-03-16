@@ -28,7 +28,7 @@ A **session** represents a conversation with persistent state:
 - **Compaction** — Automatic truncation when context is nearly full
 - **Checkpoints** — Rolling snapshots for recovery
 
-Sessions are identified by a **session key** (e.g., `telegram:123456789` or `main`). Each channel typically creates separate sessions per user.
+Sessions are identified by a **session key** (for example, `primary` for owner sessions or `user:<id>` for non-owner sessions). Channels can also pass explicit session IDs in some flows.
 
 See [Session Management](session-management.md) for details on compaction and checkpoints.
 
@@ -57,8 +57,8 @@ See [Channels](channels.md) for the full overview.
 |----------|----------|
 | File operations | read, write, edit |
 | System | exec (shell commands) |
-| Search | memory_search, transcript_search, web_search |
-| Memory Graph | recall, query, store, update, forget |
+| Search | memory_search, transcript, web_search |
+| Memory Graph | memory_graph_recall/query/store/update/forget |
 | Integration | hass (Home Assistant), browser, cron |
 | Communication | message (send to channels) |
 | Utility | media_display, skills, goclaw_update |
@@ -104,7 +104,6 @@ A separate **VoiceLLM Registry** handles real-time voice conversations:
 | Provider | Description |
 |----------|-------------|
 | xAI Voice | Grok-based real-time voice |
-| OpenAI Realtime | GPT-4o real-time audio |
 
 Voice providers maintain per-session WebSocket connections and handle audio streaming directly.
 
@@ -122,13 +121,13 @@ Traditional markdown files that the agent can read and write:
 ### Semantic Memory
 Embeddings-based search over memory files and conversation transcripts:
 - **memory_search** — Search memory files by meaning
-- **transcript_search** — Search past conversations
+- **transcript** — Search/query past conversations
 
 ### Memory Graph
 A semantic knowledge graph for structured facts and relationships:
-- **recall** — Retrieve relevant context automatically
-- **store/update/forget** — Manage entities and facts
-- **query** — Natural language questions over the graph
+- **memory_graph_recall** — Retrieve relevant context automatically
+- **memory_graph_store/update/forget** — Manage entities and facts
+- **memory_graph_query** — Natural language questions over the graph
 
 Memory Graph provides structured, queryable memory that persists across sessions. It's designed to eventually supersede file-based memory.
 

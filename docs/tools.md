@@ -55,7 +55,7 @@ Semantic search over markdown memory files:
 
 | Tool | Description | Documentation |
 |------|-------------|---------------|
-| `transcript_search` | Search conversation history | [Transcript Search](transcript-search.md) |
+| `transcript` | Search/query conversation history | [Transcript Search](transcript-search.md) |
 | `web_search` | Search the web | [Web Tools](tools/web.md) |
 | `web_fetch` | Fetch web page content | [Web Tools](tools/web.md) |
 
@@ -97,7 +97,9 @@ Tool configuration in `goclaw.json`:
     },
     "web": {
       "braveApiKey": "YOUR_API_KEY",
-      "useJina": false
+      "useBrowser": "auto",
+      "profile": "default",
+      "headless": true
     }
   }
 }
@@ -115,7 +117,7 @@ Roles define default tool access:
 {
   "roles": {
     "user": {
-      "tools": ["read", "memory_search", "transcript_search", "web_search"]
+      "tools": ["read", "memory_search", "transcript", "web_search"]
     },
     "guest": {
       "tools": ["read"]

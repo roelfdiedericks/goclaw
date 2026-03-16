@@ -52,7 +52,7 @@ sqlite3 ~/.goclaw/sessions.db ".tables"
      "llm": {
        "providers": {
          "anthropic": {
-           "type": "anthropic",
+           "driver": "anthropic",
            "apiKey": "sk-ant-..."
          }
        }
@@ -237,7 +237,7 @@ Find your user ID: message [@userinfobot](https://t.me/userinfobot)
    ```
 2. Lower minimum score:
    ```json
-   {"memorySearch": {"query": {"minScore": 0.2}}}
+   {"memory": {"query": {"minScore": 0.2}}}
    ```
 3. Check embedding model is loaded:
    ```bash
