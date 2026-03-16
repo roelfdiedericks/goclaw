@@ -36,6 +36,12 @@ func TestNewWizardAPISeedsDefaultsWhenConfigMissing(t *testing.T) {
 	if !data.SandboxEnabled || !data.ExecSandboxEnabled || !data.BrowserSandboxEnabled || !data.FileToolsSandboxEnabled {
 		t.Fatalf("expected sandbox defaults to be seeded on missing config")
 	}
+	if data.SandboxPreset != setup.SandboxPresetAssistant {
+		t.Fatalf("expected assistant sandbox preset by default, got %q", data.SandboxPreset)
+	}
+	if data.SandboxMode == "" {
+		t.Fatalf("expected sandbox mode default to be seeded")
+	}
 }
 
 func TestApplyWizardFormDefaultsSeedsMissingValuesOnly(t *testing.T) {
@@ -70,5 +76,53 @@ func TestApplyWizardFormDefaultsSeedsMissingValuesOnly(t *testing.T) {
 	applyWizardFormDefaults(data, def)
 	if data.HTTPEnabled != false {
 		t.Fatalf("expected dirty field to retain user value")
+	}
+}
+
+func TestValidateStepSecurityRequiresPresetConsent(t *testing.T) {
+	data := setup.NewWizardData()
+
+	data.SandboxPreset = setup.SandboxPresetPermissive
+	data.SandboxConsentPermissive = false
+	if errs := validateStep("security", data); errs["SandboxConsentPermissive"] == "" {
+		t.Fatalf("expected permissive consent error")
+	}
+	data.SandboxConsentPermissive = true
+
+	data.SandboxPreset = setup.SandboxPresetAssistant
+	data.SandboxConsentAssistant = false
+	if errs := validateStep("security", data); errs["SandboxConsentAssistant"] == "" {
+		t.Fatalf("expected assistant consent error")
+	}
+	data.SandboxConsentAssistant = true
+
+	data.SandboxPreset = setup.SandboxPresetHardened
+	data.SandboxConsentHardened = false
+	if errs := validateStep("security", data); errs["SandboxConsentHardened"] == "" {
+		t.Fatalf("expected hardened consent error")
+	}
+}
+
+func TestUpdateWizardDataSecurityPresetAppliesWhenAdvancedDisabled(t *testing.T) {
+	data := setup.NewWizardData()
+	payload := map[string]interface{}{
+		"SandboxPreset":           setup.SandboxPresetHardened,
+		"SandboxAdvanced":         false,
+		"SandboxConsentHardened":  true,
+		"SandboxConsentAssistant": false,
+		"SandboxConsentPermissive": false,
+	}
+	if err := updateWizardData(data, payload); err != nil {
+		t.Fatalf("updateWizardData failed: %v", err)
+	}
+
+	if data.SandboxMode != "home" {
+		t.Fatalf("expected hardened preset to apply home mode, got %q", data.SandboxMode)
+	}
+	if data.ExecSandboxEnabled || data.BrowserSandboxEnabled {
+		t.Fatalf("expected hardened preset to disable exec/browser sandboxing")
+	}
+	if !data.FileToolsSandboxEnabled {
+		t.Fatalf("expected hardened preset to keep file tools sandboxing enabled")
 	}
 }

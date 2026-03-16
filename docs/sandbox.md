@@ -14,8 +14,8 @@ GoClaw implements multiple layers of sandboxing to protect your system from unin
 | Layer | Scope | Mechanism | Default |
 |-------|-------|-----------|---------|
 | File Tools | read, write, edit | Path validation | Always on |
-| Exec Tool | Shell commands | bubblewrap (Linux) | Off |
-| Browser | Chromium | bubblewrap (Linux) | Off |
+| Exec Tool | Shell commands | Managed OS sandbox backend | Off |
+| Browser | Chromium | Managed OS sandbox backend | Off |
 
 ## File Tools Sandbox
 

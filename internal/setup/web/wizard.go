@@ -545,18 +545,71 @@ func getStepFormDef(stepID string, data *setup.WizardData) *forms.FormDef {
 		}
 
 	case "security":
+		modeOptions := sandbox.SupportedModeOptions()
 		return &forms.FormDef{
 			Title:       "Security & Skills",
 			Description: "Configure sandboxing and skill installation sources.",
 			Sections: []forms.Section{
 				{
-					Title: "Sandboxing",
-					Desc:  fmt.Sprintf("Sandboxing restricts tools to only access files within your workspace, preventing accidental or malicious access to system files. Managed backend: %s.", sandbox.CurrentBackendDisplayName()),
+					Title: "Sandboxing Presets",
+					Desc:  fmt.Sprintf("Pick a preset first. Managed backend: %s.", sandbox.CurrentBackendDisplayName()),
 					Fields: []forms.Field{
-						{Name: "SandboxEnabled", Title: "Enable Sandboxing", Type: forms.Toggle, Default: true},
-						{Name: "ExecSandboxEnabled", Title: "Enable Exec Sandboxing", Type: forms.Toggle, Default: true},
-						{Name: "BrowserSandboxEnabled", Title: "Enable Browser Sandboxing", Type: forms.Toggle, Default: true},
-						{Name: "FileToolsSandboxEnabled", Title: "Enable File Tool Sandboxing", Type: forms.Toggle, Default: true},
+						{
+							Name:  "SandboxPreset",
+							Title: "Security Preset",
+							Type:  forms.Select,
+							Options: []forms.Option{
+								{Label: "Assistant (recommended)", Value: setup.SandboxPresetAssistant},
+								{Label: "Permissive", Value: setup.SandboxPresetPermissive},
+								{Label: "Hardened", Value: setup.SandboxPresetHardened},
+							},
+							Default: setup.SandboxPresetAssistant,
+						},
+					},
+				},
+				{
+					Title:    "Preset Consent",
+					ShowWhen: "SandboxPreset=permissive",
+					Desc:     setup.SandboxPresetWarningText(setup.SandboxPresetPermissive).Body,
+					Fields: []forms.Field{
+						{Name: "SandboxConsentPermissive", Title: setup.SandboxPresetWarningText(setup.SandboxPresetPermissive).Consent, Type: forms.Toggle},
+					},
+				},
+				{
+					Title:    "Preset Consent",
+					ShowWhen: "SandboxPreset=assistant",
+					Desc:     setup.SandboxPresetWarningText(setup.SandboxPresetAssistant).Body,
+					Fields: []forms.Field{
+						{Name: "SandboxConsentAssistant", Title: setup.SandboxPresetWarningText(setup.SandboxPresetAssistant).Consent, Type: forms.Toggle},
+					},
+				},
+				{
+					Title:    "Preset Consent",
+					ShowWhen: "SandboxPreset=hardened",
+					Desc:     setup.SandboxPresetWarningText(setup.SandboxPresetHardened).Body,
+					Fields: []forms.Field{
+						{Name: "SandboxConsentHardened", Title: setup.SandboxPresetWarningText(setup.SandboxPresetHardened).Consent, Type: forms.Toggle},
+					},
+				},
+				{
+					Title: "Advanced Sandbox Settings",
+					Desc:  "Optional: customize sandbox mode and category toggles manually.",
+					Fields: []forms.Field{
+						{Name: "SandboxAdvanced", Title: "Show advanced sandbox settings", Type: forms.Toggle},
+					},
+					Nested: &forms.FormDef{
+						Sections: []forms.Section{
+							{
+								ShowWhen: "SandboxAdvanced=true",
+								Fields: []forms.Field{
+									{Name: "SandboxMode", Title: "Sandbox mode", Type: forms.Select, Options: modeOptions},
+									{Name: "SandboxEnabled", Title: "Enable Sandboxing", Type: forms.Toggle, Default: true},
+									{Name: "ExecSandboxEnabled", Title: "Enable Exec Sandboxing", Type: forms.Toggle, Default: true},
+									{Name: "BrowserSandboxEnabled", Title: "Enable Browser Sandboxing", Type: forms.Toggle, Default: true},
+									{Name: "FileToolsSandboxEnabled", Title: "Enable File Tool Sandboxing", Type: forms.Toggle, Default: true},
+								},
+							},
+						},
 					},
 				},
 				{
@@ -660,10 +713,16 @@ func updateWizardData(data *setup.WizardData, payload map[string]interface{}) er
 		VoiceLLMEnabled     bool   `json:"VoiceLLMEnabled"`
 		VoiceLLMAPIKey      string `json:"VoiceLLMAPIKey"`
 		VoiceLLMVoice       string `json:"VoiceLLMVoice"`
-		SandboxEnabled          bool   `json:"SandboxEnabled"`
-		ExecSandboxEnabled      bool   `json:"ExecSandboxEnabled"`
-		BrowserSandboxEnabled   bool   `json:"BrowserSandboxEnabled"`
-		FileToolsSandboxEnabled bool   `json:"FileToolsSandboxEnabled"`
+		SandboxPreset             string `json:"SandboxPreset"`
+		SandboxAdvanced           bool   `json:"SandboxAdvanced"`
+		SandboxMode               string `json:"SandboxMode"`
+		SandboxEnabled            bool   `json:"SandboxEnabled"`
+		ExecSandboxEnabled        bool   `json:"ExecSandboxEnabled"`
+		BrowserSandboxEnabled     bool   `json:"BrowserSandboxEnabled"`
+		FileToolsSandboxEnabled   bool   `json:"FileToolsSandboxEnabled"`
+		SandboxConsentPermissive  bool   `json:"SandboxConsentPermissive"`
+		SandboxConsentAssistant   bool   `json:"SandboxConsentAssistant"`
+		SandboxConsentHardened    bool   `json:"SandboxConsentHardened"`
 		SkillsAllowEmbedded bool   `json:"SkillsAllowEmbedded"`
 		SkillsAllowClawHub  bool   `json:"SkillsAllowClawHub"`
 		SkillsAllowLocal    bool   `json:"SkillsAllowLocal"`
@@ -742,6 +801,16 @@ func updateWizardData(data *setup.WizardData, payload map[string]interface{}) er
 	}
 
 	// Security/sandboxing fields
+	if fields.SandboxPreset != "" {
+		data.SandboxPreset = setup.NormalizeSandboxPreset(fields.SandboxPreset)
+		data.MarkDirty("SandboxPreset")
+	}
+	data.SandboxAdvanced = fields.SandboxAdvanced
+	data.MarkDirty("SandboxAdvanced")
+	if fields.SandboxMode != "" {
+		data.SandboxMode = fields.SandboxMode
+		data.MarkDirty("SandboxMode")
+	}
 	data.SandboxEnabled = fields.SandboxEnabled
 	data.MarkDirty("SandboxEnabled")
 	data.ExecSandboxEnabled = fields.ExecSandboxEnabled
@@ -750,6 +819,15 @@ func updateWizardData(data *setup.WizardData, payload map[string]interface{}) er
 	data.MarkDirty("BrowserSandboxEnabled")
 	data.FileToolsSandboxEnabled = fields.FileToolsSandboxEnabled
 	data.MarkDirty("FileToolsSandboxEnabled")
+	data.SandboxConsentPermissive = fields.SandboxConsentPermissive
+	data.MarkDirty("SandboxConsentPermissive")
+	data.SandboxConsentAssistant = fields.SandboxConsentAssistant
+	data.MarkDirty("SandboxConsentAssistant")
+	data.SandboxConsentHardened = fields.SandboxConsentHardened
+	data.MarkDirty("SandboxConsentHardened")
+	if !data.SandboxAdvanced {
+		setup.ApplySandboxPreset(data, data.SandboxPreset)
+	}
 	data.SkillsAllowEmbedded = fields.SkillsAllowEmbedded
 	data.MarkDirty("SkillsAllowEmbedded")
 	data.SkillsAllowClawHub = fields.SkillsAllowClawHub
@@ -795,6 +873,22 @@ func validateStep(stepID string, data *setup.WizardData) map[string]string {
 	case "voice":
 		if data.VoiceLLMEnabled && data.VoiceLLMAPIKey == "" {
 			errors["VoiceLLMAPIKey"] = "xAI API key is required when Voice LLM is enabled"
+		}
+
+	case "security":
+		switch setup.NormalizeSandboxPreset(data.SandboxPreset) {
+		case setup.SandboxPresetPermissive:
+			if !data.SandboxConsentPermissive {
+				errors["SandboxConsentPermissive"] = "You must explicitly acknowledge the risk for Permissive mode"
+			}
+		case setup.SandboxPresetHardened:
+			if !data.SandboxConsentHardened {
+				errors["SandboxConsentHardened"] = "You must acknowledge reduced capability for Hardened mode"
+			}
+		default:
+			if !data.SandboxConsentAssistant {
+				errors["SandboxConsentAssistant"] = "You must acknowledge Assistant mode access scope"
+			}
 		}
 	}
 
