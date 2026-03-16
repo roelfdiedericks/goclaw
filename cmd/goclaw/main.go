@@ -2023,9 +2023,17 @@ type SetupCmd struct {
 }
 
 // SetupAutoCmd auto-detects mode: wizard if no config, edit if exists
-type SetupAutoCmd struct{}
+type SetupAutoCmd struct {
+	Web bool `help:"Force web browser interface"`
+	TUI bool `help:"Force terminal interface"`
+	Dev bool `help:"Enable developer tools (right-click inspect)"`
+}
 
 func (s *SetupAutoCmd) Run(ctx *Context) error {
+	if s.Web && s.TUI {
+		return fmt.Errorf("cannot use --web and --tui together")
+	}
+
 	// Match the same web-first semantics as `setup wizard` and `setup edit`.
 	// If config exists, open editor; otherwise open wizard. Fall back to TUI if no UI is available.
 	existingConfigPath, err := paths.ConfigPath()
@@ -2036,7 +2044,20 @@ func (s *SetupAutoCmd) Run(ctx *Context) error {
 	configPath := setupweb.DefaultConfigPath()
 
 	if existingConfigPath != "" {
-		err := setupweb.RunWebEditorWithOptions(configPath, false)
+		if s.TUI {
+			return setup.RunEdit()
+		}
+
+		err := setupweb.RunWebEditorWithOptions(configPath, s.Dev)
+		if s.Web && err == setupweb.ErrNoUIAvailable {
+			fmt.Println("\nCould not open web editor.")
+			fmt.Println("The web-based editor requires either:")
+			fmt.Println("  1. webkit2gtk installed (apt install libwebkit2gtk-4.1-dev)")
+			fmt.Println("  2. A web browser (xdg-open)")
+			fmt.Println("\nUse --tui flag for terminal interface instead:")
+			fmt.Println("  goclaw setup --tui")
+			return err
+		}
 		if err == setupweb.ErrNoUIAvailable {
 			L_debug("web editor not available, falling back to TUI")
 			return setup.RunEdit()
@@ -2044,7 +2065,19 @@ func (s *SetupAutoCmd) Run(ctx *Context) error {
 		return err
 	}
 
-	err = setupweb.RunWebWizardWithOptions(configPath, false)
+	if s.TUI {
+		return setup.RunWizard()
+	}
+
+	err = setupweb.RunWebWizardWithOptions(configPath, s.Dev)
+	if s.Web && err == setupweb.ErrNoUIAvailable {
+		fmt.Println("\nError: Cannot open web interface.")
+		fmt.Println("\nTo use the web wizard, install one of:")
+		fmt.Println("  - webkit2gtk: sudo apt install libwebkit2gtk-4.1-dev")
+		fmt.Println("  - Or any web browser")
+		fmt.Println("\nAlternatively, run: goclaw setup --tui")
+		return err
+	}
 	if err == setupweb.ErrNoUIAvailable {
 		L_debug("web wizard not available, falling back to TUI")
 		return setup.RunWizard()
