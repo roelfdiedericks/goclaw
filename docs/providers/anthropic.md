@@ -16,7 +16,7 @@ The Anthropic provider connects GoClaw to Claude models via the Anthropic API.
   "llm": {
     "providers": {
       "anthropic": {
-        "type": "anthropic",
+        "driver": "anthropic",
         "apiKey": "YOUR_API_KEY",
         "promptCaching": true
       }
@@ -34,7 +34,7 @@ The Anthropic provider connects GoClaw to Claude models via the Anthropic API.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `type` | string | - | Must be `"anthropic"` |
+| `driver` | string | - | Must be `"anthropic"` |
 | `apiKey` | string | - | Anthropic API key |
 | `maxTokens` | int | 200000 | Context window size |
 | `promptCaching` | bool | true | Enable prompt caching (reduces cost) |
@@ -94,12 +94,12 @@ For setups with multiple providers:
   "llm": {
     "providers": {
       "claude": {
-        "type": "anthropic",
+        "driver": "anthropic",
         "apiKey": "YOUR_API_KEY",
         "promptCaching": true
       },
       "ollama": {
-        "type": "ollama",
+        "driver": "ollama",
         "url": "http://localhost:11434"
       }
     },

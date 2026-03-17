@@ -13,17 +13,19 @@ GoClaw includes a built-in HTTP server that provides a web chat interface and RE
 
 ```json
 {
-  "http": {
-    "enabled": true,
-    "listen": ":8080"
+  "channels": {
+    "http": {
+      "enabled": true,
+      "listen": ":8080"
+    }
   }
 }
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `enabled` | auto | Enable HTTP server (auto-enabled if users have HTTP credentials) |
-| `listen` | - | Address to listen on (e.g., `:8080`, `127.0.0.1:8080`) |
+| `enabled` | `true` when unset | Enable HTTP server |
+| `listen` | `:1337` | Address to listen on (e.g., `:8080`, `127.0.0.1:8080`) |
 
 ## Web Chat Interface
 
@@ -53,15 +55,16 @@ The web UI provides:
 POST /api/send
 ```
 
-Send a message to the agent. Returns a stream ID for receiving events.
+Send a message to the agent. Returns JSON with an ID and processing status.
 
 ### Events Stream
 
 ```
-GET /api/events?stream=<stream_id>
+GET /api/events
 ```
 
 Server-sent events stream for receiving agent responses.
+Reconnection uses the standard `Last-Event-ID` header.
 
 ### Session Status
 
@@ -74,7 +77,7 @@ Returns current session information (token count, message count, etc.).
 ### Media
 
 ```
-GET /api/media?file=<filename>
+GET /api/media?path=<media-path>
 ```
 
 Retrieve media files (screenshots, images).
@@ -90,18 +93,21 @@ JSON metrics data. See [Metrics](metrics.md) for details.
 ### Session Actions
 
 ```
-POST /api/sessions/<action>
+GET  /api/sessions/{sessionKey}/events
+POST /api/sessions/{sessionKey}/guidance
+POST /api/sessions/{sessionKey}/llm
+POST /api/sessions/{sessionKey}/message
 ```
 
-Session management actions (clear, compact).
+Owner-only supervision endpoints.
 
-### Prometheus Metrics
+### Metrics Page
 
 ```
 GET /metrics
 ```
 
-Prometheus-format metrics for monitoring.
+Metrics dashboard page.
 
 ## Authentication
 

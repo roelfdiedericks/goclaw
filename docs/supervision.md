@@ -47,12 +47,9 @@ Owners can supervise any active session, including:
 
 Every conversation has a session identified by a key:
 
-| Channel | Session Key Format | Example |
-|---------|-------------------|---------|
-| Telegram | `telegram:<user_id>` | `telegram:123456789` |
-| HTTP | `http:<session_id>` | `http:abc123` |
-| TUI | `main` | `main` |
-| Cron | `cron:<job_name>` | `cron:morning-briefing` |
+- Owner users default to the primary session key (`primary`).
+- Non-owner users default to `user:<id>`.
+- Some channel flows can pass an explicit session ID, which then becomes the session key for that request.
 
 ### Supervision State
 
@@ -106,7 +103,7 @@ Returns session information for owners, including:
 {
   "sessions": [
     {
-      "key": "telegram:123456789",
+      "key": "user:alice",
       "messages": 45,
       "totalTokens": 12500,
       "maxTokens": 200000,

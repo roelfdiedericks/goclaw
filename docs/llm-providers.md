@@ -31,7 +31,7 @@ For basic usage with Anthropic:
   "llm": {
     "providers": {
       "anthropic": {
-        "type": "anthropic",
+        "driver": "anthropic",
         "apiKey": "sk-ant-...",
         "promptCaching": true
       }
@@ -237,7 +237,7 @@ Hugot is the built-in local embeddings provider. It is intended for the `embeddi
 **xAI:**
 ```json
 {
-  "type": "xai",
+  "driver": "xai",
   "serverToolsAllowed": ["web_search"],  // Server-side tools
   "maxTurns": 5                // Max agentic turns
 }
@@ -271,13 +271,13 @@ The provider name is the key from your `providers` config, not the provider type
 
 Shows all providers, their status, and any cooldowns.
 
-### Clear Cooldown
+### Reset Cooldowns
 
 ```
-/llm clear <provider>
+/llm reset
 ```
 
-Manually clears a provider's cooldown to retry immediately.
+Clears active provider cooldowns so model chains can retry immediately.
 
 ### Cooldown Behavior
 

@@ -7,7 +7,7 @@ weight: 10
 
 # Embeddings
 
-Embeddings power semantic search in GoClaw, enabling `memory_search`, `transcript_search`, and Memory Graph queries to find content by meaning rather than exact keywords.
+Embeddings power semantic search in GoClaw, enabling `memory_search`, `transcript`, and Memory Graph queries to find content by meaning rather than exact keywords.
 
 ## Overview
 
@@ -16,7 +16,7 @@ Embeddings convert text into numerical vectors that capture semantic meaning. Si
 GoClaw uses embeddings for:
 - **Memory search** — Find relevant memory file chunks
 - **Transcript search** — Find past conversation segments
-- **Memory Graph** — Semantic similarity for `recall` and `query` tools
+- **Memory Graph** — Semantic similarity for `memory_graph_recall` and `memory_graph_query` tools
 
 By default, GoClaw includes a built-in local embeddings provider named `hugot-local`. New configs and edited configs automatically keep this provider available, so embeddings can work even if your main chat model is something like Anthropic.
 
@@ -66,23 +66,24 @@ If `llm.embeddings.models` is empty, GoClaw seeds the default local embeddings m
 
 The `hugot-local` provider is treated as built-in. If it is missing from config later, GoClaw restores it automatically. If you already configured an embeddings chain, GoClaw leaves that chain unchanged.
 
-### Via `memorySearch` (Legacy)
+### Memory Query Config
 
-For older setups, you may still see embeddings configured directly in `memorySearch`:
+Search behavior for memory search is configured under `memory.query`:
 
 ```json
 {
-  "memorySearch": {
+  "memory": {
     "enabled": true,
-    "ollama": {
-      "url": "http://localhost:11434",
-      "model": "nomic-embed-text"
-    }
+    "query": {
+      "maxResults": 6,
+      "minScore": 0.35,
+      "vectorWeight": 0.7,
+      "keywordWeight": 0.3
+    },
+    "paths": []
   }
 }
 ```
-
-This older path still works, but `llm.embeddings` is the preferred configuration surface.
 
 ## Recommended Models
 
@@ -137,16 +138,12 @@ Rebuild runs in the background and may take time for large databases.
 
 ## Search Configuration
 
-Configure search behavior in `memorySearch`:
+Configure search behavior in `memory.query`:
 
 ```json
 {
-  "memorySearch": {
+  "memory": {
     "enabled": true,
-    "ollama": {
-      "url": "http://localhost:11434",
-      "model": "nomic-embed-text"
-    },
     "query": {
       "maxResults": 6,
       "minScore": 0.35,
@@ -205,5 +202,5 @@ The built-in `hugot-local` provider downloads its model the first time GoClaw ne
 - [Agent Memory](agent-memory.md) — Memory system overview
 - [Memory Graph](memory-graph.md) — Semantic knowledge graph
 - [Memory Search](memory-search.md) — memory_search tool
-- [Transcript Search](transcript-search.md) — transcript_search tool
+- [Transcript Search](transcript-search.md) — transcript tool
 - [LLM Providers](llm-providers.md) — Provider configuration

@@ -302,10 +302,10 @@ You can also inject user messages at specific thresholds to prompt the agent mor
 | `thresholds` | Array of threshold configurations |
 | `percent` | Context usage percent to trigger |
 | `prompt` | Message to inject |
-| `injectAs` | Must be `"user"` (injected as a user message) |
+| `injectAs` | `"user"` or `"system"` |
 | `oncePerCycle` | Only trigger once per compaction cycle |
 
-The prompt is injected as a user message before the agent's next turn. Use `YYYY-MM-DD` in the prompt — it's automatically replaced with today's date.
+Use `YYYY-MM-DD` in the prompt — it's automatically replaced with today's date.
 
 ---
 

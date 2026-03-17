@@ -7,7 +7,7 @@ weight: 40
 
 # Channel Commands
 
-GoClaw provides slash commands available across all channels (Telegram, TUI, HTTP).
+GoClaw provides slash commands available across all text channels (Telegram, WhatsApp, TUI, HTTP).
 
 ## Command Reference
 

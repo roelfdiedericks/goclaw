@@ -176,13 +176,13 @@ Available agent tools:
 | `edit` | Edit file (string replace) |
 | `exec` | Execute shell commands (sandboxed) |
 | `message` | Send messages to channels |
-| `recall` | Retrieve memories from graph |
-| `query` | Search/filter memory graph |
-| `store` | Add memory to graph |
-| `update` | Modify memory in graph |
-| `forget` | Remove memory from graph |
+| `memory_graph_recall` | Retrieve memories from graph |
+| `memory_graph_query` | Search/filter memory graph |
+| `memory_graph_store` | Add memory to graph |
+| `memory_graph_update` | Modify memory in graph |
+| `memory_graph_forget` | Remove memory from graph |
 | `memory_search` | Semantic search over memory files |
-| `transcript_search` | Search conversation history |
+| `transcript` | Search/query conversation history |
 | `web_search` | Search the web (Brave API) |
 | `web_fetch` | Fetch web page content |
 | `browser` | Browser automation (Chromium) |

@@ -51,8 +51,8 @@ Transcript search requires embeddings. Any OpenAI-compatible API works:
   "llm": {
     "providers": {
       "lmstudio": {
-        "type": "openai",
-        "url": "http://localhost:1234"
+        "driver": "openai",
+        "baseURL": "http://localhost:1234"
       }
     },
     "embeddings": {
@@ -68,7 +68,7 @@ Transcript search requires embeddings. Any OpenAI-compatible API works:
   "llm": {
     "providers": {
       "ollama": {
-        "type": "ollama",
+        "driver": "ollama",
         "url": "http://localhost:11434"
       }
     },
@@ -203,14 +203,15 @@ Final score: `vector * 0.7 + keyword * 0.3`
 
 ## Agent Tools
 
-### `transcript_search`
+### `transcript` (search action)
 
 Search conversation history:
 
 ```json
 {
-  "tool": "transcript_search",
+  "tool": "transcript",
   "input": {
+    "action": "search",
     "query": "authentication system design decisions"
   }
 }
@@ -232,14 +233,16 @@ Returns:
 }
 ```
 
-### `transcript_stats`
+### `transcript` (stats action)
 
 Get indexing statistics:
 
 ```json
 {
-  "tool": "transcript_stats",
-  "input": {}
+  "tool": "transcript",
+  "input": {
+    "action": "stats"
+  }
 }
 ```
 
@@ -298,7 +301,7 @@ This means conversations in OpenClaw become searchable in GoClaw within ~30 seco
 
 ```
 Agent: "I don't have the earlier context, but let me search..."
-→ transcript_search("database migration approach")
+→ transcript(action="search", query="database migration approach")
 → "Found: We decided to use incremental migrations with checksums..."
 ```
 

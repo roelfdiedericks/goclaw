@@ -23,7 +23,7 @@ Generate images using xAI's Grok image generation. Supports text-to-image and im
 ```json
 {
   "tools": {
-    "xai_imagine": {
+    "xaiImagine": {
       "enabled": true,
       "apiKey": "YOUR_XAI_API_KEY",
       "model": "grok-2-image",
