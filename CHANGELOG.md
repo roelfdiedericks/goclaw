@@ -8,11 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
-
 ## [0.1.3] stable - 2026-03-17
 - major sandbox reworking
 - wizard/ onboarding updates
 - documentation updates
+- model fallback chains
+- sandbox exec testing tool
 
 ## [0.1.2] stable - 2026-03-14
 - macOS now properly tested
