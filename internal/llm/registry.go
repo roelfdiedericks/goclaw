@@ -119,7 +119,8 @@ func NewRegistry(cfg RegistryConfig) (*Registry, error) {
 		}
 	}
 
-	// Validate models for all purposes (skip empty chains — they fall back to agent)
+	// Validate models for all purposes (skip empty chains — most purposes can
+	// fall back to agent; embeddings remains strict and requires explicit models).
 	for _, purpose := range []string{"agent", "summarization", "embeddings", "heartbeat", "cron", "hass", "memory_extraction"} {
 		if len(r.purposes[purpose].Models) == 0 {
 			continue
@@ -299,24 +300,23 @@ func checkMetadataCapabilities(cfg LLMProviderConfig, modelName, purpose string)
 }
 
 // GetProvider returns the first available provider for a purpose.
-// Iterates through the model chain until one is available.
-// Falls back to the agent chain if the purpose has no models configured.
+// Iterates through the purpose chain and, where allowed, appends agent models as
+// last-resort fallbacks.
 func (r *Registry) GetProvider(purpose string) (Provider, error) {
 	r.mu.RLock()
-	cfg, ok := r.purposes[purpose]
-	if !ok || len(cfg.Models) == 0 {
-		if purpose != "agent" {
-			cfg = r.purposes["agent"]
-			L_debug("llm: purpose has no models, falling back to agent", "purpose", purpose)
-		}
-	}
+	_, ok := r.purposes[purpose]
 	r.mu.RUnlock()
 
-	if len(cfg.Models) == 0 {
+	if !ok {
+		return nil, fmt.Errorf("unknown purpose: %s", purpose)
+	}
+
+	candidates := r.getModelsWithAgentFallback(purpose)
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no models configured for purpose: %s", purpose)
 	}
 
-	for i, ref := range cfg.Models {
+	for i, ref := range candidates {
 		resolved, err := r.resolveForPurpose(ref, purpose)
 		if err != nil {
 			L_debug("llm: failed to resolve model", "ref", ref, "error", err)
@@ -340,7 +340,7 @@ func (r *Registry) GetProvider(purpose string) (Provider, error) {
 		return provider, nil
 	}
 
-	return nil, fmt.Errorf("no available provider for %s (tried: %v)", purpose, cfg.Models)
+	return nil, fmt.Errorf("no available provider for %s (tried: %v)", purpose, candidates)
 }
 
 // GetMaxInputTokens returns the configured maxInputTokens for a purpose.
@@ -611,10 +611,15 @@ func (r *Registry) GetProviderStatus() []ProviderStatus {
 	return statuses
 }
 
-// getModelsWithAgentFallback returns the model chain for a purpose,
-// appending agent chain models as last-resort fallbacks for non-agent purposes.
-// This ensures summarization/output can fall back to the agent model if its own
-// chain is exhausted or empty, since these operations are critical to gateway function.
+func allowsAgentFallback(purpose string) bool {
+	if purpose == "agent" || purpose == "embeddings" {
+		return false
+	}
+	return true
+}
+
+// getModelsWithAgentFallback returns the model chain for a purpose, appending
+// agent chain models as last-resort fallbacks for supported non-agent purposes.
 func (r *Registry) getModelsWithAgentFallback(purpose string) []string {
 	r.mu.RLock()
 	cfg := r.purposes[purpose]
@@ -624,7 +629,7 @@ func (r *Registry) getModelsWithAgentFallback(purpose string) []string {
 	models := make([]string, len(cfg.Models))
 	copy(models, cfg.Models)
 
-	if purpose == "agent" || len(agentCfg.Models) == 0 {
+	if !allowsAgentFallback(purpose) || len(agentCfg.Models) == 0 {
 		return models
 	}
 

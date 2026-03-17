@@ -18,6 +18,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/metrics"
+	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 	"github.com/roelfdiedericks/goclaw/internal/voicellm"
 )
@@ -440,9 +441,20 @@ func (s *Server) handleBuiltinCommand(w http.ResponseWriter, ctx context.Context
 		})
 	}
 
+	// Map HTTP transport session IDs to gateway session keys.
+	// Owner traffic always runs on the shared primary session.
+	commandSessionKey := sessionID
+	if sess.User != nil {
+		if sess.User.IsOwner() {
+			commandSessionKey = session.PrimarySession
+		} else {
+			commandSessionKey = fmt.Sprintf("user:%s", sess.User.ID)
+		}
+	}
+
 	// Execute command via manager (which has the provider wired up)
 	mgr := commands.GetManager()
-	result := mgr.Execute(ctx, message, sessionID, userID)
+	result := mgr.Execute(ctx, message, commandSessionKey, userID)
 
 	// Determine message to show
 	responseText := result.Text

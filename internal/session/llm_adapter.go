@@ -158,11 +158,9 @@ func GenerateSummaryWithRegistry(ctx context.Context, registry *llm.Registry, me
 		return "", "", fmt.Errorf("no registry available")
 	}
 
-	// Get model list to determine effective limit from primary model
+	// Log explicit summarization model count; failover may still use agent fallback
+	// when summarization.models is empty.
 	models := registry.ListModelsForPurpose("summarization")
-	if len(models) == 0 {
-		return "", "", fmt.Errorf("no models configured for summarization")
-	}
 
 	// Use configured maxInputTokens or a reasonable default
 	effectiveLimit := maxInputTokens
