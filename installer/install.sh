@@ -6,6 +6,9 @@
 # Options:
 #   --version VERSION   Install specific version (default: latest)
 #   --channel CHANNEL   Install from channel: stable, beta (default: stable)
+#   --deps MODE         Dependency install mode: auto, install, skip (default: auto)
+#   --yes               Alias for --deps install
+#   --no-deps           Alias for --deps skip
 #   --no-path           Skip PATH configuration
 #   --help              Show this help
 
@@ -23,6 +26,7 @@ PATH_ACTION="none"
 VERSION=""
 CHANNEL="stable"
 SKIP_PATH=false
+DEPS_MODE="auto"
 
 # Colors (disabled if not a terminal)
 if [ -t 1 ]; then
@@ -54,6 +58,9 @@ Usage: curl -fsSL https://goclaw.org/install.sh | sh
 Options:
     --version VERSION   Install specific version (e.g., 0.1.0)
     --channel CHANNEL   Install from channel: stable, beta (default: stable)
+    --deps MODE         Dependency install mode: auto, install, skip (default: auto)
+    --yes               Alias for --deps install
+    --no-deps           Alias for --deps skip
     --no-path           Skip PATH configuration
     --help              Show this help
 
@@ -85,6 +92,18 @@ while [ $# -gt 0 ]; do
             SKIP_PATH=true
             shift
             ;;
+        --deps)
+            DEPS_MODE="$2"
+            shift 2
+            ;;
+        --yes)
+            DEPS_MODE="install"
+            shift
+            ;;
+        --no-deps)
+            DEPS_MODE="skip"
+            shift
+            ;;
         --help|-h)
             usage
             ;;
@@ -93,6 +112,11 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+case "$DEPS_MODE" in
+    auto|install|skip) ;;
+    *) error "Invalid --deps mode: $DEPS_MODE (expected: auto, install, skip)" ;;
+esac
 
 # Detect OS
 detect_os() {
@@ -327,6 +351,24 @@ configure_path() {
     esac
 }
 
+# Prompt user via /dev/tty so curl|sh doesn't consume script stdin.
+# Return codes: 0=yes, 1=no, 2=no tty available.
+prompt_yes_no_tty() {
+    prompt="$1"
+    if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
+        return 2
+    fi
+
+    printf "%s" "$prompt" > /dev/tty
+    if IFS= read -r confirm < /dev/tty; then
+        if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+            return 0
+        fi
+        return 1
+    fi
+    return 1
+}
+
 # Main installation
 main() {
     echo ""
@@ -391,7 +433,7 @@ main() {
     success "Installed: $INSTALL_DIR/$BINARY_NAME"
     
     # Show version
-    "$INSTALL_DIR/$BINARY_NAME" --version 2>/dev/null || true
+    "$INSTALL_DIR/$BINARY_NAME" version 2>/dev/null || true
     
     # Configure PATH
     configure_path "$OS"
@@ -444,10 +486,10 @@ install_dependencies() {
     
     missing=""
     if ! command -v bwrap >/dev/null 2>&1; then
-        missing="$missing bubblewrap"
+        if [ -z "$missing" ]; then missing="bubblewrap"; else missing="$missing bubblewrap"; fi
     fi
     if ! command -v ffmpeg >/dev/null 2>&1; then
-        missing="$missing ffmpeg"
+        if [ -z "$missing" ]; then missing="ffmpeg"; else missing="$missing ffmpeg"; fi
     fi
     
     if [ -z "$missing" ]; then
@@ -461,28 +503,74 @@ install_dependencies() {
     # Detect package manager
     pkg_cmd=""
     if command -v apt-get >/dev/null 2>&1; then
-        pkg_cmd="sudo apt-get install -y"
+        pkg_cmd="apt-get install -y"
     elif command -v dnf >/dev/null 2>&1; then
-        pkg_cmd="sudo dnf install -y"
+        pkg_cmd="dnf install -y"
     elif command -v pacman >/dev/null 2>&1; then
-        pkg_cmd="sudo pacman -S --noconfirm"
+        pkg_cmd="pacman -S --noconfirm"
     elif command -v apk >/dev/null 2>&1; then
-        pkg_cmd="sudo apk add"
+        pkg_cmd="apk add"
     fi
     
     if [ -z "$pkg_cmd" ]; then
         warn "Could not detect package manager"
-        echo "Please install manually:$missing"
+        echo "Please install manually: $missing"
         return
     fi
-    
-    printf "Install with: ${GREEN}%s%s${NC}? [y/N] " "$pkg_cmd" "$missing"
-    read -r confirm
-    if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+
+    install_cmd="$pkg_cmd $missing"
+    run_cmd="$install_cmd"
+    can_auto_install=true
+    if [ "$(id -u)" -ne 0 ]; then
+        if command -v sudo >/dev/null 2>&1; then
+            install_cmd="sudo $install_cmd"
+            run_cmd="sudo $run_cmd"
+        else
+            can_auto_install=false
+        fi
+    fi
+
+    should_install=false
+    case "$DEPS_MODE" in
+        install)
+            if [ "$can_auto_install" = true ]; then
+                should_install=true
+            else
+                warn "Cannot auto-install dependencies without root privileges or sudo."
+            fi
+            ;;
+        skip)
+            ;;
+        auto)
+            if [ "$can_auto_install" = true ]; then
+                if prompt_yes_no_tty "Install with: ${GREEN}${install_cmd}${NC}? [y/N] "; then
+                    should_install=true
+                else
+                    rc=$?
+                    if [ "$rc" -eq 2 ]; then
+                        info "No interactive terminal detected; skipping dependency install."
+                    fi
+                fi
+            else
+                warn "Cannot auto-install dependencies without root privileges or sudo."
+            fi
+            ;;
+    esac
+
+    if [ "$should_install" = true ]; then
         # shellcheck disable=SC2086
-        $pkg_cmd $missing && success "Dependencies installed" || warn "Some dependencies failed to install"
+        $run_cmd && success "Dependencies installed" || warn "Some dependencies failed to install"
     else
-        echo "Skipped. Install manually if needed:$missing"
+        echo "Skipped. Install manually if needed: $missing"
+        if [ "$(id -u)" -eq 0 ]; then
+            echo "Run: $pkg_cmd $missing"
+        else
+            if command -v sudo >/dev/null 2>&1; then
+                echo "Run: sudo $pkg_cmd $missing"
+            else
+                echo "Run as root: $pkg_cmd $missing"
+            fi
+        fi
     fi
 }
 
