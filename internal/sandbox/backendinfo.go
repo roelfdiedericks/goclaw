@@ -49,9 +49,9 @@ func SupportedModeOptions() []forms.Option {
 		}
 	case BackendSeatbelt:
 		return []forms.Option{
-			{Label: "Home (full isolated home - recommended)", Value: ModeHome},
-			{Label: "Autodocs Read (sandbox home + non-hidden home directories)", Value: ModeAutoDocsRead},
-			{Label: "Autodocs Write (sandbox home + writable non-hidden home directories)", Value: ModeAutoDocsWrite},
+			{Label: "Home (policy-managed real home; dot dirs blocked)", Value: ModeHome},
+			{Label: "Autodocs Read (visible non-hidden home directories, read-only)", Value: ModeAutoDocsRead},
+			{Label: "Autodocs Write (visible non-hidden home directories, writable)", Value: ModeAutoDocsWrite},
 		}
 	default:
 		return []forms.Option{

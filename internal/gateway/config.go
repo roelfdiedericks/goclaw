@@ -40,7 +40,7 @@ func ConfigFormDef() forms.FormDef {
 				Title: "Agent Identity",
 				Fields: []forms.Field{
 					{Name: "agent.name", Title: "Agent Name", Type: forms.Text, Default: "GoClaw", Desc: "Display name for the agent"},
-					{Name: "agent.emoji", Title: "Emoji Prefix", Type: forms.Text, Desc: "Optional emoji prefix for agent name"},
+					{Name: "agent.emoji", Title: "Emoji Prefix", Type: forms.Text, Default: "🐾", Desc: "Optional emoji prefix for agent name"},
 					{Name: "agent.typing", Title: "Typing Text", Type: forms.Text, Desc: "Custom typing indicator text"},
 				},
 			},

@@ -6,6 +6,7 @@ const (
 	SandboxPresetAssistant  = "assistant"
 	SandboxPresetPermissive = "permissive"
 	SandboxPresetHardened   = "hardened"
+	SandboxPresetCustom     = "custom"
 )
 
 type SandboxPresetWarning struct {
@@ -15,12 +16,12 @@ type SandboxPresetWarning struct {
 }
 
 func SandboxPresetValues() []string {
-	return []string{SandboxPresetAssistant, SandboxPresetPermissive, SandboxPresetHardened}
+	return []string{SandboxPresetAssistant, SandboxPresetPermissive, SandboxPresetHardened, SandboxPresetCustom}
 }
 
 func NormalizeSandboxPreset(preset string) string {
 	switch preset {
-	case SandboxPresetPermissive, SandboxPresetHardened:
+	case SandboxPresetPermissive, SandboxPresetHardened, SandboxPresetCustom:
 		return preset
 	default:
 		return SandboxPresetAssistant
@@ -37,10 +38,12 @@ func ApplySandboxPreset(data *WizardData, preset string) {
 		data.SandboxMode = sandbox.ModeHome
 	case SandboxPresetHardened:
 		data.SandboxEnabled = true
-		data.ExecSandboxEnabled = false
-		data.BrowserSandboxEnabled = false
+		data.ExecSandboxEnabled = true
+		data.BrowserSandboxEnabled = true
 		data.FileToolsSandboxEnabled = true
 		data.SandboxMode = sandbox.ModeHome
+	case SandboxPresetCustom:
+		// Custom means caller-managed advanced values; keep current fields unchanged.
 	default:
 		data.SandboxEnabled = true
 		data.ExecSandboxEnabled = true
@@ -55,12 +58,12 @@ func DetectSandboxPreset(enabled bool, mode string, execEnabled bool, browserEna
 	switch {
 	case !enabled:
 		return SandboxPresetPermissive, false
-	case enabled && mode == sandbox.ModeHome && !execEnabled && !browserEnabled && fileToolsEnabled:
+	case enabled && mode == sandbox.ModeHome && execEnabled && browserEnabled && fileToolsEnabled:
 		return SandboxPresetHardened, false
 	case enabled && mode == sandbox.ModeAutoDocsWrite && execEnabled && browserEnabled && fileToolsEnabled:
 		return SandboxPresetAssistant, false
 	default:
-		return SandboxPresetAssistant, true
+		return SandboxPresetCustom, true
 	}
 }
 
@@ -74,9 +77,15 @@ func SandboxPresetWarningText(preset string) SandboxPresetWarning {
 		}
 	case SandboxPresetHardened:
 		return SandboxPresetWarning{
-			Title:   "Hardened mode: reduced capability",
-			Body:    "Hardened mode prioritizes safety for shared or multi-user workflows. High-impact tools are restricted by default, so some tasks may not work until explicitly enabled.",
-			Consent: "I understand Hardened mode reduces capability in exchange for stronger default safety.",
+			Title:   "Hardened mode: stricter isolation",
+			Body:    "Hardened mode keeps sandboxing on for supported tool categories and uses fully isolated home mode by default. It reduces host file exposure compared with Assistant mode.",
+			Consent: "I understand Hardened mode uses stricter sandbox isolation by default.",
+		}
+	case SandboxPresetCustom:
+		return SandboxPresetWarning{
+			Title:   "Custom mode: review advanced settings",
+			Body:    "Custom mode uses your manual advanced sandbox choices. Review mode and category toggles carefully to avoid unintended exposure.",
+			Consent: "",
 		}
 	default:
 		return SandboxPresetWarning{

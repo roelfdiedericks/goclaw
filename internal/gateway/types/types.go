@@ -20,7 +20,7 @@ type PromptCacheConfig struct {
 // AgentIdentityConfig configures the agent's display identity
 type AgentIdentityConfig struct {
 	Name   string `json:"name" default:"GoClaw"` // Agent's display name
-	Emoji  string `json:"emoji"`                 // Optional emoji prefix
+	Emoji  string `json:"emoji" default:"🐾"`     // Optional emoji prefix
 	Typing string `json:"typing"`                // Custom typing indicator text (derived from Name if empty)
 }
 

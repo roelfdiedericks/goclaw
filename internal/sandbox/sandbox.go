@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -39,9 +40,8 @@ func normalizeUnicodeSpaces(s string) string {
 }
 
 // expandSandboxPath handles ~ expansion and unicode normalization for file tool paths.
-// In "home" mode:
-//   - ~ expands to the sandbox home directory
-//   - Absolute paths under the real home are rewritten to the sandbox home
+// In sandbox-home remap environments, absolute paths under real home are rewritten
+// to the sandbox home backing path.
 func expandSandboxPath(filePath string, sandboxHomeDir string) string {
 	normalized := normalizeUnicodeSpaces(filePath)
 
@@ -78,14 +78,16 @@ func expandSandboxPath(filePath string, sandboxHomeDir string) string {
 }
 
 // ValidatePath validates that a path is within allowed roots and contains no symlinks.
-// In home-like modes, ~ paths usually expand to the sandbox home directory and
-// autodocs roots remain mapped to the real home.
+// HOME path behavior is policy-driven and may differ by platform/mode.
 func (m *Manager) ValidatePath(inputPath, workingDir string) (string, error) {
 	policy := m.ResolvePolicy()
 	resolution, err := policy.ResolvePath(inputPath, workingDir)
 	if err != nil {
 		L_warn("sandbox: path escapes allowed roots", "path", inputPath, "error", err, "workspace", policy.VisibleWorkspace, "home", policy.VisibleHomeDir)
 		return "", fmt.Errorf("path escapes sandbox root: %s", inputPath)
+	}
+	if shouldDenyDarwinHiddenHomePath(policy, resolution) {
+		return "", fmt.Errorf("access denied: hidden home paths are blocked in darwin home mode")
 	}
 
 	if resolution.Relative != "" && resolution.Relative != "." {
@@ -216,6 +218,9 @@ func (m *Manager) ValidateWritePath(inputPath, workingDir string) (string, error
 	if err != nil {
 		return "", err
 	}
+	if shouldDenyDarwinHiddenHomePath(policy, resolution) {
+		return "", fmt.Errorf("write denied: hidden home paths are blocked in darwin home mode")
+	}
 
 	filename := filepath.Base(resolution.ActualPath)
 	for _, denied := range deniedFiles {
@@ -241,6 +246,31 @@ func (m *Manager) ValidateWritePath(inputPath, workingDir string) (string, error
 	default:
 		return "", fmt.Errorf("write denied: path is outside writable sandbox roots")
 	}
+}
+
+func shouldDenyDarwinHiddenHomePath(policy ResolvedPolicy, resolution ResolvedPath) bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	if policy.Mode != ModeHome {
+		return false
+	}
+	if resolution.RootKind != RootSandboxHome {
+		return false
+	}
+	return isHiddenRelativePath(resolution.Relative)
+}
+
+func isHiddenRelativePath(relative string) bool {
+	clean := filepath.Clean(relative)
+	if clean == "." || clean == "" {
+		return false
+	}
+	first := clean
+	if idx := strings.IndexRune(clean, filepath.Separator); idx >= 0 {
+		first = clean[:idx]
+	}
+	return strings.HasPrefix(first, ".")
 }
 
 // WriteFileValidated validates the path for writes, then writes atomically.

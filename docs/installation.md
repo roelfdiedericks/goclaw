@@ -143,10 +143,13 @@ goclaw setup
 The wizard will:
 
 1. **Detect OpenClaw** — If found, offer to import settings (API keys, workspace, Telegram token)
-2. **Create workspace** — Set up your agent's home directory with default files
-3. **Configure providers** — Select and test LLM providers (Anthropic, Ollama, LM Studio)
-4. **Set up user** — Create your owner account with optional Telegram ID
-5. **Test connections** — Validate API keys and fetch available models
+2. **Set agent identity** — Configure name, emoji, and optional typing text
+3. **Create workspace** — Set up your agent's home directory with default files
+4. **Set up user** — Create your owner account with optional Telegram/WhatsApp IDs
+5. **Configure channels** — Enable Telegram, HTTP, and WhatsApp as needed
+6. **Configure provider** — Select and test your primary LLM provider
+7. **Configure security** — Choose a sandbox preset (`Assistant`, `Permissive`, `Hardened`, or `Custom`) and skill source permissions
+8. **Review settings** — Confirm and finish setup
 
 After setup completes, you're ready to start GoClaw:
 

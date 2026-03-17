@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
@@ -28,6 +29,7 @@ type WizardStep struct {
 // WizardSteps defines all steps in the setup wizard
 var WizardSteps = []WizardStep{
 	{ID: "welcome", Title: "Welcome to GoClaw", Description: "Let's get you set up with your personal AI assistant."},
+	{ID: "agent", Title: "Agent Identity", Description: "Set your assistant name, emoji, and typing style."},
 	{ID: "workspace", Title: "Workspace", Description: "Choose where GoClaw will store files and configurations."},
 	{ID: "user", Title: "Owner Account", Description: "Create your owner account for authentication."},
 	{ID: "channels", Title: "Communication Channels", Description: "Configure how you'll interact with GoClaw."},
@@ -52,6 +54,26 @@ type WizardAPI struct {
 
 // NewWizardAPI creates a new wizard API handler
 func NewWizardAPI(configPath string, _ configapply.Caller) *WizardAPI {
+	data := buildWizardData(configPath)
+
+	return &WizardAPI{
+		state: &WizardState{
+			Step: 1,
+			Data: data,
+		},
+		configPath: configPath,
+	}
+}
+
+// Reset reloads wizard data and returns the wizard to step 1.
+func (w *WizardAPI) Reset() {
+	w.state.mu.Lock()
+	defer w.state.mu.Unlock()
+	w.state.Step = 1
+	w.state.Data = buildWizardData(w.configPath)
+}
+
+func buildWizardData(configPath string) *setup.WizardData {
 	data := setup.NewWizardData()
 
 	// Try to load existing GoClaw config
@@ -77,13 +99,7 @@ func NewWizardAPI(configPath string, _ configapply.Caller) *WizardAPI {
 		L_info("wizard: detected OpenClaw installation")
 	}
 
-	return &WizardAPI{
-		state: &WizardState{
-			Step: 1,
-			Data: data,
-		},
-		configPath: configPath,
-	}
+	return data
 }
 
 // HandleGetState returns the current wizard state
@@ -372,6 +388,21 @@ func getStepFormDef(stepID string, data *setup.WizardData) *forms.FormDef {
 			},
 		}
 
+	case "agent":
+		return &forms.FormDef{
+			Title: "Agent Identity",
+			Sections: []forms.Section{
+				{
+					Title: "Display Settings",
+					Fields: []forms.Field{
+						{Name: "AgentName", Title: "Agent Name", Type: forms.Text, Required: true, Default: "GoClaw"},
+						{Name: "AgentEmoji", Title: "Emoji (optional)", Type: forms.Text, Default: "🐾", Desc: "Pick an emoji to prefix the agent name"},
+						{Name: "AgentTyping", Title: "Typing Text (optional)", Type: forms.Text, Desc: fmt.Sprintf("Custom typing indicator text (max %d chars)", setup.WizardAgentTypingMaxLen)},
+					},
+				},
+			},
+		}
+
 	case "user":
 		return &forms.FormDef{
 			Title: "Owner Account",
@@ -547,8 +578,8 @@ func getStepFormDef(stepID string, data *setup.WizardData) *forms.FormDef {
 	case "security":
 		modeOptions := sandbox.SupportedModeOptions()
 		return &forms.FormDef{
-			Title:       "Security & Skills",
-			Description: "Configure sandboxing and skill installation sources.",
+			Title:       "",
+			Description: "",
 			Sections: []forms.Section{
 				{
 					Title: "Sandboxing Presets",
@@ -562,10 +593,16 @@ func getStepFormDef(stepID string, data *setup.WizardData) *forms.FormDef {
 								{Label: "Assistant (recommended)", Value: setup.SandboxPresetAssistant},
 								{Label: "Permissive", Value: setup.SandboxPresetPermissive},
 								{Label: "Hardened", Value: setup.SandboxPresetHardened},
+								{Label: "Custom (advanced)", Value: setup.SandboxPresetCustom},
 							},
 							Default: setup.SandboxPresetAssistant,
 						},
 					},
+				},
+				{
+					Title:    "Custom Preset Notice",
+					ShowWhen: "SandboxPreset=custom",
+					Desc:     setup.SandboxPresetWarningText(setup.SandboxPresetCustom).Body,
 				},
 				{
 					Title:    "Preset Consent",
@@ -602,11 +639,24 @@ func getStepFormDef(stepID string, data *setup.WizardData) *forms.FormDef {
 							{
 								ShowWhen: "SandboxAdvanced=true",
 								Fields: []forms.Field{
-									{Name: "SandboxMode", Title: "Sandbox mode", Type: forms.Select, Options: modeOptions},
 									{Name: "SandboxEnabled", Title: "Enable Sandboxing", Type: forms.Toggle, Default: true},
 									{Name: "ExecSandboxEnabled", Title: "Enable Exec Sandboxing", Type: forms.Toggle, Default: true},
 									{Name: "BrowserSandboxEnabled", Title: "Enable Browser Sandboxing", Type: forms.Toggle, Default: true},
 									{Name: "FileToolsSandboxEnabled", Title: "Enable File Tool Sandboxing", Type: forms.Toggle, Default: true},
+								},
+								Nested: &forms.FormDef{
+									Sections: []forms.Section{
+										{
+											ShowWhen: "SandboxEnabled=true",
+											Fields: []forms.Field{
+												{Name: "SandboxMode", Title: "Sandbox mode", Type: forms.Select, Options: modeOptions},
+											},
+										},
+										{
+											ShowWhen: "SandboxEnabled=false",
+											Desc:     "Sandbox mode: not applicable while sandboxing is disabled.",
+										},
+									},
 								},
 							},
 						},
@@ -693,39 +743,42 @@ func updateWizardData(data *setup.WizardData, payload map[string]interface{}) er
 	// Create a temporary struct to unmarshal into
 	// (direct unmarshal would reset non-payload fields)
 	type wizardFields struct {
-		OpenClawImport      bool   `json:"OpenClawImport"`
-		WorkspacePath       string `json:"WorkspacePath"`
-		UserName            string `json:"UserName"`
-		UserDisplayName     string `json:"UserDisplayName"`
-		UserPassword        string `json:"UserPassword"`
-		UserPasswordConf    string `json:"UserPasswordConf"`
-		HTTPEnabled         bool   `json:"HTTPEnabled"`
-		HTTPListen          string `json:"HTTPListen"`
-		TelegramEnabled     bool   `json:"TelegramEnabled"`
-		TelegramToken       string `json:"TelegramToken"`
-		WhatsAppEnabled     bool   `json:"WhatsAppEnabled"`
-		LLMProviderID       string `json:"LLMProviderID"`
-		LLMAPIKey           string `json:"LLMAPIKey"`
-		LLMBaseURL          string `json:"LLMBaseURL"`
-		LLMModel            string `json:"LLMModel"`
-		STTEnabled          bool   `json:"STTEnabled"`
-		STTModel            string `json:"STTModel"`
-		VoiceLLMEnabled     bool   `json:"VoiceLLMEnabled"`
-		VoiceLLMAPIKey      string `json:"VoiceLLMAPIKey"`
-		VoiceLLMVoice       string `json:"VoiceLLMVoice"`
-		SandboxPreset             string `json:"SandboxPreset"`
-		SandboxAdvanced           bool   `json:"SandboxAdvanced"`
-		SandboxMode               string `json:"SandboxMode"`
-		SandboxEnabled            bool   `json:"SandboxEnabled"`
-		ExecSandboxEnabled        bool   `json:"ExecSandboxEnabled"`
-		BrowserSandboxEnabled     bool   `json:"BrowserSandboxEnabled"`
-		FileToolsSandboxEnabled   bool   `json:"FileToolsSandboxEnabled"`
-		SandboxConsentPermissive  bool   `json:"SandboxConsentPermissive"`
-		SandboxConsentAssistant   bool   `json:"SandboxConsentAssistant"`
-		SandboxConsentHardened    bool   `json:"SandboxConsentHardened"`
-		SkillsAllowEmbedded bool   `json:"SkillsAllowEmbedded"`
-		SkillsAllowClawHub  bool   `json:"SkillsAllowClawHub"`
-		SkillsAllowLocal    bool   `json:"SkillsAllowLocal"`
+		OpenClawImport           bool   `json:"OpenClawImport"`
+		AgentName                string `json:"AgentName"`
+		AgentEmoji               string `json:"AgentEmoji"`
+		AgentTyping              string `json:"AgentTyping"`
+		WorkspacePath            string `json:"WorkspacePath"`
+		UserName                 string `json:"UserName"`
+		UserDisplayName          string `json:"UserDisplayName"`
+		UserPassword             string `json:"UserPassword"`
+		UserPasswordConf         string `json:"UserPasswordConf"`
+		HTTPEnabled              bool   `json:"HTTPEnabled"`
+		HTTPListen               string `json:"HTTPListen"`
+		TelegramEnabled          bool   `json:"TelegramEnabled"`
+		TelegramToken            string `json:"TelegramToken"`
+		WhatsAppEnabled          bool   `json:"WhatsAppEnabled"`
+		LLMProviderID            string `json:"LLMProviderID"`
+		LLMAPIKey                string `json:"LLMAPIKey"`
+		LLMBaseURL               string `json:"LLMBaseURL"`
+		LLMModel                 string `json:"LLMModel"`
+		STTEnabled               bool   `json:"STTEnabled"`
+		STTModel                 string `json:"STTModel"`
+		VoiceLLMEnabled          bool   `json:"VoiceLLMEnabled"`
+		VoiceLLMAPIKey           string `json:"VoiceLLMAPIKey"`
+		VoiceLLMVoice            string `json:"VoiceLLMVoice"`
+		SandboxPreset            string `json:"SandboxPreset"`
+		SandboxAdvanced          bool   `json:"SandboxAdvanced"`
+		SandboxMode              string `json:"SandboxMode"`
+		SandboxEnabled           bool   `json:"SandboxEnabled"`
+		ExecSandboxEnabled       bool   `json:"ExecSandboxEnabled"`
+		BrowserSandboxEnabled    bool   `json:"BrowserSandboxEnabled"`
+		FileToolsSandboxEnabled  bool   `json:"FileToolsSandboxEnabled"`
+		SandboxConsentPermissive bool   `json:"SandboxConsentPermissive"`
+		SandboxConsentAssistant  bool   `json:"SandboxConsentAssistant"`
+		SandboxConsentHardened   bool   `json:"SandboxConsentHardened"`
+		SkillsAllowEmbedded      bool   `json:"SkillsAllowEmbedded"`
+		SkillsAllowClawHub       bool   `json:"SkillsAllowClawHub"`
+		SkillsAllowLocal         bool   `json:"SkillsAllowLocal"`
 	}
 
 	var fields wizardFields
@@ -735,6 +788,19 @@ func updateWizardData(data *setup.WizardData, payload map[string]interface{}) er
 
 	// Handle OpenClaw import toggle
 	data.OpenClawImport = fields.OpenClawImport
+
+	if _, ok := payload["AgentName"]; ok {
+		data.AgentName = fields.AgentName
+		data.MarkDirty("AgentName")
+	}
+	if _, ok := payload["AgentEmoji"]; ok {
+		data.AgentEmoji = fields.AgentEmoji
+		data.MarkDirty("AgentEmoji")
+	}
+	if _, ok := payload["AgentTyping"]; ok {
+		data.AgentTyping = fields.AgentTyping
+		data.MarkDirty("AgentTyping")
+	}
 
 	// Update fields and mark dirty when values change
 	if fields.WorkspacePath != "" {
@@ -843,6 +909,14 @@ func validateStep(stepID string, data *setup.WizardData) map[string]string {
 	errors := make(map[string]string)
 
 	switch stepID {
+	case "agent":
+		if strings.TrimSpace(data.AgentName) == "" {
+			errors["AgentName"] = "Agent name is required"
+		}
+		if utf8.RuneCountInString(data.AgentTyping) > setup.WizardAgentTypingMaxLen {
+			errors["AgentTyping"] = fmt.Sprintf("Typing text must be %d characters or fewer", setup.WizardAgentTypingMaxLen)
+		}
+
 	case "user":
 		if data.UserName == "" {
 			errors["UserName"] = "Username is required"
@@ -885,6 +959,8 @@ func validateStep(stepID string, data *setup.WizardData) map[string]string {
 			if !data.SandboxConsentHardened {
 				errors["SandboxConsentHardened"] = "You must acknowledge reduced capability for Hardened mode"
 			}
+		case setup.SandboxPresetCustom:
+			// Custom uses advanced settings by design; no preset consent checkbox required.
 		default:
 			if !data.SandboxConsentAssistant {
 				errors["SandboxConsentAssistant"] = "You must acknowledge Assistant mode access scope"

@@ -22,11 +22,6 @@ func mountSetup(mux *http.ServeMux, opts mountOptions) {
 		wrap = func(h http.HandlerFunc) http.HandlerFunc { return h }
 	}
 
-	if opts.handlers != nil {
-		mux.HandleFunc("/setup/wizard", wrap(opts.handlers.HandleWizard))
-		mux.HandleFunc("/setup/edit", wrap(opts.handlers.HandleEdit))
-	}
-
 	staticSub, err := fs.Sub(staticFS, "static")
 	if err == nil {
 		mux.Handle("/setup/static/", http.StripPrefix("/setup/static/", http.FileServer(http.FS(staticSub))))
@@ -35,6 +30,14 @@ func mountSetup(mux *http.ServeMux, opts mountOptions) {
 	api := NewAPI(opts.configPath, opts.applyCaller)
 	usersAPI := NewUsersAPI(opts.configPath)
 	wizardAPI := NewWizardAPI(opts.configPath, opts.applyCaller)
+
+	if opts.handlers != nil {
+		mux.HandleFunc("/setup/wizard", wrap(func(w http.ResponseWriter, r *http.Request) {
+			wizardAPI.Reset()
+			opts.handlers.HandleWizard(w, r)
+		}))
+		mux.HandleFunc("/setup/edit", wrap(opts.handlers.HandleEdit))
+	}
 
 	mux.HandleFunc("/setup/api/config", wrap(api.HandleGetConfig))
 	mux.HandleFunc("/setup/api/sections", wrap(api.HandleGetSections))

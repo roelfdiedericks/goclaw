@@ -1991,6 +1991,7 @@
 
             this.populateFields(this.$stepContent, this.wizardData);
             this.applyShowWhen(this.$stepContent, this.wizardData);
+            this.enhanceAgentEmojiField();
             this.renderFieldErrors(this.$stepContent, this.fieldErrors);
             this.renderReview();
             this.syncNav();
@@ -2048,11 +2049,154 @@
                 value = $field.val();
             }
             setByPath(this.wizardData, bindPath, value);
+
+            if (this.currentStep.id === 'security') {
+                if (bindPath === 'SandboxPreset') {
+                    this.applySecurityPresetDefaults(value);
+                } else if (bindPath === 'SandboxAdvanced' && !value) {
+                    if ((this.wizardData.SandboxPreset || '').toLowerCase() !== 'custom') {
+                        this.applySecurityPresetDefaults(this.wizardData.SandboxPreset);
+                    }
+                }
+            }
+
             this.applyShowWhen(this.$stepContent, this.wizardData);
+            this.populateFields(this.$stepContent, this.wizardData);
+            this.syncNav();
 
             if (this.currentStep.id === 'llm' && bindPath === 'LLMProviderID' && value && value !== 'custom') {
                 this.refreshModelOptions(value);
             }
+        }
+
+        enhanceAgentEmojiField() {
+            if (!this.currentStep || this.currentStep.id !== 'agent') return;
+            const $input = this.$stepContent.find('.js-bound-field[data-bind="AgentEmoji"]').first();
+            if (!$input.length || $input.data('emoji-enhanced')) return;
+            $input.data('emoji-enhanced', true);
+
+            const $group = $('<div class="input-group"></div>');
+            $input.wrap($group);
+
+            const $button = $('<button type="button" class="btn btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown" data-bs-auto-close="false" aria-expanded="false" title="Pick emoji">😀</button>');
+            const $menu = $('<div class="dropdown-menu p-0 shadow emoji-picker-dropdown"></div>');
+
+            const picker = document.createElement('emoji-picker');
+            picker.style.width = '320px';
+            picker.style.height = '360px';
+            picker.addEventListener('emoji-click', (event) => {
+                const emoji = event && event.detail ? event.detail.unicode : '';
+                if (!emoji) return;
+                $input.val(emoji);
+                $input.trigger('input');
+                const dropdown = bootstrap.Dropdown.getOrCreateInstance($button.get(0));
+                dropdown.hide();
+            });
+
+            const $quick = $('<div class="emoji-priority-row emoji-priority-row-bottom"></div>');
+            const quickPicks = ['🤖', '🦞', '⚙️', '🦾', '🔧', '🛠️', '🧠', '🛰️', '🖥️', '📡', '🐾', '🪛'];
+            const $quickButtons = $('<div class="emoji-priority-buttons"></div>');
+            quickPicks.forEach((emoji) => {
+                const $emojiBtn = $(`<button type="button" class="emoji-priority-btn" title="${emoji}">${emoji}</button>`);
+                if (emoji === '🤖') {
+                    $emojiBtn.addClass('emoji-priority-btn-primary');
+                }
+                $emojiBtn.on('click', () => {
+                    $input.val(emoji);
+                    $input.trigger('input');
+                    const dropdown = bootstrap.Dropdown.getOrCreateInstance($button.get(0));
+                    dropdown.hide();
+                });
+                $quickButtons.append($emojiBtn);
+            });
+            $quick.append($quickButtons);
+
+            $menu.append(picker, $quick);
+            $input.after($button);
+            $button.after($menu);
+
+            if (!document.getElementById('emoji-priority-style')) {
+                const style = document.createElement('style');
+                style.id = 'emoji-priority-style';
+                style.textContent = `
+                    .emoji-picker-dropdown {
+                        margin-top: 6px !important;
+                        min-width: 320px;
+                        z-index: 2000;
+                    }
+                    .emoji-priority-row {
+                        background: #1e1f26;
+                        border-top: 1px solid #4a4d59;
+                        padding: 6px 8px 4px;
+                        width: 320px;
+                        box-sizing: border-box;
+                    }
+                    .emoji-priority-buttons {
+                        display: flex;
+                        flex-wrap: wrap;
+                        gap: 2px 6px;
+                    }
+                    .emoji-priority-btn {
+                        border: 0;
+                        background: transparent;
+                        color: #fff;
+                        font-size: 18px;
+                        line-height: 1;
+                        border-radius: 6px;
+                        padding: 2px 4px;
+                        width: 20px;
+                        height: 24px;
+                        display: inline-flex;
+                        align-items: center;
+                        justify-content: center;
+                    }
+                    .emoji-priority-btn:hover,
+                    .emoji-priority-btn:focus {
+                        background: rgba(255,255,255,0.14);
+                        outline: none;
+                    }
+                    .emoji-priority-btn-primary {
+                        background: rgba(32,118,255,0.35);
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+        }
+
+        applySecurityPresetDefaults(preset) {
+            const normalized = (preset || 'assistant').toLowerCase();
+            this.wizardData.SandboxConsentPermissive = false;
+            this.wizardData.SandboxConsentAssistant = false;
+            this.wizardData.SandboxConsentHardened = false;
+
+            if (normalized === 'permissive') {
+                this.wizardData.SandboxEnabled = false;
+                this.wizardData.ExecSandboxEnabled = false;
+                this.wizardData.BrowserSandboxEnabled = false;
+                this.wizardData.FileToolsSandboxEnabled = false;
+                this.wizardData.SandboxMode = 'home';
+                return;
+            }
+
+            if (normalized === 'hardened') {
+                this.wizardData.SandboxEnabled = true;
+                this.wizardData.ExecSandboxEnabled = true;
+                this.wizardData.BrowserSandboxEnabled = true;
+                this.wizardData.FileToolsSandboxEnabled = true;
+                this.wizardData.SandboxMode = 'home';
+                return;
+            }
+
+            if (normalized === 'custom') {
+                this.wizardData.SandboxAdvanced = true;
+                return;
+            }
+
+            this.wizardData.SandboxEnabled = true;
+            this.wizardData.ExecSandboxEnabled = true;
+            this.wizardData.BrowserSandboxEnabled = true;
+            this.wizardData.FileToolsSandboxEnabled = true;
+            this.wizardData.SandboxMode = 'autodocs-write';
         }
 
         async refreshModelOptions(provider) {
@@ -2078,6 +2222,7 @@
                 <table class="table table-sm">
                     <tbody>
                         <tr><th>Workspace</th><td>${escapeHtml(this.wizardData.WorkspacePath || '~/.goclaw/workspace')}</td></tr>
+                        <tr><th>Agent</th><td>${escapeHtml(((this.wizardData.AgentEmoji || '').trim() ? `${this.wizardData.AgentEmoji} ` : '') + (this.wizardData.AgentName || 'GoClaw'))}</td></tr>
                         <tr><th>Owner</th><td>${escapeHtml((this.wizardData.UserDisplayName || '') + ' (' + (this.wizardData.UserName || '') + ')')}</td></tr>
                         <tr><th>HTTP Server</th><td>${escapeHtml(this.wizardData.HTTPEnabled ? this.wizardData.HTTPListen : 'Disabled')}</td></tr>
                         <tr><th>Telegram</th><td>${escapeHtml(this.wizardData.TelegramEnabled ? 'Enabled' : 'Disabled')}</td></tr>
@@ -2091,10 +2236,29 @@
 
         syncNav() {
             this.$prev.prop('disabled', this.step <= 1 || this.loading || this.saving);
-            this.$next.prop('disabled', this.loading || this.saving);
+            const blockedByConsent = this.isCurrentStepBlockedByConsent();
+            this.$next.prop('disabled', this.loading || this.saving || blockedByConsent);
             this.$nextLabel.text(this.step === this.totalSteps ? 'Finish' : 'Next');
             this.$nextIcon.attr('class', `bi ${this.step === this.totalSteps ? 'bi-check-lg' : 'bi-arrow-right'}`);
             this.$nextSpinner.toggleClass('d-none', !this.saving);
+        }
+
+        isCurrentStepBlockedByConsent() {
+            if (!this.currentStep || this.currentStep.id !== 'security') {
+                return false;
+            }
+
+            const preset = (this.wizardData.SandboxPreset || 'assistant').toLowerCase();
+            if (preset === 'permissive') {
+                return !this.wizardData.SandboxConsentPermissive;
+            }
+            if (preset === 'hardened') {
+                return !this.wizardData.SandboxConsentHardened;
+            }
+            if (preset === 'custom') {
+                return false;
+            }
+            return !this.wizardData.SandboxConsentAssistant;
         }
 
         setLoading(isLoading) {

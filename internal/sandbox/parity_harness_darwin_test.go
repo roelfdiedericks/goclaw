@@ -77,13 +77,20 @@ func TestDarwinRuntimeParityAcrossModes(t *testing.T) {
 			}
 
 			if mode == ModeHome {
-				// Home mode file tools should resolve HOME writes into backing home.
+				// Home mode file tools should resolve to real HOME paths on darwin.
 				target, err := mgr.ValidateWritePath("~/home_probe.txt", fx.workspace)
 				if err != nil {
 					t.Fatalf("expected file tool home write in home mode, err=%v", err)
 				}
-				if target == filepath.Join(fx.home, "home_probe.txt") {
-					t.Fatalf("expected home mode to map to backing home path, got real home target %q", target)
+				if target != filepath.Join(fx.home, "home_probe.txt") {
+					t.Fatalf("expected home mode to use real home target, got %q", target)
+				}
+				// Hidden home paths are blocked by policy in darwin home mode.
+				if _, err := mgr.ValidatePath("~/.ssh/rodent.txt", fx.workspace); err == nil {
+					t.Fatalf("expected hidden home read deny in mode %s", mode)
+				}
+				if _, err := mgr.ValidateWritePath("~/.ssh/rodent.txt", fx.workspace); err == nil {
+					t.Fatalf("expected hidden home write deny in mode %s", mode)
 				}
 				return
 			}
@@ -93,6 +100,12 @@ func TestDarwinRuntimeParityAcrossModes(t *testing.T) {
 				t.Fatalf("expected file tool desktop read in mode %s, err=%v", mode, err)
 			} else if resolved != fx.desktopDoc {
 				t.Fatalf("expected desktop path to stay on visible home in mode %s, got %q want %q", mode, resolved, fx.desktopDoc)
+			}
+			if _, err := mgr.ValidatePath("~/.ssh/rodent.txt", fx.workspace); err == nil {
+				t.Fatalf("expected hidden home read deny in mode %s", mode)
+			}
+			if _, err := mgr.ValidateWritePath("~/.ssh/rodent.txt", fx.workspace); err == nil {
+				t.Fatalf("expected hidden home write deny in mode %s", mode)
 			}
 
 			// Autodocs-read must block writes; autodocs-write must allow writes in file tools.

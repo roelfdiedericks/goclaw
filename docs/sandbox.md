@@ -78,9 +78,9 @@ GoClaw supports explicit modes. Availability depends on platform backend:
 
 | Mode | Linux (bubblewrap) | macOS (seatbelt) | Description |
 |------|---------------------|------------------|-------------|
-| `home` | Yes | Yes | Full isolated sandbox home |
-| `autodocs-read` | Yes | Yes | Home mode plus top-level non-hidden real-home directories as read-only |
-| `autodocs-write` | Yes | Yes | Home mode plus top-level non-hidden real-home directories as read-write |
+| `home` | Yes | Yes | Linux: full isolated sandbox home; macOS: policy-managed real home (dot dirs blocked) |
+| `autodocs-read` | Yes | Yes | Workspace + top-level non-hidden real-home directories as read-only |
+| `autodocs-write` | Yes | Yes | Workspace + top-level non-hidden real-home directories as read-write |
 | `volumes` | Yes | No | Only configured volume mount points are persisted |
 | `ephemeral` | Yes | No | Nothing persists between runs |
 
@@ -122,9 +122,32 @@ GoClaw supports explicit modes. Availability depends on platform backend:
 | `sandbox.bubblewrap.volumes` | `~/.local`, `~/.config`, `~/.cache` | Persisted home paths in `volumes` mode (Linux) |
 | `sandbox.seatbelt.path` | (search PATH) | Custom `sandbox-exec` path (macOS) |
 
-### Home Mode (Recommended)
+### Setup Wizard Security Presets
 
-The default mode creates a full isolated home directory at `~/.goclaw/sandbox/home/`. Agent-installed tools persist across runs, but are isolated from your real home.
+The setup wizard Security step exposes these preset labels:
+
+| Preset | Effective behavior |
+|--------|--------------------|
+| `Assistant (recommended)` | Enables sandboxing for exec, browser, and file tools. Uses `autodocs-write` mode. |
+| `Permissive` | Disables sandboxing globally (`sandbox.general.enabled=false`). Mode is not applicable while disabled. |
+| `Hardened` | Enables sandboxing for exec, browser, and file tools. Uses `home` mode (Linux isolated home; macOS policy-managed real home with dot dirs blocked). |
+| `Custom (advanced)` | Keeps your manual advanced settings (mode + per-category toggles) instead of applying a preset mapping. |
+
+Consent behavior in the wizard:
+
+- `Assistant`, `Permissive`, and `Hardened` require explicit acknowledgment before continuing.
+- `Custom (advanced)` is an explicit manual path and does not require preset consent.
+
+### Home Mode
+
+On Linux, the default mode creates a full isolated home directory at `~/.goclaw/sandbox/home/`. Agent-installed tools persist across runs, but are isolated from your real home.
+
+On macOS, `home` mode is policy-managed over real home paths (Seatbelt + file-tools policy), with hidden dot-directories blocked by default.
+
+Recommendation:
+
+- Linux: `home` is the recommended default for strong isolation with persistence.
+- macOS: use `autodocs-read` or `autodocs-write` when you want visible-directory-only access; use `home` only when broader real-home policy access is intentional.
 
 ```json
 {
@@ -138,13 +161,13 @@ The default mode creates a full isolated home directory at `~/.goclaw/sandbox/ho
 
 ### Autodocs Modes
 
-Autodocs modes keep home-mode isolation but expose selected real-home directories (top-level, non-hidden, non-symlinked) such as `~/Desktop`, `~/Documents`, `~/Pictures`, and similar.
+Autodocs modes expose selected real-home directories (top-level, non-hidden, non-symlinked) such as `~/Desktop`, `~/Documents`, `~/Pictures`, and similar.
 
 #### `autodocs-read`
 
 - Exposed autodocs directories are read-only
 - Writes to those roots are blocked
-- Hidden directories like `~/.ssh` are not part of autodocs discovery
+- Hidden directories like `~/.ssh` are outside allowed roots
 
 #### `autodocs-write`
 

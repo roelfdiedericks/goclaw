@@ -1,10 +1,11 @@
 package web
 
 import (
+	"strings"
 	"testing"
 
-	"github.com/roelfdiedericks/goclaw/internal/configapply"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
+	"github.com/roelfdiedericks/goclaw/internal/configapply"
 	"github.com/roelfdiedericks/goclaw/internal/setup"
 )
 
@@ -33,6 +34,9 @@ func TestNewWizardAPISeedsDefaultsWhenConfigMissing(t *testing.T) {
 	if data.LLMModel == "" {
 		t.Fatalf("expected LLM model default to be seeded")
 	}
+	if data.AgentName == "" {
+		t.Fatalf("expected agent name default to be seeded")
+	}
 	if !data.SandboxEnabled || !data.ExecSandboxEnabled || !data.BrowserSandboxEnabled || !data.FileToolsSandboxEnabled {
 		t.Fatalf("expected sandbox defaults to be seeded on missing config")
 	}
@@ -41,6 +45,25 @@ func TestNewWizardAPISeedsDefaultsWhenConfigMissing(t *testing.T) {
 	}
 	if data.SandboxMode == "" {
 		t.Fatalf("expected sandbox mode default to be seeded")
+	}
+}
+
+func TestValidateStepAgentRequiresName(t *testing.T) {
+	data := setup.NewWizardData()
+	data.AgentName = ""
+	errs := validateStep("agent", data)
+	if errs["AgentName"] == "" {
+		t.Fatalf("expected agent-name validation error")
+	}
+}
+
+func TestValidateStepAgentTypingMaxLength(t *testing.T) {
+	data := setup.NewWizardData()
+	data.AgentName = "GoClaw"
+	data.AgentTyping = strings.Repeat("x", setup.WizardAgentTypingMaxLen+1)
+	errs := validateStep("agent", data)
+	if errs["AgentTyping"] == "" {
+		t.Fatalf("expected agent typing max-length validation error")
 	}
 }
 
@@ -106,10 +129,10 @@ func TestValidateStepSecurityRequiresPresetConsent(t *testing.T) {
 func TestUpdateWizardDataSecurityPresetAppliesWhenAdvancedDisabled(t *testing.T) {
 	data := setup.NewWizardData()
 	payload := map[string]interface{}{
-		"SandboxPreset":           setup.SandboxPresetHardened,
-		"SandboxAdvanced":         false,
-		"SandboxConsentHardened":  true,
-		"SandboxConsentAssistant": false,
+		"SandboxPreset":            setup.SandboxPresetHardened,
+		"SandboxAdvanced":          false,
+		"SandboxConsentHardened":   true,
+		"SandboxConsentAssistant":  false,
 		"SandboxConsentPermissive": false,
 	}
 	if err := updateWizardData(data, payload); err != nil {
@@ -119,10 +142,19 @@ func TestUpdateWizardDataSecurityPresetAppliesWhenAdvancedDisabled(t *testing.T)
 	if data.SandboxMode != "home" {
 		t.Fatalf("expected hardened preset to apply home mode, got %q", data.SandboxMode)
 	}
-	if data.ExecSandboxEnabled || data.BrowserSandboxEnabled {
-		t.Fatalf("expected hardened preset to disable exec/browser sandboxing")
+	if !data.ExecSandboxEnabled || !data.BrowserSandboxEnabled {
+		t.Fatalf("expected hardened preset to keep exec/browser sandboxing enabled")
 	}
 	if !data.FileToolsSandboxEnabled {
 		t.Fatalf("expected hardened preset to keep file tools sandboxing enabled")
+	}
+}
+
+func TestValidateStepSecurityCustomPresetNeedsNoConsent(t *testing.T) {
+	data := setup.NewWizardData()
+	data.SandboxPreset = setup.SandboxPresetCustom
+	errs := validateStep("security", data)
+	if len(errs) != 0 {
+		t.Fatalf("expected no preset-consent errors for custom preset, got %#v", errs)
 	}
 }

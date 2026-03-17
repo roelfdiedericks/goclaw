@@ -74,11 +74,11 @@ func TestBuildConfigFromWizardDataAppliesPresetMapping(t *testing.T) {
 	if got := getString(cfg, "sandbox.general.mode"); got != sandbox.ModeHome {
 		t.Fatalf("expected hardened preset home mode, got %q", got)
 	}
-	if got := getBool(cfg, "sandbox.general.execEnabled"); got {
-		t.Fatalf("expected hardened preset to disable exec sandboxing")
+	if got := getBool(cfg, "sandbox.general.execEnabled"); !got {
+		t.Fatalf("expected hardened preset to keep exec sandboxing enabled")
 	}
-	if got := getBool(cfg, "sandbox.general.browserEnabled"); got {
-		t.Fatalf("expected hardened preset to disable browser sandboxing")
+	if got := getBool(cfg, "sandbox.general.browserEnabled"); !got {
+		t.Fatalf("expected hardened preset to keep browser sandboxing enabled")
 	}
 	if got := getBool(cfg, "sandbox.general.fileToolsEnabled"); !got {
 		t.Fatalf("expected hardened preset to keep file tools sandboxing enabled")
@@ -108,6 +108,35 @@ func TestBuildConfigFromWizardDataAdvancedOverridesPreset(t *testing.T) {
 	}
 	if got := getBool(cfg, "sandbox.general.browserEnabled"); got {
 		t.Fatalf("expected advanced override browser sandbox disabled")
+	}
+}
+
+func TestBuildConfigFromWizardDataWritesAgentIdentityWhenDirty(t *testing.T) {
+	data := NewWizardData()
+	data.AgentName = "Clawbert"
+	data.AgentEmoji = ":crab:"
+	data.AgentTyping = "Clawbert is thinking..."
+	data.MarkDirty("AgentName", "AgentEmoji", "AgentTyping")
+
+	cfg := buildConfigFromWizardData(data)
+	if got := getString(cfg, "agent.name"); got != "Clawbert" {
+		t.Fatalf("expected agent.name to be written, got %q", got)
+	}
+	if got := getString(cfg, "agent.emoji"); got != ":crab:" {
+		t.Fatalf("expected agent.emoji to be written, got %q", got)
+	}
+	if got := getString(cfg, "agent.typing"); got != "Clawbert is thinking..." {
+		t.Fatalf("expected agent.typing to be written, got %q", got)
+	}
+}
+
+func TestDetectSandboxPresetReturnsCustomForManualBlend(t *testing.T) {
+	preset, advanced := DetectSandboxPreset(true, sandbox.ModeAutoDocsRead, true, true, true)
+	if preset != SandboxPresetCustom {
+		t.Fatalf("expected custom preset for manual blend, got %q", preset)
+	}
+	if !advanced {
+		t.Fatalf("expected custom preset to mark advanced=true")
 	}
 }
 

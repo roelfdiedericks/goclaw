@@ -205,7 +205,7 @@ func ConfigFormDef() forms.FormDef {
 	case BackendSeatbelt:
 		sections = append(sections, forms.Section{
 			Title: backendLabel,
-			Desc:  "macOS supports Home and Autodocs modes for managed sandboxing. Volumes and Ephemeral are not available.",
+			Desc:  "macOS supports policy-managed Home and Autodocs modes. Volumes and Ephemeral are not available.",
 			Fields: []forms.Field{
 				{
 					Name:  backendPathFieldName,

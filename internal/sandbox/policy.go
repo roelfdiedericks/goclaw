@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -81,7 +82,7 @@ func (p ResolvedPolicy) ResolvePath(inputPath string, workingDir string) (Resolv
 	}
 
 	actualPath := visible
-	if rootKind == RootSandboxHome && p.BackingHomeDir != "" {
+	if rootKind == RootSandboxHome && p.shouldRemapSandboxHome() {
 		actualPath = filepath.Clean(filepath.Join(p.BackingHomeDir, relative))
 	}
 
@@ -120,7 +121,7 @@ func (p ResolvedPolicy) selectVisibleRoot(path string) (rootPath, relative, root
 		}{root, RootAutoDocs})
 	}
 
-	if p.VisibleHomeDir != "" {
+	if p.allowHomeRootFallback() {
 		roots = append(roots, struct {
 			path string
 			kind string
@@ -137,6 +138,27 @@ func (p ResolvedPolicy) selectVisibleRoot(path string) (rootPath, relative, root
 	}
 
 	return "", "", "", false
+}
+
+func (p ResolvedPolicy) shouldRemapSandboxHome() bool {
+	if p.BackingHomeDir == "" {
+		return false
+	}
+	// Darwin seatbelt has no mount namespace remap semantics, so file-tools
+	// should resolve home paths against real home policy roots.
+	return runtime.GOOS != "darwin"
+}
+
+func (p ResolvedPolicy) allowHomeRootFallback() bool {
+	if p.VisibleHomeDir == "" {
+		return false
+	}
+	// In Darwin autodocs modes, file-tools should only operate on workspace
+	// and discovered visible non-hidden home directories.
+	if runtime.GOOS == "darwin" && (p.Mode == ModeAutoDocsRead || p.Mode == ModeAutoDocsWrite) {
+		return false
+	}
+	return true
 }
 
 func pathWithinAnyRoot(path string, roots []string) bool {

@@ -38,11 +38,14 @@ goclaw setup
 The wizard walks you through:
 
 1. **OpenClaw Detection** — If found, offers to import settings (API keys, workspace, Telegram token)
-2. **Workspace** — Creates your agent's home directory with identity files
-3. **LLM Providers** — Configure at least one provider (Anthropic, OpenAI, Ollama, xAI)
+2. **Agent Identity** — Set agent name, emoji, and optional typing text
+3. **Workspace** — Creates your agent's home directory with identity files
 4. **User Account** — Create your owner account with optional Telegram/WhatsApp IDs
 5. **Channels** — Enable Telegram, HTTP, WhatsApp as needed
-6. **Test Connection** — Validates API keys and fetches available models
+6. **LLM Provider** — Configure and test your primary model provider
+7. **Voice Settings (optional)** — Configure speech-to-text and voice LLM
+8. **Security & Skills** — Choose a security preset (`Assistant`, `Permissive`, `Hardened`, or `Custom`) and skill source permissions
+9. **Review & Finish** — Confirm settings and write config
 
 After setup completes, you'll have:
 - `~/.goclaw/goclaw.json` — Main configuration

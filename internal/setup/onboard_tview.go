@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -19,6 +20,8 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/stt"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
+
+const WizardAgentTypingMaxLen = 80
 
 // enableFormMouseScroll adds mouse scroll support to a tview.Form
 // Converts scroll events to Tab/BackTab for field navigation
@@ -56,6 +59,11 @@ type WizardData struct {
 	// Workspace
 	WorkspacePath string
 
+	// Agent identity
+	AgentName   string
+	AgentEmoji  string
+	AgentTyping string
+
 	// User setup
 	UserName            string
 	UserDisplayName     string
@@ -80,13 +88,13 @@ type WizardData struct {
 	BrowserSetup bool
 
 	// Sandboxing
-	SandboxEnabled          bool
-	SandboxMode             string
-	ExecSandboxEnabled      bool
-	BrowserSandboxEnabled   bool
-	FileToolsSandboxEnabled bool
-	SandboxPreset           string
-	SandboxAdvanced         bool
+	SandboxEnabled           bool
+	SandboxMode              string
+	ExecSandboxEnabled       bool
+	BrowserSandboxEnabled    bool
+	FileToolsSandboxEnabled  bool
+	SandboxPreset            string
+	SandboxAdvanced          bool
 	SandboxConsentPermissive bool
 	SandboxConsentAssistant  bool
 	SandboxConsentHardened   bool
@@ -150,6 +158,8 @@ func (d *WizardData) HasAnyDirty(fields ...string) bool {
 // NewWizardData creates a new WizardData with defaults
 func NewWizardData() *WizardData {
 	d := &WizardData{
+		AgentName:           "GoClaw",
+		AgentEmoji:          "🐾",
 		UserRole:            "owner",
 		HTTPEnabled:         true,
 		HTTPListen:          "127.0.0.1:1337",
@@ -189,6 +199,14 @@ func (d *WizardData) LoadFromDefaults(cfg *config.Config) {
 }
 
 func (d *WizardData) loadFromConfig(cfg *config.Config) {
+	// Agent identity
+	d.AgentName = cfg.Agent.Name
+	d.AgentEmoji = cfg.Agent.Emoji
+	d.AgentTyping = cfg.Agent.Typing
+	if d.AgentName == "" {
+		d.AgentName = "GoClaw"
+	}
+
 	// Extract values from existing config
 	d.WorkspacePath = cfg.Gateway.WorkingDir
 	d.TelegramEnabled = cfg.Channels.Telegram.Enabled
@@ -411,6 +429,7 @@ func buildWizardSteps(data *WizardData) []forms.WizardStep {
 	}
 
 	steps = append(steps,
+		stepAgentIdentity(data),
 		stepWorkspace(data),
 		stepUserSetup(data),
 		stepTelegram(data),
@@ -424,6 +443,49 @@ func buildWizardSteps(data *WizardData) []forms.WizardStep {
 	)
 
 	return steps
+}
+
+// Step: Agent Identity
+func stepAgentIdentity(data *WizardData) forms.WizardStep {
+	return forms.WizardStep{
+		Title: "Agent Identity",
+		Content: func(w *forms.Wizard) tview.Primitive {
+			form := tview.NewForm()
+			form.SetBorder(false)
+			enableFormMouseScroll(form, w)
+
+			form.AddInputField("Agent Name", data.AgentName, 40, nil, func(text string) {
+				data.AgentName = text
+				data.MarkDirty("AgentName")
+			})
+
+			form.AddInputField("Agent Emoji (optional)", data.AgentEmoji, 8, nil, func(text string) {
+				data.AgentEmoji = text
+				data.MarkDirty("AgentEmoji")
+			})
+
+			form.AddInputField("Typing Text (optional)", data.AgentTyping, 60, nil, func(text string) {
+				data.AgentTyping = text
+				data.MarkDirty("AgentTyping")
+			})
+
+			return formWithHeader(`Set how your assistant appears in messages.
+
+Name is required. Emoji and typing text are optional.
+Typing text max length: 80 characters.`, 3, form)
+		},
+		OnExit: func(_ *forms.Wizard) error {
+			if strings.TrimSpace(data.AgentName) == "" {
+				return fmt.Errorf("agent name is required")
+			}
+			if utf8.RuneCountInString(data.AgentTyping) > WizardAgentTypingMaxLen {
+				return fmt.Errorf("typing text must be %d characters or fewer", WizardAgentTypingMaxLen)
+			}
+			data.AgentName = strings.TrimSpace(data.AgentName)
+			L_info("wizard: agent identity set", "name", data.AgentName, "emoji", data.AgentEmoji)
+			return nil
+		},
+	}
 }
 
 // Step: Welcome
@@ -469,6 +531,7 @@ or click [yellow]Next[white] to walk through all settings step by step.`, data.C
 This wizard will help you set up your personal AI assistant.
 
 We'll configure:
+  • Agent identity
   • Workspace location
   • User profile
   • Telegram bot (optional)
@@ -1020,8 +1083,8 @@ On other platforms, the exec and browser tools run without OS sandbox enforcemen
 			form.SetBorder(false)
 			enableFormMouseScroll(form, w)
 
-			presetLabels := []string{"Assistant (recommended)", "Permissive", "Hardened"}
-			presetValues := []string{SandboxPresetAssistant, SandboxPresetPermissive, SandboxPresetHardened}
+			presetLabels := []string{"Assistant (recommended)", "Permissive", "Hardened", "Custom (advanced)"}
+			presetValues := []string{SandboxPresetAssistant, SandboxPresetPermissive, SandboxPresetHardened, SandboxPresetCustom}
 			presetIndex := 0
 			for i, value := range presetValues {
 				if value == NormalizeSandboxPreset(data.SandboxPreset) {
@@ -1037,6 +1100,17 @@ On other platforms, the exec and browser tools run without OS sandbox enforcemen
 				selectedPreset := presetValues[optionIndex]
 				warning := SandboxPresetWarningText(selectedPreset)
 				previousPreset := NormalizeSandboxPreset(data.SandboxPreset)
+				if selectedPreset == SandboxPresetCustom {
+					data.SandboxPreset = selectedPreset
+					data.SandboxAdvanced = true
+					data.MarkDirty("SandboxPreset", "SandboxAdvanced")
+					w.App().ShowModal(
+						warning.Title+"\n\n"+warning.Body,
+						[]string{"OK"},
+						nil,
+					)
+					return
+				}
 				sandboxPresetConsentModal(w, warning, func() {
 					data.SandboxPreset = selectedPreset
 					data.MarkDirty("SandboxPreset")
@@ -1164,6 +1238,8 @@ Embedded skills are bundled with GoClaw. ClawHub is a public skill repository.`,
 				if !data.SandboxConsentHardened {
 					return fmt.Errorf("please acknowledge the Hardened warning before continuing")
 				}
+			case SandboxPresetCustom:
+				// Custom mode is an explicit advanced path; no preset consent checkbox required.
 			default:
 				if !data.SandboxConsentAssistant {
 					return fmt.Errorf("please acknowledge the Assistant warning before continuing")
@@ -1196,6 +1272,8 @@ func presetDropDownIndex(preset string) int {
 		return 1
 	case SandboxPresetHardened:
 		return 2
+	case SandboxPresetCustom:
+		return 3
 	default:
 		return 0
 	}
@@ -1481,6 +1559,7 @@ func stepReview(data *WizardData) forms.WizardStep {
 			summary := fmt.Sprintf(`[cyan]Configuration Summary[white]
 
 Workspace:    %s
+Agent:        %s%s
 User:         %s (%s)
 Telegram:     %s
 WhatsApp:     %s
@@ -1491,6 +1570,13 @@ LLM:          %s
 
 Press [yellow]Finish[white] to complete setup.`,
 				data.WorkspacePath,
+				data.AgentName,
+				func() string {
+					if data.AgentEmoji == "" {
+						return ""
+					}
+					return " (" + data.AgentEmoji + ")"
+				}(),
 				data.UserDisplayName,
 				data.UserName,
 				boolToEnabled(data.TelegramEnabled),
@@ -1671,6 +1757,13 @@ func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
 	}
 	if cfg == nil {
 		cfg = make(map[string]interface{})
+	}
+
+	// Workspace - only if dirty
+	if data.HasAnyDirty("AgentName", "AgentEmoji", "AgentTyping") {
+		deepSet(cfg, "agent.name", data.AgentName)
+		deepSet(cfg, "agent.emoji", data.AgentEmoji)
+		deepSet(cfg, "agent.typing", data.AgentTyping)
 	}
 
 	// Workspace - only if dirty
