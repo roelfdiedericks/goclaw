@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/roelfdiedericks/goclaw/internal/release"
@@ -37,7 +38,7 @@ func main() {
 
 func runCurrent(args []string) {
 	fs := flag.NewFlagSet("current", flag.ExitOnError)
-	field := fs.String("field", "", "field to print: version, channel, date, next-version, tag")
+	field := fs.String("field", "", "field to print: version, channel, date, next-version, tag, release-tag")
 	jsonOut := fs.Bool("json", false, "print JSON")
 	if err := fs.Parse(args); err != nil {
 		fatalf("parse flags: %v", err)
@@ -67,9 +68,41 @@ func runCurrent(args []string) {
 		fmt.Println(state.NextVersion)
 	case "tag":
 		fmt.Println(state.ComputedTag)
+	case "release-tag":
+		fmt.Println(currentReleaseTag(state.CurrentVersion, state.CurrentChannel, gitTags()))
 	default:
 		fatalf("unknown field: %s", *field)
 	}
+}
+
+func currentReleaseTag(version, channel string, existingTags []string) string {
+	if version == "" {
+		return ""
+	}
+	if channel == "" || channel == "stable" {
+		return "v" + version
+	}
+
+	prefix := fmt.Sprintf("v%s-%s.", version, channel)
+	maxSeen := 0
+	for _, tag := range existingTags {
+		if !strings.HasPrefix(tag, prefix) {
+			continue
+		}
+		suffix := strings.TrimPrefix(tag, prefix)
+		n, err := strconv.Atoi(suffix)
+		if err != nil {
+			continue
+		}
+		if n > maxSeen {
+			maxSeen = n
+		}
+	}
+	if maxSeen > 0 {
+		return fmt.Sprintf("%s%d", prefix, maxSeen)
+	}
+	// Fallback for prerelease channels when no numbered tag exists yet.
+	return fmt.Sprintf("%s1", prefix)
 }
 
 func runValidate(args []string) {
