@@ -11,11 +11,11 @@ import (
 
 // Sandbox modes
 const (
-	ModeEphemeral      = "ephemeral"      // No persistent home dirs - maximum security
-	ModeVolumes        = "volumes"        // Specific directories persisted via isolated mounts
-	ModeHome           = "home"           // Full isolated home directory - everything persists
-	ModeAutoDocsRead   = "autodocs-read"  // Sandbox home plus dynamic read-only non-hidden home directories
-	ModeAutoDocsWrite  = "autodocs-write" // Sandbox home plus dynamic read-write non-hidden home directories
+	ModeEphemeral     = "ephemeral"      // No persistent home dirs - maximum security
+	ModeVolumes       = "volumes"        // Specific directories persisted via isolated mounts
+	ModeHome          = "home"           // Full isolated home directory - everything persists
+	ModeAutoDocsRead  = "autodocs-read"  // Sandbox home plus dynamic read-only non-hidden home directories
+	ModeAutoDocsWrite = "autodocs-write" // Sandbox home plus dynamic read-write non-hidden home directories
 )
 
 // Config holds top-level sandbox configuration.
@@ -28,12 +28,12 @@ type Config struct {
 // GeneralConfig holds shared sandbox policy across backends.
 type GeneralConfig struct {
 	Enabled          bool     `json:"enabled" default:"true"`
-	Mode       string   `json:"mode" default:"home"` // "ephemeral", "volumes", "home"
-	DataDir    string   `json:"dataDir"`             // Backing directory root (default: ~/.goclaw/sandbox)
-	ExtraPaths []string `json:"extraPaths"`          // Additional PATH entries for sandbox
-	ExecEnabled       bool     `json:"execEnabled" default:"true"`
-	BrowserEnabled    bool     `json:"browserEnabled" default:"true"`
-	FileToolsEnabled  bool     `json:"fileToolsEnabled" default:"true"`
+	Mode             string   `json:"mode" default:"home"` // "ephemeral", "volumes", "home"
+	DataDir          string   `json:"dataDir"`             // Backing directory root (default: ~/.goclaw/sandbox)
+	ExtraPaths       []string `json:"extraPaths"`          // Additional PATH entries for sandbox
+	ExecEnabled      bool     `json:"execEnabled" default:"true"`
+	BrowserEnabled   bool     `json:"browserEnabled" default:"true"`
+	FileToolsEnabled bool     `json:"fileToolsEnabled" default:"true"`
 }
 
 // BubblewrapConfig holds Linux-specific bubblewrap settings.
@@ -135,10 +135,10 @@ func ConfigFormDef() forms.FormDef {
 					Desc:  "Master switch for sandboxing across exec, browser, and file tools",
 				},
 				{
-					Name:  "general.mode",
-					Title: "Sandbox Mode",
-					Type:  forms.Select,
-					Desc:  "How home directories are handled inside the sandbox",
+					Name:    "general.mode",
+					Title:   "Sandbox Mode",
+					Type:    forms.Select,
+					Desc:    "How home directories are handled inside the sandbox",
 					Options: modeOptions,
 				},
 				{
@@ -225,7 +225,7 @@ func ConfigFormDef() forms.FormDef {
 	return forms.FormDef{
 		Title:       "Sandbox",
 		Description: "Configure agent sandboxing and filesystem isolation",
-		Sections: sections,
+		Sections:    sections,
 		Actions: []forms.ActionDef{
 			{Name: "apply", Label: "Apply"},
 		},

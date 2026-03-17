@@ -39,44 +39,6 @@ func normalizeUnicodeSpaces(s string) string {
 	return unicodeSpaces.ReplaceAllString(s, " ")
 }
 
-// expandSandboxPath handles ~ expansion and unicode normalization for file tool paths.
-// In sandbox-home remap environments, absolute paths under real home are rewritten
-// to the sandbox home backing path.
-func expandSandboxPath(filePath string, sandboxHomeDir string) string {
-	normalized := normalizeUnicodeSpaces(filePath)
-
-	// Get real home for comparison
-	realHome, _ := os.UserHomeDir()
-
-	// Determine target home directory
-	targetHome := sandboxHomeDir
-	if targetHome == "" {
-		targetHome = realHome
-	}
-
-	// Handle ~ and ~/
-	if normalized == "~" {
-		return targetHome
-	}
-	if strings.HasPrefix(normalized, "~/") {
-		return targetHome + normalized[1:]
-	}
-
-	// In home mode, rewrite absolute paths under real home to sandbox home
-	if sandboxHomeDir != "" && realHome != "" {
-		if normalized == realHome {
-			return sandboxHomeDir
-		}
-		if strings.HasPrefix(normalized, realHome+"/") {
-			rewritten := sandboxHomeDir + normalized[len(realHome):]
-			L_debug("sandbox: rewriting home path", "original", normalized, "rewritten", rewritten)
-			return rewritten
-		}
-	}
-
-	return normalized
-}
-
 // ValidatePath validates that a path is within allowed roots and contains no symlinks.
 // HOME path behavior is policy-driven and may differ by platform/mode.
 func (m *Manager) ValidatePath(inputPath, workingDir string) (string, error) {
@@ -281,26 +243,4 @@ func (m *Manager) WriteFileValidated(inputPath, workingDir string, data []byte, 
 	}
 
 	return m.AtomicWriteFile(resolved, data, defaultPerm)
-}
-
-// shortPath shortens a path for display by replacing the home directory with ~.
-// In home mode, also handles the sandbox home directory.
-func (m *Manager) shortPath(value string) string {
-	// Try sandbox home first (if in home mode)
-	if m.homeDir != "" {
-		sandboxHome := filepath.Clean(m.homeDir)
-		if strings.HasPrefix(value, sandboxHome) {
-			return "~" + value[len(sandboxHome):]
-		}
-	}
-
-	// Fall back to real home
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return value
-	}
-	if strings.HasPrefix(value, home) {
-		return "~" + value[len(home):]
-	}
-	return value
 }

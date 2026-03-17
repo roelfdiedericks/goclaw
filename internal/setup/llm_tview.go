@@ -560,8 +560,8 @@ func (e *LLMEditor) showModelChain(purpose string, cfg *llm.LLMPurposeConfig, fo
 	})
 
 	if purpose == "summarization" || purpose == "embeddings" {
-		settingsLabel := "[settings]"
-		settingsPreview := "Edit purpose-specific settings."
+		var settingsLabel string
+		var settingsPreview string
 		if purpose == "summarization" {
 			settingsLabel = fmt.Sprintf("[settings] Max Input Tokens: %d", cfg.MaxInputTokens)
 			settingsPreview = "Input limit for summarization.\n0 = use model context - buffer."

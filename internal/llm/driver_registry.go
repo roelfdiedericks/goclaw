@@ -119,4 +119,3 @@ func EndpointIsLocal(endpoint string) bool {
 func DriverOrEndpointIsLocal(driver, endpoint string) bool {
 	return DriverIsLocal(driver) || EndpointIsLocal(endpoint)
 }
-

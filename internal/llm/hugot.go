@@ -323,8 +323,8 @@ func sanitizeHugotModelID(modelID string) string {
 }
 
 var (
-	_ Provider          = (*HugotProvider)(nil)
-	_ ModelLister       = (*HugotProvider)(nil)
-	_ ConnectionTester  = (*HugotProvider)(nil)
-	_ LLMEmbedder       = (*HugotProvider)(nil)
+	_ Provider         = (*HugotProvider)(nil)
+	_ ModelLister      = (*HugotProvider)(nil)
+	_ ConnectionTester = (*HugotProvider)(nil)
+	_ LLMEmbedder      = (*HugotProvider)(nil)
 )

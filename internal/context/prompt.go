@@ -16,16 +16,16 @@ import (
 
 // PromptParams contains parameters for building the system prompt
 type PromptParams struct {
-	WorkspaceDir string
+	WorkspaceDir   string
 	VisibleHomeDir string
-	SandboxMode string
-	IsSubagent   bool
-	Tools        *tools.Registry
-	Model        string
-	Channel      string // "tui", "telegram", etc.
-	UserTimezone string
-	Version      string
-	User         *user.User // Current user for identity section
+	SandboxMode    string
+	IsSubagent     bool
+	Tools          *tools.Registry
+	Model          string
+	Channel        string // "tui", "telegram", etc.
+	UserTimezone   string
+	Version        string
+	User           *user.User // Current user for identity section
 	// Context tracking
 	TotalTokens int // Current context size
 	MaxTokens   int // Model's context window

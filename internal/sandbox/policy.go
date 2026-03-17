@@ -27,9 +27,9 @@ type ResolvedPath struct {
 }
 
 const (
-	RootWorkspace = "workspace"
+	RootWorkspace   = "workspace"
 	RootSandboxHome = "sandbox-home"
-	RootAutoDocs = "autodocs"
+	RootAutoDocs    = "autodocs"
 )
 
 // ApplyUserSandboxOverride applies the per-user sandbox override to an already

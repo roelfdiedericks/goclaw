@@ -61,13 +61,13 @@ type setupResult struct {
 }
 
 type benchmarkResult struct {
-	Queries             []string
-	WarmupIterations    int
-	Iterations          int
-	QueryEmbedSamples   []time.Duration
-	SearchTotalSamples  []time.Duration
-	BestScoreSamples    []float64
-	TotalBenchmarkTime  time.Duration
+	Queries            []string
+	WarmupIterations   int
+	Iterations         int
+	QueryEmbedSamples  []time.Duration
+	SearchTotalSamples []time.Duration
+	BestScoreSamples   []float64
+	TotalBenchmarkTime time.Duration
 }
 
 func main() {
@@ -275,7 +275,7 @@ func createSession(cfg config) (*hugot.Session, error) {
 }
 
 func downloadModel(model, modelsDir string, verbose bool) (string, error) {
-	if err := os.MkdirAll(modelsDir, 0755); err != nil {
+	if err := os.MkdirAll(modelsDir, 0750); err != nil {
 		return "", fmt.Errorf("create models dir: %w", err)
 	}
 	opts := hugot.NewDownloadOptions()
@@ -310,6 +310,7 @@ func runBenchmark(cfg config, setup *setupResult) (*benchmarkResult, error) {
 		return nil, fmt.Errorf("failed to derive benchmark queries from %s", setup.InputPath)
 	}
 
+	// #nosec G404 -- deterministic pseudo-random benchmark sampling is intentional.
 	rng := rand.New(rand.NewSource(cfg.BenchSeed))
 
 	for i := 0; i < cfg.BenchWarmup; i++ {
