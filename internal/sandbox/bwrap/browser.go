@@ -2,6 +2,12 @@
 
 package bwrap
 
+import (
+	"path/filepath"
+
+	"github.com/roelfdiedericks/goclaw/internal/sandbox"
+)
+
 // BrowserSandbox creates a pre-configured builder for browser (Chromium) sandboxing.
 // Sets up system binds, GPU access, shared memory, and display access.
 //
@@ -11,7 +17,7 @@ package bwrap
 //   - visibleHome: the home directory to expose inside sandbox
 //   - backingHome: the backing directory for sandbox-managed home content
 //   - gpu: whether to enable GPU acceleration (/dev/dri)
-func BrowserSandbox(workspace, browserProfile, visibleHome, backingHome string, gpu bool) *Builder {
+func BrowserSandbox(workspace, browserProfile, visibleHome, backingHome, sandboxMode string, gpu bool) *Builder {
 	b := New()
 
 	// Core system binds
@@ -20,8 +26,14 @@ func BrowserSandbox(workspace, browserProfile, visibleHome, backingHome string, 
 	b.SSLCerts()
 	b.Fonts()
 
-	if backingHome != "" {
+	if backingHome != "" && sandboxMode == sandbox.ModeHome {
 		b.BindTo(backingHome, visibleHome)
+	} else if sandboxMode == sandbox.ModeAutoDocsRead || sandboxMode == sandbox.ModeAutoDocsWrite {
+		homeParent := filepath.Dir(visibleHome)
+		if homeParent != "" && homeParent != "." && homeParent != string(filepath.Separator) {
+			b.Tmpfs(homeParent)
+		}
+		b.Tmpfs(visibleHome)
 	}
 
 	// Workspace writable (for screenshot/media downloads)

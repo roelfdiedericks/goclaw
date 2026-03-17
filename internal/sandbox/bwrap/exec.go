@@ -3,12 +3,14 @@
 package bwrap
 
 import (
+	"path/filepath"
+
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 )
 
 // ExecSandbox creates a pre-configured builder for the exec tool.
 // Sets up standard system binds, isolated /tmp, /proc, and safe defaults.
-func ExecSandbox(workspace, visibleHome, backingHome string, allowNetwork, clearEnv bool) *Builder {
+func ExecSandbox(workspace, visibleHome, backingHome, sandboxMode string, allowNetwork, clearEnv bool) *Builder {
 	b := New()
 	mgr := sandbox.GetManager()
 
@@ -25,10 +27,17 @@ func ExecSandbox(workspace, visibleHome, backingHome string, allowNetwork, clear
 	b.Dev()
 	b.UnsharePID()
 
-	// Sandbox home isolation: mount broad home replacement first,
-	// then overlay specific directories on top (bwrap last-mount-wins).
-	if backingHome != "" {
+	// Home mode: mount broad home replacement, then overlay specific dirs.
+	if backingHome != "" && sandboxMode == sandbox.ModeHome {
 		b.BindTo(backingHome, visibleHome)
+	} else if sandboxMode == sandbox.ModeAutoDocsRead || sandboxMode == sandbox.ModeAutoDocsWrite {
+		// Autodocs modes should not expose hidden home paths. Create an empty
+		// visible home root and overlay only explicit autodocs binds from callers.
+		homeParent := filepath.Dir(visibleHome)
+		if homeParent != "" && homeParent != "." && homeParent != string(filepath.Separator) {
+			b.Tmpfs(homeParent)
+		}
+		b.Tmpfs(visibleHome)
 	} else {
 		for _, vol := range mgr.GetVolumes() {
 			if pathExists(vol.Source) {

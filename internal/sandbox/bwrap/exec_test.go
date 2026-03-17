@@ -26,7 +26,7 @@ func TestExecSandboxKeepsVisibleHomeAndMountsBackingHome(t *testing.T) {
 
 	sandbox.InitManager(sandbox.Config{General: sandbox.GeneralConfig{Mode: sandbox.ModeHome}}, workspace)
 
-	b := ExecSandbox(workspace, home, backingHome, true, true)
+	b := ExecSandbox(workspace, home, backingHome, sandbox.ModeHome, true, true)
 	b.BwrapPath("/bin/true").ShellCommand("pwd")
 	_, args, err := b.Build()
 	if err != nil {

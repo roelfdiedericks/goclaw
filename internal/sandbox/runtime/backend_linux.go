@@ -29,7 +29,7 @@ func (linuxExecBackend) Available(customPath string) bool {
 }
 
 func (linuxExecBackend) BuildCommand(command string, opts ExecLaunchOptions) (*exec.Cmd, error) {
-	b := bwrap.ExecSandbox(opts.WorkspaceDir, opts.VisibleHomeDir, opts.BackingHomeDir, opts.AllowNetwork, opts.ClearEnv)
+	b := bwrap.ExecSandbox(opts.WorkspaceDir, opts.VisibleHomeDir, opts.BackingHomeDir, opts.SandboxMode, opts.AllowNetwork, opts.ClearEnv)
 	if opts.BackendPath != "" {
 		b.BwrapPath(opts.BackendPath)
 	}
@@ -57,7 +57,7 @@ func (linuxBrowserBackend) Available(customPath string) bool {
 }
 
 func (linuxBrowserBackend) CreateLauncher(browserBin string, opts BrowserLaunchOptions) (string, error) {
-	b := bwrap.BrowserSandbox(opts.WorkspaceDir, opts.ProfileDir, opts.VisibleHomeDir, opts.BackingHomeDir, opts.AllowGPU)
+	b := bwrap.BrowserSandbox(opts.WorkspaceDir, opts.ProfileDir, opts.VisibleHomeDir, opts.BackingHomeDir, opts.SandboxMode, opts.AllowGPU)
 	if opts.BackendPath != "" {
 		b.BwrapPath(opts.BackendPath)
 	}

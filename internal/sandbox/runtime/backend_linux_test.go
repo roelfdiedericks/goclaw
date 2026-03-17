@@ -31,23 +31,40 @@ func TestLinuxExecBackendBindsAutodocsRootsByMode(t *testing.T) {
 	}, workspaceDir)
 
 	tests := []struct {
-		name       string
-		extraBind  []string
-		extraRo    []string
-		expectBind string
-		expectRo   string
+		name              string
+		mode              string
+		extraBind         []string
+		extraRo           []string
+		expectBind        string
+		expectRo          string
+		expectHomeBind    bool
+		expectHomeTmpfs   bool
 	}{
 		{
-			name:       "autodocs-read uses ro bind",
-			extraRo:    []string{autodocsRoot},
-			expectRo:   "--ro-bind " + autodocsRoot + " " + autodocsRoot,
-			expectBind: "",
+			name:            "autodocs-read uses ro bind",
+			mode:            "autodocs-read",
+			extraRo:         []string{autodocsRoot},
+			expectRo:        "--ro-bind " + autodocsRoot + " " + autodocsRoot,
+			expectBind:      "",
+			expectHomeBind:  false,
+			expectHomeTmpfs: true,
 		},
 		{
-			name:       "autodocs-write uses rw bind",
-			extraBind:  []string{autodocsRoot},
-			expectBind: "--bind " + autodocsRoot + " " + autodocsRoot,
-			expectRo:   "",
+			name:            "autodocs-write uses rw bind",
+			mode:            "autodocs-write",
+			extraBind:       []string{autodocsRoot},
+			expectBind:      "--bind " + autodocsRoot + " " + autodocsRoot,
+			expectRo:        "",
+			expectHomeBind:  false,
+			expectHomeTmpfs: true,
+		},
+		{
+			name:            "home mode keeps full home bind",
+			mode:            "home",
+			expectBind:      "",
+			expectRo:        "",
+			expectHomeBind:  true,
+			expectHomeTmpfs: false,
 		},
 	}
 
@@ -55,6 +72,7 @@ func TestLinuxExecBackendBindsAutodocsRootsByMode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd, err := backend.BuildCommand("pwd", ExecLaunchOptions{
 				BackendPath:    "/bin/true",
+				SandboxMode:    tt.mode,
 				WorkspaceDir:   workspaceDir,
 				WorkDir:        workspaceDir,
 				VisibleHomeDir: visibleHome,
@@ -70,8 +88,18 @@ func TestLinuxExecBackendBindsAutodocsRootsByMode(t *testing.T) {
 			}
 
 			joined := strings.Join(cmd.Args, " ")
-			if !strings.Contains(joined, "--bind "+backingHome+" "+visibleHome) {
-				t.Fatalf("expected backing home bind, args: %s", joined)
+			homeBind := "--bind " + backingHome + " " + visibleHome
+			if tt.expectHomeBind && !strings.Contains(joined, homeBind) {
+				t.Fatalf("expected backing home bind in mode %q, args: %s", tt.mode, joined)
+			}
+			if !tt.expectHomeBind && strings.Contains(joined, homeBind) {
+				t.Fatalf("did not expect full home bind in mode %q, args: %s", tt.mode, joined)
+			}
+			if tt.expectHomeTmpfs && !strings.Contains(joined, "--tmpfs "+visibleHome) {
+				t.Fatalf("expected visible home tmpfs in mode %q, args: %s", tt.mode, joined)
+			}
+			if !tt.expectHomeTmpfs && strings.Contains(joined, "--tmpfs "+visibleHome) {
+				t.Fatalf("did not expect visible home tmpfs in mode %q, args: %s", tt.mode, joined)
 			}
 			if !strings.Contains(joined, "--setenv HOME "+visibleHome) {
 				t.Fatalf("expected visible HOME env, args: %s", joined)
