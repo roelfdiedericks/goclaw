@@ -9,6 +9,7 @@
 #   --deps MODE         Dependency install mode: auto, install, skip (default: auto)
 #   --yes               Alias for --deps install
 #   --no-deps           Alias for --deps skip
+#   --allow-root        Allow install as root without interactive confirmation
 #   --no-path           Skip PATH configuration
 #   --help              Show this help
 
@@ -27,6 +28,7 @@ VERSION=""
 CHANNEL="stable"
 SKIP_PATH=false
 DEPS_MODE="auto"
+ALLOW_ROOT=false
 
 # Colors (disabled if not a terminal)
 if [ -t 1 ]; then
@@ -61,6 +63,7 @@ Options:
     --deps MODE         Dependency install mode: auto, install, skip (default: auto)
     --yes               Alias for --deps install
     --no-deps           Alias for --deps skip
+    --allow-root        Allow install as root without interactive confirmation
     --no-path           Skip PATH configuration
     --help              Show this help
 
@@ -102,6 +105,10 @@ while [ $# -gt 0 ]; do
             ;;
         --no-deps)
             DEPS_MODE="skip"
+            shift
+            ;;
+        --allow-root)
+            ALLOW_ROOT=true
             shift
             ;;
         --help|-h)
@@ -297,10 +304,10 @@ choose_path_strategy() {
             PATH_ACTION="rc"
             case "$shell_name" in
                 fish)
-                    RC_EXPORT_LINE="set -gx PATH \$PATH $INSTALL_DIR"
+                    RC_EXPORT_LINE="set -gx PATH $INSTALL_DIR \$PATH"
                     ;;
                 *)
-                    RC_EXPORT_LINE="export PATH=\"\$PATH:$INSTALL_DIR\""
+                    RC_EXPORT_LINE="export PATH=\"$INSTALL_DIR:\$PATH\""
                     ;;
             esac
             return
@@ -359,7 +366,7 @@ prompt_yes_no_tty() {
         return 2
     fi
 
-    printf "%s" "$prompt" > /dev/tty
+    printf "%b" "$prompt" > /dev/tty
     if IFS= read -r confirm < /dev/tty; then
         if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
             return 0
@@ -367,6 +374,35 @@ prompt_yes_no_tty() {
         return 1
     fi
     return 1
+}
+
+# Root installs are discouraged for security; require explicit confirmation.
+confirm_root_install() {
+    if [ "$(id -u)" -ne 0 ]; then
+        return
+    fi
+
+    if [ "$ALLOW_ROOT" = true ]; then
+        warn "Running installer as root (allowed by --allow-root)."
+        return
+    fi
+
+    echo ""
+    warn "SECURITY WARNING: running GoClaw as root is not recommended."
+    warn "This increases risk and may expose your full system to agent/tool actions."
+    warn "Install and run GoClaw as a normal user whenever possible."
+    echo ""
+
+    if prompt_yes_no_tty "Continue installing as root into ${GREEN}${INSTALL_DIR}${NC}? [y/N] "; then
+        warn "Continuing as root by explicit confirmation."
+        return
+    fi
+
+    rc=$?
+    if [ "$rc" -eq 2 ]; then
+        error "Root install requires interactive confirmation. Re-run with --allow-root to bypass prompt."
+    fi
+    error "Aborted root install."
 }
 
 # Main installation
@@ -381,6 +417,7 @@ main() {
     ARCH=$(detect_arch)
     
     info "Detected: $OS/$ARCH"
+    confirm_root_install
     
     # Determine version to install
     if [ -z "$VERSION" ]; then
@@ -497,7 +534,7 @@ install_dependencies() {
         return
     fi
     
-    info "Optional dependencies not found:$missing"
+    info "Optional dependencies not found: $missing"
     info "These enable sandboxed execution and audio processing."
     
     # Detect package manager
