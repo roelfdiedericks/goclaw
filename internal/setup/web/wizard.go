@@ -640,21 +640,21 @@ func getStepFormDef(stepID string, data *setup.WizardData) *forms.FormDef {
 								ShowWhen: "SandboxAdvanced=true",
 								Fields: []forms.Field{
 									{Name: "SandboxEnabled", Title: "Enable Sandboxing", Type: forms.Toggle, Default: true},
-									{Name: "ExecSandboxEnabled", Title: "Enable Exec Sandboxing", Type: forms.Toggle, Default: true},
-									{Name: "BrowserSandboxEnabled", Title: "Enable Browser Sandboxing", Type: forms.Toggle, Default: true},
-									{Name: "FileToolsSandboxEnabled", Title: "Enable File Tool Sandboxing", Type: forms.Toggle, Default: true},
 								},
 								Nested: &forms.FormDef{
 									Sections: []forms.Section{
 										{
 											ShowWhen: "SandboxEnabled=true",
 											Fields: []forms.Field{
+												{Name: "ExecSandboxEnabled", Title: "Enable Exec Sandboxing", Type: forms.Toggle, Default: true},
+												{Name: "BrowserSandboxEnabled", Title: "Enable Browser Sandboxing", Type: forms.Toggle, Default: true},
+												{Name: "FileToolsSandboxEnabled", Title: "Enable File Tool Sandboxing", Type: forms.Toggle, Default: true},
 												{Name: "SandboxMode", Title: "Sandbox mode", Type: forms.Select, Options: modeOptions},
 											},
 										},
 										{
 											ShowWhen: "SandboxEnabled=false",
-											Desc:     "Sandbox mode: not applicable while sandboxing is disabled.",
+											Desc:     "Sandbox categories and mode are not applicable while sandboxing is disabled.",
 										},
 									},
 								},

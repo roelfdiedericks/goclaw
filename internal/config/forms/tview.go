@@ -594,11 +594,11 @@ func populateFormSections(form *tview.Form, sections []Section, rv reflect.Value
 				continue
 			}
 
-			var afterSelect func()
+			var afterChange func()
 			if rebuild != nil && showWhenFields[strings.TrimSpace(field.Name)] {
-				afterSelect = rebuild
+				afterChange = rebuild
 			}
-			addFieldToFormInternal(form, field, fv, afterSelect)
+			addFieldToFormInternal(form, field, fv, afterChange)
 		}
 	}
 }
@@ -641,9 +641,9 @@ func addFieldToForm(form *tview.Form, field Field, fv reflect.Value) {
 }
 
 // addFieldToFormInternal adds a single field to the form.
-// afterSelect, if non-nil, is called directly after a Select field value changes.
+// afterChange, if non-nil, is called directly after a ShowWhen-driving field changes.
 // Used for dynamic ShowWhen: the callback clears and repopulates the form.
-func addFieldToFormInternal(form *tview.Form, field Field, fv reflect.Value, afterSelect func()) {
+func addFieldToFormInternal(form *tview.Form, field Field, fv reflect.Value, afterChange func()) {
 	label := field.Title
 	if field.Desc != "" {
 		label = fmt.Sprintf("%s [gray](%s)", field.Title, truncate(field.Desc, 40))
@@ -672,6 +672,9 @@ func addFieldToFormInternal(form *tview.Form, field Field, fv reflect.Value, aft
 					fv.Set(reflect.ValueOf(&checked))
 				} else {
 					fv.SetBool(checked)
+				}
+				if afterChange != nil {
+					afterChange()
 				}
 			})
 		form.AddFormItem(checkbox)
@@ -753,8 +756,8 @@ func addFieldToFormInternal(form *tview.Form, field Field, fv reflect.Value, aft
 				fv.SetString(val)
 			}
 
-			if afterSelect != nil {
-				afterSelect()
+			if afterChange != nil {
+				afterChange()
 			}
 		})
 

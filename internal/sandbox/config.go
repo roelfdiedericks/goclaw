@@ -135,13 +135,6 @@ func ConfigFormDef() forms.FormDef {
 					Desc:  "Master switch for sandboxing across exec, browser, and file tools",
 				},
 				{
-					Name:    "general.mode",
-					Title:   "Sandbox Mode",
-					Type:    forms.Select,
-					Desc:    "How home directories are handled inside the sandbox",
-					Options: modeOptions,
-				},
-				{
 					Name:  "general.dataDir",
 					Title: "Data Directory",
 					Type:  forms.Text,
@@ -153,6 +146,12 @@ func ConfigFormDef() forms.FormDef {
 					Type:  forms.StringList,
 					Desc:  "Additional directories to add to sandbox PATH",
 				},
+			},
+		},
+		{
+			Title:    "Sandbox Categories",
+			ShowWhen: "general.enabled=true",
+			Fields: []forms.Field{
 				{
 					Name:  "general.execEnabled",
 					Title: "Enable Exec Sandboxing",
@@ -172,6 +171,29 @@ func ConfigFormDef() forms.FormDef {
 					Desc:  "Restrict read, write, edit, and jq file-mode to sandboxed paths",
 				},
 			},
+		},
+		{
+			Title:    "Sandbox Categories",
+			ShowWhen: "general.enabled=false",
+			Desc:     "Exec, browser, and file tool sandboxing are not applicable while sandboxing is disabled.",
+		},
+		{
+			Title:    "Sandbox Mode",
+			ShowWhen: "general.enabled=true",
+			Fields: []forms.Field{
+				{
+					Name:    "general.mode",
+					Title:   "Sandbox Mode",
+					Type:    forms.Select,
+					Desc:    "How home directories are handled inside the sandbox",
+					Options: modeOptions,
+				},
+			},
+		},
+		{
+			Title:    "Sandbox Mode",
+			ShowWhen: "general.enabled=false",
+			Desc:     "Sandbox mode: not applicable while sandboxing is disabled.",
 		},
 	}
 

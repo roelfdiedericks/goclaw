@@ -158,3 +158,52 @@ func TestValidateStepSecurityCustomPresetNeedsNoConsent(t *testing.T) {
 		t.Fatalf("expected no preset-consent errors for custom preset, got %#v", errs)
 	}
 }
+
+func TestSecurityStepAdvancedSandboxHidesCategoriesWhenDisabled(t *testing.T) {
+	def := getStepFormDef("security", setup.NewWizardData())
+	if def == nil {
+		t.Fatalf("expected security form definition")
+	}
+
+	var advanced *forms.Section
+	for i := range def.Sections {
+		if def.Sections[i].Title == "Advanced Sandbox Settings" {
+			advanced = &def.Sections[i]
+			break
+		}
+	}
+	if advanced == nil || advanced.Nested == nil || len(advanced.Nested.Sections) == 0 {
+		t.Fatalf("expected advanced sandbox settings nested sections")
+	}
+
+	top := advanced.Nested.Sections[0]
+	if top.ShowWhen != "SandboxAdvanced=true" {
+		t.Fatalf("expected top advanced showWhen SandboxAdvanced=true, got %q", top.ShowWhen)
+	}
+	if len(top.Fields) != 1 || top.Fields[0].Name != "SandboxEnabled" {
+		t.Fatalf("expected only SandboxEnabled at top advanced level, got %#v", top.Fields)
+	}
+	if top.Nested == nil {
+		t.Fatalf("expected nested sections under SandboxEnabled")
+	}
+
+	var foundEnabled bool
+	var foundDisabled bool
+	for _, sec := range top.Nested.Sections {
+		switch sec.ShowWhen {
+		case "SandboxEnabled=true":
+			foundEnabled = true
+			if len(sec.Fields) != 4 {
+				t.Fatalf("expected 4 fields when SandboxEnabled=true, got %d", len(sec.Fields))
+			}
+		case "SandboxEnabled=false":
+			foundDisabled = true
+			if sec.Desc != "Sandbox categories and mode are not applicable while sandboxing is disabled." {
+				t.Fatalf("unexpected disabled sandbox advanced message: %q", sec.Desc)
+			}
+		}
+	}
+	if !foundEnabled || !foundDisabled {
+		t.Fatalf("expected both enabled and disabled SandboxEnabled conditional sections")
+	}
+}

@@ -37,6 +37,73 @@ func TestConfigFormDefUsesGeneralSection(t *testing.T) {
 	}
 }
 
+func TestConfigFormDefIncludesConditionalSandboxModeSections(t *testing.T) {
+	def := ConfigFormDef()
+
+	var foundEnabled bool
+	var foundDisabled bool
+	for _, section := range def.Sections {
+		if section.Title != "Sandbox Mode" {
+			continue
+		}
+		switch section.ShowWhen {
+		case "general.enabled=true":
+			foundEnabled = true
+			if len(section.Fields) != 1 || section.Fields[0].Name != "general.mode" {
+				t.Fatalf("expected enabled sandbox mode section to contain general.mode field, got %#v", section.Fields)
+			}
+		case "general.enabled=false":
+			foundDisabled = true
+			if section.Desc != "Sandbox mode: not applicable while sandboxing is disabled." {
+				t.Fatalf("unexpected disabled sandbox mode message: %q", section.Desc)
+			}
+		}
+	}
+
+	if !foundEnabled {
+		t.Fatal("expected sandbox mode section with showWhen general.enabled=true")
+	}
+	if !foundDisabled {
+		t.Fatal("expected sandbox mode section with showWhen general.enabled=false")
+	}
+}
+
+func TestConfigFormDefIncludesConditionalSandboxCategorySections(t *testing.T) {
+	def := ConfigFormDef()
+
+	var foundEnabled bool
+	var foundDisabled bool
+	for _, section := range def.Sections {
+		if section.Title != "Sandbox Categories" {
+			continue
+		}
+		switch section.ShowWhen {
+		case "general.enabled=true":
+			foundEnabled = true
+			if len(section.Fields) != 3 {
+				t.Fatalf("expected 3 sandbox category fields, got %d", len(section.Fields))
+			}
+			if section.Fields[0].Name != "general.execEnabled" ||
+				section.Fields[1].Name != "general.browserEnabled" ||
+				section.Fields[2].Name != "general.fileToolsEnabled" {
+				t.Fatalf("unexpected sandbox category field order/content: %#v", section.Fields)
+			}
+		case "general.enabled=false":
+			foundDisabled = true
+			if section.Desc != "Exec, browser, and file tool sandboxing are not applicable while sandboxing is disabled." {
+				t.Fatalf("unexpected disabled sandbox categories message: %q", section.Desc)
+			}
+		}
+	}
+
+	if !foundEnabled {
+		t.Fatal("expected sandbox categories section with showWhen general.enabled=true")
+	}
+	if !foundDisabled {
+		t.Fatal("expected sandbox categories section with showWhen general.enabled=false")
+	}
+}
+
 func TestSupportedModeOptionsReflectPlatform(t *testing.T) {
 	options := SupportedModeOptions()
 	if len(options) == 0 {
