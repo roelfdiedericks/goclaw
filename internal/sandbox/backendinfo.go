@@ -42,8 +42,8 @@ func SupportedModeOptions() []forms.Option {
 	case BackendBubblewrap:
 		return []forms.Option{
 			{Label: "Home (full isolated home - recommended)", Value: ModeHome},
-			{Label: "Autodocs Read (sandbox home + non-hidden home directories)", Value: ModeAutoDocsRead},
-			{Label: "Autodocs Write (sandbox home + writable non-hidden home directories)", Value: ModeAutoDocsWrite},
+			{Label: "Autodocs Read (visible non-hidden home directories, read-only)", Value: ModeAutoDocsRead},
+			{Label: "Autodocs Write (visible non-hidden home directories, writable)", Value: ModeAutoDocsWrite},
 			{Label: "Volumes (specific dirs only)", Value: ModeVolumes},
 			{Label: "Ephemeral (nothing persists)", Value: ModeEphemeral},
 		}

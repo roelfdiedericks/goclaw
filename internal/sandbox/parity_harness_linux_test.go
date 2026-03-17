@@ -60,8 +60,14 @@ func TestLinuxModeParityAcrossFileToolsAndPolicy(t *testing.T) {
 				} else if resolved != fx.desktopDoc {
 					t.Fatalf("expected desktop path to resolve to visible home root in mode %s, got %q", mode, resolved)
 				}
+				if _, err := mgr.ValidatePath("~/.ssh/rodent.txt", fx.workspace); err == nil {
+					t.Fatalf("expected hidden home read denial in mode %s", mode)
+				}
 				if _, err := mgr.ValidateWritePath("~/Desktop/linux_autodocs_probe.txt", fx.workspace); err == nil {
 					t.Fatalf("expected desktop write denial in mode %s", mode)
+				}
+				if _, err := mgr.ValidateWritePath("~/.ssh/rodent.txt", fx.workspace); err == nil {
+					t.Fatalf("expected hidden home write denial in mode %s", mode)
 				}
 			case ModeAutoDocsWrite:
 				if policy.BackingHomeDir == "" {
@@ -72,8 +78,14 @@ func TestLinuxModeParityAcrossFileToolsAndPolicy(t *testing.T) {
 				} else if resolved != fx.desktopDoc {
 					t.Fatalf("expected desktop path to resolve to visible home root in mode %s, got %q", mode, resolved)
 				}
+				if _, err := mgr.ValidatePath("~/.ssh/rodent.txt", fx.workspace); err == nil {
+					t.Fatalf("expected hidden home read denial in mode %s", mode)
+				}
 				if _, err := mgr.ValidateWritePath("~/Desktop/linux_autodocs_probe.txt", fx.workspace); err != nil {
 					t.Fatalf("expected desktop write in mode %s, err=%v", mode, err)
+				}
+				if _, err := mgr.ValidateWritePath("~/.ssh/rodent.txt", fx.workspace); err == nil {
+					t.Fatalf("expected hidden home write denial in mode %s", mode)
 				}
 			case ModeVolumes:
 				if policy.BackingHomeDir != "" {

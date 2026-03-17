@@ -174,6 +174,11 @@ Autodocs modes expose selected real-home directories (top-level, non-hidden, non
 - Same roots as `autodocs-read`
 - Exposed autodocs directories are writable
 
+Darwin note:
+
+- In macOS seatbelt-backed autodocs modes, listing the home root (for example `ls /Users/your-user`) is allowed for discovery.
+- Hidden paths remain outside allowed roots for file tools, and sensitive hidden content access remains denied by policy/rules.
+
 ### Volumes Mode (Linux)
 
 Only specific directories persist. Useful when you want controlled isolation:

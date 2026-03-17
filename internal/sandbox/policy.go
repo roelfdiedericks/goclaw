@@ -153,9 +153,9 @@ func (p ResolvedPolicy) allowHomeRootFallback() bool {
 	if p.VisibleHomeDir == "" {
 		return false
 	}
-	// In Darwin autodocs modes, file-tools should only operate on workspace
-	// and discovered visible non-hidden home directories.
-	if runtime.GOOS == "darwin" && (p.Mode == ModeAutoDocsRead || p.Mode == ModeAutoDocsWrite) {
+	// In autodocs modes, file-tools should only operate on workspace and
+	// discovered visible non-hidden home directories.
+	if p.Mode == ModeAutoDocsRead || p.Mode == ModeAutoDocsWrite {
 		return false
 	}
 	return true
