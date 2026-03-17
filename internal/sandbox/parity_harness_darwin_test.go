@@ -72,6 +72,9 @@ func TestDarwinRuntimeParityAcrossModes(t *testing.T) {
 			if !strings.Contains(profile, `    (subpath "`+filepath.Clean(fx.workspace)+`")`) {
 				t.Fatalf("expected profile to include workspace root in mode %s, profile=%s", mode, profile)
 			}
+			if !strings.Contains(profile, `    (literal "`+filepath.Clean(fx.home)+`")`) {
+				t.Fatalf("expected profile to allow home root literal discovery in mode %s, profile=%s", mode, profile)
+			}
 			if !strings.Contains(profile, `    (subpath "`+filepath.Clean(fx.backingHome)+`")`) {
 				t.Fatalf("expected profile to include backing home root in mode %s, profile=%s", mode, profile)
 			}

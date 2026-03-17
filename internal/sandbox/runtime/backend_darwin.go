@@ -294,6 +294,7 @@ func buildExecReadRules(opts ExecLaunchOptions, allowRoots []string) []string {
 		return []string{
 			"(allow file-read*)",
 			buildSubpathRule("deny file-read*", []string{filepath.Clean(realHome)}),
+			buildLiteralRule("allow file-read*", filepath.Clean(realHome)),
 			buildSubpathRule("allow file-read*", allowRoots),
 		}
 	}
@@ -318,6 +319,16 @@ func buildRuntimeDeviceWriteRules() []string {
 		"  )",
 		")",
 	}
+}
+
+func buildLiteralRule(verb string, path string) string {
+	return strings.Join([]string{
+		"(" + verb,
+		"  (require-all",
+		fmt.Sprintf(`    (literal "%s")`, path),
+		"  )",
+		")",
+	}, "\n")
 }
 
 func buildSubpathRule(verb string, paths []string) string {

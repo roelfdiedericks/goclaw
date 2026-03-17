@@ -43,6 +43,9 @@ func TestBuildExecProfileDeniesRealHomeWhenUsingSandboxHome(t *testing.T) {
 	if !strings.Contains(profile, "(deny file-read*") {
 		t.Fatalf("expected profile to deny real home reads, profile: %s", profile)
 	}
+	if !strings.Contains(profile, fmt.Sprintf(`(literal "%s")`, realHome)) {
+		t.Fatalf("expected profile to re-allow real home literal for directory discovery %s, profile: %s", realHome, profile)
+	}
 	if !strings.Contains(profile, fmt.Sprintf(`(subpath "%s")`, workspace)) {
 		t.Fatalf("expected profile to re-allow workspace %s, profile: %s", workspace, profile)
 	}
