@@ -48,7 +48,14 @@ export CGO_LDFLAGS := $(WHISPER_LIB_PATHS) $(WHISPER_PLATFORM_LIBS)
 export C_INCLUDE_PATH := $(WHISPER_LIB)
 export LIBRARY_PATH := $(WHISPER_LIB)
 
-build:
+# Run dependency checks before build by default.
+# Use SKIP_DEPS_CHECK=1 to bypass explicitly (for controlled CI/dev scenarios).
+BUILD_DEPS_CHECK := deps-check
+ifeq ($(SKIP_DEPS_CHECK),1)
+BUILD_DEPS_CHECK :=
+endif
+
+build: $(BUILD_DEPS_CHECK)
 	go build -o $(BINARY) ./cmd/goclaw
 
 embtest:

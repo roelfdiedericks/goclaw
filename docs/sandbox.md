@@ -163,6 +163,11 @@ Recommendation:
 
 Autodocs modes expose selected real-home directories (top-level, non-hidden, non-symlinked) such as `~/Desktop`, `~/Documents`, `~/Pictures`, and similar.
 
+Policy scope in autodocs modes applies consistently to managed `exec`, managed browser launchers, and file tools:
+
+- Visible non-hidden autodocs roots are accessible.
+- Hidden dot-directories (for example `~/.ssh`, `~/.goclaw`) are outside allowed roots.
+
 #### `autodocs-read`
 
 - Exposed autodocs directories are read-only
@@ -178,6 +183,11 @@ Darwin note:
 
 - In macOS seatbelt-backed autodocs modes, listing the home root (for example `ls /Users/your-user`) is allowed for discovery.
 - Hidden paths remain outside allowed roots for file tools, and sensitive hidden content access remains denied by policy/rules.
+
+Linux note:
+
+- In Linux bubblewrap-backed autodocs modes, hidden dot-directories are not exposed in the sandbox home view.
+- For hidden paths, `exec` may return filesystem-level errors such as `ENOENT`, while file tools return policy errors such as `path escapes sandbox root`; both are expected deny outcomes.
 
 ### Volumes Mode (Linux)
 

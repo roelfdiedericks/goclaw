@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	osexec "os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -129,6 +131,7 @@ type CLI struct {
 	Setup      SetupCmd      `cmd:"" help:"Interactive setup wizard"`
 	Onboard    OnboardCmd    `cmd:"" help:"Run onboarding wizard"`
 	Config     ConfigCmd     `cmd:"" help:"View configuration"`
+	Sandbox    SandboxCmd    `cmd:"" help:"Sandbox diagnostics and interactive testing"`
 	TUI        TUICmd        `cmd:"tui" help:"Run gateway with interactive TUI"`
 }
 
@@ -2198,6 +2201,144 @@ type ConfigPathCmd struct{}
 
 func (c *ConfigPathCmd) Run(ctx *Context) error {
 	return setup.ShowConfigPath()
+}
+
+// SandboxCmd provides CLI helpers for sandbox diagnostics.
+type SandboxCmd struct {
+	Exec SandboxExecCmd `cmd:"" default:"withargs" help:"Launch an interactive shell as if the exec tool were invoked"`
+}
+
+// SandboxExecCmd runs an interactive or one-shot command using exec-tool sandbox bootstrapping.
+type SandboxExecCmd struct {
+	Mode    string `help:"Optional sandbox mode override for this run (home, autodocs-read, autodocs-write, volumes, ephemeral). Platform rules still apply."`
+	CWD     string `help:"Working directory inside command (default: gateway.workingDir from config)"`
+	Command string `short:"c" help:"One-shot shell command to execute instead of launching an interactive shell"`
+}
+
+func (s *SandboxExecCmd) Run(ctx *Context) error {
+	loadResult, err := config.LoadRuntime()
+	if err != nil {
+		return err
+	}
+	cfg := loadResult.Config
+
+	if s.Mode != "" {
+		allowed := false
+		for _, opt := range sandbox.SupportedModeOptions() {
+			if opt.Value == s.Mode {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return fmt.Errorf("invalid mode %q for this platform", s.Mode)
+		}
+		cfg.Sandbox.General.Mode = s.Mode
+	}
+
+	workDir := cfg.Gateway.WorkingDir
+	if s.CWD != "" {
+		workDir = s.CWD
+	}
+
+	sandbox.InitManager(cfg.Sandbox, cfg.Gateway.WorkingDir)
+	mgr := sandbox.GetManager()
+
+	useSandbox := cfg.Sandbox.IsExecEnabled()
+	if useSandbox {
+		if !sbruntime.ExecSandboxAvailable(cfg.Sandbox.GetBackendPath()) {
+			L_warn("sandbox exec: backend unavailable, running unsandboxed", "backend", sbruntime.SandboxBackendName())
+			useSandbox = false
+		}
+	}
+
+	command := s.Command
+	if command == "" {
+		shell := os.Getenv("SHELL")
+		if shell == "" {
+			if runtime.GOOS == "darwin" {
+				shell = "/bin/zsh"
+			} else {
+				shell = "/bin/bash"
+			}
+		}
+		command = shell + " -i"
+	}
+
+	L_info("sandbox exec: launching",
+		"sandboxed", useSandbox,
+		"mode", mgr.GetMode(),
+		"workDir", workDir,
+		"command", command,
+	)
+
+	var cmd *osexec.Cmd
+	if useSandbox {
+		policy := mgr.ResolvePolicy()
+		autoDocsRoots := mgr.GetAutoDocsRoots()
+		extraBind := append([]string{}, cfg.Tools.Exec.Bubblewrap.ExtraBind...)
+		extraRoBind := append([]string{}, cfg.Tools.Exec.Bubblewrap.ExtraRoBind...)
+		if mgr.IsAutoDocsWriteMode() {
+			extraBind = append(extraBind, autoDocsRoots...)
+		} else {
+			extraRoBind = append(extraRoBind, autoDocsRoots...)
+		}
+		pathValue := os.Getenv("PATH")
+		if runtime.GOOS == "darwin" {
+			pathValue = mgr.BuildSandboxPATH(policy.VisibleHomeDir)
+		}
+
+		cmd, err = sbruntime.BuildExecCommand(command, sbruntime.ExecLaunchOptions{
+			BackendPath:    cfg.Sandbox.GetBackendPath(),
+			SandboxMode:    mgr.GetMode(),
+			WorkspaceDir:   cfg.Gateway.WorkingDir,
+			WorkDir:        workDir,
+			VisibleHomeDir: policy.VisibleHomeDir,
+			BackingHomeDir: policy.BackingHomeDir,
+			PathValue:      pathValue,
+			Volumes:        runtimeVolumesForSandboxExec(mgr.GetVolumes()),
+			ProtectedDirs:  mgr.GetProtectedDirs(),
+			ClearEnv:       cfg.Tools.Exec.Bubblewrap.ClearEnv,
+			AllowNetwork:   cfg.Tools.Exec.Bubblewrap.AllowNetwork,
+			ExtraEnv:       cfg.Tools.Exec.Bubblewrap.ExtraEnv,
+			ExtraBind:      extraBind,
+			ExtraRoBind:    extraRoBind,
+		})
+		if err != nil {
+			return err
+		}
+		if cmd == nil {
+			useSandbox = false
+		}
+	}
+
+	if !useSandbox {
+		cmd = osexec.Command("bash", "-lc", command)
+		cmd.Dir = workDir
+	}
+
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*osexec.ExitError); ok {
+			return &exec.Error{ExitCode: exitErr.ExitCode(), Err: err}
+		}
+		return err
+	}
+	return nil
+}
+
+func runtimeVolumesForSandboxExec(vols []sandbox.SandboxVolume) []sbruntime.SandboxVolume {
+	out := make([]sbruntime.SandboxVolume, 0, len(vols))
+	for _, vol := range vols {
+		out = append(out, sbruntime.SandboxVolume{
+			MountPoint: vol.MountPoint,
+			Source:     vol.Source,
+		})
+	}
+	return out
 }
 
 // TUICmd is a top-level shortcut for goclaw tui
