@@ -78,14 +78,14 @@ type XAIImagineConfig struct {
 
 // XAIVideoConfig contains xAI video generation tool settings
 type XAIVideoConfig struct {
-	Enabled      bool   `json:"enabled"`                                       // Enable the tool
-	APIKey       string `json:"apiKey,omitempty"`                              // xAI API key
-	Model        string `json:"model,omitempty" default:"grok-imagine-video"`  // Model to use
-	Resolution   string `json:"resolution,omitempty" default:"480p"`           // Default resolution: "480p" or "720p"
-	Duration     int    `json:"duration,omitempty" default:"5"`                // Default video duration in seconds (1-15)
-	SaveToMedia  bool   `json:"saveToMedia,omitempty" default:"true"`          // Save generated videos to media store
-	PollInterval int    `json:"pollInterval,omitempty" default:"5"`            // Seconds between status polls
-	Timeout      int    `json:"timeout,omitempty" default:"600"`               // Max wait time in seconds (10 min)
+	Enabled      bool   `json:"enabled"`                                      // Enable the tool
+	APIKey       string `json:"apiKey,omitempty"`                             // xAI API key
+	Model        string `json:"model,omitempty" default:"grok-imagine-video"` // Model to use
+	Resolution   string `json:"resolution,omitempty" default:"480p"`          // Default resolution: "480p" or "720p"
+	Duration     int    `json:"duration,omitempty" default:"5"`               // Default video duration in seconds (1-15)
+	SaveToMedia  bool   `json:"saveToMedia,omitempty" default:"true"`         // Save generated videos to media store
+	PollInterval int    `json:"pollInterval,omitempty" default:"5"`           // Seconds between status polls
+	Timeout      int    `json:"timeout,omitempty" default:"600"`              // Max wait time in seconds (10 min)
 }
 
 const configPath = "tools"

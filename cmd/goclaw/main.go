@@ -2314,7 +2314,8 @@ func (s *SandboxExecCmd) Run(ctx *Context) error {
 	}
 
 	if !useSandbox {
-		cmd = osexec.Command("bash", "-lc", command)
+		// G204: command is intentionally user-provided via CLI (goclaw exec "...")
+		cmd = osexec.Command("bash", "-lc", command) //nolint:gosec
 		cmd.Dir = workDir
 	}
 
