@@ -25,8 +25,9 @@ const (
 	// DefaultTTL is the default time-to-live for media files (10 minutes)
 	DefaultTTL = 10 * time.Minute
 
-	// MaxMediaBytes is the maximum allowed file size (5MB)
-	MaxMediaBytes = 5 * 1024 * 1024
+	// MaxMediaBytes is the maximum allowed file size (50MB)
+	// Increased to support video files from xai_video tool
+	MaxMediaBytes = 50 * 1024 * 1024
 
 	// CleanupInterval is how often to run cleanup (half of TTL)
 	CleanupIntervalDivisor = 2

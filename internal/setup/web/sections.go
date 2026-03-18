@@ -54,6 +54,7 @@ var EditorSections = []SectionCategory{
 			{ID: "stt", Label: "Speech-to-Text", ConfigPath: "/stt", Type: SectionTypeFormDef},
 			{ID: "skills", Label: "Skills", ConfigPath: "/skills", Type: SectionTypeFormDef},
 			{ID: "cron", Label: "Cron", ConfigPath: "/cron", Type: SectionTypeFormDef},
+			{ID: "tools", Label: "Tools", ConfigPath: "/tools", Type: SectionTypeFormDef},
 		},
 	},
 	{

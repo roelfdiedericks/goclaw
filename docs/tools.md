@@ -73,6 +73,7 @@ Semantic search over markdown memory files:
 |------|-------------|---------------|
 | `jq` | JSON query and transformation | [JQ Tool](tools/jq.md) |
 | `xai_imagine` | xAI image generation | [xAI Imagine](tools/xai-imagine.md) |
+| `xai_video` | xAI video generation | [xAI Video](tools/xai-video.md) |
 | `user_auth` | Request role elevation | [User Auth](tools/user-auth.md) |
 | `skills` | List, search, install, and manage skills | [Skills](skills.md) |
 | `media_display` | Display images/media to user | — |

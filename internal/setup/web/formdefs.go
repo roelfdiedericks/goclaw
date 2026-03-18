@@ -16,6 +16,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/stt"
+	toolsconfig "github.com/roelfdiedericks/goclaw/internal/tools/config"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
 	"github.com/roelfdiedericks/goclaw/internal/voicellm"
 )
@@ -44,6 +45,7 @@ var formDefRegistry = map[string]FormDefGetter{
 	"stt":         stt.ConfigFormDef,
 	"skills":      skills.ConfigFormDef,
 	"cron":        cron.ConfigFormDef,
+	"tools":       toolsconfig.ConfigFormDef,
 
 	// System
 	"sandbox": sandbox.ConfigFormDef,

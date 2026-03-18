@@ -21,6 +21,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/stt"
+	toolsconfig "github.com/roelfdiedericks/goclaw/internal/tools/config"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
 	"github.com/roelfdiedericks/goclaw/internal/voicellm"
 )
@@ -63,6 +64,7 @@ func (e *EditorTview) Run() error {
 	transcript.RegisterCommands()
 	stt.RegisterCommands()
 	voicellm.RegisterCommands()
+	toolsconfig.RegisterCommands()
 
 	for {
 		// Create UI
@@ -127,6 +129,7 @@ func (e *EditorTview) createMenu() *forms.MenuListResult {
 		{Label: "Speech-to-Text (STT)", OnSelect: e.editSTT},
 		{Label: "Skills", OnSelect: e.editSkills},
 		{Label: "Cron Jobs", OnSelect: e.editCron},
+		{Label: "Tools (xAI)", OnSelect: e.editTools},
 		{IsSeparator: true, Label: "System"},
 		{Label: "Media Storage", OnSelect: e.editMedia},
 		{Label: "TUI Settings", OnSelect: e.editTUI},
@@ -451,6 +454,32 @@ func (e *EditorTview) editCron() {
 	}
 
 	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Cron Jobs"})
+	e.app.SetFormContent(content)
+}
+
+// editTools opens the tools configuration form (xAI Imagine, xAI Video)
+func (e *EditorTview) editTools() {
+	L_info("editor: opening tools config")
+
+	toolsCfg := e.cfg.Tools
+	formDef := toolsconfig.ConfigFormDef()
+
+	content, err := forms.BuildFormContent(formDef, &toolsCfg, "tools", func(result forms.TviewResult) {
+		if result == forms.ResultAccepted {
+			e.cfg.Tools = toolsCfg
+			e.dirty = true
+			L_info("editor: tools config updated")
+		} else {
+			L_info("editor: tools config cancelled")
+		}
+		e.showMainMenu()
+	}, e.app.App())
+	if err != nil {
+		L_error("editor: tools form error", "error", err)
+		return
+	}
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Tools"})
 	e.app.SetFormContent(content)
 }
 

@@ -73,6 +73,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/tools/websearch"
 	"github.com/roelfdiedericks/goclaw/internal/tools/write"
 	"github.com/roelfdiedericks/goclaw/internal/tools/xaiimagine"
+	"github.com/roelfdiedericks/goclaw/internal/tools/xaivideo"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
 	"github.com/roelfdiedericks/goclaw/internal/update"
 	"github.com/roelfdiedericks/goclaw/internal/user"
@@ -2951,6 +2952,18 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 				L_warn("xai_imagine: tool not registered", "error", err)
 			} else {
 				reg.Register(xaiImagineTool)
+			}
+		}
+	}
+
+	// xAI Video tool
+	if cfg.Tools.XAIVideo.Enabled {
+		if mediaStore := gw.MediaStore(); mediaStore != nil {
+			xaiVideoTool, err := xaivideo.NewTool(cfg.Tools.XAIVideo, mediaStore)
+			if err != nil {
+				L_warn("xai_video: tool not registered", "error", err)
+			} else {
+				reg.Register(xaiVideoTool)
 			}
 		}
 	}
