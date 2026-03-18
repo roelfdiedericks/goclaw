@@ -3,6 +3,7 @@ package webview
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 
@@ -55,7 +56,15 @@ func Open(url string, opts Options) (usedWebview bool, err error) {
 
 // tryWebview attempts to open URL in embedded webview
 // Returns true if successful (blocks until window closed), false if webview unavailable
-func tryWebview(url string, opts Options) bool {
+func tryWebview(url string, opts Options) (success bool) {
+	// Recover from panic - webview.New() panics on headless systems (no X server)
+	defer func() {
+		if r := recover(); r != nil {
+			L_debug("webview: panic recovered (likely no display)", "panic", r)
+			success = false
+		}
+	}()
+
 	w := webview.New(opts.DevMode)
 	if w == nil {
 		return false
@@ -90,12 +99,24 @@ func openBrowser(url string) error {
 	case "darwin":
 		return exec.Command("open", url).Start()
 	default: // linux, freebsd, etc.
+		// Check for display - xdg-open won't work on headless systems
+		if !hasDisplay() {
+			return fmt.Errorf("no display available (DISPLAY/WAYLAND_DISPLAY not set)")
+		}
 		return exec.Command("xdg-open", url).Start()
 	}
 }
 
 // CanUseWebview checks if webview (webkit2gtk) is available
-func CanUseWebview() bool {
+func CanUseWebview() (available bool) {
+	// Recover from panic - webview.New() panics on headless systems (no X server)
+	defer func() {
+		if r := recover(); r != nil {
+			L_debug("webview: CanUseWebview panic recovered", "panic", r)
+			available = false
+		}
+	}()
+
 	w := webview.New(false)
 	if w == nil {
 		return false
@@ -110,9 +131,26 @@ func CanUseBrowser() bool {
 	case "windows", "darwin":
 		return true
 	default:
+		// On Linux, need both xdg-open AND a display
+		if !hasDisplay() {
+			return false
+		}
 		_, err := exec.LookPath("xdg-open")
 		return err == nil
 	}
+}
+
+// hasDisplay checks if a display server (X11 or Wayland) is available
+func hasDisplay() bool {
+	// Check for X11
+	if display := os.Getenv("DISPLAY"); display != "" {
+		return true
+	}
+	// Check for Wayland
+	if wayland := os.Getenv("WAYLAND_DISPLAY"); wayland != "" {
+		return true
+	}
+	return false
 }
 
 // IsAvailable returns true if either webview or browser can be used
