@@ -37,6 +37,8 @@ type Manager struct {
 	provider     SessionProvider
 	panicPhrases []string // uppercase panic phrases (e.g., ["STOP"])
 	panicEnabled bool     // whether panic phrase detection is active
+	shutdownPhrases []string // uppercase shutdown phrases (e.g., ["SHUTDOWN NOW"])
+	shutdownEnabled bool     // whether shutdown phrase detection is active
 }
 
 var (
@@ -152,6 +154,17 @@ func (m *Manager) SetPanicConfig(phrases []string, enabled bool) {
 	m.panicEnabled = enabled
 }
 
+// SetShutdownConfig configures shutdown phrase detection.
+func (m *Manager) SetShutdownConfig(phrases []string, enabled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.shutdownPhrases = make([]string, len(phrases))
+	for i, p := range phrases {
+		m.shutdownPhrases[i] = strings.ToUpper(strings.TrimSpace(p))
+	}
+	m.shutdownEnabled = enabled
+}
+
 // IsCommand checks if text is a command
 func IsCommand(text string) bool {
 	return strings.HasPrefix(strings.TrimSpace(text), "/")
@@ -172,16 +185,48 @@ func IsPanicPhrase(text string) bool {
 		return false
 	}
 
-	text = strings.TrimSpace(strings.ToUpper(text))
-	if text == "" {
+	return matchPhrase(text, phrases)
+}
+
+// IsShutdownPhrase returns true if text matches a configured shutdown phrase.
+func IsShutdownPhrase(text string) bool {
+	if globalManager == nil {
 		return false
 	}
+	globalManager.mu.RLock()
+	enabled := globalManager.shutdownEnabled
+	phrases := globalManager.shutdownPhrases
+	globalManager.mu.RUnlock()
 
-	words := strings.Fields(text)
+	if !enabled || len(phrases) == 0 {
+		return false
+	}
+	return matchPhrase(text, phrases)
+}
+
+func matchPhrase(text string, phrases []string) bool {
+	norm := strings.TrimSpace(strings.ToUpper(strings.Join(strings.Fields(text), " ")))
+	if norm == "" {
+		return false
+	}
+	words := strings.Fields(norm)
+
 	for _, phrase := range phrases {
+		p := strings.TrimSpace(strings.ToUpper(strings.Join(strings.Fields(phrase), " ")))
+		if p == "" {
+			continue
+		}
+		// Exact multi-word match (e.g. "SHUTDOWN NOW").
+		if strings.Contains(p, " ") {
+			if norm == p {
+				return true
+			}
+			continue
+		}
+		// Single-word repeated match (e.g. "STOP STOP STOP").
 		allMatch := true
 		for _, w := range words {
-			if w != phrase {
+			if w != p {
 				allMatch = false
 				break
 			}

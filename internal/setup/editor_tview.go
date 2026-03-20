@@ -545,6 +545,7 @@ func (e *EditorTview) editGateway() {
 		Agent:       e.cfg.Agent,
 		PromptCache: e.cfg.PromptCache,
 		Supervision: e.cfg.Supervision,
+		Safety:      e.cfg.Safety,
 	}
 	formDef := gateway.ConfigFormDef()
 
@@ -554,6 +555,7 @@ func (e *EditorTview) editGateway() {
 			e.cfg.Agent = gatewayCfg.Agent
 			e.cfg.PromptCache = gatewayCfg.PromptCache
 			e.cfg.Supervision = gatewayCfg.Supervision
+			e.cfg.Safety = gatewayCfg.Safety
 			e.dirty = true
 			L_info("editor: gateway config updated")
 		} else {

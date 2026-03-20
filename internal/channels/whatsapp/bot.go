@@ -478,10 +478,20 @@ func (b *Bot) handleMessage(evt *events.Message) {
 
 	// Check for panic phrase (emergency stop) before commands
 	// Always attempt cancel and confirm - avoids race conditions where session just finished
+	if commands.IsShutdownPhrase(text) {
+		chatJID := evt.Info.Chat
+		if err := b.gateway.RequestShutdown(u.ID); err != nil {
+			b.client.SendMessage(b.ctx, chatJID, &waE2E.Message{Conversation: proto.String("Shutdown denied.")}) //nolint:errcheck
+			return
+		}
+		b.client.SendMessage(b.ctx, chatJID, &waE2E.Message{Conversation: proto.String("Shutting down now.")}) //nolint:errcheck
+		return
+	}
+
 	if commands.IsPanicPhrase(text) {
 		b.gateway.StopAllUserSessions(u.ID) //nolint:errcheck // fire-and-forget panic stop
 		chatJID := evt.Info.Chat
-		b.client.SendMessage(b.ctx, chatJID, &waE2E.Message{Conversation: proto.String("Stopping all tasks.")}) //nolint:errcheck
+		b.client.SendMessage(b.ctx, chatJID, &waE2E.Message{Conversation: proto.String("Stopping all tasks. Send /resume to continue.")}) //nolint:errcheck
 		return
 	}
 

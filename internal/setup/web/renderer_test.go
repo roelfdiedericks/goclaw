@@ -17,7 +17,7 @@ func TestRenderFormHTMLUsesDataHooksInsteadOfAlpine(t *testing.T) {
 				ShowWhen: "gateway.enabled=true",
 				Fields: []forms.Field{
 					{Name: "enabled", Title: "Enabled", Type: forms.Toggle},
-					{Name: "logFile", Title: "Log File", Type: forms.Text},
+					{Name: "logFile", Title: "Log File", Type: forms.Text, Placeholder: "~/.goclaw/goclaw.log"},
 					{Name: "listen", Title: "Listen", Type: forms.Select, Options: []forms.Option{
 						{Label: "Local", Value: "127.0.0.1"},
 						{Label: "All", Value: "0.0.0.0"},
@@ -42,6 +42,9 @@ func TestRenderFormHTMLUsesDataHooksInsteadOfAlpine(t *testing.T) {
 	}
 	if !strings.Contains(got, `data-bind="logFile"`) {
 		t.Fatalf("expected text field data-bind hook, got:\n%s", got)
+	}
+	if !strings.Contains(got, `placeholder="~/.goclaw/goclaw.log"`) {
+		t.Fatalf("expected placeholder attribute, got:\n%s", got)
 	}
 	if !strings.Contains(got, `data-bind="listen"`) {
 		t.Fatalf("expected select data-bind hook, got:\n%s", got)

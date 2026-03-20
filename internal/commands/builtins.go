@@ -47,6 +47,18 @@ func registerBuiltins(m *Manager) {
 	})
 
 	m.Register(&Command{
+		Name:        "/resume",
+		Description: "Resume tasks after /stop",
+		Handler:     handleResume,
+	})
+
+	m.Register(&Command{
+		Name:        "/shutdown",
+		Description: "Gracefully shutdown GoClaw (owner only)",
+		Handler:     handleShutdown,
+	})
+
+	m.Register(&Command{
 		Name:        "/help",
 		Description: "Show this help",
 		Handler:     handleHelp,
@@ -256,8 +268,43 @@ func handleStop(ctx context.Context, args *CommandArgs) *CommandResult {
 	}
 
 	return &CommandResult{
-		Text:     "Stopping all tasks.",
-		Markdown: "Stopping all tasks.",
+		Text:     "Stopping all tasks. Send /resume to continue.",
+		Markdown: "Stopping all tasks. Send `/resume` to continue.",
+	}
+}
+
+func handleResume(ctx context.Context, args *CommandArgs) *CommandResult {
+	resumed, err := args.Provider.ResumeAllUserSessions(args.UserID)
+	if err != nil {
+		return &CommandResult{
+			Text:     fmt.Sprintf("Resume failed: %s", err),
+			Markdown: fmt.Sprintf("Resume failed: `%s`", err),
+			Error:    err,
+		}
+	}
+	if resumed == 0 {
+		return &CommandResult{
+			Text:     "No paused sessions.",
+			Markdown: "No paused sessions.",
+		}
+	}
+	return &CommandResult{
+		Text:     "Resumed. You can continue.",
+		Markdown: "Resumed. You can continue.",
+	}
+}
+
+func handleShutdown(ctx context.Context, args *CommandArgs) *CommandResult {
+	if err := args.Provider.RequestShutdown(args.UserID); err != nil {
+		return &CommandResult{
+			Text:     fmt.Sprintf("Shutdown denied: %s", err),
+			Markdown: fmt.Sprintf("Shutdown denied: `%s`", err),
+			Error:    err,
+		}
+	}
+	return &CommandResult{
+		Text:     "Shutting down now.",
+		Markdown: "Shutting down now.",
 	}
 }
 

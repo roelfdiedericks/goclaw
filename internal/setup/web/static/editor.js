@@ -1178,6 +1178,7 @@
                     html += `<div class="col-md-6"><div class="form-check form-switch"><input class="form-check-input js-provider-input" type="checkbox" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="promptCaching"${cfg.promptCaching ? ' checked' : ''}><label class="form-check-label">Prompt Caching</label></div></div>`;
                     html += `<div class="col-md-6"><label class="form-label">Thinking Level</label><select class="form-select form-select-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="thinkingLevel">${this.renderOptions(THINKING_LEVEL_OPTIONS, cfg.thinkingLevel || '')}</select></div>`;
                     html += `<div class="col-md-6"><label class="form-label">Max Tokens</label><input type="number" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="maxTokens" value="${escapeHtml(cfg.maxTokens || '')}" placeholder="0 = default"></div>`;
+                    html += `<div class="col-md-6"><label class="form-label">Context Window (tokens)</label><input type="number" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="contextTokens" value="${escapeHtml(cfg.contextTokens || '')}" placeholder="0 = auto-detect"></div>`;
                     html += `<div class="col-md-6"><label class="form-label">Timeout (seconds)</label><input type="number" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="timeoutSeconds" value="${escapeHtml(cfg.timeoutSeconds || '')}" placeholder="0 = default"></div>`;
                     html += `</div></div>`;
                 }
@@ -1315,7 +1316,7 @@
 
             if (!alias || !providers[alias]) return;
             let value = $input.is(':checkbox') ? $input.is(':checked') : $input.val();
-            if (providerField === 'maxTokens' || providerField === 'timeoutSeconds') {
+            if (providerField === 'maxTokens' || providerField === 'contextTokens' || providerField === 'timeoutSeconds') {
                 value = value === '' ? 0 : Number(value);
             }
             if (providerField === 'baseURL') {

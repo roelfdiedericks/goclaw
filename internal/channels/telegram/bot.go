@@ -313,11 +313,19 @@ func (b *Bot) handleMessage(c tele.Context) error {
 
 	logging.L_info("telegram: authenticated message", "user", u.Name, "role", u.Role, "userID", userID)
 
+	// Check for shutdown phrase before panic/commands (owner-only).
+	if commands.IsShutdownPhrase(c.Text()) {
+		if err := b.gateway.RequestShutdown(u.ID); err != nil {
+			return c.Send("Shutdown denied.")
+		}
+		return c.Send("Shutting down now.")
+	}
+
 	// Check for panic phrase (emergency stop) before anything else
 	// Always attempt cancel and confirm - avoids race conditions where session just finished
 	if commands.IsPanicPhrase(c.Text()) {
 		b.gateway.StopAllUserSessions(u.ID) //nolint:errcheck // fire-and-forget panic stop
-		return c.Send("Stopping all tasks.")
+		return c.Send("Stopping all tasks. Send /resume to continue.")
 	}
 
 	// Check if this is a command - route to global command manager

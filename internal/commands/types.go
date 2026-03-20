@@ -20,6 +20,8 @@ type SessionProvider interface {
 
 	// Emergency stop
 	StopAllUserSessions(userID string) (int, error)
+	ResumeAllUserSessions(userID string) (int, error)
+	RequestShutdown(userID string) error
 
 	// HASS commands
 	GetHassInfo() *HassInfo

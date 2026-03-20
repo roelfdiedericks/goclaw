@@ -59,8 +59,10 @@ type GhostwritingConfig struct {
 
 // SafetyConfig configures emergency stop / panic phrase behavior
 type SafetyConfig struct {
-	PanicPhrases []string `json:"panicPhrases"`                // Words that trigger emergency stop (GetPanicPhrases has fallback)
-	PanicEnabled bool     `json:"panicEnabled" default:"true"` // Whether panic phrase detection is active
+	PanicPhrases    []string `json:"panicPhrases"`                    // Words that trigger emergency stop (GetPanicPhrases has fallback)
+	PanicEnabled    bool     `json:"panicEnabled" default:"true"`     // Whether panic phrase detection is active
+	ShutdownPhrases []string `json:"shutdownPhrases"`                 // Phrases that trigger graceful shutdown (owner-only)
+	ShutdownEnabled bool     `json:"shutdownEnabled" default:"true"` // Whether shutdown phrase detection is active
 }
 
 // GetPanicPhrases returns configured panic phrases with fallback default
@@ -68,7 +70,15 @@ func (c *SafetyConfig) GetPanicPhrases() []string {
 	if len(c.PanicPhrases) > 0 {
 		return c.PanicPhrases
 	}
-	return []string{"STOP"}
+	return []string{"STOP", "STOP NOW"}
+}
+
+// GetShutdownPhrases returns configured shutdown phrases with fallback default.
+func (c *SafetyConfig) GetShutdownPhrases() []string {
+	if len(c.ShutdownPhrases) > 0 {
+		return c.ShutdownPhrases
+	}
+	return []string{"SHUTDOWN NOW"}
 }
 
 // SecurityConfig configures security policies for the gateway

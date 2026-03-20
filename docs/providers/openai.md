@@ -81,6 +81,29 @@ OpenRouter requests include GoClaw attribution headers automatically.
 | `timeoutSeconds` | int | 300 | Request timeout |
 | `embeddingOnly` | bool | false | Use only for embeddings |
 
+### Unknown Model Context Windows
+
+For custom or newly released models that are not in `models.json`, GoClaw falls back to a conservative context window. If the model supports a larger context, set `contextTokens` on the provider:
+
+```json
+{
+  "llm": {
+    "providers": {
+      "openrouter1": {
+        "driver": "openai",
+        "subtype": "openrouter",
+        "apiKey": "YOUR_OPENROUTER_KEY",
+        "baseURL": "https://openrouter.ai/api/v1",
+        "contextTokens": 262144,
+        "maxTokens": 8192
+      }
+    }
+  }
+}
+```
+
+Use the model's documented context window from the provider.
+
 ## Compatible APIs
 
 The OpenAI provider works with any API that follows the OpenAI chat completions format:

@@ -683,13 +683,36 @@ func (m *Manager) CancelAllForUser(userID string) int {
 	cancelled := 0
 	for _, s := range m.sessions {
 		u := s.GetUser()
-		if u != nil && u.ID == userID && s.IsRunning() {
-			s.Cancel()
-			cancelled++
-			L_debug("session: cancelled for user", "session", s.ID, "user", userID)
+		if u != nil && u.ID == userID {
+			// Pause and bump generation first so all active loops exit quickly.
+			s.Pause()
+			s.BumpStopGeneration()
+			runCancelled := s.Cancel()
+			if runCancelled > 0 {
+				cancelled += runCancelled
+				L_debug("session: cancelled for user", "session", s.ID, "user", userID, "runs", runCancelled)
+			}
 		}
 	}
 	return cancelled
+}
+
+// ResumeAllForUser clears pause state for all sessions belonging to the user.
+// Returns the number of sessions resumed.
+func (m *Manager) ResumeAllForUser(userID string) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	resumed := 0
+	for _, s := range m.sessions {
+		u := s.GetUser()
+		if u != nil && u.ID == userID && s.IsPaused() {
+			s.Resume()
+			resumed++
+			L_debug("session: resumed for user", "session", s.ID, "user", userID)
+		}
+	}
+	return resumed
 }
 
 // Count returns the number of active sessions

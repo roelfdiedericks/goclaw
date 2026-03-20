@@ -276,6 +276,20 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	logging.L_info("http: message received", "user", u.ID, "session", sessionID[:8]+"...", "length", len(req.Message), "images", len(contentBlocks))
 
+	// Check for shutdown phrase (owner-only) before panic/commands.
+	if commands.IsShutdownPhrase(req.Message) {
+		if s.channel.gateway != nil {
+			if err := s.channel.gateway.RequestShutdown(u.ID); err == nil {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Shutting down now."}) //nolint:errcheck
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		json.NewEncoder(w).Encode(map[string]string{"status": "error", "message": "Shutdown denied."}) //nolint:errcheck
+		return
+	}
+
 	// Check for panic phrase (emergency stop) before anything else
 	// Always attempt cancel and confirm - avoids race conditions where session just finished
 	if commands.IsPanicPhrase(req.Message) {
@@ -283,7 +297,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			s.channel.gateway.StopAllUserSessions(u.ID) //nolint:errcheck // fire-and-forget panic stop
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Stopping all tasks."}) //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Stopping all tasks. Send /resume to continue."}) //nolint:errcheck
 		return
 	}
 

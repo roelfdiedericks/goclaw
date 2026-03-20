@@ -148,14 +148,22 @@ func renderToggle(sb *strings.Builder, field forms.Field, inputID, fieldKey, fie
 }
 
 func renderText(sb *strings.Builder, field forms.Field, inputID, fieldKey, fieldPath string) {
-	sb.WriteString(fmt.Sprintf(`      <input type="text" class="form-control js-bound-field" id="%s" data-bind="%s">`+"\n",
+	sb.WriteString(fmt.Sprintf(`      <input type="text" class="form-control js-bound-field" id="%s" data-bind="%s"`,
 		inputID, template.HTMLEscapeString(fieldPath)))
+	if field.Placeholder != "" {
+		sb.WriteString(fmt.Sprintf(` placeholder="%s"`, template.HTMLEscapeString(field.Placeholder)))
+	}
+	sb.WriteString(">\n")
 	renderFieldError(sb, fieldKey)
 }
 
 func renderSecret(sb *strings.Builder, field forms.Field, inputID, fieldKey, fieldPath string) {
-	sb.WriteString(fmt.Sprintf(`      <input type="password" class="form-control js-bound-field" id="%s" data-bind="%s" autocomplete="off" data-lpignore="true" data-form-type="other">`+"\n",
+	sb.WriteString(fmt.Sprintf(`      <input type="password" class="form-control js-bound-field" id="%s" data-bind="%s" autocomplete="off" data-lpignore="true" data-form-type="other"`,
 		inputID, template.HTMLEscapeString(fieldPath)))
+	if field.Placeholder != "" {
+		sb.WriteString(fmt.Sprintf(` placeholder="%s"`, template.HTMLEscapeString(field.Placeholder)))
+	}
+	sb.WriteString(">\n")
 	renderFieldError(sb, fieldKey)
 }
 
@@ -170,6 +178,9 @@ func renderNumber(sb *strings.Builder, field forms.Field, inputID, fieldKey, fie
 	}
 	if field.Step != 0 {
 		sb.WriteString(fmt.Sprintf(` step="%v"`, field.Step))
+	}
+	if field.Placeholder != "" {
+		sb.WriteString(fmt.Sprintf(` placeholder="%s"`, template.HTMLEscapeString(field.Placeholder)))
 	}
 	sb.WriteString(">\n")
 	renderFieldError(sb, fieldKey)
@@ -189,14 +200,22 @@ func renderSelect(sb *strings.Builder, field forms.Field, inputID, fieldKey, fie
 }
 
 func renderTextArea(sb *strings.Builder, field forms.Field, inputID, fieldKey, fieldPath string) {
-	sb.WriteString(fmt.Sprintf(`      <textarea class="form-control js-bound-field" id="%s" data-bind="%s" rows="4"></textarea>`+"\n",
+	sb.WriteString(fmt.Sprintf(`      <textarea class="form-control js-bound-field" id="%s" data-bind="%s" rows="4"`,
 		inputID, template.HTMLEscapeString(fieldPath)))
+	if field.Placeholder != "" {
+		sb.WriteString(fmt.Sprintf(` placeholder="%s"`, template.HTMLEscapeString(field.Placeholder)))
+	}
+	sb.WriteString("></textarea>\n")
 	renderFieldError(sb, fieldKey)
 }
 
 func renderStringList(sb *strings.Builder, field forms.Field, inputID, fieldKey, fieldPath string) {
-	sb.WriteString(fmt.Sprintf(`      <input type="text" class="form-control js-bound-field" id="%s" data-bind="%s" data-bind-type="string-list">`+"\n",
+	sb.WriteString(fmt.Sprintf(`      <input type="text" class="form-control js-bound-field" id="%s" data-bind="%s" data-bind-type="string-list"`,
 		inputID, template.HTMLEscapeString(fieldPath)))
+	if field.Placeholder != "" {
+		sb.WriteString(fmt.Sprintf(` placeholder="%s"`, template.HTMLEscapeString(field.Placeholder)))
+	}
+	sb.WriteString(">\n")
 	renderFieldError(sb, fieldKey)
 	sb.WriteString(`      <div class="form-text">Comma-separated values</div>` + "\n")
 }

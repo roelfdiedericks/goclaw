@@ -33,6 +33,7 @@ type GatewayRunner interface {
 	AgentIdentity() *gwtypes.AgentIdentityConfig
 	SupervisionConfig() *gwtypes.SupervisionConfig
 	StopAllUserSessions(userID string) (int, error)
+	RequestShutdown(userID string) error
 }
 
 const maxEventBuffer = 200 // Keep last N events per session for replay

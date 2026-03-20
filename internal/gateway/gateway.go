@@ -393,6 +393,10 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 		cfg.Safety.GetPanicPhrases(),
 		cfg.Safety.PanicEnabled,
 	)
+	g.commandHandler.GetManager().SetShutdownConfig(
+		cfg.Safety.GetShutdownPhrases(),
+		cfg.Safety.ShutdownEnabled,
+	)
 	L_debug("command handler initialized")
 
 	// Initialize skill manager (skills are config - load early)
@@ -1999,6 +2003,17 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		}
 	}
 
+	// Respect /stop pause latch.
+	if sess.IsPaused() {
+		sendEvent(EventAgentStart{
+			RunID:      runID,
+			Source:     req.Source,
+			SessionKey: sessionKey,
+		})
+		sendEvent(EventAgentEnd{RunID: runID, FinalText: "Tasks are stopped. Send /resume to continue."})
+		return nil
+	}
+
 	sendEvent(EventAgentStart{
 		RunID:      runID,
 		Source:     req.Source,
@@ -2220,8 +2235,9 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	defer agentCancel()
 
 	// Store cancel on session so /stop and panic phrase can reach it
-	sess.SetCancelFunc(agentCancel)
-	defer sess.ClearCancelFunc()
+	sess.SetCancelFunc(runID, agentCancel)
+	defer sess.ClearCancelFunc(runID)
+	runStopGeneration := sess.StopGeneration()
 
 	// Also store on supervision if supervised (keeps existing interrupt behavior)
 	if supervision := sess.GetSupervision(); supervision != nil {
@@ -2240,6 +2256,13 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 	// Agent loop - keep going until no more tool use
 	for {
+		// STOP generation changed: this run is stale and must exit.
+		if sess.StopGeneration() != runStopGeneration {
+			L_info("agent: stop generation changed, exiting run", "session", sessionKey, "runID", runID)
+			sendEvent(EventAgentEnd{RunID: runID, FinalText: ""})
+			return nil
+		}
+
 		// Check for cancellation (emergency stop, /stop command, panic phrase)
 		select {
 		case <-agentCtx.Done():
@@ -3630,8 +3653,38 @@ func (g *Gateway) StopAllUserSessions(userID string) (int, error) {
 	cancelled := g.sessions.CancelAllForUser(userID)
 	if cancelled > 0 {
 		L_info("gateway: emergency stop", "user", userID, "cancelled", cancelled)
+	} else {
+		L_info("gateway: emergency stop set pause latch", "user", userID)
 	}
 	return cancelled, nil
+}
+
+// ResumeAllUserSessions clears STOP pause latches for a user.
+func (g *Gateway) ResumeAllUserSessions(userID string) (int, error) {
+	resumed := g.sessions.ResumeAllForUser(userID)
+	L_info("gateway: resume requested", "user", userID, "resumed", resumed)
+	return resumed, nil
+}
+
+// RequestShutdown requests graceful process shutdown (owner-only).
+func (g *Gateway) RequestShutdown(userID string) error {
+	owner := g.users.Owner()
+	if owner == nil || owner.ID != userID {
+		return fmt.Errorf("shutdown denied: owner only")
+	}
+	L_warn("gateway: shutdown requested", "user", userID)
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		proc, err := os.FindProcess(os.Getpid())
+		if err != nil {
+			L_error("gateway: failed to find current process for shutdown", "error", err)
+			return
+		}
+		if err := proc.Signal(os.Interrupt); err != nil {
+			L_error("gateway: failed to signal shutdown", "error", err)
+		}
+	}()
+	return nil
 }
 
 // CleanOrphanedToolMessages deletes orphaned tool_use/tool_result messages from a session

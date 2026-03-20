@@ -17,6 +17,7 @@ type (
 	SupervisionConfig   = gwtypes.SupervisionConfig
 	GuidanceConfig      = gwtypes.GuidanceConfig
 	GhostwritingConfig  = gwtypes.GhostwritingConfig
+	SafetyConfig        = gwtypes.SafetyConfig
 )
 
 const configPath = "gateway"
@@ -68,6 +69,16 @@ func ConfigFormDef() forms.FormDef {
 					{Name: "supervision.ghostwriting.typingDelayMs", Title: "Typing Delay (ms)", Type: forms.Number, Default: 500, Desc: "Delay before sending ghostwritten message"},
 				},
 			},
+			{
+				Title:     "Safety - Emergency Control",
+				Collapsed: true,
+				Fields: []forms.Field{
+					{Name: "safety.panicEnabled", Title: "Enable STOP Phrases", Type: forms.Toggle, Default: true, Desc: "Allow panic phrases to trigger emergency stop"},
+					{Name: "safety.panicPhrases", Title: "STOP Phrases", Type: forms.StringList, Default: []string{"STOP", "STOP NOW"}, Placeholder: "STOP, STOP NOW", Desc: "Exact phrases that trigger emergency stop. Leave empty to use built-in defaults."},
+					{Name: "safety.shutdownEnabled", Title: "Enable SHUTDOWN Phrases", Type: forms.Toggle, Default: true, Desc: "Allow shutdown phrases to gracefully stop GoClaw (owner only)"},
+					{Name: "safety.shutdownPhrases", Title: "SHUTDOWN Phrases", Type: forms.StringList, Default: []string{"SHUTDOWN NOW"}, Placeholder: "SHUTDOWN NOW", Desc: "Exact phrases that trigger graceful shutdown. Leave empty to use built-in defaults."},
+				},
+			},
 		},
 		Actions: []forms.ActionDef{
 			{Name: "apply", Label: "Apply"},
@@ -81,6 +92,7 @@ type GatewayConfigBundle struct {
 	Agent       AgentIdentityConfig `json:"agent"`
 	PromptCache PromptCacheConfig   `json:"promptCache"`
 	Supervision SupervisionConfig   `json:"supervision"`
+	Safety      SafetyConfig        `json:"safety"`
 }
 
 // RegisterCommands registers config commands for gateway.

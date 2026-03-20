@@ -60,8 +60,10 @@ type Session struct {
 	Supervision *SupervisionState `json:"-"`
 
 	// Cancellation — allows emergency stop of active agent runs
-	cancelMu   sync.Mutex
-	cancelFunc context.CancelFunc
+	cancelMu        sync.Mutex
+	cancelFuncs     map[string]context.CancelFunc // runID -> cancel function
+	stopGeneration  uint64                        // incremented on STOP to invalidate active loops
+	pausedByCommand bool                          // true after STOP until /resume
 
 	mu sync.RWMutex
 }
@@ -507,33 +509,81 @@ func (s *Session) IsLLMEnabled() bool {
 	return s.Supervision.IsLLMEnabled()
 }
 
-// SetCancelFunc stores the cancel function for the current agent run.
-func (s *Session) SetCancelFunc(cancel context.CancelFunc) {
+// SetCancelFunc stores the cancel function for an active agent run.
+func (s *Session) SetCancelFunc(runID string, cancel context.CancelFunc) {
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
-	s.cancelFunc = cancel
+	if s.cancelFuncs == nil {
+		s.cancelFuncs = make(map[string]context.CancelFunc)
+	}
+	s.cancelFuncs[runID] = cancel
 }
 
 // ClearCancelFunc removes the cancel function after a run completes.
-func (s *Session) ClearCancelFunc() {
+func (s *Session) ClearCancelFunc(runID string) {
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
-	s.cancelFunc = nil
+	if s.cancelFuncs == nil {
+		return
+	}
+	delete(s.cancelFuncs, runID)
 }
 
-// Cancel cancels the current agent run if one is active.
-func (s *Session) Cancel() {
+// Cancel cancels all active runs and returns the number cancelled.
+func (s *Session) Cancel() int {
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
-	if s.cancelFunc != nil {
-		s.cancelFunc()
-		s.cancelFunc = nil
+	if len(s.cancelFuncs) == 0 {
+		return 0
 	}
+	cancelled := 0
+	for runID, cancel := range s.cancelFuncs {
+		cancel()
+		delete(s.cancelFuncs, runID)
+		cancelled++
+	}
+	return cancelled
 }
 
 // IsRunning returns true if an agent run is currently active.
 func (s *Session) IsRunning() bool {
 	s.cancelMu.Lock()
 	defer s.cancelMu.Unlock()
-	return s.cancelFunc != nil
+	return len(s.cancelFuncs) > 0
+}
+
+// BumpStopGeneration increments the STOP generation for this session.
+func (s *Session) BumpStopGeneration() uint64 {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	s.stopGeneration++
+	return s.stopGeneration
+}
+
+// StopGeneration returns the current STOP generation for this session.
+func (s *Session) StopGeneration() uint64 {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	return s.stopGeneration
+}
+
+// Pause marks the session as paused by /stop.
+func (s *Session) Pause() {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	s.pausedByCommand = true
+}
+
+// Resume clears the paused state set by /stop.
+func (s *Session) Resume() {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	s.pausedByCommand = false
+}
+
+// IsPaused returns true when the session is paused by /stop.
+func (s *Session) IsPaused() bool {
+	s.cancelMu.Lock()
+	defer s.cancelMu.Unlock()
+	return s.pausedByCommand
 }

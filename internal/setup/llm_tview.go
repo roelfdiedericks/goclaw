@@ -180,6 +180,9 @@ func (e *LLMEditor) buildProviderPreview(name string, cfg llm.LLMProviderConfig)
 	if cfg.MaxTokens > 0 {
 		lines = append(lines, fmt.Sprintf("[yellow]Max Tokens:[white] %d", cfg.MaxTokens))
 	}
+	if cfg.ContextTokens > 0 {
+		lines = append(lines, fmt.Sprintf("[yellow]Context Window:[white] %d", cfg.ContextTokens))
+	}
 
 	return strings.Join(lines, "\n")
 }

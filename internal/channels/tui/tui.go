@@ -272,12 +272,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Send message
 				text := strings.TrimSpace(m.input.Value())
 				if text != "" {
+					if commands.IsShutdownPhrase(text) {
+						m.input.Reset()
+						if err := m.gateway.RequestShutdown(m.user.ID); err != nil {
+							m.chatLines = append(m.chatLines, helpStyle.Render("Shutdown denied."), "")
+						} else {
+							m.chatLines = append(m.chatLines, helpStyle.Render("Shutting down now."), "")
+						}
+						m.chatViewport.SetContent(m.getChatContent())
+						m.chatViewport.GotoBottom()
+						return m, nil
+					}
+
 					// Check for panic phrase (emergency stop)
 					// Always attempt cancel and confirm - avoids race conditions where session just finished
 					if commands.IsPanicPhrase(text) {
 						m.input.Reset()
 						m.gateway.StopAllUserSessions(m.user.ID) //nolint:errcheck // fire-and-forget panic stop
-						m.chatLines = append(m.chatLines, helpStyle.Render("Stopping all tasks."), "")
+						m.chatLines = append(m.chatLines, helpStyle.Render("Stopping all tasks. Send /resume to continue."), "")
 						m.chatViewport.SetContent(m.getChatContent())
 						m.chatViewport.GotoBottom()
 						return m, nil
