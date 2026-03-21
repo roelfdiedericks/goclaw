@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/contentguard"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -296,6 +297,11 @@ func (s *Session) AddToolUse(toolUseID, toolName string, input json.RawMessage, 
 func (s *Session) AddToolResult(toolUseID, result string, contentBlocks []ContentBlock, responseGroupID string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	sanitized := contentguard.ToolResultText(result)
+	if sanitized.Changed {
+		result = sanitized.Text
+	}
 
 	id := GenerateMessageID()
 	s.Messages = append(s.Messages, Message{

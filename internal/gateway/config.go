@@ -12,6 +12,7 @@ import (
 // Re-export types from gateway/types for convenience
 type (
 	GatewayConfig       = gwtypes.GatewayConfig
+	ToolExecutionConfig = gwtypes.ToolExecutionConfig
 	PromptCacheConfig   = gwtypes.PromptCacheConfig
 	AgentIdentityConfig = gwtypes.AgentIdentityConfig
 	SupervisionConfig   = gwtypes.SupervisionConfig
@@ -52,6 +53,15 @@ func ConfigFormDef() forms.FormDef {
 					{Name: "promptCache.pollInterval", Title: "Poll Interval (seconds)", Type: forms.Number, Default: 60, Desc: "Hash poll interval for prompt cache (0 = disabled)"},
 					{Name: "promptCache.timeInUserMessage", Title: "Show Time to Agent", Type: forms.Toggle, Default: true, Desc: "Inject current time before user messages"},
 					{Name: "promptCache.showUptime", Title: "Show Uptime to Agent", Type: forms.Toggle, Default: true, Desc: "Include gateway uptime with time (privacy sensitive)"},
+				},
+			},
+			{
+				Title:     "Tool Execution",
+				Collapsed: true,
+				Fields: []forms.Field{
+					{Name: "gateway.toolExecution.parallelEnabled", Title: "Enable Parallel Tool Execution", Type: forms.Toggle, Default: true, Desc: "Run allowlisted readonly tool batches concurrently"},
+					{Name: "gateway.toolExecution.maxConcurrent", Title: "Max Concurrent Tools", Type: forms.Number, Default: 3, Desc: "Worker limit for parallel tool batches"},
+					{Name: "gateway.toolExecution.parallelAllowlist", Title: "Parallel Allowlist", Type: forms.StringList, Placeholder: "read, web_search, web_fetch", Desc: "Tool names allowed to run in parallel. Empty = built-in readonly defaults."},
 				},
 			},
 			{

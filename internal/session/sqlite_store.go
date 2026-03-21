@@ -865,6 +865,25 @@ func (s *SQLiteStore) UpdateCompactionSummary(ctx context.Context, compactionID 
 	return nil
 }
 
+// UpdateCompactionStats updates telemetry fields for a compaction row after truncation.
+func (s *SQLiteStore) UpdateCompactionStats(ctx context.Context, compactionID string, tokensAfter, messagesRemoved int) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE compactions
+		SET tokens_after = ?, messages_removed = ?
+		WHERE id = ?
+	`, tokensAfter, messagesRemoved, compactionID)
+	if err != nil {
+		return fmt.Errorf("update compaction stats failed: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	L_info("sqlite: compaction stats updated",
+		"id", compactionID,
+		"tokensAfter", tokensAfter,
+		"messagesRemoved", messagesRemoved,
+		"rowsAffected", rows)
+	return nil
+}
+
 // GetMessagesInRange returns messages between two compaction points for summary regeneration
 // startAfterID: ID of first_kept_entry from previous compaction (or empty for all messages)
 // endBeforeID: ID of first_kept_entry from current compaction (messages to summarize)

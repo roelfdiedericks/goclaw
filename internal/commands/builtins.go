@@ -56,6 +56,7 @@ func registerBuiltins(m *Manager) {
 		Name:        "/shutdown",
 		Description: "Gracefully shutdown GoClaw (owner only)",
 		Handler:     handleShutdown,
+		OwnerOnly:   true,
 	})
 
 	m.Register(&Command{

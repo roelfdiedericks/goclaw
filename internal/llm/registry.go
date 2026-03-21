@@ -749,6 +749,17 @@ func (r *Registry) StreamMessageWithFailover(
 			continue
 		}
 
+		if opts != nil && opts.OnBeforeModelAttempt != nil {
+			if err := opts.OnBeforeModelAttempt(modelRef, p.ContextTokens()); err != nil {
+				result.ModelUsed = modelRef
+				L_warn("failover: pre-attempt check failed",
+					"model", modelRef,
+					"contextWindow", p.ContextTokens(),
+					"error", err)
+				return result, err
+			}
+		}
+
 		// Build state key for stateful providers: providerName:model
 		stateKey := p.Name() + ":" + p.Model()
 

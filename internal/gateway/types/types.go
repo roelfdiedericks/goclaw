@@ -4,9 +4,17 @@ package types
 
 // GatewayConfig contains gateway server settings
 type GatewayConfig struct {
-	LogFile    string `json:"logFile"`
-	PIDFile    string `json:"pidFile"`
-	WorkingDir string `json:"workingDir"`
+	LogFile       string              `json:"logFile"`
+	PIDFile       string              `json:"pidFile"`
+	WorkingDir    string              `json:"workingDir"`
+	ToolExecution ToolExecutionConfig `json:"toolExecution"`
+}
+
+// ToolExecutionConfig configures how the gateway executes model-requested tools.
+type ToolExecutionConfig struct {
+	ParallelEnabled   bool     `json:"parallelEnabled" default:"true"`
+	MaxConcurrent     int      `json:"maxConcurrent" default:"3"`
+	ParallelAllowlist []string `json:"parallelAllowlist"`
 }
 
 // PromptCacheConfig configures system prompt caching and time injection
@@ -59,9 +67,9 @@ type GhostwritingConfig struct {
 
 // SafetyConfig configures emergency stop / panic phrase behavior
 type SafetyConfig struct {
-	PanicPhrases    []string `json:"panicPhrases"`                    // Words that trigger emergency stop (GetPanicPhrases has fallback)
-	PanicEnabled    bool     `json:"panicEnabled" default:"true"`     // Whether panic phrase detection is active
-	ShutdownPhrases []string `json:"shutdownPhrases"`                 // Phrases that trigger graceful shutdown (owner-only)
+	PanicPhrases    []string `json:"panicPhrases"`                   // Words that trigger emergency stop (GetPanicPhrases has fallback)
+	PanicEnabled    bool     `json:"panicEnabled" default:"true"`    // Whether panic phrase detection is active
+	ShutdownPhrases []string `json:"shutdownPhrases"`                // Phrases that trigger graceful shutdown (owner-only)
 	ShutdownEnabled bool     `json:"shutdownEnabled" default:"true"` // Whether shutdown phrase detection is active
 }
 

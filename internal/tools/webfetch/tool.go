@@ -13,6 +13,7 @@ import (
 	htmltomd "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/go-shiori/go-readability"
 	"github.com/roelfdiedericks/goclaw/internal/browser"
+	"github.com/roelfdiedericks/goclaw/internal/contentguard"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
@@ -121,14 +122,22 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		if err != nil {
 			return nil, err
 		}
-		return types.ExternalTextResult(content, "web"), nil
+		safe := contentguard.ToolResultText(content)
+		if safe.Changed {
+			L_warn("web_fetch: sanitized result", "reason", safe.Reason, "mime", safe.MIME, "bytes", safe.OriginalBytes, "url", params.URL)
+		}
+		return types.ExternalTextResult(safe.Text, "web"), nil
 	}
 
 	mgr := browser.GetManager()
 	if mgr != nil {
 		content, err := t.fetchWithBrowser(ctx, params.URL, maxLen)
 		if err == nil {
-			return types.ExternalTextResult(content, "web"), nil
+			safe := contentguard.ToolResultText(content)
+			if safe.Changed {
+				L_warn("web_fetch: sanitized browser result", "reason", safe.Reason, "mime", safe.MIME, "bytes", safe.OriginalBytes, "url", params.URL)
+			}
+			return types.ExternalTextResult(safe.Text, "web"), nil
 		}
 		if t.useBrowser == "always" {
 			return nil, err
@@ -142,7 +151,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	if err != nil {
 		return nil, err
 	}
-	return types.ExternalTextResult(content, "web"), nil
+	safe := contentguard.ToolResultText(content)
+	if safe.Changed {
+		L_warn("web_fetch: sanitized fallback result", "reason", safe.Reason, "mime", safe.MIME, "bytes", safe.OriginalBytes, "url", params.URL)
+	}
+	return types.ExternalTextResult(safe.Text, "web"), nil
 }
 
 func (t *Tool) fetchWithHTTP(ctx context.Context, urlStr string, maxLen int, parsedURL *url.URL) (string, error) {
@@ -197,11 +210,16 @@ func (t *Tool) fetchWithHTTP(ctx context.Context, urlStr string, maxLen int, par
 
 	contentType := resp.Header.Get("Content-Type")
 	if !strings.Contains(contentType, "text/html") && !strings.Contains(contentType, "application/xhtml") {
-		if len(bodyStr) > maxLen {
-			bodyStr = bodyStr[:maxLen]
+		safe := contentguard.ToolResultBytes(body, contentType)
+		if safe.Changed {
+			L_warn("web_fetch: non-html payload sanitized", "reason", safe.Reason, "mime", safe.MIME, "bytes", safe.OriginalBytes, "url", urlStr)
 		}
-		L_debug("web_fetch: non-HTML content", "contentType", contentType, "length", len(bodyStr))
-		return bodyStr, nil
+		nonHTML := safe.Text
+		if len(nonHTML) > maxLen {
+			nonHTML = nonHTML[:maxLen]
+		}
+		L_debug("web_fetch: non-HTML content", "contentType", contentType, "length", len(nonHTML))
+		return nonHTML, nil
 	}
 
 	article, err := readability.FromReader(strings.NewReader(bodyStr), parsedURL)

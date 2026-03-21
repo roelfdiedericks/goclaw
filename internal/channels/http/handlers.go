@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html/template"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -20,6 +22,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/types"
+	"github.com/roelfdiedericks/goclaw/internal/user"
 	"github.com/roelfdiedericks/goclaw/internal/voicellm"
 )
 
@@ -49,10 +52,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Title     string
 		User      *UserTemplateData
 		Timestamp time.Time
+		ChatPage  bool
 	}{
 		Title:     "GoClaw",
 		User:      &UserTemplateData{Name: u.Name, Username: u.ID, Role: string(u.Role), IsOwner: u.IsOwner()},
 		Timestamp: time.Now(),
+		ChatPage:  false,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -101,6 +106,22 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		superviseSession = ""
 	}
 
+	chatClientCfg := struct {
+		IsSupervising    bool   `json:"isSupervising"`
+		SuperviseSession string `json:"superviseSession"`
+		TypingText       string `json:"typingText"`
+	}{
+		IsSupervising:    isSupervising,
+		SuperviseSession: superviseSession,
+		TypingText:       typingText,
+	}
+	cfgBytes, err := json.Marshal(chatClientCfg)
+	if err != nil {
+		logging.L_error("http: chat client config marshal failed", "error", err)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
 	data := struct {
 		Title            string
 		User             *UserTemplateData
@@ -109,6 +130,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Timestamp        time.Time
 		SuperviseSession string
 		IsSupervising    bool
+		ChatPage         bool
+		ChatConfigJSON   template.JS
 	}{
 		Title:            "GoClaw - Chat",
 		User:             &UserTemplateData{Name: u.Name, Username: u.ID, Role: string(u.Role), IsOwner: u.IsOwner()},
@@ -117,11 +140,76 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Timestamp:        time.Now(),
 		SuperviseSession: superviseSession,
 		IsSupervising:    isSupervising,
+		ChatPage:         true,
+		ChatConfigJSON:   template.JS(cfgBytes),
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.templates.ExecuteTemplate(w, "chat.html", data); err != nil {
 		logging.L_error("http: template error", "error", err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+	}
+}
+
+// handleTranscript serves a read-only transcript page that renders saved browser localStorage history.
+func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
+	if err := s.reloadTemplatesIfDev(); err != nil {
+		logging.L_error("http: template reload error", "error", err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+		return
+	}
+
+	u := getUserFromContext(r)
+	if u == nil {
+		logging.L_error("http: transcript failed - no user in context")
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+
+	superviseSession := strings.TrimSpace(r.URL.Query().Get("supervise"))
+	isSupervising := false
+	if superviseSession != "" && u.IsOwner() {
+		isSupervising = true
+	} else if superviseSession != "" && !u.IsOwner() {
+		logging.L_warn("http: transcript supervision denied - not owner", "user", u.ID, "session", superviseSession)
+		superviseSession = ""
+	}
+
+	transcriptClientCfg := struct {
+		IsSupervising    bool   `json:"isSupervising"`
+		SuperviseSession string `json:"superviseSession"`
+	}{
+		IsSupervising:    isSupervising,
+		SuperviseSession: superviseSession,
+	}
+	cfgBytes, err := json.Marshal(transcriptClientCfg)
+	if err != nil {
+		logging.L_error("http: transcript config marshal failed", "error", err)
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	data := struct {
+		Title              string
+		User               *UserTemplateData
+		Timestamp          time.Time
+		ChatPage           bool
+		IsSupervising      bool
+		SuperviseSession   string
+		TranscriptConfigJS template.JS
+	}{
+		Title:              "GoClaw - Transcript",
+		User:               &UserTemplateData{Name: u.Name, Username: u.ID, Role: string(u.Role), IsOwner: u.IsOwner()},
+		Timestamp:          time.Now(),
+		ChatPage:           false,
+		IsSupervising:      isSupervising,
+		SuperviseSession:   superviseSession,
+		TranscriptConfigJS: template.JS(cfgBytes),
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.templates.ExecuteTemplate(w, "transcript.html", data); err != nil {
+		logging.L_error("http: transcript template error", "error", err)
 		http.Error(w, "Template error", http.StatusInternalServerError)
 	}
 }
@@ -150,12 +238,14 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 		Timestamp          time.Time
 		VoiceAvailable     bool
 		VoiceStatusMessage string
+		ChatPage           bool
 	}{
 		Title:              "GoClaw - Voice",
 		User:               &UserTemplateData{Name: u.Name, Username: u.ID, Role: string(u.Role), IsOwner: u.IsOwner()},
 		Timestamp:          time.Now(),
 		VoiceAvailable:     voiceAvailability.Available,
 		VoiceStatusMessage: voiceAvailability.Message,
+		ChatPage:           false,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -220,6 +310,76 @@ type UserTemplateData struct {
 	IsOwner  bool
 }
 
+const (
+	httpMultipartMaxMemory    = 64 << 20 // buffered to memory before spill
+	httpMultipartMaxFiles     = 10
+	httpMultipartFieldFiles   = "files"
+	httpMultipartFieldMessage = "message"
+)
+
+// httpMediaStore returns the gateway media store for persisting uploads, or nil.
+func (s *Server) httpMediaStore() *media.MediaStore {
+	if s.channel == nil || s.channel.gateway == nil {
+		return nil
+	}
+	type mediaStoreProvider interface {
+		MediaStore() *media.MediaStore
+	}
+	gw, ok := s.channel.gateway.(mediaStoreProvider)
+	if !ok {
+		return nil
+	}
+	return gw.MediaStore()
+}
+
+// trySendPreflight handles shutdown phrase, panic phrase, /thinking, and built-in slash commands.
+// Returns true if the HTTP response was fully written and the caller must return.
+func (s *Server) trySendPreflight(w http.ResponseWriter, r *http.Request, u *user.User, sessionID string, message string) bool {
+	if s.channel == nil {
+		return false
+	}
+
+	if commands.IsShutdownPhrase(message) {
+		if s.channel.gateway != nil {
+			if err := s.channel.gateway.RequestShutdown(u.ID); err == nil {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Shutting down now."})
+				return true
+			}
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "error", "message": "Shutdown denied."})
+		return true
+	}
+
+	if commands.IsPanicPhrase(message) {
+		if s.channel.gateway != nil {
+			s.channel.gateway.StopAllUserSessions(u.ID) //nolint:errcheck
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Stopping all tasks. Send /resume to continue."})
+		return true
+	}
+
+	if strings.HasPrefix(strings.TrimSpace(message), "/thinking") {
+		s.handleThinkingCommand(w, sessionID, message)
+		return true
+	}
+
+	trimmedMsg := strings.TrimSpace(message)
+	if strings.HasPrefix(trimmedMsg, "/") {
+		parts := strings.Fields(trimmedMsg)
+		if len(parts) > 0 {
+			if cmd := commands.GetManager().Get(parts[0]); cmd != nil {
+				s.handleBuiltinCommand(w, r.Context(), sessionID, u.ID, trimmedMsg, cmd)
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // handleSend handles POST /api/send - send message to agent
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -276,47 +436,8 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 	logging.L_info("http: message received", "user", u.ID, "session", sessionID[:8]+"...", "length", len(req.Message), "images", len(contentBlocks))
 
-	// Check for shutdown phrase (owner-only) before panic/commands.
-	if commands.IsShutdownPhrase(req.Message) {
-		if s.channel.gateway != nil {
-			if err := s.channel.gateway.RequestShutdown(u.ID); err == nil {
-				w.Header().Set("Content-Type", "application/json; charset=utf-8")
-				json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Shutting down now."}) //nolint:errcheck
-				return
-			}
-		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		json.NewEncoder(w).Encode(map[string]string{"status": "error", "message": "Shutdown denied."}) //nolint:errcheck
+	if s.trySendPreflight(w, r, u, sessionID, req.Message) {
 		return
-	}
-
-	// Check for panic phrase (emergency stop) before anything else
-	// Always attempt cancel and confirm - avoids race conditions where session just finished
-	if commands.IsPanicPhrase(req.Message) {
-		if s.channel.gateway != nil {
-			s.channel.gateway.StopAllUserSessions(u.ID) //nolint:errcheck // fire-and-forget panic stop
-		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Stopping all tasks. Send /resume to continue."}) //nolint:errcheck
-		return
-	}
-
-	// Handle /thinking command locally (channel-specific preference)
-	if strings.HasPrefix(strings.TrimSpace(req.Message), "/thinking") {
-		s.handleThinkingCommand(w, sessionID, req.Message)
-		return
-	}
-
-	// Handle built-in commands (/status, /compact, /clear, /help, etc.)
-	trimmedMsg := strings.TrimSpace(req.Message)
-	if strings.HasPrefix(trimmedMsg, "/") {
-		cmdMgr := commands.GetManager()
-		// Parse command name (first word)
-		cmdName := strings.Fields(trimmedMsg)[0]
-		if cmd := cmdMgr.Get(cmdName); cmd != nil {
-			s.handleBuiltinCommand(w, r.Context(), sessionID, u.ID, trimmedMsg, cmd)
-			return
-		}
 	}
 
 	// Run agent request (will stream via SSE)
@@ -341,6 +462,150 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		logging.L_warn("http: failed to encode response", "error", err)
+	}
+}
+
+// handleSendMultipart handles POST /api/send/multipart — message text + file parts (saved via MediaStore).
+func (s *Server) handleSendMultipart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		logging.L_warn("http: send multipart - wrong method", "method", r.Method)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	u := getUserFromContext(r)
+	if u == nil {
+		logging.L_error("http: send multipart - no user in context")
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+	sessionID := getSessionFromContext(r)
+	if sessionID == "" {
+		logging.L_error("http: send multipart - no session", "user", u.ID)
+		http.Error(w, "No session", http.StatusInternalServerError)
+		return
+	}
+	store := s.httpMediaStore()
+	if store == nil {
+		logging.L_error("http: send multipart - no media store", "user", u.ID)
+		http.Error(w, "Server not ready", http.StatusInternalServerError)
+		return
+	}
+	if s.channel == nil {
+		logging.L_error("http: send multipart - no channel", "user", u.ID)
+		http.Error(w, "Server not ready", http.StatusInternalServerError)
+		return
+	}
+
+	if err := r.ParseMultipartForm(httpMultipartMaxMemory); err != nil {
+		logging.L_warn("http: send multipart - parse failed", "user", u.ID, "error", err)
+		http.Error(w, "Invalid multipart body", http.StatusBadRequest)
+		return
+	}
+	msg := strings.TrimSpace(r.FormValue(httpMultipartFieldMessage))
+	if r.MultipartForm == nil {
+		http.Error(w, "Invalid multipart form", http.StatusBadRequest)
+		return
+	}
+	headers := r.MultipartForm.File[httpMultipartFieldFiles]
+	if len(headers) == 0 {
+		logging.L_warn("http: send multipart - no files", "user", u.ID)
+		http.Error(w, "At least one file field "+httpMultipartFieldFiles+" is required", http.StatusBadRequest)
+		return
+	}
+	if len(headers) > httpMultipartMaxFiles {
+		logging.L_warn("http: send multipart - too many files", "user", u.ID, "count", len(headers))
+		http.Error(w, fmt.Sprintf("Too many files (max %d)", httpMultipartMaxFiles), http.StatusBadRequest)
+		return
+	}
+
+	var contentBlocks []types.ContentBlock
+	for _, fh := range headers {
+		f, err := fh.Open()
+		if err != nil {
+			logging.L_warn("http: send multipart - open file failed", "user", u.ID, "error", err)
+			http.Error(w, "Failed to read upload", http.StatusBadRequest)
+			return
+		}
+		data, err := io.ReadAll(f)
+		_ = f.Close()
+		if err != nil {
+			logging.L_warn("http: send multipart - read failed", "user", u.ID, "error", err)
+			http.Error(w, "Failed to read upload", http.StatusBadRequest)
+			return
+		}
+		if len(data) == 0 {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(fh.Filename))
+		if ext == "" {
+			ext = ".bin"
+		}
+		mime := media.DetectMIME(data)
+		mediaType := "file"
+		if strings.HasPrefix(mime, "image/") {
+			mediaType = "image"
+		}
+		ctx := media.UploadContext{
+			Channel:      "http",
+			User:         u,
+			ChatID:       sessionID,
+			MediaType:    mediaType,
+			OriginalName: fh.Filename,
+		}
+		absPath, _, err := store.SaveUpload(data, ext, ctx)
+		if err != nil {
+			logging.L_warn("http: send multipart - save failed", "user", u.ID, "error", err)
+			http.Error(w, "Failed to store upload", http.StatusInternalServerError)
+			return
+		}
+		if mediaType == "image" {
+			contentBlocks = append(contentBlocks, types.ContentBlock{
+				Type:     "image",
+				FilePath: absPath,
+				MimeType: mime,
+				Source:   "http",
+			})
+		} else {
+			contentBlocks = append(contentBlocks, types.ContentBlock{
+				Type:     "file",
+				FilePath: absPath,
+				MimeType: mime,
+				FileName: fh.Filename,
+				Source:   "http",
+			})
+		}
+	}
+
+	if len(contentBlocks) == 0 {
+		http.Error(w, "No non-empty file parts", http.StatusBadRequest)
+		return
+	}
+
+	logging.L_info("http: multipart message received", "user", u.ID, "session", sessionID[:8]+"...", "files", len(contentBlocks))
+
+	if s.trySendPreflight(w, r, u, sessionID, msg) {
+		return
+	}
+
+	msgID := fmt.Sprintf("msg_%d", time.Now().UnixNano())
+	if err := s.channel.RunAgentRequest(r.Context(), sessionID, u, msg, contentBlocks); err != nil {
+		logging.L_error("http: multipart run agent failed", "user", u.ID, "error", err)
+		http.Error(w, fmt.Sprintf("Failed to process: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	resp := struct {
+		ID      string `json:"id"`
+		Status  string `json:"status"`
+		Message string `json:"message"`
+	}{
+		ID:      msgID,
+		Status:  "processing",
+		Message: "Message sent to agent",
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		logging.L_warn("http: failed to encode multipart response", "error", err)
 	}
 }
 
@@ -497,6 +762,54 @@ func (s *Server) handleBuiltinCommand(w http.ResponseWriter, ctx context.Context
 	}
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		logging.L_warn("http: failed to encode response", "error", err)
+	}
+}
+
+// commandListItem is JSON for GET /api/commands (web chat command palette).
+type commandListItem struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Usage       string   `json:"usage,omitempty"`
+	Aliases     []string `json:"aliases,omitempty"`
+	OwnerOnly   bool     `json:"ownerOnly"`
+}
+
+// handleCommands handles GET /api/commands — built-in slash commands for the chat palette.
+func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		logging.L_warn("http: commands - wrong method", "method", r.Method)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	u := getUserFromContext(r)
+	if u == nil {
+		logging.L_error("http: commands - no user in context")
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+
+	list := commands.GetManager().List()
+	out := make([]commandListItem, 0, len(list))
+	for _, cmd := range list {
+		if cmd.OwnerOnly && !u.IsOwner() {
+			continue
+		}
+		aliases := cmd.Aliases
+		if aliases == nil {
+			aliases = []string{}
+		}
+		out = append(out, commandListItem{
+			Name:        cmd.Name,
+			Description: cmd.Description,
+			Usage:       cmd.Usage,
+			Aliases:     aliases,
+			OwnerOnly:   cmd.OwnerOnly,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(out); err != nil {
+		logging.L_warn("http: commands - encode failed", "error", err)
 	}
 }
 
@@ -779,10 +1092,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		Title     string
 		User      *UserTemplateData
 		Timestamp time.Time
+		ChatPage  bool
 	}{
 		Title:     "GoClaw - Metrics",
 		User:      &UserTemplateData{Name: u.Name, Username: u.ID, Role: string(u.Role), IsOwner: u.IsOwner()},
 		Timestamp: time.Now(),
+		ChatPage:  false,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

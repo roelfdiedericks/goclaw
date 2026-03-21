@@ -293,7 +293,7 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 	}
 
 	// Truncate messages immediately (fast)
-	m.truncateMessages(sess, firstKeptID)
+	messagesRemoved := m.truncateMessages(sess, firstKeptID)
 
 	// Invalidate stateful provider state (e.g. oai-next incremental indices).
 	// After truncation the message array has shifted, so saved indices are stale.
@@ -312,6 +312,18 @@ func (m *CompactionManager) Compact(ctx context.Context, sess *Session, sessionF
 	sess.ResetFlushedThresholds()
 
 	tokensAfter := sess.GetTotalTokens()
+
+	// Best-effort update of compaction telemetry fields after truncation.
+	if m.store != nil && compactionID != "" {
+		type compactionStatsUpdater interface {
+			UpdateCompactionStats(ctx context.Context, compactionID string, tokensAfter, messagesRemoved int) error
+		}
+		if updater, ok := m.store.(compactionStatsUpdater); ok {
+			if err := updater.UpdateCompactionStats(ctx, compactionID, tokensAfter, messagesRemoved); err != nil {
+				L_warn("compaction: failed to update stats in store", "compactionID", compactionID, "error", err)
+			}
+		}
+	}
 
 	// Release the lock - truncation is done, summary can proceed in background
 	m.inProgress.Store(false)
@@ -634,12 +646,7 @@ func (m *CompactionManager) findFirstKeptID(sess *Session, keepPercent int) stri
 	if startIdx < 0 {
 		startIdx = 0
 	}
-
-	// Walk boundary backwards to avoid splitting tool call/result pairs.
-	// The Responses API rejects orphaned function_call_output items.
-	for startIdx > 0 && (sess.Messages[startIdx].Role == "tool_result" || sess.Messages[startIdx].Role == "tool_use") {
-		startIdx--
-	}
+	startIdx = alignStartIndexForToolPairs(sess.Messages, startIdx)
 
 	L_debug("compaction: calculating keep range",
 		"totalMessages", len(sess.Messages),
@@ -655,10 +662,29 @@ func (m *CompactionManager) findFirstKeptID(sess *Session, keepPercent int) stri
 	return ""
 }
 
-// truncateMessages removes messages before the first kept ID
-func (m *CompactionManager) truncateMessages(sess *Session, firstKeptID string) {
+func alignStartIndexForToolPairs(messages []Message, startIdx int) int {
+	if startIdx <= 0 || startIdx >= len(messages) {
+		return startIdx
+	}
+	role := messages[startIdx].Role
+	if role == "tool_result" {
+		// Include its paired tool_use when possible, but avoid rewinding to zero.
+		prev := startIdx - 1
+		if prev > 0 && messages[prev].Role == "tool_use" {
+			return prev
+		}
+	}
+	if role == "tool_use" {
+		// Keep boundary at tool_use so its result (if present) remains in kept range.
+		return startIdx
+	}
+	return startIdx
+}
+
+// truncateMessages removes messages before the first kept ID and returns count removed.
+func (m *CompactionManager) truncateMessages(sess *Session, firstKeptID string) int {
 	if firstKeptID == "" {
-		return
+		return 0
 	}
 
 	sess.mu.Lock()
@@ -673,8 +699,11 @@ func (m *CompactionManager) truncateMessages(sess *Session, firstKeptID string) 
 	}
 
 	if startIdx > 0 {
+		removed := startIdx
 		sess.Messages = sess.Messages[startIdx:]
+		return removed
 	}
+	return 0
 }
 
 // Legacy compatibility aliases

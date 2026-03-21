@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/contentguard"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 	"github.com/roelfdiedericks/goclaw/internal/types"
@@ -129,7 +130,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 
 	if len(result.Stdout) > 0 {
 		output.WriteString("STDOUT:\n")
-		output.Write(result.Stdout)
+		stdout := contentguard.ToolResultBytes(result.Stdout, "")
+		if stdout.Changed {
+			L_warn("exec tool: sanitized stdout", "reason", stdout.Reason, "mime", stdout.MIME, "bytes", stdout.OriginalBytes)
+		}
+		output.WriteString(stdout.Text)
 	}
 
 	if len(result.Stderr) > 0 {
@@ -137,7 +142,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 			output.WriteString("\n")
 		}
 		output.WriteString("STDERR:\n")
-		output.Write(result.Stderr)
+		stderr := contentguard.ToolResultBytes(result.Stderr, "")
+		if stderr.Changed {
+			L_warn("exec tool: sanitized stderr", "reason", stderr.Reason, "mime", stderr.MIME, "bytes", stderr.OriginalBytes)
+		}
+		output.WriteString(stderr.Text)
 	}
 
 	if result.ExitCode != 0 {
@@ -151,8 +160,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	if output.Len() == 0 {
 		output.WriteString("Command completed successfully (no output)")
 	}
-
-	return types.ExternalTextResult(output.String(), "exec"), nil
+	safe := contentguard.ToolResultText(output.String())
+	if safe.Changed {
+		L_warn("exec tool: sanitized combined output", "reason", safe.Reason, "mime", safe.MIME, "bytes", safe.OriginalBytes)
+	}
+	return types.ExternalTextResult(safe.Text, "exec"), nil
 }
 
 // ToolConfig holds configuration for the exec tool

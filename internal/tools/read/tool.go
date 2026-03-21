@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/contentguard"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 	"github.com/roelfdiedericks/goclaw/internal/types"
@@ -116,6 +117,27 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 			"images": []string{params.Path},
 		})
 		return types.ImageRefResult(resolvedPath, mimeType, string(jsonResult)), nil
+	}
+
+	// Reject binary content to prevent context poisoning (e.g. raw PDFs).
+	// We intentionally do not return file bytes for binary data.
+	if contentguard.IsBinaryContent(content, mimeType) {
+		sizeBytes := len(content)
+		pathForDisplay := params.Path
+		if pathForDisplay == "" {
+			pathForDisplay = resolvedPath
+		}
+		summary := fmt.Sprintf(
+			"Binary file detected; raw content was not returned.\nPath: %s\nMIME: %s\nSize: %d bytes\nUse a text extraction tool/workflow before sending contents to the model.",
+			pathForDisplay,
+			mimeType,
+			sizeBytes,
+		)
+		L_info("read tool: binary file rejected",
+			"path", params.Path,
+			"mimeType", mimeType,
+			"bytes", sizeBytes)
+		return types.TextResult(summary), nil
 	}
 
 	// Otherwise treat as text

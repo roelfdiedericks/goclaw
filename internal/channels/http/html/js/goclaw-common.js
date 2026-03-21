@@ -105,6 +105,81 @@ function formatDuration(seconds) {
     return mins + ':' + secs;
 }
 
+/**
+ * Map logical role to message CSS class names.
+ */
+function messageRoleClass(role) {
+    var roleClass = 'assistant';
+    if (role === 'user') roleClass = 'user';
+    else if (role === 'error') roleClass = 'error';
+    else if (role === 'system') roleClass = 'system';
+    else if (role === 'guidance') roleClass = 'supervision guidance';
+    else if (role === 'ghostwrite') roleClass = 'supervision ghostwrite';
+    else if (typeof role === 'string' && role.indexOf('mirror-') === 0) roleClass = 'mirror ' + role;
+    return roleClass;
+}
+
+/**
+ * Build one `.message` element used by chat + transcript pages.
+ * options:
+ * - role, content, imageUrl, metadata { supervisor, interventionType, source }
+ * - useJQuery: return jQuery object when available
+ */
+function buildMessageElement(options) {
+    options = options || {};
+    var role = options.role || 'assistant';
+    var content = options.content || '';
+    var imageUrl = options.imageUrl || '';
+    var metadata = options.metadata || {};
+    var useJQuery = !!options.useJQuery;
+
+    var msg = document.createElement('div');
+    msg.className = 'message ' + messageRoleClass(role);
+    var bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    msg.appendChild(bubble);
+
+    msg.dataset.rawContent = content;
+    if (metadata.supervisor) msg.dataset.supervisor = metadata.supervisor;
+    if (metadata.interventionType) msg.dataset.interventionType = metadata.interventionType;
+    if (metadata.source) msg.dataset.source = metadata.source;
+
+    if (imageUrl) {
+        var img = document.createElement('img');
+        img.src = imageUrl;
+        img.className = 'inline-image';
+        img.style.maxWidth = '300px';
+        img.style.maxHeight = '200px';
+        img.style.borderRadius = '0.5rem';
+        img.style.display = 'block';
+        img.style.marginBottom = '0.5rem';
+        bubble.appendChild(img);
+    }
+
+    if (content) {
+        var displayContent = content;
+        if ((role === 'guidance' || role === 'ghostwrite') && metadata.supervisor) {
+            var label = role === 'guidance' ? 'Guidance' : 'Ghostwrite';
+            var prefix = '[' + label + ':' + metadata.supervisor + '] ';
+            if (content.indexOf('[' + label + ':') !== 0) {
+                displayContent = prefix + content;
+            }
+        }
+        if (role === 'error') {
+            var span = document.createElement('span');
+            span.textContent = displayContent;
+            bubble.appendChild(span);
+        } else {
+            bubble.innerHTML += renderMarkdown(displayContent);
+        }
+    }
+
+    if (useJQuery && typeof window !== 'undefined' && window.jQuery) {
+        return window.jQuery(msg);
+    }
+    return msg;
+}
+
 // Export for module systems (optional)
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
@@ -113,6 +188,8 @@ if (typeof module !== 'undefined' && module.exports) {
         renderMediaRefs,
         unescapeMediaPath,
         formatTimestamp,
-        formatDuration
+        formatDuration,
+        messageRoleClass,
+        buildMessageElement
     };
 }

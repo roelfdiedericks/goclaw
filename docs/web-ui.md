@@ -7,7 +7,8 @@ weight: 20
 
 # Web UI
 
-GoClaw includes a built-in HTTP server that provides a web chat interface and REST API.
+GoClaw includes a built-in HTTP server with a browser chat interface.
+Use it when you want a local web dashboard for chatting, uploads, and supervision.
 
 ## Configuration
 
@@ -27,91 +28,83 @@ GoClaw includes a built-in HTTP server that provides a web chat interface and RE
 | `enabled` | `true` when unset | Enable HTTP server |
 | `listen` | `:1337` | Address to listen on (e.g., `:8080`, `127.0.0.1:8080`) |
 
-## Web Chat Interface
+## Open the Chat
 
-Access the chat interface at the root URL:
-
-```
-http://localhost:8080/
-```
-
-Or the dedicated chat page:
+When GoClaw is running, open:
 
 ```
-http://localhost:8080/chat
+http://localhost:1337/
 ```
 
-The web UI provides:
+Or directly:
+
+```
+http://localhost:1337/chat
+```
+
+Read-only transcript view:
+
+```
+http://localhost:1337/chat/transcript
+```
+
+## What You Can Do in the Web UI
+
 - Real-time streaming responses
-- Session persistence
-- Tool call visibility
-- Message history
+- Ongoing message history in your browser
+- File uploads from the paperclip button
+- Drag and drop files into chat
+- Paste images directly into chat
+- Optional tool/thinking visibility (based on your session settings)
+- Read-only transcript view in a separate window
 
-## API Endpoints
+## Streaming Display Modes
 
-### Send Message
+Use the **Stream** dropdown in the chat header:
 
-```
-POST /api/send
-```
+- **Plain**: fastest, minimal formatting while text is still arriving
+- **Debounced Markdown**: markdown refreshes in short intervals
+- **Per-Token Markdown**: markdown updates on every streamed chunk
 
-Send a message to the agent. Returns JSON with an ID and processing status.
+Final response formatting is always applied when a turn completes.
 
-### Events Stream
+## File Uploads
 
-```
-GET /api/events
-```
+You can upload one or more files with each message.
 
-Server-sent events stream for receiving agent responses.
-Reconnection uses the standard `Last-Event-ID` header.
+- Images are sent as image content when supported by the active model.
+- Other files are attached with filename and type metadata.
+- Uploaded files are stored in the media library under channel/user upload paths.
+- Original upload filenames are preserved in stored media filenames (sanitized and uniqued).
 
-### Session Status
+## Transcript View
 
-```
-GET /api/status
-```
+The **Transcript** button opens a read-only page from your browser-saved chat history.
 
-Returns current session information (token count, message count, etc.).
+- It is local to your browser profile.
+- It is designed for reading/printing, not editing.
+- Links open in a new tab so the transcript page stays intact.
 
-### Media
+## Chat History and Performance
 
-```
-GET /api/media?path=<media-path>
-```
+The chat keeps a working window in the DOM for smooth performance and lets you load earlier messages as needed.
 
-Retrieve media files (screenshots, images).
+If your chat is very long:
+- use **Load earlier messages** near the top
+- keep the browser tab open for best continuity
+- use transcript view for long-form reading
 
-### Metrics API
+## Accessibility and Link Behavior
 
-```
-GET /api/metrics
-```
-
-JSON metrics data. See [Metrics](metrics.md) for details.
-
-### Session Actions
-
-```
-GET  /api/sessions/{sessionKey}/events
-POST /api/sessions/{sessionKey}/guidance
-POST /api/sessions/{sessionKey}/llm
-POST /api/sessions/{sessionKey}/message
-```
-
-Owner-only supervision endpoints.
-
-### Metrics Page
-
-```
-GET /metrics
-```
-
-Metrics dashboard page.
+- Connection status and completion announcements are screen-reader friendly.
+- Icon controls include labels.
+- Links clicked inside chat messages open in a new tab.
 
 ## Authentication
 
-The HTTP channel supports password authentication via `users.json`:
+HTTP login uses `users.json` credentials. When credentials are present, the web UI prompts for login.
+
+Example:
 
 ```json
 {
@@ -130,30 +123,19 @@ The HTTP channel supports password authentication via `users.json`:
 }
 ```
 
-When credentials are configured, the web UI prompts for login.
-
 ## Security
 
-- **Local only**: Bind to `127.0.0.1:1337` for local access (default)
-- **All interfaces**: Use `0.0.0.0:1337` with caution
-- **Authentication**: Configure user credentials for access control
+- Use `127.0.0.1:1337` for local-only access.
+- Use `0.0.0.0:1337` only on trusted networks.
+- Enable credentials for shared environments.
+- Do not expose GoClaw directly to the public internet.
 
-GoClaw is designed for trusted network environments. Do not expose directly to the internet.
+## Next Steps
 
-## Development Mode
-
-For development, run with debug logging:
-
-```bash
-./goclaw gateway -d
-```
-
----
-
-## See Also
-
-- [Voice](voice.md) — Real-time voice conversations
-- [Channels](channels.md) — Channel overview
-- [Metrics](metrics.md) — Monitoring and metrics
+- [Tools](tools.md) — Available tools and tool execution behavior
+- [Voice](voice.md) — Voice conversations
+- [Channels](channels.md) — Other channel options
 - [Roles](roles.md) — Access control
 - [Configuration](configuration.md) — Full config reference
+
+---

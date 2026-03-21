@@ -8,13 +8,19 @@ landing: true
 
 # Tools
 
-GoClaw provides tools that the agent can use to interact with the system, files, web, and external services.
+Tools are how GoClaw does work for you: reading files, searching the web, querying memory, automating the browser, and more.
+
+This page helps you understand:
+- what tools are available
+- where to configure them
+- how access is controlled
+- how parallel tool execution works
 
 ## Tool Categories
 
 ### Core Tools
 
-Basic file and system operations:
+Daily file and shell operations:
 
 | Tool | Description | Documentation |
 |------|-------------|---------------|
@@ -31,7 +37,7 @@ Basic file and system operations:
 
 ### Memory Graph
 
-Structured knowledge graph for persistent agent memory:
+Structured long-term memory operations:
 
 | Tool | Description | Documentation |
 |------|-------------|---------------|
@@ -81,7 +87,8 @@ Semantic search over markdown memory files:
 
 ## Configuration
 
-Tool configuration in `goclaw.json`:
+Most tool-specific settings live under `tools` in `goclaw.json`.
+Common examples include shell timeout, browser settings, and web search keys.
 
 ```json
 {
@@ -106,13 +113,83 @@ Tool configuration in `goclaw.json`:
 }
 ```
 
+## Binary Content Protection
+
+GoClaw protects tool execution from raw binary payloads entering model context.
+This helps prevent context overflows and malformed output from files like PDFs, archives, media, and other non-text content.
+
+### What to expect
+
+- If a tool detects binary content, it returns a safe summary instead of raw bytes.
+- The summary includes path, MIME type, and size when available.
+- Large tool outputs may be truncated for context safety.
+- Existing session history is also sanitized before reuse.
+
+### Affected tool flows
+
+- `read` rejects raw binary file content and returns a safe summary.
+- `web_fetch` sanitizes non-HTML/binary responses before returning content.
+- `exec`/`jq` outputs are guarded so binary stdout/stderr does not poison context.
+
+### If your file is rejected
+
+- Extract text first (for example from a PDF) and send the extracted text.
+- Keep raw binaries in uploads/media, but pass text excerpts to the model.
+- For very large text outputs, narrow scope before sending (smaller files, fewer lines, or filtered output).
+
+## Parallel Tool Execution
+
+GoClaw can run some tool batches concurrently to reduce latency.
+This is enabled by default, but only for allowlisted safe tools.
+
+### How it works
+
+- Parallel execution is controlled by gateway settings.
+- A batch runs in parallel only if:
+  - `gateway.toolExecution.parallelEnabled` is `true`
+  - there are at least 2 tool calls in the same turn
+  - every tool in that batch is in the parallel allowlist
+- If any tool in that batch is not allowlisted, GoClaw runs the full batch sequentially.
+- Tool completion events can appear out of order while running in parallel.
+- Saved session/transcript order remains stable.
+
+### Configuration
+
+```json
+{
+  "gateway": {
+    "toolExecution": {
+      "parallelEnabled": true,
+      "maxConcurrent": 3,
+      "parallelAllowlist": []
+    }
+  }
+}
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `parallelEnabled` | `true` | Enable allowlisted parallel batch execution |
+| `maxConcurrent` | `3` | Max worker count for a parallel tool batch |
+| `parallelAllowlist` | `[]` | Empty uses built-in defaults; otherwise use your explicit list |
+
+Built-in allowlist (used when `parallelAllowlist` is empty): `read`, `web_search`, `web_fetch`, `memory_get`, `memory_search`, `transcript`.
+
+### Change it in the web editor
+
+Go to **Gateway Settings → Tool Execution** and adjust:
+
+- **Enable Parallel Tool Execution**
+- **Max Concurrent Tools**
+- **Parallel Allowlist**
+
 ## Tool Permissions
 
-Tool access is controlled at two levels:
+Tool access is controlled in two layers:
 
 ### Role-Based (goclaw.json)
 
-Roles define default tool access:
+Roles set default tool access:
 
 ```json
 {
@@ -131,7 +208,7 @@ Use `"tools": "*"` to allow all tools (default for `owner` role).
 
 ### Per-User Override (users.json)
 
-Override role defaults for specific users:
+You can override role defaults for specific users:
 
 ```json
 {
@@ -146,7 +223,7 @@ Override role defaults for specific users:
 }
 ```
 
-When `permissions` is set, it overrides the role's tool list for that user.
+When `permissions` is set, it replaces the role's tool list for that user.
 
 See [Roles & Access Control](roles.md) for full RBAC documentation.
 

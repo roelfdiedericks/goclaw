@@ -16,6 +16,7 @@ type Command struct {
 	Usage       string   // Subcommand usage, e.g. "[debug|info|subs]" (optional)
 	Aliases     []string // e.g., ["/stat"]
 	Handler     CommandHandler
+	OwnerOnly   bool     // If true, omit from non-owner UIs (e.g. /shutdown)
 }
 
 // CommandHandler is the function signature for command handlers

@@ -10,12 +10,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/config"
+	"github.com/roelfdiedericks/goclaw/internal/contentguard"
 	gcontext "github.com/roelfdiedericks/goclaw/internal/context"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/delivery"
@@ -222,6 +225,22 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 		"keepPercent", sumCfg.Compaction.KeepPercent,
 		"minMessages", sumCfg.Compaction.MinMessages,
 		"retryInterval", sumCfg.RetryIntervalSeconds)
+
+	allow := g.parallelToolAllowlist()
+	allowList := make([]string, 0, len(allow))
+	for name := range allow {
+		allowList = append(allowList, name)
+	}
+	sort.Strings(allowList)
+	allowSource := "default"
+	if len(cfg.Gateway.ToolExecution.ParallelAllowlist) > 0 {
+		allowSource = "config"
+	}
+	L_info("gateway: tool execution config",
+		"parallelEnabled", cfg.Gateway.ToolExecution.ParallelEnabled,
+		"maxConcurrent", g.parallelToolMaxConcurrent(),
+		"allowlistSource", allowSource,
+		"allowlist", allowList)
 
 	// Summarization uses llm.GetRegistry() directly - no setup needed here
 	L_info("summarization: will use registry for lazy provider resolution")
@@ -635,6 +654,16 @@ func (g *Gateway) resolveMediaContent(messages []types.Message, provider llm.Pro
 
 	for i := range resolved {
 		msg := &resolved[i]
+		if msg.Role == "tool_result" && msg.Content != "" {
+			sanitized := contentguard.ToolResultText(msg.Content)
+			if sanitized.Changed {
+				L_warn("resolveMediaContent: sanitized tool_result content",
+					"reason", sanitized.Reason,
+					"mime", sanitized.MIME,
+					"bytes", sanitized.OriginalBytes)
+				msg.Content = sanitized.Text
+			}
+		}
 
 		// Skip messages without content blocks
 		if len(msg.ContentBlocks) == 0 {
@@ -668,6 +697,31 @@ func (g *Gateway) resolveMediaContent(messages []types.Message, provider llm.Pro
 			if block.Type == "audio" && block.FilePath != "" {
 				resolvedBlock := g.resolveAudioBlock(block, sttProvider)
 				resolvedBlocks = append(resolvedBlocks, resolvedBlock)
+				continue
+			}
+
+			// Opaque file attachments (HTTP multipart, etc.): path + MIME + name as text for the LLM
+			if block.Type == "file" && block.FilePath != "" {
+				if msg.Role != "user" {
+					resolvedBlocks = append(resolvedBlocks, block)
+					continue
+				}
+				rel := block.FilePath
+				if g.mediaStore != nil {
+					if rp := g.mediaStore.RelativePath(block.FilePath); rp != "" {
+						rel = rp
+					}
+				}
+				name := block.FileName
+				if name == "" {
+					name = filepath.Base(block.FilePath)
+				}
+				mime := block.MimeType
+				if mime == "" {
+					mime = "application/octet-stream"
+				}
+				summary := fmt.Sprintf("[Attached file: `%s` MIME: %s Path: %s]", name, mime, rel)
+				resolvedBlocks = append(resolvedBlocks, types.ContentBlock{Type: "text", Text: summary})
 				continue
 			}
 
@@ -1886,6 +1940,59 @@ var defaultToolRestrictions = map[string]gwtypes.ToolRestriction{
 	"webhook": {Deny: []string{"exec", "write", "edit", "cron"}},
 }
 
+// defaultParallelToolAllowlist is the conservative readonly set for parallel batches.
+var defaultParallelToolAllowlist = map[string]bool{
+	"read":          true,
+	"web_search":    true,
+	"web_fetch":     true,
+	"memory_get":    true,
+	"memory_search": true,
+	"transcript":    true,
+}
+
+func (g *Gateway) parallelToolAllowlist() map[string]bool {
+	cfg := g.config.Gateway.ToolExecution.ParallelAllowlist
+	if len(cfg) == 0 {
+		return defaultParallelToolAllowlist
+	}
+	out := make(map[string]bool, len(cfg))
+	for _, name := range cfg {
+		n := strings.TrimSpace(name)
+		if n == "" {
+			continue
+		}
+		out[n] = true
+	}
+	return out
+}
+
+func (g *Gateway) parallelToolMaxConcurrent() int {
+	n := g.config.Gateway.ToolExecution.MaxConcurrent
+	if n < 1 {
+		return 1
+	}
+	if n > 16 {
+		return 16
+	}
+	return n
+}
+
+func (g *Gateway) shouldRunToolsInParallel(calls []llm.ToolCallInfo) bool {
+	if !g.config.Gateway.ToolExecution.ParallelEnabled {
+		return false
+	}
+	if len(calls) < 2 {
+		return false
+	}
+	allow := g.parallelToolAllowlist()
+	for _, tc := range calls {
+		if !allow[tc.Name] {
+			return false
+		}
+	}
+	return true
+}
+
 // getToolRestriction returns the tool restriction for a purpose, checking
 // user config first, then falling back to hardcoded defaults.
 func (g *Gateway) getToolRestriction(purpose string) *gwtypes.ToolRestriction {
@@ -2390,6 +2497,33 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					sendEvent(EventToolEnd{RunID: runID, ToolName: name, ToolID: "", Result: result, Error: errMsg})
 				}
 			},
+			OnBeforeModelAttempt: func(modelRef string, modelContextWindow int) error {
+				if modelContextWindow <= 0 {
+					return nil
+				}
+				estimated := sess.GetTotalTokens()
+				if estimated <= 0 {
+					return nil
+				}
+				// Session token estimates can undercount provider-side tokenization.
+				// Inflate before checking smaller failover windows.
+				projected := int(float64(estimated) * 1.4)
+				safetyBuffer := 4000
+				limit := modelContextWindow - safetyBuffer
+				if limit < modelContextWindow/2 {
+					limit = modelContextWindow / 2
+				}
+				if projected > limit {
+					L_warn("pre-failover context check: projected overflow",
+						"model", modelRef,
+						"estimated", estimated,
+						"projected", projected,
+						"contextWindow", modelContextWindow,
+						"limit", limit)
+					return fmt.Errorf("context overflow: projected %d tokens exceeds %d for model %s", projected, modelContextWindow, modelRef)
+				}
+				return nil
+			},
 		}
 		if enableThinking {
 			streamOpts.EnableThinking = true
@@ -2604,6 +2738,203 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			transcriptScope := "own" // Default to restrictive
 			if resolvedRole, err := g.users.ResolveUserRole(req.User); err == nil {
 				transcriptScope = resolvedRole.GetTranscriptScope()
+			}
+
+			// Conservative parallel mode: only enabled + allowlisted readonly tool batches.
+			if g.shouldRunToolsInParallel(response.ToolCalls) {
+				L_info("tools: executing batch in parallel",
+					"count", len(response.ToolCalls),
+					"maxConcurrent", g.parallelToolMaxConcurrent(),
+					"responseGroupID", responseGroupID)
+
+				type parallelToolResult struct {
+					resultText string
+					content    []types.ContentBlock
+					errStr     string
+					durationMs int64
+					handled    bool
+				}
+				results := make([]parallelToolResult, len(response.ToolCalls))
+				execIndexes := make([]int, 0, len(response.ToolCalls))
+
+				// Pre-check and emit starts in original order.
+				for i, tc := range response.ToolCalls {
+					if !req.User.CanUseTool(tc.Name) {
+						result := fmt.Sprintf("Permission denied: %s cannot use tool %s", req.User.Name, tc.Name)
+						sendEvent(EventToolEnd{
+							RunID:    runID,
+							ToolName: tc.Name,
+							ToolID:   tc.ID,
+							Result:   result,
+							Error:    "permission_denied",
+						})
+						results[i] = parallelToolResult{
+							resultText: result,
+							errStr:     "permission_denied",
+							handled:    true,
+						}
+						continue
+					}
+					if g.isToolDeniedForPurpose(tc.Name, purpose) {
+						result := fmt.Sprintf("Permission denied: tool %s is not available for purpose %q", tc.Name, purpose)
+						sendEvent(EventToolEnd{
+							RunID:    runID,
+							ToolName: tc.Name,
+							ToolID:   tc.ID,
+							Result:   result,
+							Error:    "purpose_denied",
+						})
+						results[i] = parallelToolResult{
+							resultText: result,
+							errStr:     "purpose_denied",
+							handled:    true,
+						}
+						continue
+					}
+					sendEvent(EventToolStart{
+						RunID:    runID,
+						ToolName: tc.Name,
+						ToolID:   tc.ID,
+						Input:    tc.Input,
+					})
+					execIndexes = append(execIndexes, i)
+				}
+
+				sem := make(chan struct{}, g.parallelToolMaxConcurrent())
+				var wg sync.WaitGroup
+				for _, idx := range execIndexes {
+					tc := response.ToolCalls[idx]
+					wg.Add(1)
+					go func(i int, tc llm.ToolCallInfo) {
+						defer wg.Done()
+						select {
+						case sem <- struct{}{}:
+							defer func() { <-sem }()
+						case <-agentCtx.Done():
+							sendEvent(EventToolEnd{
+								RunID:    runID,
+								ToolName: tc.Name,
+								ToolID:   tc.ID,
+								Result:   "Tool execution cancelled",
+								Error:    "cancelled",
+							})
+							results[i] = parallelToolResult{
+								resultText: "Tool execution cancelled",
+								errStr:     "cancelled",
+								handled:    true,
+							}
+							return
+						}
+
+						toolStartTime := time.Now()
+						toolCtx := tools.WithSessionContext(agentCtx, &tools.SessionContext{
+							Channel:           req.Source,
+							ChatID:            req.ChatID,
+							OwnerChatID:       ownerChatID,
+							User:              req.User,
+							TranscriptScope:   transcriptScope,
+							Session:           sess,
+							CurrentMessageIDs: currentMsgIDs,
+						})
+						toolResult, err := g.tools.Execute(toolCtx, tc.Name, tc.Input)
+						toolDuration := time.Since(toolStartTime)
+
+						errStr := ""
+						if err != nil {
+							errStr = err.Error()
+							toolResult = types.ErrorResult(err.Error())
+						}
+
+						resultText := toolResult.GetText()
+						if toolResult.ExternalContent {
+							wrapped, spoofed := security.WrapExternalContent(resultText, toolResult.ExternalSource, tc.Name)
+							if spoofed {
+								L_warn("security: marker spoofing detected, content blocked",
+									"tool", tc.Name, "source", toolResult.ExternalSource)
+								g.SendStatusMessage(ctx, req.User,
+									"⚠️ Security: Marker spoofing attack detected in content from "+tc.Name+". Content discarded.")
+							}
+							resultText = wrapped
+						}
+						if req.OnMediaToSend != nil {
+							parseResult := media.SplitMediaFromOutput(resultText)
+							resultText = parseResult.Text
+							for _, mediaPath := range parseResult.MediaURLs {
+								if mediaErr := req.OnMediaToSend(mediaPath, ""); mediaErr != nil {
+									L_warn("failed to send media", "path", mediaPath, "error", mediaErr)
+								}
+							}
+						}
+
+						sendEvent(EventToolEnd{
+							RunID:      runID,
+							ToolName:   tc.Name,
+							ToolID:     tc.ID,
+							Result:     resultText,
+							Error:      errStr,
+							DurationMs: toolDuration.Milliseconds(),
+						})
+						results[i] = parallelToolResult{
+							resultText: resultText,
+							content:    toolResult.Content,
+							errStr:     errStr,
+							durationMs: toolDuration.Milliseconds(),
+							handled:    true,
+						}
+					}(idx, tc)
+				}
+				wg.Wait()
+
+				// Persist/session writes in original tool-call order for deterministic history.
+				for i, tc := range response.ToolCalls {
+					r := results[i]
+					if !r.handled {
+						r.resultText = "Tool execution failed: no result"
+						r.errStr = "no_result"
+					}
+
+					toolUseID := sess.AddToolUse(tc.ID, tc.Name, tc.Input, response.Thinking, responseGroupID)
+					toolResultID := sess.AddToolResult(tc.ID, r.resultText, r.content, responseGroupID)
+					if !ephemeralRun {
+						g.persistMessage(ctx, PersistMessageParams{
+							MsgID:           toolUseID,
+							SessionKey:      sessionKey,
+							UserID:          userID,
+							Role:            "tool_use",
+							Source:          req.Source,
+							ToolCallID:      tc.ID,
+							ToolName:        tc.Name,
+							ToolInput:       tc.Input,
+							Thinking:        response.Thinking,
+							ResponseGroupID: responseGroupID,
+						})
+						g.persistMessage(ctx, PersistMessageParams{
+							MsgID:           toolResultID,
+							SessionKey:      sessionKey,
+							UserID:          userID,
+							Role:            "tool_result",
+							Content:         r.resultText,
+							Source:          req.Source,
+							ToolCallID:      tc.ID,
+							ToolError:       r.errStr,
+							ResponseGroupID: responseGroupID,
+						})
+						if r.errStr == "" && tc.Name == "message" {
+							if sentText := extractMessageToolText(tc.Input); sentText != "" {
+								g.persistMessage(ctx, PersistMessageParams{
+									SessionKey: sessionKey,
+									UserID:     userID,
+									Role:       "assistant",
+									Content:    sentText,
+									Source:     "message_tool",
+								})
+							}
+						}
+					}
+				}
+
+				// Batch complete; ask the LLM for the next turn with tool results in context.
+				continue
 			}
 
 			// Execute ALL tool calls sequentially
@@ -3848,8 +4179,15 @@ func (g *Gateway) persistMessage(ctx context.Context, p PersistMessageParams) {
 
 	// For tool_result, store the result in ToolResult field and mark errors
 	if p.Role == "tool_result" {
-		msg.ToolResult = p.Content // Store actual result
-		msg.Content = ""           // Keep content empty for tool results
+		sanitized := contentguard.ToolResultText(p.Content)
+		if sanitized.Changed {
+			L_warn("persistMessage: sanitized tool_result",
+				"reason", sanitized.Reason,
+				"mime", sanitized.MIME,
+				"bytes", sanitized.OriginalBytes)
+		}
+		msg.ToolResult = sanitized.Text // Store sanitized result
+		msg.Content = ""                // Keep content empty for tool results
 		if p.ToolError != "" {
 			msg.ToolIsError = true
 		}

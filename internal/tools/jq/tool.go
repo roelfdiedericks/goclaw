@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/roelfdiedericks/goclaw/internal/contentguard"
 	"github.com/itchyny/gojq"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
@@ -140,6 +141,10 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 			}
 			return nil, fmt.Errorf("exec failed: %w", err)
 		}
+		if contentguard.IsBinaryContent(data, "") {
+			L_warn("jq tool: binary exec output rejected", "bytes", len(data))
+			return nil, fmt.Errorf("exec output appears binary (%d bytes); pipe text/json output only", len(data))
+		}
 		L_debug("jq tool: exec completed", "bytes", len(data))
 	}
 
@@ -151,9 +156,17 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 
 	L_debug("jq tool: query completed", "query", truncate(params.Query, 50), "resultLen", len(result))
 	if isExecMode {
-		return types.ExternalTextResult(result, "exec"), nil
+		safe := contentguard.ToolResultText(result)
+		if safe.Changed {
+			L_warn("jq tool: sanitized exec result", "reason", safe.Reason, "mime", safe.MIME, "bytes", safe.OriginalBytes)
+		}
+		return types.ExternalTextResult(safe.Text, "exec"), nil
 	}
-	return types.TextResult(result), nil
+	safe := contentguard.ToolResultText(result)
+	if safe.Changed {
+		L_warn("jq tool: sanitized result", "reason", safe.Reason, "mime", safe.MIME, "bytes", safe.OriginalBytes)
+	}
+	return types.TextResult(safe.Text), nil
 }
 
 func resolveSandboxModes(fileToolsEnabled bool, execEnabled bool, userSandbox bool) (bool, bool) {

@@ -2,18 +2,21 @@
 package types
 
 // ContentBlock represents a single block of content in a message or tool result.
-// Supports text, images, and audio with ephemeral media resolution.
+// Supports text, images, audio, and opaque file references with ephemeral media resolution.
 type ContentBlock struct {
-	Type string `json:"type"` // "text", "image", or "audio"
+	Type string `json:"type"` // "text", "image", "audio", or "file"
 
 	// Text content
 	Text string `json:"text,omitempty"`
 
-	// Media fields (shared pattern for image/audio)
+	// Media fields (shared pattern for image/audio/file)
 	// FilePath is stored in session; Data is resolved at LLM request time
 	FilePath string `json:"filePath,omitempty"` // Disk reference (stored in session)
 	Data     string `json:"data,omitempty"`     // Base64 data (resolved at LLM time, NOT stored)
-	MimeType string `json:"mimeType,omitempty"` // e.g., "image/jpeg", "audio/ogg"
+	MimeType string `json:"mimeType,omitempty"` // e.g., "image/jpeg", "audio/ogg", "application/pdf"
+
+	// FileName is the original upload filename for type "file" (HTTP multipart, etc.)
+	FileName string `json:"fileName,omitempty"`
 
 	// Audio-specific
 	Duration int `json:"duration,omitempty"` // Duration in seconds (for audio)

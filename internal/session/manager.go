@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/contentguard"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
@@ -250,7 +251,7 @@ func mergeMessagesByTimestamp(openclawMsgs []Message, goclawMsgs []StoredMessage
 		// For tool_result, use ToolResult field (Content is empty for tool results)
 		content := sm.Content
 		if sm.Role == "tool_result" && sm.ToolResult != "" {
-			content = sm.ToolResult
+			content = contentguard.ToolResultText(sm.ToolResult).Text
 		}
 
 		key := makeKey(sm.Timestamp.Unix(), sm.Role, content)
@@ -441,7 +442,7 @@ func storedToMessages(stored []StoredMessage) []Message {
 			msgs[i].ToolInput = sm.ToolInput
 		}
 		if sm.ToolResult != "" {
-			msgs[i].Content = sm.ToolResult
+			msgs[i].Content = contentguard.ToolResultText(sm.ToolResult).Text
 		}
 	}
 	return msgs

@@ -185,6 +185,11 @@ type StreamOptions struct {
 	// web_search, x_search, code_execution). Use this when calling a model that doesn't
 	// support server tools or when you only want client-side tools.
 	DisableServerTools bool
+
+	// OnBeforeModelAttempt is called before each failover model attempt.
+	// It can return an error to abort the current attempt before network I/O.
+	// Intended for context-window safety checks in callers with session state.
+	OnBeforeModelAttempt func(modelRef string, contextWindow int) error
 }
 
 // Note: Response type is currently defined in anthropic.go

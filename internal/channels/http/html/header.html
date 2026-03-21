@@ -20,6 +20,71 @@
         }
         .navbar-brand { font-weight: bold; }
         .chat-container { height: calc(100vh - 200px); overflow-y: auto; }
+
+        /* /chat only — Layout Option B: document (window) scroll + fixed composer bar */
+        :root {
+            --chat-composer-reserve: 7.5rem;
+        }
+        body.chat-page {
+            overflow-x: hidden;
+        }
+        main.chat-page-shell {
+            display: block;
+            min-height: 0;
+        }
+        body.chat-page .chat-root {
+            padding-bottom: var(--chat-composer-reserve);
+            box-sizing: border-box;
+        }
+        body.chat-page .chat-page-card {
+            --bs-card-border-width: 0;
+            border: 0;
+            box-shadow: none;
+            background: transparent;
+            overflow: visible;
+        }
+        body.chat-page .chat-page-card > .card-header {
+            position: sticky;
+            top: 56px;
+            z-index: 1015;
+            background-color: var(--bs-body-bg, #fff);
+            border: none;
+            border-bottom: 1px solid var(--bs-border-color, #dee2e6);
+            border-radius: 0;
+        }
+        body.chat-page .chat-page-card > .card-body.chat-container {
+            height: auto !important;
+            overflow: visible !important;
+            min-height: 0;
+            padding-top: 1rem;
+            padding-bottom: 0.5rem;
+        }
+        body.chat-page .chat-composer-bar {
+            --bs-card-cap-bg: var(--bs-body-bg);
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 1020;
+            background-color: var(--bs-body-bg, #fff);
+            border: none;
+            box-shadow: none;
+            padding-bottom: env(safe-area-inset-bottom, 0);
+        }
+        /* Flat composer field: no grey input frame; focus ring for keyboard/mouse */
+        body.chat-page .chat-composer-bar #message-input.form-control {
+            border: 0;
+            box-shadow: none;
+            background-color: var(--bs-tertiary-bg);
+        }
+        body.chat-page .chat-composer-bar #message-input.form-control:focus {
+            border: 0;
+            background-color: var(--bs-tertiary-bg);
+            box-shadow: 0 0 0 0.25rem var(--bs-focus-ring-color, rgba(13, 110, 253, 0.25));
+        }
+        body.chat-page .chat-composer-bar #message-input.form-control:focus-visible {
+            outline: 0;
+        }
         .message { margin-bottom: 1rem; }
         .message.user { text-align: right; }
         .message.assistant { text-align: left; }
@@ -356,7 +421,7 @@
         }
     </style>
 </head>
-<body>
+<body{{if .ChatPage}} class="chat-page"{{end}}>
     <!-- Media modal for enlarged view -->
     <div id="media-modal">
         <span class="close-btn"><i class="bi bi-x-lg"></i></span>
@@ -403,5 +468,9 @@
             </div>
         </div>
     </nav>
+    {{if .ChatPage}}
+    <main class="chat-page-shell container-fluid px-0 py-2">
+    {{else}}
     <main class="container mt-3 mb-2">
+    {{end}}
 {{end}}

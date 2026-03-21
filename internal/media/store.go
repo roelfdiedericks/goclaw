@@ -198,6 +198,7 @@ type UploadContext struct {
 	ChatID        string     // Session/chat identifier
 	MediaType     string     // Media type: "image", "voice", "document", etc.
 	Caption       string     // Optional caption for metadata
+	OriginalName  string     // Original uploaded filename (if available)
 }
 
 // sanitizeFilename removes unsafe characters from a string for use in filenames
@@ -248,9 +249,49 @@ func (s *MediaStore) SaveUpload(data []byte, ext string, ctx UploadContext) (abs
 		"user", username,
 		"mediaType", mediaType,
 		"chatID", ctx.ChatID,
+		"originalName", ctx.OriginalName,
 	)
 
-	return s.Save(data, subdir, ext)
+	// Preserve original upload filename stem for traceability while still avoiding collisions.
+	base := strings.TrimSpace(filepath.Base(ctx.OriginalName))
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	safeStem := sanitizeFilename(stem)
+	if safeStem == "unknown" {
+		safeStem = "upload"
+	}
+	filename := fmt.Sprintf("%s_%s%s", safeStem, uuid.New().String()[:8], ext)
+	return s.saveWithFilename(data, subdir, filename)
+}
+
+func (s *MediaStore) saveWithFilename(data []byte, subdir, filename string) (absPath, relPath string, err error) {
+	// Check size limit
+	if int64(len(data)) > s.maxSize {
+		return "", "", fmt.Errorf("file size %d exceeds limit %d", len(data), s.maxSize)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Create subdirectory
+	dir := filepath.Join(s.baseDir, subdir)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", "", fmt.Errorf("failed to create subdirectory: %w", err)
+	}
+
+	absPath = filepath.Join(dir, filename)
+	if err := os.WriteFile(absPath, data, 0600); err != nil {
+		return "", "", fmt.Errorf("failed to write file: %w", err)
+	}
+
+	relPath = fmt.Sprintf("./media/%s/%s", subdir, filename)
+	logging.L_debug("media: saved file",
+		"absPath", absPath,
+		"relPath", relPath,
+		"size", len(data),
+		"subdir", subdir,
+		"filename", filename,
+	)
+	return absPath, relPath, nil
 }
 
 // SaveFile copies a file from srcPath to the media store.
