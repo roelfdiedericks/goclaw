@@ -824,53 +824,9 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 					logging.L_error("telegram: failed to send with media", "error", err)
 				}
 			} else {
-				// No media refs - send as regular text
-				// Convert markdown to Telegram HTML
-				formattedText := FormatMessage(finalText)
-
-				logging.L_trace("telegram: formatting message",
-					"rawMarkdown", finalText,
-					"formattedHTML", formattedText)
-
-				// Split long messages to fit Telegram's 4096 char limit
-				chunks := splitMessage(finalText, maxTelegramMessage)
-
-				if currentMsg == nil {
-					// Send all chunks as new messages
-					for i, chunk := range chunks {
-						formatted := FormatMessage(chunk)
-						_, err := b.bot.Send(c.Chat(), formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
-						if err != nil {
-							logging.L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
-							_, err = b.bot.Send(c.Chat(), chunk)
-							if err != nil {
-								logging.L_error("telegram: failed to send message chunk", "error", err, "chunk", i+1)
-							}
-						}
-					}
-				} else {
-					// Edit first chunk into existing message, send rest as new
-					formatted := FormatMessage(chunks[0])
-					_, err := b.bot.Edit(currentMsg, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
-					if err != nil {
-						logging.L_debug("telegram: HTML edit failed, falling back to plain text", "error", err)
-						_, err = b.bot.Edit(currentMsg, chunks[0])
-						if err != nil {
-							logging.L_debug("telegram: failed to edit final message", "error", err)
-						}
-					}
-					// Send remaining chunks as new messages
-					for i := 1; i < len(chunks); i++ {
-						formatted := FormatMessage(chunks[i])
-						_, err := b.bot.Send(c.Chat(), formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
-						if err != nil {
-							logging.L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
-							_, err = b.bot.Send(c.Chat(), chunks[i])
-							if err != nil {
-								logging.L_error("telegram: failed to send message chunk", "error", err, "chunk", i+1)
-							}
-						}
-					}
+				// No media refs - send as regular text, splitting by formatted HTML length.
+				if _, err := b.sendTextWithOptionalEdit(c.Chat(), finalText, currentMsg); err != nil {
+					logging.L_error("telegram: failed to send final text", "error", err)
 				}
 			}
 
@@ -1028,13 +984,7 @@ func (b *Bot) Send(ctx context.Context, msg string) error {
 
 // sendWithHTMLFallback sends a message with HTML formatting, falling back to plain text
 func (b *Bot) sendWithHTMLFallback(chat *tele.Chat, text string) (*tele.Message, error) {
-	formatted := FormatMessage(text)
-	msg, err := b.bot.Send(chat, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
-	if err != nil {
-		logging.L_debug("telegram: HTML send failed, falling back to plain text", "error", err)
-		return b.bot.Send(chat, text)
-	}
-	return msg, nil
+	return b.sendTextWithOptionalEdit(chat, text, nil)
 }
 
 // containsMediaRefs checks if text contains any media references (delegates to shared media package)
@@ -1350,21 +1300,8 @@ func (b *Bot) DeliverAssistantMessage(ctx context.Context, u *user.User, message
 		return b.sendWithMediaRefs(chat, message)
 	}
 
-	// Text-only: chunk long responses for parity with streaming/finalization path.
-	chunks := splitMessage(message, maxTelegramMessage)
-	for i, chunk := range chunks {
-		formatted := FormatMessage(chunk)
-		_, err := b.bot.Send(chat, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
-		if err != nil {
-			logging.L_debug("telegram: HTML deliver chunk failed, falling back to plain text", "error", err, "chunk", i+1, "totalChunks", len(chunks))
-			_, err = b.bot.Send(chat, chunk)
-		}
-		if err != nil {
-			logging.L_error("failed to send telegram message chunk", "error", err, "chunk", i+1, "totalChunks", len(chunks))
-			return err
-		}
-	}
-	return nil
+	_, err := b.sendTextWithOptionalEdit(chat, message, nil)
+	return err
 }
 
 // DeliverSystemMessage sends system/status output to the user's Telegram chat.
@@ -1425,27 +1362,7 @@ func (b *Bot) DeliverGhostwrite(ctx context.Context, u *user.User, message strin
 // Returns the last sent message for potential editing/deletion.
 func (b *Bot) SendText(chatID int64, text string) (*tele.Message, error) {
 	chat := &tele.Chat{ID: chatID}
-
-	// Split long messages
-	chunks := splitMessage(text, maxTelegramMessage)
-	var lastMsg *tele.Message
-
-	for i, chunk := range chunks {
-		formatted := FormatMessage(chunk)
-		msg, err := b.bot.Send(chat, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
-		if err != nil {
-			// Fallback to plain text
-			logging.L_debug("telegram: HTML send failed, falling back to plain text", "error", err, "chunk", i+1)
-			msg, err = b.bot.Send(chat, chunk)
-		}
-		if err != nil {
-			return lastMsg, fmt.Errorf("failed to send text chunk %d: %w", i+1, err)
-		}
-		lastMsg = msg
-		logging.L_debug("telegram: sent text message", "chatID", chatID, "msgID", msg.ID, "chunk", i+1, "length", len(chunk))
-	}
-
-	return lastMsg, nil
+	return b.sendTextWithOptionalEdit(chat, text, nil)
 }
 
 // EditMessage edits an existing message.
@@ -1625,6 +1542,165 @@ func escapeHTML(s string) string {
 // maxTelegramMessage is the maximum message length for Telegram (4096 chars).
 // We use 4000 to leave room for formatting overhead.
 const maxTelegramMessage = 4000
+const maxTelegramHTMLRetrySplitDepth = 6
+
+// sendTextWithOptionalEdit sends a potentially long text message to Telegram.
+// Chunks are split using formatted HTML length so markdown expansion doesn't overflow Telegram limits.
+// If firstMsg is provided, first chunk is edited into that message and remaining chunks are sent as new messages.
+func (b *Bot) sendTextWithOptionalEdit(chat *tele.Chat, text string, firstMsg *tele.Message) (*tele.Message, error) {
+	chunks := splitMessageByFormattedLength(text, maxTelegramMessage)
+	if len(chunks) == 0 {
+		return nil, nil
+	}
+
+	var lastMsg *tele.Message
+	for i, chunk := range chunks {
+		msgs, err := b.sendChunkWithRetry(chat, firstMsg, i == 0 && firstMsg != nil, chunk, 0)
+		if err != nil {
+			return lastMsg, fmt.Errorf("failed to deliver telegram text chunk %d/%d: %w", i+1, len(chunks), err)
+		}
+		if len(msgs) > 0 {
+			lastMsg = msgs[len(msgs)-1]
+		}
+	}
+
+	return lastMsg, nil
+}
+
+// sendChunkWithRetry sends one chunk using HTML mode, with split-and-retry for fixable HTML errors.
+// If useEdit is true, the first successful send edits firstMsg; additional split children are sent as new messages.
+func (b *Bot) sendChunkWithRetry(chat *tele.Chat, firstMsg *tele.Message, useEdit bool, chunk string, depth int) ([]*tele.Message, error) {
+	chunk = strings.TrimSpace(chunk)
+	if chunk == "" {
+		return nil, nil
+	}
+
+	formatted := FormatMessage(chunk)
+
+	var (
+		msg *tele.Message
+		err error
+	)
+	if useEdit {
+		msg, err = b.bot.Edit(firstMsg, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
+	} else {
+		msg, err = b.bot.Send(chat, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
+	}
+	if err == nil {
+		return []*tele.Message{msg}, nil
+	}
+
+	if shouldRetrySplitForTelegramHTMLError(err, chunk, depth) {
+		left, right, ok := splitChunkForRetry(chunk)
+		if ok {
+			logging.L_debug("telegram: HTML send/edit failed, splitting and retrying",
+				"error", err,
+				"depth", depth,
+				"leftLen", len(left),
+				"rightLen", len(right),
+			)
+
+			leftMsgs, leftErr := b.sendChunkWithRetry(chat, firstMsg, useEdit, left, depth+1)
+			if leftErr == nil {
+				rightMsgs, rightErr := b.sendChunkWithRetry(chat, nil, false, right, depth+1)
+				if rightErr == nil {
+					return append(leftMsgs, rightMsgs...), nil
+				}
+			}
+		}
+	}
+
+	logging.L_debug("telegram: HTML send/edit failed, falling back to plain text",
+		"error", err,
+		"depth", depth,
+		"chunkLen", len(chunk),
+	)
+	if useEdit {
+		msg, err = b.bot.Edit(firstMsg, chunk)
+	} else {
+		msg, err = b.bot.Send(chat, chunk)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return []*tele.Message{msg}, nil
+}
+
+func shouldRetrySplitForTelegramHTMLError(err error, chunk string, depth int) bool {
+	if err == nil || len(chunk) <= 1 || depth >= maxTelegramHTMLRetrySplitDepth {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "message is too long") ||
+		strings.Contains(msg, "can't parse entities") ||
+		strings.Contains(msg, "can't find end tag") ||
+		strings.Contains(msg, "entity") ||
+		strings.Contains(msg, "bad request")
+}
+
+func splitChunkForRetry(chunk string) (string, string, bool) {
+	if len(chunk) <= 1 {
+		return "", "", false
+	}
+	splitAt := findSplitPoint(chunk, len(chunk)/2)
+	if splitAt <= 0 || splitAt >= len(chunk) {
+		splitAt = len(chunk) / 2
+	}
+
+	left := strings.TrimSpace(chunk[:splitAt])
+	right := strings.TrimSpace(chunk[splitAt:])
+	if left == "" || right == "" {
+		return "", "", false
+	}
+	return left, right, true
+}
+
+// splitMessageByFormattedLength ensures every chunk fits Telegram limits after markdown->HTML formatting.
+func splitMessageByFormattedLength(text string, maxLen int) []string {
+	baseChunks := splitMessage(text, maxLen)
+	var out []string
+
+	for _, chunk := range baseChunks {
+		out = append(out, splitChunkByFormattedLength(chunk, maxLen)...)
+	}
+	return out
+}
+
+func splitChunkByFormattedLength(chunk string, maxLen int) []string {
+	chunk = strings.TrimSpace(chunk)
+	if chunk == "" {
+		return nil
+	}
+
+	formatted := FormatMessage(chunk)
+	if len(formatted) <= maxLen {
+		return []string{chunk}
+	}
+
+	if len(chunk) <= 1 {
+		return []string{chunk}
+	}
+
+	splitAt := findSplitPoint(chunk, len(chunk)/2)
+	if splitAt <= 0 || splitAt >= len(chunk) {
+		splitAt = len(chunk) / 2
+	}
+
+	left := strings.TrimSpace(chunk[:splitAt])
+	right := strings.TrimSpace(chunk[splitAt:])
+	if left == "" || right == "" {
+		splitAt = len(chunk) / 2
+		left = strings.TrimSpace(chunk[:splitAt])
+		right = strings.TrimSpace(chunk[splitAt:])
+	}
+	if left == "" || right == "" {
+		return []string{chunk}
+	}
+
+	result := splitChunkByFormattedLength(left, maxLen)
+	result = append(result, splitChunkByFormattedLength(right, maxLen)...)
+	return result
+}
 
 // splitMessage splits a long message into chunks that fit within Telegram's limit.
 // It tries to split at natural boundaries: paragraphs, then sentences, then words.
