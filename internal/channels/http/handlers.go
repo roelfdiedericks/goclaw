@@ -141,7 +141,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		SuperviseSession: superviseSession,
 		IsSupervising:    isSupervising,
 		ChatPage:         true,
-		ChatConfigJSON:   template.JS(cfgBytes),
+		// #nosec G203 -- cfgBytes is server-generated JSON (json.Marshal), intentionally embedded as JS object literal.
+		ChatConfigJSON: template.JS(cfgBytes),
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -198,12 +199,13 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		SuperviseSession   string
 		TranscriptConfigJS template.JS
 	}{
-		Title:              "GoClaw - Transcript",
-		User:               &UserTemplateData{Name: u.Name, Username: u.ID, Role: string(u.Role), IsOwner: u.IsOwner()},
-		Timestamp:          time.Now(),
-		ChatPage:           false,
-		IsSupervising:      isSupervising,
-		SuperviseSession:   superviseSession,
+		Title:            "GoClaw - Transcript",
+		User:             &UserTemplateData{Name: u.Name, Username: u.ID, Role: string(u.Role), IsOwner: u.IsOwner()},
+		Timestamp:        time.Now(),
+		ChatPage:         false,
+		IsSupervising:    isSupervising,
+		SuperviseSession: superviseSession,
+		// #nosec G203 -- cfgBytes is server-generated JSON (json.Marshal), intentionally embedded as JS object literal.
 		TranscriptConfigJS: template.JS(cfgBytes),
 	}
 

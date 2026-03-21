@@ -16,7 +16,7 @@ type Command struct {
 	Usage       string   // Subcommand usage, e.g. "[debug|info|subs]" (optional)
 	Aliases     []string // e.g., ["/stat"]
 	Handler     CommandHandler
-	OwnerOnly   bool     // If true, omit from non-owner UIs (e.g. /shutdown)
+	OwnerOnly   bool // If true, omit from non-owner UIs (e.g. /shutdown)
 }
 
 // CommandHandler is the function signature for command handlers
@@ -33,11 +33,11 @@ type CommandArgs struct {
 
 // Manager is the global command registry
 type Manager struct {
-	mu           sync.RWMutex
-	commands     map[string]*Command // keyed by name (lowercase)
-	provider     SessionProvider
-	panicPhrases []string // uppercase panic phrases (e.g., ["STOP"])
-	panicEnabled bool     // whether panic phrase detection is active
+	mu              sync.RWMutex
+	commands        map[string]*Command // keyed by name (lowercase)
+	provider        SessionProvider
+	panicPhrases    []string // uppercase panic phrases (e.g., ["STOP"])
+	panicEnabled    bool     // whether panic phrase detection is active
 	shutdownPhrases []string // uppercase shutdown phrases (e.g., ["SHUTDOWN NOW"])
 	shutdownEnabled bool     // whether shutdown phrase detection is active
 }

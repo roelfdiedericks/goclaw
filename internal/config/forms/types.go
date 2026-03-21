@@ -39,13 +39,13 @@ type Section struct {
 
 // Field defines a single form field
 type Field struct {
-	Name     string    // JSON field name (maps to struct field)
-	Title    string    // Display title
-	Desc     string    // Help text/description
-	Placeholder string // Optional placeholder text for web inputs
-	Type     FieldType // Field type
-	Default  any       // Default value
-	Required bool      // Whether field is required
+	Name        string    // JSON field name (maps to struct field)
+	Title       string    // Display title
+	Desc        string    // Help text/description
+	Placeholder string    // Optional placeholder text for web inputs
+	Type        FieldType // Field type
+	Default     any       // Default value
+	Required    bool      // Whether field is required
 
 	// Numeric constraints (for Number type)
 	Min  float64 // Minimum value
