@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+
+
+
+## [0.1.4] stable - 2026-03-21
+- add binary file contentguard
+- http channel ui rewrite
+- sort out binary tool output compaction issues
+- better safety word handling, shutdown safety word implementation
+- expose contextWindow size in UI for customising on unknown models
+
 ## [0.1.3] stable - 2026-03-17
 - major sandbox reworking
 - wizard/ onboarding updates
