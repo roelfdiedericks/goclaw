@@ -1350,18 +1350,21 @@ func (b *Bot) DeliverAssistantMessage(ctx context.Context, u *user.User, message
 		return b.sendWithMediaRefs(chat, message)
 	}
 
-	// Text-only: format and send as HTML
-	formatted := FormatMessage(message)
-	_, err := b.bot.Send(chat, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
-	if err != nil {
-		// Fallback to plain text
-		logging.L_debug("telegram: HTML deliver failed, falling back to plain text", "error", err)
-		_, err = b.bot.Send(chat, message)
+	// Text-only: chunk long responses for parity with streaming/finalization path.
+	chunks := splitMessage(message, maxTelegramMessage)
+	for i, chunk := range chunks {
+		formatted := FormatMessage(chunk)
+		_, err := b.bot.Send(chat, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		if err != nil {
+			logging.L_debug("telegram: HTML deliver chunk failed, falling back to plain text", "error", err, "chunk", i+1, "totalChunks", len(chunks))
+			_, err = b.bot.Send(chat, chunk)
+		}
+		if err != nil {
+			logging.L_error("failed to send telegram message chunk", "error", err, "chunk", i+1, "totalChunks", len(chunks))
+			return err
+		}
 	}
-	if err != nil {
-		logging.L_error("failed to send telegram message", "error", err)
-	}
-	return err
+	return nil
 }
 
 // DeliverSystemMessage sends system/status output to the user's Telegram chat.

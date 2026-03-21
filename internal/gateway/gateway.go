@@ -526,7 +526,9 @@ func (g *Gateway) mirrorUserMessage(ctx context.Context, source, userMsg string,
 			continue
 		}
 		L_debug("mirror: sending user message", "from", source, "to", ch.Name())
-		ch.SendMirror(ctx, source, userMsg) //nolint:errcheck // fire-and-forget mirror
+		if err := ch.SendMirror(ctx, source, userMsg); err != nil {
+			L_warn("mirror: failed to send user message", "from", source, "to", ch.Name(), "error", err)
+		}
 	}
 }
 
@@ -542,7 +544,9 @@ func (g *Gateway) deliverAssistantMessage(ctx context.Context, u *user.User, mes
 			continue
 		}
 		L_debug("deliver: sending assistant message", "to", ch.Name(), "msgLen", len(message))
-		ch.DeliverAssistantMessage(ctx, u, message) //nolint:errcheck // fire-and-forget delivery
+		if err := ch.DeliverAssistantMessage(ctx, u, message); err != nil {
+			L_warn("deliver: failed to send assistant message", "to", ch.Name(), "error", err)
+		}
 	}
 }
 
@@ -2177,6 +2181,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		L_debug("RunAgent: skipping message add (already in session)", "session", sessionKey, "source", req.Source)
 	}
 
+	// Mirror user input to other channels immediately so peers see it without
+	// waiting for the agent turn to finish.
+	if !req.IsGroup && !req.SkipMirror {
+		g.mirrorUserMessage(ctx, req.Source, req.UserMsg, req.User, g.channelsExcept(req.Source))
+	}
+
 	// Re-estimate session tokens BEFORE compaction check.
 	// TotalTokens is normally updated from API response (after the call), but we need
 	// an accurate count now to prevent context overflow. Without this, compaction check
@@ -2624,7 +2634,10 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		var response *llm.Response
 		var failoverResult *llm.FailoverResult
 		var llmErr error
+		var successfulStreamText string
 		for retry := 0; retry <= maxOverflowRetries; retry++ {
+			var attemptStream strings.Builder
+			var attemptStreamMu sync.Mutex
 			failoverResult, llmErr = g.registry.StreamMessageWithFailover(
 				agentCtx,
 				purpose,
@@ -2633,6 +2646,9 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				toolDefs,
 				systemPrompt,
 				func(delta string) {
+					attemptStreamMu.Lock()
+					attemptStream.WriteString(delta)
+					attemptStreamMu.Unlock()
 					sendEvent(EventTextDelta{RunID: runID, Delta: delta})
 				},
 				streamOpts,
@@ -2640,6 +2656,9 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 			if llmErr == nil {
 				response = failoverResult.Response
+				attemptStreamMu.Lock()
+				successfulStreamText = attemptStream.String()
+				attemptStreamMu.Unlock()
 				break // Success
 			}
 
@@ -3158,6 +3177,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 		// No tool use - we're done
 		finalText = response.Text
+		if finalText == "" && successfulStreamText != "" {
+			L_info("agent: using streamed delta fallback for final text",
+				"runID", runID,
+				"streamedLen", len(successfulStreamText))
+			finalText = successfulStreamText
+		}
 		break
 	}
 
@@ -3227,10 +3252,10 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	// Reset flush thresholds if context dropped (e.g., after compaction)
 	session.ResetThresholdsIfNeeded(sess)
 
-	// Distribute to other channels (not for group chats, not if caller handles delivery)
+	// Distribute assistant response to other channels (not for group chats, not if caller handles delivery).
+	// User message mirroring is intentionally done earlier (pre-turn) for better symmetry.
 	if !req.IsGroup && !req.SkipMirror {
 		otherChannels := g.channelsExcept(req.Source)
-		g.mirrorUserMessage(ctx, req.Source, req.UserMsg, req.User, otherChannels)
 		g.deliverAssistantMessage(ctx, req.User, finalText, otherChannels)
 	}
 
