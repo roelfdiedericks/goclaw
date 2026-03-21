@@ -448,12 +448,20 @@ func (s *Server) supervisionEventToSSE(event interface{}) *SSEEvent {
 		if len(result) > 2048 {
 			result = result[:2048] + "..."
 		}
+		displayResult := e.DisplayResult
+		if displayResult == "" {
+			displayResult = e.Result
+		}
+		if len(displayResult) > 2048 {
+			displayResult = displayResult[:2048] + "..."
+		}
 		return &SSEEvent{Event: "tool_end", Data: map[string]interface{}{
-			"runId":    e.RunID,
-			"toolName": e.ToolName,
-			"toolId":   e.ToolID,
-			"result":   result,
-			"isError":  e.Error != "",
+			"runId":        e.RunID,
+			"toolName":     e.ToolName,
+			"toolId":       e.ToolID,
+			"result":       result,
+			"displayResult": displayResult,
+			"isError":      e.Error != "",
 		}}
 
 	case gateway.EventAgentEnd:

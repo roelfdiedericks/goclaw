@@ -2867,8 +2867,8 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 	reg.Register(jq.NewTool(cfg.Gateway.WorkingDir, execRunner))
 
 	// Web search
-	if cfg.Tools.Web.BraveAPIKey != "" {
-		reg.Register(websearch.NewTool(cfg.Tools.Web.BraveAPIKey))
+	if cfg.Tools.Web.Search.Enabled {
+		reg.Register(websearch.NewTool(cfg.Tools.Web, cfg.LLM.Providers))
 	}
 
 	// Web fetch

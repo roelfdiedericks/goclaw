@@ -104,7 +104,25 @@ Common examples include shell timeout, browser settings, and web search keys.
       "headless": true
     },
     "web": {
-      "braveApiKey": "YOUR_API_KEY",
+      "braveApiKey": "YOUR_BRAVE_API_KEY",
+      "search": {
+        "enabled": true,
+        "provider": "auto",
+        "fallbackProviders": [],
+        "maxFallbackAttempts": 3,
+        "retry": {
+          "enabled": true,
+          "maxAttemptsPerProvider": 2,
+          "baseBackoffMs": 500,
+          "maxBackoffMs": 5000
+        },
+        "providers": {
+          "brave": { "apiKey": "YOUR_BRAVE_API_KEY" },
+          "grok": { "apiKey": "YOUR_XAI_API_KEY" },
+          "perplexity": { "apiKey": "YOUR_PERPLEXITY_API_KEY" },
+          "gemini": { "apiKey": "YOUR_GEMINI_API_KEY" }
+        }
+      },
       "useBrowser": "auto",
       "profile": "default",
       "headless": true
@@ -174,6 +192,16 @@ This is enabled by default, but only for allowlisted safe tools.
 | `parallelAllowlist` | `[]` | Empty uses built-in defaults; otherwise use your explicit list |
 
 Built-in allowlist (used when `parallelAllowlist` is empty): `read`, `web_search`, `web_fetch`, `memory_get`, `memory_search`, `transcript`.
+
+## web_search providers
+
+`web_search` supports `grok`, `brave`, `perplexity`, and `gemini`.
+
+- API keys are read from `goclaw.json` (`tools.web.search.providers.<provider>.apiKey`).
+- If your `goclaw.json` uses `${VAR}` placeholders, GoClaw expands them at config load.
+- Legacy `tools.web.braveApiKey` still works as a fallback for Brave.
+- If `provider` is `auto`, selection order is: `grok`, `brave`, `perplexity`, `gemini`.
+- On retryable failures (such as `429`, `408`, timeouts, `5xx`), `web_search` retries and can fall back to the next provider.
 
 ### Change it in the web editor
 

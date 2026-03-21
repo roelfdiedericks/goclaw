@@ -22,9 +22,43 @@ type ToolsConfig struct {
 // WebToolsConfig contains web tool settings
 type WebToolsConfig struct {
 	BraveAPIKey string `json:"braveApiKey"`
+	Search      WebSearchConfig `json:"search"`
 	UseBrowser  string `json:"useBrowser" default:"auto"` // Browser fallback: "auto" (on 403/bot), "always", "never"
 	Profile     string `json:"profile" default:"default"` // Browser profile for web_fetch
 	Headless    bool   `json:"headless" default:"true"`   // Run browser headless
+}
+
+// WebSearchConfig contains web_search provider and fallback settings.
+type WebSearchConfig struct {
+	Enabled             bool                     `json:"enabled" default:"true"`
+	Provider            string                   `json:"provider" default:"auto"` // auto|grok|brave|perplexity|gemini
+	FallbackProviders   []string                 `json:"fallbackProviders"`        // ordered provider fallback chain override
+	MaxFallbackAttempts int                      `json:"maxFallbackAttempts" default:"3"`
+	Retry               WebSearchRetryConfig     `json:"retry"`
+	Providers           WebSearchProvidersConfig `json:"providers"`
+}
+
+// WebSearchRetryConfig controls retry behavior before falling back providers.
+type WebSearchRetryConfig struct {
+	Enabled                bool `json:"enabled" default:"true"`
+	MaxAttemptsPerProvider int  `json:"maxAttemptsPerProvider" default:"2"`
+	BaseBackoffMs          int  `json:"baseBackoffMs" default:"500"`
+	MaxBackoffMs           int  `json:"maxBackoffMs" default:"5000"`
+}
+
+// WebSearchProvidersConfig holds provider-specific credentials and options.
+type WebSearchProvidersConfig struct {
+	Brave      WebSearchProviderConfig `json:"brave"`
+	Grok       WebSearchProviderConfig `json:"grok"`
+	Perplexity WebSearchProviderConfig `json:"perplexity"`
+	Gemini     WebSearchProviderConfig `json:"gemini"`
+}
+
+// WebSearchProviderConfig holds per-provider config values.
+type WebSearchProviderConfig struct {
+	APIKey  string `json:"apiKey,omitempty"`
+	BaseURL string `json:"baseUrl,omitempty"`
+	Model   string `json:"model,omitempty"`
 }
 
 // BrowserToolsConfig contains browser tool settings
@@ -96,6 +130,33 @@ func ConfigFormDef() forms.FormDef {
 		Title:       "Tools",
 		Description: "Configure AI-powered tools for image and video generation",
 		Sections: []forms.Section{
+			{
+				Title:     "Web Search",
+				Collapsed: true,
+				Fields: []forms.Field{
+					{Name: "web.search.enabled", Title: "Enable web_search", Type: forms.Toggle, Default: true},
+					{Name: "web.search.provider", Title: "Search Provider", Type: forms.Select, Default: "auto", Options: []forms.Option{
+						{Label: "Auto", Value: "auto"},
+						{Label: "Grok (xAI)", Value: "grok"},
+						{Label: "Brave", Value: "brave"},
+						{Label: "Perplexity", Value: "perplexity"},
+						{Label: "Gemini", Value: "gemini"},
+					}},
+					{Name: "web.search.fallbackProviders", Title: "Fallback Providers", Type: forms.StringList, Placeholder: "grok, brave, perplexity, gemini"},
+					{Name: "web.search.maxFallbackAttempts", Title: "Max Fallback Attempts", Type: forms.Number, Default: 3},
+					{Name: "web.search.retry.enabled", Title: "Enable Retries", Type: forms.Toggle, Default: true},
+					{Name: "web.search.retry.maxAttemptsPerProvider", Title: "Retries per Provider", Type: forms.Number, Default: 2},
+					{Name: "web.search.retry.baseBackoffMs", Title: "Retry Base Backoff (ms)", Type: forms.Number, Default: 500},
+					{Name: "web.search.retry.maxBackoffMs", Title: "Retry Max Backoff (ms)", Type: forms.Number, Default: 5000},
+					{Name: "web.search.providers.brave.apiKey", Title: "Brave API Key", Type: forms.Secret},
+					{Name: "web.search.providers.grok.apiKey", Title: "Grok API Key", Type: forms.Secret},
+					{Name: "web.search.providers.perplexity.apiKey", Title: "Perplexity API Key", Type: forms.Secret},
+					{Name: "web.search.providers.perplexity.baseUrl", Title: "Perplexity Base URL", Type: forms.Text},
+					{Name: "web.search.providers.perplexity.model", Title: "Perplexity Model", Type: forms.Text},
+					{Name: "web.search.providers.gemini.apiKey", Title: "Gemini API Key", Type: forms.Secret},
+					{Name: "web.search.providers.gemini.model", Title: "Gemini Model", Type: forms.Text},
+				},
+			},
 			{
 				Title: "xAI Image Generation",
 				Fields: []forms.Field{

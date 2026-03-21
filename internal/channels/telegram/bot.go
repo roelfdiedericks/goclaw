@@ -638,6 +638,21 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 	var thinkingMsg *tele.Message
 	var lastThinkingUpdate time.Time
 
+	// Tool activity summary (Option A): one editable status message for all tools in this run.
+	type toolRow struct {
+		Name       string
+		Status     string // running | completed | error
+		DurationMs int64
+		ArgsPreview string
+		OutLabel    string // "result" | "error"
+		OutPreview  string
+	}
+	var toolsMsg *tele.Message
+	var toolRowsByID = map[string]*toolRow{}
+	var toolOrder []string
+	var lastToolsUpdate time.Time
+	var runningTools int
+
 	// Get thinking mode preference upfront
 	userID := fmt.Sprintf("%d", c.Sender().ID)
 	u := b.users.FromIdentity("telegram", userID)
@@ -646,6 +661,117 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 	// Once text deltas start flowing (tools are finished), switch to streaming.
 	bufferMode := prefs.ShowThinking
 	toolsActive := false // true while a tool is running
+
+	toolKey := func(toolID, toolName string) string {
+		id := strings.TrimSpace(toolID)
+		if id != "" {
+			return id
+		}
+		return fmt.Sprintf("anon:%s:%d", strings.TrimSpace(toolName), len(toolOrder)+1)
+	}
+	findRunningKeyByName := func(toolName string) string {
+		for _, id := range toolOrder {
+			row := toolRowsByID[id]
+			if row == nil {
+				continue
+			}
+			if row.Name == toolName && row.Status == "running" {
+				return id
+			}
+		}
+		return ""
+	}
+	statusIcon := func(status string) string {
+		switch status {
+		case "completed":
+			return "✅"
+		case "error":
+			return "❌"
+		default:
+			return "⏳"
+		}
+	}
+	compactPreview := func(raw string, max int) string {
+		s := strings.TrimSpace(strings.Join(strings.Fields(raw), " "))
+		if s == "" {
+			return ""
+		}
+		if max <= 0 {
+			max = 120
+		}
+		if len(s) <= max {
+			return s
+		}
+		if max <= 3 {
+			return s[:max]
+		}
+		return s[:max-3] + "..."
+	}
+	renderToolsSummary := func(finalCompact bool) string {
+		if len(toolOrder) == 0 {
+			return ""
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("🛠 <b>Tool Activity (%d)</b>\n", len(toolOrder)))
+		for i, id := range toolOrder {
+			row := toolRowsByID[id]
+			if row == nil {
+				continue
+			}
+			dur := ""
+			if row.DurationMs > 0 {
+				dur = fmt.Sprintf(" %dms", row.DurationMs)
+			}
+			sb.WriteString(fmt.Sprintf("%d) %s <b>%s</b>%s\n",
+				i+1,
+				statusIcon(row.Status),
+				escapeHTML(row.Name),
+				dur,
+			))
+			showDetails := !finalCompact || row.Status == "error"
+			if showDetails && row.ArgsPreview != "" {
+				sb.WriteString(fmt.Sprintf("   • args: <code>%s</code>\n", escapeHTML(row.ArgsPreview)))
+			}
+			if showDetails && row.OutPreview != "" {
+				label := row.OutLabel
+				if label == "" {
+					label = "result"
+				}
+				sb.WriteString(fmt.Sprintf("   • %s: <code>%s</code>\n", escapeHTML(label), escapeHTML(row.OutPreview)))
+			}
+		}
+		out := strings.TrimSpace(sb.String())
+		if len(out) > 3500 {
+			out = out[:3500] + "\n..."
+		}
+		return out
+	}
+	flushToolsSummary := func(force bool, finalCompact bool) {
+		if !prefs.ShowThinking || len(toolOrder) == 0 {
+			return
+		}
+		if !force && time.Since(lastToolsUpdate) <= updateInterval {
+			return
+		}
+		body := renderToolsSummary(finalCompact)
+		if body == "" {
+			return
+		}
+		if toolsMsg == nil {
+			msg, err := b.bot.Send(c.Chat(), body, &tele.SendOptions{ParseMode: tele.ModeHTML})
+			if err != nil {
+				logging.L_trace("telegram: failed to send tool summary", "error", err)
+				return
+			}
+			toolsMsg = msg
+		} else {
+			if _, err := b.bot.Edit(toolsMsg, body, &tele.SendOptions{ParseMode: tele.ModeHTML}); err != nil {
+				logging.L_trace("telegram: failed to edit tool summary", "error", err)
+				return
+			}
+		}
+		lastToolsUpdate = time.Now()
+	}
 
 	logging.L_debug("telegram: starting response stream", "chatID", c.Chat().ID, "bufferMode", bufferMode)
 
@@ -691,7 +817,8 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 			}
 
 		case gateway.EventToolStart:
-			toolsActive = true
+			runningTools++
+			toolsActive = runningTools > 0
 			logging.L_debug("telegram: tool started", "tool", e.ToolName)
 			_ = c.Notify(tele.Typing)
 
@@ -704,47 +831,65 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 				}
 			}
 
-			// Show tool start if thinking mode is on
+			// Update structured tool summary if thinking mode is on.
 			if prefs.ShowThinking {
-				inputStr := string(e.Input)
-				if len(inputStr) > 1024 {
-					inputStr = inputStr[:1024] + "..."
+				id := toolKey(e.ToolID, e.ToolName)
+				inputStr := compactPreview(string(e.Input), 120)
+				if _, ok := toolRowsByID[id]; !ok {
+					toolRowsByID[id] = &toolRow{
+						Name:        e.ToolName,
+						Status:      "running",
+						ArgsPreview: inputStr,
+					}
+					toolOrder = append(toolOrder, id)
+				} else {
+					toolRowsByID[id].Status = "running"
+					if inputStr != "" {
+						toolRowsByID[id].ArgsPreview = inputStr
+					}
 				}
-				toolMsg := fmt.Sprintf("⚙️ <b>%s</b>\n<code>%s</code>",
-					escapeHTML(e.ToolName), escapeHTML(inputStr))
-				_, _ = b.bot.Send(c.Chat(), toolMsg, &tele.SendOptions{ParseMode: tele.ModeHTML})
+				flushToolsSummary(true, false)
 			}
 
 		case gateway.EventToolEnd:
-			toolsActive = false
+			if runningTools > 0 {
+				runningTools--
+			}
+			toolsActive = runningTools > 0
 			logging.L_debug("telegram: tool ended", "tool", e.ToolName, "hasError", e.Error != "")
 
-			// Tool results suppressed - too noisy
-			// TODO: make this a preference
-			// if prefs.ShowThinking {
-			// 	status := "✓"
-			// 	duration := ""
-			// 	if e.DurationMs > 0 {
-			// 		duration = fmt.Sprintf(" (%dms)", e.DurationMs)
-			// 	}
-			// 	if e.Error != "" {
-			// 		status = "✗"
-			// 	}
-			//
-			// 	result := e.Result
-			// 	if e.Error != "" {
-			// 		result = e.Error
-			// 	}
-			// 	if len(result) > 1024 {
-			// 		result = result[:1024] + "..."
-			// 	}
-			//
-			// 	toolMsg := fmt.Sprintf("%s Completed%s", status, duration)
-			// 	if result != "" {
-			// 		toolMsg += fmt.Sprintf("\n<code>%s</code>", escapeHTML(result))
-			// 	}
-			// 	_, _ = b.bot.Send(c.Chat(), toolMsg, &tele.SendOptions{ParseMode: tele.ModeHTML})
-			// }
+			if prefs.ShowThinking {
+				id := strings.TrimSpace(e.ToolID)
+				if id == "" {
+					id = findRunningKeyByName(e.ToolName)
+				}
+				if id == "" {
+					id = toolKey("", e.ToolName)
+				}
+				row, ok := toolRowsByID[id]
+				if !ok || row == nil {
+					row = &toolRow{Name: e.ToolName}
+					toolRowsByID[id] = row
+					toolOrder = append(toolOrder, id)
+				}
+				if row.Name == "" {
+					row.Name = e.ToolName
+				}
+				if e.Error != "" {
+					row.Status = "error"
+					row.OutLabel = "error"
+					row.OutPreview = compactPreview(e.Error, 140)
+				} else {
+					row.Status = "completed"
+					row.OutLabel = "result"
+					row.OutPreview = compactPreview(e.DisplayResult, 140)
+					if row.OutPreview == "" {
+						row.OutPreview = compactPreview(e.Result, 140)
+					}
+				}
+				row.DurationMs = e.DurationMs
+				flushToolsSummary(true, false)
+			}
 
 		case gateway.EventThinkingDelta:
 			// Accumulate thinking deltas if thinking mode is on
@@ -811,6 +956,7 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 				"editCount", editCount,
 				"elapsed", elapsed.Round(time.Millisecond),
 			)
+			flushToolsSummary(true, true)
 
 			// Check for inline media references
 			if containsMediaRefs(finalText) {

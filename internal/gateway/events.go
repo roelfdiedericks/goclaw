@@ -40,6 +40,7 @@ type EventToolEnd struct {
 	ToolName   string `json:"toolName"`
 	ToolID     string `json:"toolId"`
 	Result     string `json:"result"`
+	DisplayResult string `json:"displayResult,omitempty"` // Human-readable result for UI/debug (unwrapped)
 	Error      string `json:"error,omitempty"`
 	DurationMs int64  `json:"durationMs,omitempty"`
 }

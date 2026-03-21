@@ -11,7 +11,12 @@ Search the web and fetch page content.
 
 ## web_search
 
-Search the web using Brave Search API.
+Search the web using one of these providers:
+
+- `grok` (xAI)
+- `brave`
+- `perplexity`
+- `gemini`
 
 ```json
 {
@@ -27,19 +32,64 @@ Search the web using Brave Search API.
 {
   "tools": {
     "web": {
-      "braveApiKey": "YOUR_BRAVE_API_KEY"
+      "braveApiKey": "YOUR_BRAVE_API_KEY",
+      "search": {
+        "enabled": true,
+        "provider": "auto",
+        "fallbackProviders": [],
+        "maxFallbackAttempts": 3,
+        "retry": {
+          "enabled": true,
+          "maxAttemptsPerProvider": 2,
+          "baseBackoffMs": 500,
+          "maxBackoffMs": 5000
+        },
+        "providers": {
+          "brave": {
+            "apiKey": "YOUR_BRAVE_API_KEY"
+          },
+          "grok": {
+            "apiKey": "YOUR_XAI_API_KEY"
+          },
+          "perplexity": {
+            "apiKey": "YOUR_PERPLEXITY_API_KEY",
+            "baseUrl": "https://api.perplexity.ai",
+            "model": "sonar"
+          },
+          "gemini": {
+            "apiKey": "YOUR_GEMINI_API_KEY",
+            "model": "gemini-2.5-flash"
+          }
+        }
+      }
     }
   }
 }
 ```
 
-Get an API key at [brave.com/search/api](https://brave.com/search/api/).
+### Provider selection and fallback
+
+- `provider: "auto"` uses order: `grok`, `brave`, `perplexity`, `gemini`.
+- `fallbackProviders` overrides fallback order when set.
+- Retryable errors (`429`, `408`, timeouts, `5xx`) retry per provider, then can fall back.
+- Non-retryable errors (`401`, `403`, invalid request) fail that provider immediately.
+
+### Key resolution
+
+For each provider, API key resolution order is:
+
+1. `tools.web.search.providers.<provider>.apiKey`
+2. matching existing `llm.providers` key (when available)
+3. `tools.web.braveApiKey` (Brave only, compatibility)
+
+GoClaw reads keys from `goclaw.json`. If you use `${VAR}` placeholders there, GoClaw expands them during config load.
 
 ### Parameters
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `query` | Yes | Search query |
+| `count` | No | Results requested (default 5, max 20) |
 
 ### Example Output
 
@@ -83,7 +133,14 @@ Fetch a web page and extract readable text content.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `braveApiKey` | - | Brave Search API key |
+| `braveApiKey` | - | Legacy Brave key fallback |
+| `search.provider` | `"auto"` | `auto`, `grok`, `brave`, `perplexity`, `gemini` |
+| `search.fallbackProviders` | `[]` | Explicit fallback chain override |
+| `search.maxFallbackAttempts` | `3` | Max providers to attempt in one request |
+| `search.retry.enabled` | `true` | Enable retry logic |
+| `search.retry.maxAttemptsPerProvider` | `2` | Retry attempts per provider |
+| `search.retry.baseBackoffMs` | `500` | Retry backoff start |
+| `search.retry.maxBackoffMs` | `5000` | Retry backoff cap |
 | `useBrowser` | `"auto"` | Browser fallback mode for `web_fetch` (`auto`, `always`, `never`) |
 | `profile` | `"default"` | Browser profile used for fetch fallback |
 | `headless` | `true` | Run browser fallback in headless mode |

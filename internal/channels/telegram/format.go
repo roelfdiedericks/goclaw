@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"unicode/utf8"
 
@@ -224,73 +225,170 @@ func (r *TelegramRenderer) renderStrikethrough(w util.BufWriter, source []byte, 
 // Table rendering - output as preformatted text since Telegram doesn't support HTML tables
 func (r *TelegramRenderer) renderTable(w util.BufWriter, source []byte, node ast.Node, entering bool) (ast.WalkStatus, error) {
 	if entering {
+		tableText, links := r.renderTableAsText(source, node)
 		w.WriteString("<pre>")
-		// Render table manually as text
-		r.renderTableAsText(w, source, node)
+		w.WriteString(escapeHTMLString(tableText))
 		w.WriteString("</pre>\n")
+		r.renderTableLinks(w, links)
 		return ast.WalkSkipChildren, nil
 	}
 	return ast.WalkContinue, nil
 }
 
-func (r *TelegramRenderer) renderTableAsText(w util.BufWriter, source []byte, table ast.Node) {
+type tableLinkRef struct {
+	Index int
+	URL   string
+}
+
+type tableLinkRegistry struct {
+	order []tableLinkRef
+	ids   map[string]int
+}
+
+func newTableLinkRegistry() *tableLinkRegistry {
+	return &tableLinkRegistry{
+		order: make([]tableLinkRef, 0, 8),
+		ids:   make(map[string]int),
+	}
+}
+
+func (r *tableLinkRegistry) indexForURL(url string) int {
+	u := strings.TrimSpace(url)
+	if u == "" {
+		return 0
+	}
+	if idx, ok := r.ids[u]; ok {
+		return idx
+	}
+	idx := len(r.order) + 1
+	r.ids[u] = idx
+	r.order = append(r.order, tableLinkRef{Index: idx, URL: u})
+	return idx
+}
+
+func (r *TelegramRenderer) renderTableAsText(source []byte, table ast.Node) (string, []tableLinkRef) {
+	links := newTableLinkRegistry()
+	rows := make([][]string, 0, 8)
+
 	// First pass: calculate column widths (rune count - emojis may not align perfectly)
 	var colWidths []int
 	for row := table.FirstChild(); row != nil; row = row.NextSibling() {
+		rowTexts := make([]string, 0, 6)
 		col := 0
 		for cell := row.FirstChild(); cell != nil; cell = cell.NextSibling() {
-			cellText := r.getCellText(source, cell)
+			cellText := r.getCellText(source, cell, links)
 			width := utf8.RuneCountInString(cellText)
 			if col >= len(colWidths) {
 				colWidths = append(colWidths, width)
 			} else if width > colWidths[col] {
 				colWidths[col] = width
 			}
+			rowTexts = append(rowTexts, cellText)
 			col++
 		}
+		rows = append(rows, rowTexts)
 	}
 
 	// Second pass: render with padding
+	var out bytes.Buffer
 	isHeader := true
-	for row := table.FirstChild(); row != nil; row = row.NextSibling() {
-		w.WriteString("|")
-		col := 0
-		for cell := row.FirstChild(); cell != nil; cell = cell.NextSibling() {
-			cellText := r.getCellText(source, cell)
-			w.WriteString(" ")
-			w.WriteString(cellText)
+	for _, row := range rows {
+		out.WriteString("|")
+		for col, cellText := range row {
+			out.WriteString(" ")
+			out.WriteString(cellText)
 			// Pad to column width
 			if col < len(colWidths) {
 				padding := colWidths[col] - utf8.RuneCountInString(cellText)
 				if padding > 0 {
-					w.WriteString(strings.Repeat(" ", padding))
+					out.WriteString(strings.Repeat(" ", padding))
 				}
 			}
-			w.WriteString(" |")
-			col++
+			out.WriteString(" |")
 		}
-		w.WriteString("\n")
+		out.WriteString("\n")
 
 		// Add separator after header
 		if isHeader {
-			w.WriteString("|")
+			out.WriteString("|")
 			for _, width := range colWidths {
-				w.WriteString("-")
-				w.WriteString(strings.Repeat("-", width))
-				w.WriteString("-|")
+				out.WriteString("-")
+				out.WriteString(strings.Repeat("-", width))
+				out.WriteString("-|")
 			}
-			w.WriteString("\n")
+			out.WriteString("\n")
 			isHeader = false
+		}
+	}
+	return out.String(), links.order
+}
+
+func (r *TelegramRenderer) renderTableLinks(w util.BufWriter, links []tableLinkRef) {
+	if len(links) == 0 {
+		return
+	}
+	w.WriteString("<b>Links:</b>\n")
+	for _, ref := range links {
+		w.WriteString(fmt.Sprintf("[%d] ", ref.Index))
+		w.WriteString(`<a href="`)
+		w.WriteString(escapeHTMLString(ref.URL))
+		w.WriteString(`">`)
+		w.WriteString(escapeHTMLString(ref.URL))
+		w.WriteString("</a>\n")
+	}
+	w.WriteString("\n")
+}
+
+func (r *TelegramRenderer) getCellText(source []byte, cell ast.Node, links *tableLinkRegistry) string {
+	var buf bytes.Buffer
+	for child := cell.FirstChild(); child != nil; child = child.NextSibling() {
+		r.extractTableText(&buf, source, child, links)
+	}
+	return strings.TrimSpace(buf.String())
+}
+
+func (r *TelegramRenderer) extractTableText(buf *bytes.Buffer, source []byte, node ast.Node, links *tableLinkRegistry) {
+	switch n := node.(type) {
+	case *ast.Text:
+		buf.Write(n.Segment.Value(source))
+	case *ast.String:
+		buf.Write(n.Value)
+	case *ast.Link:
+		r.extractLinkLabel(buf, source, node, links.indexForURL(string(n.Destination)))
+	case *ast.AutoLink:
+		url := strings.TrimSpace(string(n.URL(source)))
+		if url == "" {
+			return
+		}
+		ref := links.indexForURL(url)
+		if ref <= 0 {
+			buf.WriteString(url)
+			return
+		}
+		buf.WriteString(url)
+		buf.WriteString(fmt.Sprintf(" [%d]", ref))
+	default:
+		for child := node.FirstChild(); child != nil; child = child.NextSibling() {
+			r.extractTableText(buf, source, child, links)
 		}
 	}
 }
 
-func (r *TelegramRenderer) getCellText(source []byte, cell ast.Node) string {
-	var buf bytes.Buffer
-	for child := cell.FirstChild(); child != nil; child = child.NextSibling() {
-		r.extractText(&buf, source, child)
+func (r *TelegramRenderer) extractLinkLabel(buf *bytes.Buffer, source []byte, node ast.Node, ref int) {
+	var label bytes.Buffer
+	for child := node.FirstChild(); child != nil; child = child.NextSibling() {
+		r.extractText(&label, source, child)
 	}
-	return strings.TrimSpace(buf.String())
+	text := strings.TrimSpace(label.String())
+	if text != "" {
+		buf.WriteString(text)
+	}
+	if ref > 0 {
+		if text != "" {
+			buf.WriteString(" ")
+		}
+		buf.WriteString(fmt.Sprintf("[%d]", ref))
+	}
 }
 
 func (r *TelegramRenderer) extractText(buf *bytes.Buffer, source []byte, node ast.Node) {

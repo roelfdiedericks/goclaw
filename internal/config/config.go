@@ -497,6 +497,14 @@ func applyRuntimeDefaults(cfg *Config, goclawDir, home string) {
 	if cfg.MemoryGraph.LiveExtraction.ExcludeSources == nil {
 		cfg.MemoryGraph.LiveExtraction.ExcludeSources = memorygraph.DefaultExcludeSources()
 	}
+
+	// Backward compatibility: hydrate new multi-provider web search key path from
+	// legacy tools.web.braveApiKey so config forms can display existing values.
+	if strings.TrimSpace(cfg.Tools.Web.Search.Providers.Brave.APIKey) == "" &&
+		strings.TrimSpace(cfg.Tools.Web.BraveAPIKey) != "" {
+		cfg.Tools.Web.Search.Providers.Brave.APIKey = cfg.Tools.Web.BraveAPIKey
+	}
+
 	if cfg.Session.Summarization.Checkpoint.Thresholds == nil {
 		cfg.Session.Summarization.Checkpoint.Thresholds = []int{25, 50, 75}
 	}

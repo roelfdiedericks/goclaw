@@ -45,6 +45,11 @@ type PromptParams struct {
 	// Memory graph bulletins (pre-generated, for injection="prompt" mode)
 	MemoryBulletin  string // Memory bulletin content (if injection="prompt")
 	ContextBulletin string // Context bulletin content (if injection="prompt")
+	// Tool batching and parallel-execution hints (runtime capabilities)
+	ParallelToolBatching   bool     // If true, model should consider batching independent tool calls in one turn
+	ParallelExecution      bool     // If true, gateway may execute eligible tool calls concurrently
+	ParallelMaxConcurrent  int      // Max concurrent eligible tools
+	ParallelEligibleTools  []string // Effective allowlist of tools eligible for parallel execution
 }
 
 // BuildSystemPrompt builds the full system prompt with workspace context injection
@@ -74,6 +79,10 @@ func BuildSystemPrompt(params PromptParams) string {
 		s := buildToolingSection(params.Tools)
 		toolsText += s
 		sections = append(sections, s)
+
+		ps := buildToolBatchingSection(params)
+		toolsText += ps
+		sections = append(sections, ps)
 	}
 
 	// 2b. Message tool guidance (if message tool is available)
@@ -285,6 +294,27 @@ func buildToolingSection(reg *tools.Registry) string {
 	lines = append(lines, "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.")
 	lines = append(lines, "If a task is more complex or takes longer, consider breaking it into steps.")
 
+	return strings.Join(lines, "\n")
+}
+
+func buildToolBatchingSection(params PromptParams) string {
+	var lines []string
+	lines = append(lines, "## Tool Batching & Parallelism")
+	lines = append(lines, "You may emit multiple tool calls in a single assistant turn when tasks are independent.")
+	lines = append(lines, "For dependent tasks, sequence calls so later inputs can use earlier outputs.")
+	lines = append(lines, "Do not assume completion order for batched calls.")
+	lines = append(lines, "")
+	lines = append(lines, fmt.Sprintf("- Multi-call batching supported: %t", params.ParallelToolBatching))
+	lines = append(lines, fmt.Sprintf("- Parallel execution enabled: %t", params.ParallelExecution))
+	if params.ParallelExecution {
+		lines = append(lines, fmt.Sprintf("- Max concurrent eligible tools: %d", params.ParallelMaxConcurrent))
+		if len(params.ParallelEligibleTools) > 0 {
+			lines = append(lines, "- Parallel-eligible tools: "+strings.Join(params.ParallelEligibleTools, ", "))
+		} else {
+			lines = append(lines, "- Parallel-eligible tools: none")
+		}
+		lines = append(lines, "- Non-eligible tools may execute sequentially even when batched.")
+	}
 	return strings.Join(lines, "\n")
 }
 

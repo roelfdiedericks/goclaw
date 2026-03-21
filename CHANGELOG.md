@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.5] stable - 2026-03-21
+
+- web_search: add multi-provider backend support (brave, grok/xai, perplexity, gemini) with a shared driver interface
+- web_search: add provider retry and fallback chain handling for transient upstream failures without changing agent/tool parallelism
+- web_search: add provider-aware result metadata so the agent can see which provider produced results
+- config: add full tools.web.search config-form support (default provider, fallbacks, retry tuning, per-provider keys)
+- config: add legacy brave key compatibility mapping into the new provider config path for smoother migration
+- http ui: fix run-scoped debug/tool panel lifecycle issues that caused duplicate or disappearing tool bubbles at turn completion
+- telegram: add structured streaming tool activity summary (thinking -> tools -> final response flow) with compact post-run success display
+- telegram: preserve clickable links for markdown tables by rendering table refs in `<pre>` and appending a clickable `Links:` section
+- tests/docs: add web_search resolver/tool unit coverage and update web/tooling docs for new provider configuration
+
 ## [0.1.4] stable - 2026-03-21
 - add binary file contentguard
 - http channel ui rewrite

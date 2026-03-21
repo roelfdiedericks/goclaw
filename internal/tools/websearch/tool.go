@@ -4,27 +4,43 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"strings"
-	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/contentguard"
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	toolsconfig "github.com/roelfdiedericks/goclaw/internal/tools/config"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
-// Tool searches the web using Brave Search API
+// Tool searches the web through configurable providers with retries/fallback.
 type Tool struct {
-	apiKey string
-	client *http.Client
+	cfg       toolConfig
+	providers map[string]ProviderDriver
 }
 
-// NewTool creates a new web search tool
-func NewTool(apiKey string) *Tool {
+// NewTool creates a new web search tool with multi-provider configuration.
+func NewTool(webCfg toolsconfig.WebToolsConfig, llmCfg map[string]llm.LLMProviderConfig) *Tool {
+	llmProviders := make(map[string]llmProviderCredential, len(llmCfg))
+	for name, cfg := range llmCfg {
+		llmProviders[name] = llmProviderCredential{
+			Driver:  cfg.Driver,
+			Subtype: cfg.Subtype,
+			APIKey:  strings.TrimSpace(cfg.APIKey),
+		}
+	}
+
 	return &Tool{
-		apiKey: apiKey,
-		client: &http.Client{Timeout: 30 * time.Second},
+		cfg: toolConfig{
+			Web:          webCfg,
+			LLMProviders: llmProviders,
+		},
+		providers: map[string]ProviderDriver{
+			providerBrave:      &braveDriver{},
+			providerGrok:       &grokDriver{},
+			providerPerplexity: &perplexityDriver{},
+			providerGemini:     &geminiDriver{},
+		},
 	}
 }
 
@@ -67,89 +83,166 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		return nil, fmt.Errorf("query is required")
 	}
 
-	if t.apiKey == "" {
-		return nil, fmt.Errorf("Brave API key not configured")
+	if !t.cfg.Web.Search.Enabled {
+		return nil, fmt.Errorf("web_search is disabled")
 	}
 
-	count := params.Count
-	if count <= 0 {
-		count = 5
+	req := SearchRequest{
+		Query: params.Query,
+		Count: normalizeCount(params.Count),
 	}
-	if count > 20 {
-		count = 20
-	}
-
-	L_debug("web_search: executing", "query", params.Query, "count", count)
-
-	// Build request URL
-	baseURL := "https://api.search.brave.com/res/v1/web/search"
-	reqURL, _ := url.Parse(baseURL)
-	q := reqURL.Query()
-	q.Set("q", params.Query)
-	q.Set("count", fmt.Sprintf("%d", count))
-	reqURL.RawQuery = q.Encode()
-
-	// Create request
-	req, err := http.NewRequestWithContext(ctx, "GET", reqURL.String(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	providerChain := t.resolveProviderChain()
+	if len(providerChain) == 0 {
+		return nil, fmt.Errorf("no web_search providers configured")
 	}
 
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("X-Subscription-Token", t.apiKey)
-
-	// Execute request
-	resp, err := t.client.Do(req)
-	if err != nil {
-		L_error("web_search: request failed", "error", err)
-		return nil, fmt.Errorf("search request failed: %w", err)
+	maxFallback := t.cfg.Web.Search.MaxFallbackAttempts
+	if maxFallback <= 0 || maxFallback > len(providerChain) {
+		maxFallback = len(providerChain)
 	}
-	defer resp.Body.Close()
+	providerChain = providerChain[:maxFallback]
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
+	L_debug("web_search: executing", "query", params.Query, "count", req.Count, "chain", strings.Join(providerIDs(providerChain), ","))
 
-	if resp.StatusCode != http.StatusOK {
-		L_error("web_search: API error", "status", resp.StatusCode, "body", string(body))
-		return nil, fmt.Errorf("search API error: %s", resp.Status)
-	}
-
-	// Parse response
-	var searchResp BraveSearchResponse
-	if err := json.Unmarshal(body, &searchResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	// Format results
-	var results []string
-	for i, result := range searchResp.Web.Results {
-		if i >= count {
-			break
+	var (
+		result    SearchResponse
+		lastErr   error
+		attempted []string
+	)
+	for _, attempt := range providerChain {
+		driver := t.providers[attempt.ID]
+		if driver == nil {
+			continue
 		}
-		results = append(results, fmt.Sprintf(
-			"%d. %s\n   URL: %s\n   %s",
-			i+1, result.Title, result.URL, result.Description,
-		))
+		attempted = append(attempted, attempt.ID)
+		res, err := t.executeWithRetry(ctx, driver, req, attempt.Config)
+		if err != nil {
+			lastErr = err
+			L_warn("web_search: provider failed", "provider", attempt.ID, "error", err)
+			continue
+		}
+		result = res
+		lastErr = nil
+		break
 	}
 
-	if len(results) == 0 {
-		return types.TextResult("No results found."), nil
+	if lastErr != nil {
+		return nil, fmt.Errorf("web_search failed after providers [%s]: %w", strings.Join(attempted, ", "), lastErr)
 	}
 
-	L_debug("web_search: completed", "results", len(results))
-	return types.TextResult(strings.Join(results, "\n\n")), nil
+	content := formatSearchResponse(result)
+	if strings.TrimSpace(content) == "" {
+		content = "No results found."
+	}
+	safe := contentguard.ToolResultText(content)
+	if safe.Changed {
+		L_warn("web_search: sanitized result", "reason", safe.Reason, "mime", safe.MIME, "bytes", safe.OriginalBytes, "provider", result.Provider)
+	}
+
+	L_info("web_search: completed", "provider", result.Provider, "items", len(result.Items), "citations", len(result.Citations))
+	return types.ExternalTextResult(safe.Text, "web"), nil
 }
 
-// BraveSearchResponse represents the Brave Search API response
-type BraveSearchResponse struct {
-	Web struct {
-		Results []struct {
-			Title       string `json:"title"`
-			URL         string `json:"url"`
-			Description string `json:"description"`
-		} `json:"results"`
-	} `json:"web"`
+func (t *Tool) executeWithRetry(
+	ctx context.Context,
+	driver ProviderDriver,
+	req SearchRequest,
+	cfg ProviderConfig,
+) (SearchResponse, error) {
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		return SearchResponse{}, newProviderError(driver.ID(), "API key not configured", false, nil)
+	}
+
+	maxAttempts := t.cfg.Web.Search.Retry.MaxAttemptsPerProvider
+	if maxAttempts <= 0 {
+		maxAttempts = 1
+	}
+	if !t.cfg.Web.Search.Retry.Enabled {
+		maxAttempts = 1
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		res, err := driver.Search(ctx, req, cfg)
+		if err == nil {
+			return res, nil
+		}
+		lastErr = err
+		if !isRetryableProviderError(err) || attempt == maxAttempts {
+			return SearchResponse{}, err
+		}
+
+		delay := retryBackoff(t.cfg.Web.Search.Retry.BaseBackoffMs, t.cfg.Web.Search.Retry.MaxBackoffMs, attempt)
+		L_warn("web_search: retrying provider", "provider", driver.ID(), "attempt", attempt+1, "delayMs", delay.Milliseconds(), "error", err)
+		if err := sleepWithContext(ctx, delay); err != nil {
+			return SearchResponse{}, err
+		}
+	}
+	return SearchResponse{}, lastErr
+}
+
+func providerIDs(chain []providerAttempt) []string {
+	out := make([]string, 0, len(chain))
+	for _, p := range chain {
+		out = append(out, p.ID)
+	}
+	return out
+}
+
+func formatSearchResponse(resp SearchResponse) string {
+	lines := make([]string, 0, 12+len(resp.Items)*4)
+	resultType := "results"
+	hasAnswer := strings.TrimSpace(resp.Answer) != ""
+	hasItems := len(resp.Items) > 0
+	switch {
+	case hasAnswer && hasItems:
+		resultType = "mixed"
+	case hasAnswer:
+		resultType = "answer"
+	case hasItems:
+		resultType = "results"
+	default:
+		resultType = "empty"
+	}
+
+	lines = append(lines,
+		fmt.Sprintf("Meta: provider=%s resultType=%s count=%d citations=%d", strings.TrimSpace(resp.Provider), resultType, len(resp.Items), len(resp.Citations)),
+	)
+
+	if strings.TrimSpace(resp.Answer) != "" {
+		lines = append(lines, "", strings.TrimSpace(resp.Answer))
+	}
+
+	if len(resp.Items) > 0 {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		for i, item := range resp.Items {
+			title := strings.TrimSpace(item.Title)
+			if title == "" {
+				title = item.URL
+			}
+			lines = append(lines, fmt.Sprintf("%d. %s", i+1, title))
+			if strings.TrimSpace(item.URL) != "" {
+				lines = append(lines, "   URL: "+strings.TrimSpace(item.URL))
+			}
+			if strings.TrimSpace(item.Snippet) != "" {
+				lines = append(lines, "   "+strings.TrimSpace(item.Snippet))
+			}
+			lines = append(lines, "")
+		}
+	}
+
+	if len(resp.Citations) > 0 {
+		lines = append(lines, "Citations:")
+		for _, c := range resp.Citations {
+			c = strings.TrimSpace(c)
+			if c == "" {
+				continue
+			}
+			lines = append(lines, "- "+c)
+		}
+	}
+
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }

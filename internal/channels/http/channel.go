@@ -569,16 +569,24 @@ func (c *HTTPChannel) convertEvent(event gateway.AgentEvent) *SSEEvent {
 		}}
 
 	case gateway.EventToolEnd:
-		// Truncate result for display (1024 chars max)
+		// Truncate wrapped and display results for SSE payload.
 		result := e.Result
 		if len(result) > 1024 {
 			result = result[:1024] + "..."
+		}
+		displayResult := e.DisplayResult
+		if displayResult == "" {
+			displayResult = e.Result
+		}
+		if len(displayResult) > 1024 {
+			displayResult = displayResult[:1024] + "..."
 		}
 		return &SSEEvent{Event: "tool_end", Data: map[string]interface{}{
 			"runId":      e.RunID,
 			"toolName":   e.ToolName,
 			"toolId":     e.ToolID,
 			"result":     result,
+			"displayResult": displayResult,
 			"error":      e.Error,
 			"durationMs": e.DurationMs,
 		}}

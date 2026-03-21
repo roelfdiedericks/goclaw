@@ -226,12 +226,7 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 		"minMessages", sumCfg.Compaction.MinMessages,
 		"retryInterval", sumCfg.RetryIntervalSeconds)
 
-	allow := g.parallelToolAllowlist()
-	allowList := make([]string, 0, len(allow))
-	for name := range allow {
-		allowList = append(allowList, name)
-	}
-	sort.Strings(allowList)
+	allowList := g.parallelToolAllowlistNames()
 	allowSource := "default"
 	if len(cfg.Gateway.ToolExecution.ParallelAllowlist) > 0 {
 		allowSource = "config"
@@ -1970,6 +1965,16 @@ func (g *Gateway) parallelToolAllowlist() map[string]bool {
 	return out
 }
 
+func (g *Gateway) parallelToolAllowlistNames() []string {
+	allow := g.parallelToolAllowlist()
+	names := make([]string, 0, len(allow))
+	for name := range allow {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func (g *Gateway) parallelToolMaxConcurrent() int {
 	n := g.config.Gateway.ToolExecution.MaxConcurrent
 	if n < 1 {
@@ -2268,6 +2273,10 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		RoleSystemPromptFile: roleSystemPromptFile,
 		TimeInSystemPrompt:   g.config.PromptCache.TimeInSystemPrompt,
 		AgentExtraction:      agentExtraction,
+		ParallelToolBatching:  true,
+		ParallelExecution:     g.config.Gateway.ToolExecution.ParallelEnabled,
+		ParallelMaxConcurrent: g.parallelToolMaxConcurrent(),
+		ParallelEligibleTools: g.parallelToolAllowlistNames(),
 	}
 
 	// Inject bulletins into prompt params based on injection mode (only if not empty)
@@ -2504,7 +2513,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					if status == "failed" {
 						result = ""
 					}
-					sendEvent(EventToolEnd{RunID: runID, ToolName: name, ToolID: "", Result: result, Error: errMsg})
+					sendEvent(EventToolEnd{RunID: runID, ToolName: name, ToolID: "", Result: result, DisplayResult: result, Error: errMsg})
 				}
 			},
 			OnBeforeModelAttempt: func(modelRef string, modelContextWindow int) error {
@@ -2768,6 +2777,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 				type parallelToolResult struct {
 					resultText string
+					displayText string
 					content    []types.ContentBlock
 					errStr     string
 					durationMs int64
@@ -2785,10 +2795,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 							ToolName: tc.Name,
 							ToolID:   tc.ID,
 							Result:   result,
+							DisplayResult: result,
 							Error:    "permission_denied",
 						})
 						results[i] = parallelToolResult{
 							resultText: result,
+							displayText: result,
 							errStr:     "permission_denied",
 							handled:    true,
 						}
@@ -2801,10 +2813,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 							ToolName: tc.Name,
 							ToolID:   tc.ID,
 							Result:   result,
+							DisplayResult: result,
 							Error:    "purpose_denied",
 						})
 						results[i] = parallelToolResult{
 							resultText: result,
+							displayText: result,
 							errStr:     "purpose_denied",
 							handled:    true,
 						}
@@ -2835,10 +2849,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 								ToolName: tc.Name,
 								ToolID:   tc.ID,
 								Result:   "Tool execution cancelled",
+								DisplayResult: "Tool execution cancelled",
 								Error:    "cancelled",
 							})
 							results[i] = parallelToolResult{
 								resultText: "Tool execution cancelled",
+								displayText: "Tool execution cancelled",
 								errStr:     "cancelled",
 								handled:    true,
 							}
@@ -2865,6 +2881,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 						}
 
 						resultText := toolResult.GetText()
+						displayText := resultText
 						if toolResult.ExternalContent {
 							wrapped, spoofed := security.WrapExternalContent(resultText, toolResult.ExternalSource, tc.Name)
 							if spoofed {
@@ -2876,9 +2893,11 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 							resultText = wrapped
 						}
 						if req.OnMediaToSend != nil {
-							parseResult := media.SplitMediaFromOutput(resultText)
-							resultText = parseResult.Text
-							for _, mediaPath := range parseResult.MediaURLs {
+							parseResultWrapped := media.SplitMediaFromOutput(resultText)
+							resultText = parseResultWrapped.Text
+							parseResultDisplay := media.SplitMediaFromOutput(displayText)
+							displayText = parseResultDisplay.Text
+							for _, mediaPath := range parseResultWrapped.MediaURLs {
 								if mediaErr := req.OnMediaToSend(mediaPath, ""); mediaErr != nil {
 									L_warn("failed to send media", "path", mediaPath, "error", mediaErr)
 								}
@@ -2890,11 +2909,13 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 							ToolName:   tc.Name,
 							ToolID:     tc.ID,
 							Result:     resultText,
+							DisplayResult: displayText,
 							Error:      errStr,
 							DurationMs: toolDuration.Milliseconds(),
 						})
 						results[i] = parallelToolResult{
 							resultText: resultText,
+							displayText: displayText,
 							content:    toolResult.Content,
 							errStr:     errStr,
 							durationMs: toolDuration.Milliseconds(),
@@ -2909,6 +2930,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					r := results[i]
 					if !r.handled {
 						r.resultText = "Tool execution failed: no result"
+						r.displayText = r.resultText
 						r.errStr = "no_result"
 					}
 
@@ -2975,6 +2997,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 						ToolName: tc.Name,
 						ToolID:   tc.ID,
 						Result:   result,
+						DisplayResult: result,
 						Error:    "permission_denied",
 					})
 					toolUseID := sess.AddToolUse(tc.ID, tc.Name, tc.Input, response.Thinking, responseGroupID)
@@ -3015,6 +3038,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 						ToolName: tc.Name,
 						ToolID:   tc.ID,
 						Result:   result,
+						DisplayResult: result,
 						Error:    "purpose_denied",
 					})
 					toolUseID := sess.AddToolUse(tc.ID, tc.Name, tc.Input, response.Thinking, responseGroupID)
@@ -3075,6 +3099,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 				// Get text content for downstream processing
 				resultText := toolResult.GetText()
+				displayText := resultText
 
 				// Wrap external content with security boundaries
 				if toolResult.ExternalContent {
@@ -3093,9 +3118,11 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 				// Check for media in tool output
 				if req.OnMediaToSend != nil {
-					parseResult := media.SplitMediaFromOutput(resultText)
-					resultText = parseResult.Text
-					for _, mediaPath := range parseResult.MediaURLs {
+					parseResultWrapped := media.SplitMediaFromOutput(resultText)
+					resultText = parseResultWrapped.Text
+					parseResultDisplay := media.SplitMediaFromOutput(displayText)
+					displayText = parseResultDisplay.Text
+					for _, mediaPath := range parseResultWrapped.MediaURLs {
 						if mediaErr := req.OnMediaToSend(mediaPath, ""); mediaErr != nil {
 							L_warn("failed to send media", "path", mediaPath, "error", mediaErr)
 						}
@@ -3107,6 +3134,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					ToolName:   tc.Name,
 					ToolID:     tc.ID,
 					Result:     resultText,
+					DisplayResult: displayText,
 					Error:      errStr,
 					DurationMs: toolDuration.Milliseconds(),
 				})
@@ -3727,6 +3755,10 @@ func (g *Gateway) BuildSystemPromptForVoice(ctx context.Context, params VoicePro
 		RoleSystemPromptFile: roleSystemPromptFile,
 		TimeInSystemPrompt:   g.config.PromptCache.TimeInSystemPrompt,
 		AgentExtraction:      agentExtraction,
+		ParallelToolBatching:  true,
+		ParallelExecution:     g.config.Gateway.ToolExecution.ParallelEnabled,
+		ParallelMaxConcurrent: g.parallelToolMaxConcurrent(),
+		ParallelEligibleTools: g.parallelToolAllowlistNames(),
 	}
 
 	// Inject bulletins based on mode
@@ -4290,40 +4322,47 @@ func extractMessageToolText(toolInput []byte) string {
 	return input.Message
 }
 
-// buildMediaInstructions returns media storage instructions for the system prompt.
 // resolveThinkingLevel determines the effective thinking level based on priority hierarchy:
 // Request Override > User Preference > Provider Default > Global Default
 // Note: Request.ThinkingLevel is set by channel handlers based on per-session preferences
 func (g *Gateway) resolveThinkingLevel(req AgentRequest, providerName string) llm.ThinkingLevel {
+	var level llm.ThinkingLevel
+
 	// 1. Request override (set via /thinking command by channel handler)
 	if req.ThinkingLevel != "" {
 		L_trace("thinking: using request override", "level", req.ThinkingLevel)
-		return llm.ParseThinkingLevel(req.ThinkingLevel)
-	}
-
-	// 2. User preference
-	if req.User != nil && req.User.ThinkingLevel != "" {
+		level = llm.ParseThinkingLevel(req.ThinkingLevel)
+	} else if req.User != nil && req.User.ThinkingLevel != "" {
+		// 2. User preference
 		L_trace("thinking: using user preference", "user", req.User.ID, "level", req.User.ThinkingLevel)
-		return llm.ParseThinkingLevel(req.User.ThinkingLevel)
-	}
-
-	// 3. Provider default (from config)
-	if providerName != "" {
+		level = llm.ParseThinkingLevel(req.User.ThinkingLevel)
+	} else if providerName != "" {
+		// 3. Provider default (from config)
 		if providerCfg, ok := g.config.LLM.Providers[providerName]; ok && providerCfg.ThinkingLevel != "" {
 			L_trace("thinking: using provider default", "provider", providerName, "level", providerCfg.ThinkingLevel)
-			return llm.ParseThinkingLevel(providerCfg.ThinkingLevel)
+			level = llm.ParseThinkingLevel(providerCfg.ThinkingLevel)
 		}
 	}
-
-	// 4. Global default from config
-	if g.config.LLM.Thinking.DefaultLevel != "" {
+	if level == "" && g.config.LLM.Thinking.DefaultLevel != "" {
+		// 4. Global default from config
 		L_trace("thinking: using global default", "level", g.config.LLM.Thinking.DefaultLevel)
-		return llm.ParseThinkingLevel(g.config.LLM.Thinking.DefaultLevel)
+		level = llm.ParseThinkingLevel(g.config.LLM.Thinking.DefaultLevel)
+	}
+	if level == "" {
+		// 5. Fallback to hardcoded default
+		L_trace("thinking: using hardcoded default", "level", llm.DefaultThinkingLevel)
+		level = llm.DefaultThinkingLevel
 	}
 
-	// 5. Fallback to hardcoded default
-	L_trace("thinking: using hardcoded default", "level", llm.DefaultThinkingLevel)
-	return llm.DefaultThinkingLevel
+	// Normalize contradictory state: thinking toggle on but resolved level is disabled.
+	// This can happen when old user/session state has showThinking=true + thinkingLevel=off.
+	if req.EnableThinking && !level.IsEnabled() {
+		L_warn("thinking: enable requested with disabled level; normalizing to default",
+			"requestedLevel", level.String(),
+			"fallbackLevel", llm.DefaultThinkingLevel.String())
+		return llm.DefaultThinkingLevel
+	}
+	return level
 }
 
 // MediaPromptOptions configures channel-specific media prompt generation.

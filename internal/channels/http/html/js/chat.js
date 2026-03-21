@@ -166,6 +166,29 @@
         }
     }
 
+    function resetTransientRunDebugMaps() {
+        // Keep debugByCanonicalIndex snapshots; reset only live run/panel instances
+        // that point at current DOM nodes.
+        runViewsByID = {};
+        toolPanelsByRun = {};
+        toolPanelOrder = [];
+        toolAutoSeqByRun = {};
+    }
+
+    function shiftDebugIndexMap(dropCount) {
+        if (!dropCount || dropCount <= 0) return;
+        var shifted = {};
+        Object.keys(debugByCanonicalIndex).forEach(function(k) {
+            var idx = parseInt(k, 10);
+            if (isNaN(idx)) return;
+            var nextIdx = idx - dropCount;
+            if (nextIdx >= 0) {
+                shifted[String(nextIdx)] = debugByCanonicalIndex[k];
+            }
+        });
+        debugByCanonicalIndex = shifted;
+    }
+
     /**
      * Push one row into canonicalHistory. If storage cap slices, rebuild DOM from tail when safe.
      * @returns {boolean} true if DOM was fully rebuilt (caller must not also append the new bubble).
@@ -177,6 +200,7 @@
             var over = canonicalHistory.length - MAX_MESSAGES;
             logDomCap('storage-slice', { droppedFromFront: over, role: entry.role });
             canonicalHistory = canonicalHistory.slice(-MAX_MESSAGES);
+            shiftDebugIndexMap(over);
             historyWindowStart = Math.max(0, historyWindowStart - over);
             historyWindowEnd = canonicalHistory.length - 1;
             persistCanonicalHistory();
@@ -203,7 +227,25 @@
     var typingTimeout = null; // For hiding typing indicator after inactivity
     var TYPING_TIMEOUT_MS = 5000; // Hide typing after 5s of no stream data
     var showThinking = false; // Whether to show tool calls and thinking output
-    var activeToolCalls = {}; // Track active tool calls by ID
+    var currentThinkingRunId = null;
+    var currentThinkingText = '';
+    var $currentThinkingWrap = null;
+    var $currentThinkingText = null;
+    var lastStartedRunId = null;
+    var runViewsByID = {};
+    var debugByCanonicalIndex = {};
+    var toolPanelsByRun = {};
+    var toolPanelOrder = [];
+    var toolAutoSeqByRun = {};
+    var TOOL_PANEL_FILTERS = ['all', 'running', 'errors'];
+    var TOOL_DEBUG_LOG = true;
+
+    function toolDebugLog(label, data) {
+        if (!TOOL_DEBUG_LOG || !window.console || typeof console.log !== 'function') return;
+        try {
+            console.log('goclaw chat: tool-debug ' + label, data || {});
+        } catch (e) { /* ignore */ }
+    }
 
     // P2a: streaming display — plain (default) vs debounced incremental markdown (§ CHATIMPROVEMENT)
     var STREAM_MARKDOWN_STORAGE = 'goclaw_chat_stream_markdown';
@@ -249,7 +291,7 @@
     }
 
     function applyCurrentStreamRender() {
-        if (!$currentBubble || showThinking) return;
+        if (!$currentBubble) return;
         if (streamMarkdownMode === 'plain') {
             $currentBubble.text(currentRawText);
         } else if (streamMarkdownMode === 'debounced') {
@@ -279,7 +321,7 @@
         }
     }
     function scheduleStreamMarkdownUpdate() {
-        if (streamMarkdownMode !== 'debounced' || showThinking || !$currentBubble) return;
+        if (streamMarkdownMode !== 'debounced' || !$currentBubble) return;
         cancelStreamMarkdownDebounce();
         streamMarkdownDebounceTimer = setTimeout(function() {
             streamMarkdownDebounceTimer = null;
@@ -304,6 +346,544 @@
         return $('<div>').text(text || '').html();
     }
 
+    function resetThinkingStreamState(runId) {
+        currentThinkingRunId = runId || null;
+        currentThinkingText = '';
+        $currentThinkingWrap = null;
+        $currentThinkingText = null;
+    }
+
+    function ensureThinkingStreamBlock() {
+        if ($currentThinkingText && $currentThinkingText.length) return;
+        var runView = ensureRunView(currentThinkingRunId || currentRunId);
+        if (!runView) return;
+        var debugClass = isSupervising ? ' debug-content' : '';
+        var $thinking = $('<div class="thinking-content' + debugClass + '">' +
+            '<details open>' +
+                '<summary><i class="bi bi-lightbulb"></i> Reasoning</summary>' +
+                '<div class="thinking-text"></div>' +
+            '</details>' +
+        '</div>');
+        runView.$debugHost.append($thinking);
+        setRunDebugVisible(runView, true);
+        $currentThinkingWrap = $thinking;
+        $currentThinkingText = $thinking.find('.thinking-text');
+    }
+
+    function updateThinkingStreamText(content) {
+        if (!isSupervising && !showThinking) return;
+        if (!content) return;
+        ensureThinkingStreamBlock();
+        currentThinkingText = content;
+        if ($currentThinkingText && $currentThinkingText.length) {
+            $currentThinkingText.text(currentThinkingText);
+        }
+        scrollChatToBottom();
+    }
+
+    function appendThinkingDelta(delta, runId) {
+        if (!isSupervising && !showThinking) return;
+        if (!delta) return;
+        if (runId && currentThinkingRunId && runId !== currentThinkingRunId) {
+            resetThinkingStreamState(runId);
+        }
+        ensureThinkingStreamBlock();
+        currentThinkingText += delta;
+        if ($currentThinkingText && $currentThinkingText.length) {
+            $currentThinkingText.text(currentThinkingText);
+        }
+        scrollChatToBottom();
+    }
+
+    function shouldAutoscrollToolActivity() {
+        var viewportBottom = window.scrollY + window.innerHeight;
+        var docBottom = document.documentElement.scrollHeight;
+        return (docBottom - viewportBottom) < 220;
+    }
+
+    function buildToolPreview(text, maxLen) {
+        var value = String(text || '').replace(/\s+/g, ' ').trim();
+        if (!value) return '';
+        if (value.length <= maxLen) return value;
+        return value.slice(0, maxLen - 3) + '...';
+    }
+
+    function getRunView(runId) {
+        if (!runId) return null;
+        return runViewsByID[String(runId)] || null;
+    }
+
+    function resolveRunIdFromData(data) {
+        if (!data) return '';
+        var rid = String(data.runId || data.RunID || '').trim();
+        return rid;
+    }
+
+    function getCurrentRunIdFromDom() {
+        if (!$currentBubble || !$currentBubble.length) return '';
+        var rid = String($currentBubble.closest('.run-message').attr('data-run-id') || '').trim();
+        return rid;
+    }
+
+    function resolveEventRunId(data) {
+        var rid = resolveRunIdFromData(data);
+        if (rid) return rid;
+        if (currentRunId) return String(currentRunId);
+        var domRid = getCurrentRunIdFromDom();
+        if (domRid) return domRid;
+        if (lastStartedRunId) return String(lastStartedRunId);
+        return '';
+    }
+
+    function setRunDebugVisible(runView, visible) {
+        if (!runView) return;
+        if (visible) {
+            runView.$debugHost.show();
+        } else {
+            runView.$debugHost.hide();
+        }
+    }
+
+    function pinRunDebug(runView) {
+        if (!runView) return;
+        if (!runView.pinned) {
+            runView.pinned = true;
+        }
+        var visible = runView.$debugHost.is(':visible');
+        setRunDebugVisible(runView, visible);
+    }
+
+    function ensureRunView(runId) {
+        var key = String(runId || currentRunId || getCurrentRunIdFromDom() || lastStartedRunId || '');
+        if (!key) return null;
+        var existing = getRunView(key);
+        if (existing) {
+            toolDebugLog('ensureRunView:existing', { key: key });
+            return existing;
+        }
+
+        if ($currentBubble && $currentBubble.length) {
+            var $msg = $currentBubble.closest('.message');
+            if ($msg.length) {
+                var $toggle = $msg.find('.run-debug-toggle');
+                if (!$toggle.length) {
+                    $toggle = $();
+                }
+                var $host = $msg.find('.run-debug-host');
+                if (!$host.length) {
+                    $host = $('<div class="run-debug-host" style="display:none;"></div>');
+                    var $bubble = $msg.find('.bubble').first();
+                    if ($bubble.length) {
+                        $bubble.before($host);
+                    } else {
+                        $msg.append($host);
+                    }
+                }
+                $msg.attr('data-run-id', key);
+                var view = { runId: key, $message: $msg, $debugToggle: $toggle, $debugHost: $host, pinned: false };
+                runViewsByID[key] = view;
+                toolDebugLog('ensureRunView:created', {
+                    key: key,
+                    hasCurrentBubble: !!($currentBubble && $currentBubble.length),
+                    runViewKeys: Object.keys(runViewsByID),
+                });
+                return view;
+            }
+        }
+        toolDebugLog('ensureRunView:missing', {
+            key: key,
+            currentRunId: currentRunId,
+            domRunId: getCurrentRunIdFromDom(),
+            lastStartedRunId: lastStartedRunId,
+        });
+        return null;
+    }
+
+    function collapseRunDebugSections(runView) {
+        if (!runView || !runView.$debugHost) return;
+        runView.$debugHost.find('details').prop('open', false);
+    }
+
+    function finalizeRunDebugAfterDone(runId, keepOpen) {
+        var runView = getRunView(runId);
+        if (!runView) return;
+        if (runView.$debugHost.children().length === 0) {
+            runView.$debugHost.hide();
+            return;
+        }
+        // Keep host visible if it has debug content; collapse only details when not pinned.
+        if (keepOpen || runView.pinned) {
+            setRunDebugVisible(runView, true);
+        } else {
+            setRunDebugVisible(runView, true);
+            collapseRunDebugSections(runView);
+        }
+    }
+
+    function findToolPanelForRun(runId, runView) {
+        var key = String(runId || '');
+        if (key && toolPanelsByRun[key]) {
+            return toolPanelsByRun[key];
+        }
+        for (var i = 0; i < toolPanelOrder.length; i++) {
+            var panelKey = toolPanelOrder[i];
+            var panel = toolPanelsByRun[panelKey];
+            if (!panel) continue;
+            if (runView && panel.runView === runView) {
+                return panel;
+            }
+        }
+        return null;
+    }
+
+    function buildRunDebugState(runId) {
+        var runView = getRunView(runId);
+        if (!runView || !runView.$debugHost) return null;
+        if (runView.$debugHost.children().length === 0) return null;
+
+        var state = {
+            runId: String(runId || ''),
+            pinned: !!runView.pinned
+        };
+
+        var $thinking = runView.$debugHost.find('.thinking-content').first();
+        if ($thinking.length) {
+            state.thinking = {
+                text: String($thinking.find('.thinking-text').text() || ''),
+                open: !!$thinking.find('details').first().prop('open')
+            };
+        }
+
+        var panel = findToolPanelForRun(runId, runView);
+        if (panel) {
+            var rows = [];
+            for (var i = 0; i < panel.orderedKeys.length; i++) {
+                var key = panel.orderedKeys[i];
+                var row = panel.rowsByKey[key];
+                if (!row) continue;
+                var dur = 0;
+                var durText = String(row.$duration.text() || '');
+                var m = durText.match(/(\d+)/);
+                if (m) dur = parseInt(m[1], 10) || 0;
+                rows.push({
+                    key: key,
+                    toolName: row.toolName,
+                    status: row.status,
+                    durationMs: dur,
+                    inputText: String(row.$item.find('.tool-activity-input').text() || ''),
+                    outputText: String(row.$resultOutput.text() || ''),
+                    open: !!row.$item.find('details').first().prop('open')
+                });
+            }
+            state.tools = {
+                filter: panel.filter || 'all',
+                open: !!panel.$panel.find('details').first().prop('open'),
+                rows: rows
+            };
+        }
+        return state;
+    }
+
+    function persistRunDebugSnapshotToIndex(runId, canonicalIndex) {
+        if (canonicalIndex === undefined || canonicalIndex === null || canonicalIndex < 0) return;
+        var state = buildRunDebugState(runId);
+        if (!state) {
+            // Fallback: try the currently mounted run message key.
+            var domRunId = getCurrentRunIdFromDom();
+            if (domRunId && domRunId !== String(runId || '')) {
+                state = buildRunDebugState(domRunId);
+            }
+        }
+        if (!state) return;
+        debugByCanonicalIndex[String(canonicalIndex)] = state;
+    }
+
+    function hydrateDebugForCanonicalIndex($message, canonicalIndex) {
+        if (!$message || !$message.length) return;
+        var snap = debugByCanonicalIndex[String(canonicalIndex)];
+        if (!snap) return;
+        var runId = String(snap.runId || ('hist-' + String(canonicalIndex)));
+        $message.addClass('run-message');
+        $message.attr('data-run-id', runId);
+        var $bubble = $message.find('.bubble').first();
+        var $host = $message.find('.run-debug-host');
+        if (!$host.length) {
+            $host = $('<div class="run-debug-host"></div>');
+            if ($bubble.length) {
+                $bubble.before($host);
+            } else {
+                $message.append($host);
+            }
+        }
+        $host.empty().show();
+
+        var runView = {
+            runId: runId,
+            $message: $message,
+            $debugToggle: $(),
+            $debugHost: $host,
+            pinned: !!snap.pinned,
+        };
+        runViewsByID[runId] = runView;
+
+        if (snap.thinking && snap.thinking.text) {
+            var debugClass = isSupervising ? ' debug-content' : '';
+            var $thinking = $('<div class="thinking-content' + debugClass + '">' +
+                '<details>' +
+                    '<summary><i class="bi bi-lightbulb"></i> Reasoning</summary>' +
+                    '<div class="thinking-text"></div>' +
+                '</details>' +
+            '</div>');
+            $thinking.find('.thinking-text').text(String(snap.thinking.text || ''));
+            if (snap.thinking.open) {
+                $thinking.find('details').prop('open', true);
+            }
+            $host.append($thinking);
+        }
+
+        if (snap.tools && Array.isArray(snap.tools.rows) && snap.tools.rows.length > 0) {
+            var panel = createToolPanel(runView, runId);
+            if (panel) {
+                for (var i = 0; i < snap.tools.rows.length; i++) {
+                    var rs = snap.tools.rows[i];
+                    var key = String(rs.key || ('rehydrated:' + i));
+                    var row = createToolRow(panel, key, rs.toolName || 'tool', rs.inputText || '');
+                    if (rs.status === 'completed' || rs.status === 'error') {
+                        updateToolRowResult(row, {
+                            error: rs.status === 'error' ? (rs.outputText || 'error') : '',
+                            displayResult: rs.status === 'error' ? '' : (rs.outputText || ''),
+                            result: rs.status === 'error' ? '' : (rs.outputText || ''),
+                            durationMs: rs.durationMs || 0,
+                        });
+                    } else {
+                        row.status = 'running';
+                    }
+                    if (rs.open) {
+                        row.$item.find('details').first().prop('open', true);
+                    } else {
+                        row.$item.find('details').first().prop('open', false);
+                    }
+                }
+                panel.$panel.find('details').first().prop('open', !!snap.tools.open);
+                setToolPanelFilter(panel, snap.tools.filter || 'all');
+            }
+        }
+    }
+
+    function ensureToolPanel(runId) {
+        var key = String(runId || resolveEventRunId(null) || '');
+        if (!key) return null;
+        var panel = toolPanelsByRun[key];
+        if (panel) return panel;
+        var runView = ensureRunView(key);
+        if (!runView) return null;
+        return createToolPanel(runView, key);
+    }
+
+    function createToolPanel(runView, key) {
+        if (!runView) return null;
+        if (toolPanelsByRun[key]) return toolPanelsByRun[key];
+        var debugClass = isSupervising ? ' debug-content' : '';
+        var $panel = $('<div class="tool-activity-panel' + debugClass + '" data-run-id="' + escapeHtmlCompat(key) + '">' +
+            '<details open>' +
+                '<summary><i class="bi bi-tools me-1"></i> Tool Activity <span class="tool-activity-count">(0)</span></summary>' +
+                '<div class="tool-activity-controls" role="group" aria-label="Filter tool activity">' +
+                    '<button type="button" class="btn btn-sm btn-outline-secondary active" data-tool-filter="all">All</button>' +
+                    '<button type="button" class="btn btn-sm btn-outline-secondary" data-tool-filter="running">Running</button>' +
+                    '<button type="button" class="btn btn-sm btn-outline-secondary" data-tool-filter="errors">Errors</button>' +
+                '</div>' +
+                '<ul class="tool-activity-list"></ul>' +
+                '<div class="tool-activity-empty text-muted small" style="display:none;">No entries for this filter.</div>' +
+            '</details>' +
+        '</div>');
+        runView.$debugHost.append($panel);
+        setRunDebugVisible(runView, true);
+
+        var panel = {
+            runId: key,
+            $panel: $panel,
+            $count: $panel.find('.tool-activity-count'),
+            $controls: $panel.find('.tool-activity-controls'),
+            $list: $panel.find('.tool-activity-list'),
+            $empty: $panel.find('.tool-activity-empty'),
+            rowsByKey: {},
+            orderedKeys: [],
+            filter: 'all',
+            runView: runView,
+        };
+        toolPanelsByRun[key] = panel;
+        toolPanelOrder.push(key);
+        toolDebugLog('createToolPanel', {
+            key: key,
+            panelKeys: Object.keys(toolPanelsByRun),
+            order: toolPanelOrder.slice(),
+            runViewKeys: Object.keys(runViewsByID),
+        });
+        return panel;
+    }
+
+    function updateToolPanelCount(panel) {
+        if (!panel || !panel.$count) return;
+        panel.$count.text('(' + panel.orderedKeys.length + ')');
+    }
+
+    function updateToolFilterCounts(panel) {
+        if (!panel || !panel.$controls || !panel.$controls.length) return;
+        var total = panel.orderedKeys.length;
+        var running = 0;
+        var errors = 0;
+        for (var i = 0; i < panel.orderedKeys.length; i++) {
+            var key = panel.orderedKeys[i];
+            var row = panel.rowsByKey[key];
+            if (!row) continue;
+            if (row.status === 'running') running++;
+            if (row.status === 'error') errors++;
+        }
+        panel.$controls.find('[data-tool-filter="all"]').text('All (' + total + ')');
+        panel.$controls.find('[data-tool-filter="running"]').text('Running (' + running + ')');
+        panel.$controls.find('[data-tool-filter="errors"]').text('Errors (' + errors + ')');
+    }
+
+    function rowMatchesToolFilter(row, filter) {
+        if (!row) return false;
+        if (filter === 'running') return row.status === 'running';
+        if (filter === 'errors') return row.status === 'error';
+        return true;
+    }
+
+    function refreshToolPanelFilter(panel) {
+        if (!panel) return;
+        var visible = 0;
+        for (var i = 0; i < panel.orderedKeys.length; i++) {
+            var key = panel.orderedKeys[i];
+            var row = panel.rowsByKey[key];
+            if (!row || !row.$item) continue;
+            var show = rowMatchesToolFilter(row, panel.filter);
+            row.$item.toggle(show);
+            if (show) visible++;
+        }
+        if (panel.$empty && panel.$empty.length) {
+            panel.$empty.toggle(visible === 0);
+        }
+        if (panel.$controls && panel.$controls.length) {
+            panel.$controls.find('[data-tool-filter]').removeClass('active');
+            panel.$controls.find('[data-tool-filter="' + panel.filter + '"]').addClass('active');
+        }
+        updateToolFilterCounts(panel);
+    }
+
+    function setToolPanelFilter(panel, filter) {
+        if (!panel) return;
+        var next = String(filter || '').toLowerCase();
+        if (TOOL_PANEL_FILTERS.indexOf(next) === -1) next = 'all';
+        panel.filter = next;
+        refreshToolPanelFilter(panel);
+    }
+
+    function createToolRow(panel, key, toolName, inputStr) {
+        var preview = buildToolPreview(inputStr, 120);
+        var $item = $('<li class="tool-activity-item" data-tool-key="' + escapeHtmlCompat(key) + '">' +
+            '<details>' +
+                '<summary>' +
+                    '<span class="badge rounded-pill tool-activity-status running">running</span>' +
+                    '<span class="tool-activity-name">' + escapeHtmlCompat(toolName || 'tool') + '</span>' +
+                    '<span class="tool-activity-preview">' + escapeHtmlCompat(preview) + '</span>' +
+                    '<span class="tool-activity-duration"></span>' +
+                '</summary>' +
+                '<div class="tool-activity-body">' +
+                    '<div class="tool-activity-section-label">Arguments</div>' +
+                    '<pre class="tool-activity-pre tool-activity-input"></pre>' +
+                    '<div class="tool-activity-result-wrap" style="display:none;">' +
+                        '<div class="tool-activity-section-label tool-activity-result-label">Result</div>' +
+                        '<pre class="tool-activity-pre tool-activity-output"></pre>' +
+                    '</div>' +
+                '</div>' +
+            '</details>' +
+        '</li>');
+        $item.find('.tool-activity-input').text(String(inputStr || ''));
+        panel.$list.append($item);
+
+        var row = {
+            panel: panel,
+            key: key,
+            toolName: String(toolName || 'tool'),
+            status: 'running',
+            $item: $item,
+            $status: $item.find('.tool-activity-status'),
+            $preview: $item.find('.tool-activity-preview'),
+            $duration: $item.find('.tool-activity-duration'),
+            $resultWrap: $item.find('.tool-activity-result-wrap'),
+            $resultLabel: $item.find('.tool-activity-result-label'),
+            $resultOutput: $item.find('.tool-activity-output'),
+        };
+        panel.rowsByKey[key] = row;
+        panel.orderedKeys.push(key);
+        updateToolPanelCount(panel);
+        refreshToolPanelFilter(panel);
+        toolDebugLog('createToolRow', {
+            runId: panel.runId,
+            key: key,
+            toolName: toolName,
+            count: panel.orderedKeys.length,
+        });
+        return row;
+    }
+
+    function toolRowKeyForStart(panel, toolId, toolName) {
+        if (toolId) return 'id:' + toolId;
+        var runKey = panel.runId;
+        var next = (toolAutoSeqByRun[runKey] || 0) + 1;
+        toolAutoSeqByRun[runKey] = next;
+        return 'auto:' + String(toolName || 'tool') + ':' + String(next);
+    }
+
+    function findRunningToolRowKey(panel, toolName) {
+        if (!panel) return '';
+        for (var i = 0; i < panel.orderedKeys.length; i++) {
+            var key = panel.orderedKeys[i];
+            var row = panel.rowsByKey[key];
+            if (!row) continue;
+            if (row.status === 'running' && row.toolName === String(toolName || '')) {
+                return key;
+            }
+        }
+        return '';
+    }
+
+    function findPanelForToolEnd(runId, toolId, toolName) {
+        if (runId && toolPanelsByRun[runId]) {
+            return toolPanelsByRun[runId];
+        }
+        for (var i = toolPanelOrder.length - 1; i >= 0; i--) {
+            var key = toolPanelOrder[i];
+            var panel = toolPanelsByRun[key];
+            if (!panel) continue;
+            if (toolId && panel.rowsByKey['id:' + toolId]) return panel;
+            if (findRunningToolRowKey(panel, toolName)) return panel;
+        }
+        return null;
+    }
+
+    function updateToolRowResult(row, data) {
+        if (!row || !data) return;
+        var isError = !!data.error;
+        row.status = isError ? 'error' : 'completed';
+        row.$status.removeClass('running completed error').addClass(row.status).text(row.status);
+        row.$duration.text(data.durationMs ? (String(data.durationMs) + 'ms') : '');
+
+        var output = isError ? String(data.error || '') : String(data.displayResult || data.result || '');
+        if (output) {
+            row.$resultWrap.show();
+            row.$resultLabel.text(isError ? 'Error' : 'Result');
+            row.$resultOutput.text(output);
+            row.$preview.text(buildToolPreview(output, 100));
+        }
+        var panel = row.panel;
+        if (panel) {
+            refreshToolPanelFilter(panel);
+        }
+    }
+
     // Build one .message element (used by history window, load earlier, rebuild)
     function buildMessageElement(role, content, imageUrl, metadata) {
         if (typeof window.buildMessageElement === 'function') {
@@ -326,6 +906,7 @@
         var $typing = $('#typing-indicator').detach();
         var $tools = $('#chat-history-tools').detach();
         $messages.empty();
+        resetTransientRunDebugMaps();
         if ($tools.length) {
             $messages.append($tools);
         }
@@ -338,6 +919,7 @@
                 source: msg.source
             });
             $m.attr('data-canonical-index', String(i));
+            hydrateDebugForCanonicalIndex($m, i);
             $messages.append($m);
             mounted++;
         }
@@ -420,6 +1002,7 @@
                         source: msg.source
                     });
                     $m.attr('data-canonical-index', String(idx));
+                    hydrateDebugForCanonicalIndex($m, idx);
                     $after.after($m);
                     $after = $m;
                 }
@@ -461,6 +1044,7 @@
         try {
             var parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
             canonicalHistory = Array.isArray(parsed) ? parsed : [];
+            resetTransientRunDebugMaps();
             historyWindowEnd = canonicalHistory.length - 1;
             historyWindowStart = Math.max(0, canonicalHistory.length - chatDomCap);
 
@@ -472,6 +1056,7 @@
                     source: msg.source
                 });
                 $m.attr('data-canonical-index', String(hi));
+                hydrateDebugForCanonicalIndex($m, hi);
                 $messages.append($m);
             }
             updateLoadEarlierVisibility();
@@ -489,6 +1074,8 @@
     function clearHistory() {
         localStorage.removeItem(STORAGE_KEY);
         canonicalHistory = [];
+        debugByCanonicalIndex = {};
+        resetTransientRunDebugMaps();
         historyWindowStart = 0;
         historyWindowEnd = -1;
         var $typing = $('#typing-indicator').detach();
@@ -612,23 +1199,36 @@
             }
             var data = parsed.value;
             if (!data) return;
-            currentRunId = data.RunID;
-            currentRawText = ''; // Reset raw text accumulator
-            cancelStreamMarkdownDebounce();
-
-            if (showThinking) {
-                // BUFFER MODE: Don't create bubble yet - tools will appear first
-                // Bubble will be created in 'done' handler after tools
-                $currentBubble = null;
-                showTypingIndicator();
-            } else {
-                // NORMAL MODE: Create bubble for streaming
-                var $msg = $('<div class="message assistant"><div class="bubble"></div></div>');
-                $currentBubble = $msg.find('.bubble');
-                $messages.append($msg);
-                trimChatDomIfNeeded();
-                showTypingIndicator();
+            currentRunId = resolveRunIdFromData(data);
+            if (!currentRunId) {
+                currentRunId = String(Date.now());
             }
+            lastStartedRunId = currentRunId;
+            toolDebugLog('event:start', {
+                runId: currentRunId,
+                payloadRunId: resolveRunIdFromData(data),
+            });
+            currentRawText = ''; // Reset raw text accumulator
+            resetThinkingStreamState(currentRunId);
+            cancelStreamMarkdownDebounce();
+            // Always create bubble for streaming output; thinking stream is independent.
+            var $msg = $('<div class="message assistant run-message" data-run-id="' + escapeHtmlCompat(currentRunId || '') + '">' +
+                '<div class="run-debug-host" style="display:none;"></div>' +
+                '<div class="bubble"></div>' +
+            '</div>');
+            $currentBubble = $msg.find('.bubble');
+            $messages.append($msg);
+            if (currentRunId) {
+                runViewsByID[String(currentRunId)] = {
+                    runId: String(currentRunId),
+                    $message: $msg,
+                    $debugToggle: $(),
+                    $debugHost: $msg.find('.run-debug-host'),
+                    pinned: false,
+                };
+            }
+            trimChatDomIfNeeded();
+            showTypingIndicator();
         });
         
         eventSource.addEventListener('message', function(e) {
@@ -645,22 +1245,16 @@
             
             // Always accumulate raw text
             currentRawText += data.content;
-            
-            if (showThinking) {
-                // BUFFER MODE: Just accumulate, don't display yet
-                // Response will appear after tools in 'done' handler
-            } else {
-                // NORMAL MODE: Stream to bubble (plain text vs debounced markdown)
-                if ($currentBubble) {
-                    if (streamMarkdownMode === 'debounced') {
-                        scheduleStreamMarkdownUpdate();
-                    } else if (streamMarkdownMode === 'token') {
-                        $currentBubble.html(renderMarkdown(currentRawText));
-                        scrollChatToBottom();
-                    } else {
-                        $currentBubble.text(currentRawText);
-                        scrollChatToBottom();
-                    }
+            // Stream to bubble regardless of thinking mode.
+            if ($currentBubble) {
+                if (streamMarkdownMode === 'debounced') {
+                    scheduleStreamMarkdownUpdate();
+                } else if (streamMarkdownMode === 'token') {
+                    $currentBubble.html(renderMarkdown(currentRawText));
+                    scrollChatToBottom();
+                } else {
+                    $currentBubble.text(currentRawText);
+                    scrollChatToBottom();
                 }
             }
         });
@@ -676,29 +1270,61 @@
             }
             var data = parsed.value;
             if (!data) return;
+            var completedRunId = resolveEventRunId(data);
+            var domRunId = getCurrentRunIdFromDom();
+            toolDebugLog('event:done:before-reconcile', {
+                payloadRunId: resolveRunIdFromData(data),
+                resolvedRunId: completedRunId,
+                domRunId: domRunId,
+                currentRunId: currentRunId,
+                panelKeys: Object.keys(toolPanelsByRun),
+                runViewKeys: Object.keys(runViewsByID),
+            });
+            if (domRunId && completedRunId && domRunId !== completedRunId) {
+                // Reconcile mismatched run IDs so debug snapshot/finalization stays attached to one run.
+                if (toolPanelsByRun[completedRunId] && !toolPanelsByRun[domRunId]) {
+                    toolPanelsByRun[domRunId] = toolPanelsByRun[completedRunId];
+                    delete toolPanelsByRun[completedRunId];
+                }
+                if (runViewsByID[completedRunId] && !runViewsByID[domRunId]) {
+                    runViewsByID[domRunId] = runViewsByID[completedRunId];
+                    delete runViewsByID[completedRunId];
+                }
+                completedRunId = domRunId;
+            } else if (domRunId && !completedRunId) {
+                completedRunId = domRunId;
+            }
+            toolDebugLog('event:done:after-reconcile', {
+                completedRunId: completedRunId,
+                panelKeys: Object.keys(toolPanelsByRun),
+                runViewKeys: Object.keys(runViewsByID),
+            });
             // Use finalText from server (has media refs enriched) instead of accumulated deltas
             var finalText = data.finalText || currentRawText;
-            
-            if (showThinking && !$currentBubble && finalText) {
-                // BUFFER MODE: Create bubble NOW (after tools have been shown)
-                var $msg = $('<div class="message assistant"><div class="bubble"></div></div>');
-                $currentBubble = $msg.find('.bubble');
-                $messages.append($msg);
-                trimChatDomIfNeeded();
-            }
+            var completedCanonicalIndex = -1;
 
             if (finalText && String(finalText).trim().length > 0) {
                 announceToScreenReader('Assistant reply complete.');
                 var rebuiltDone = appendCanonicalMessage({ role: 'assistant', content: finalText });
+                completedCanonicalIndex = canonicalHistory.length - 1;
+                persistRunDebugSnapshotToIndex(completedRunId, completedCanonicalIndex);
                 if (!rebuiltDone && $currentBubble) {
                     $currentBubble.html(renderMarkdown(finalText));
-                    $currentBubble.closest('.message').attr('data-canonical-index', String(canonicalHistory.length - 1));
+                    $currentBubble.closest('.message').attr('data-canonical-index', String(completedCanonicalIndex));
                     $currentBubble.closest('.message').data('raw-content', finalText);
+                } else if (rebuiltDone) {
+                    var $rebuiltLast = $messages.children('.message').last();
+                    if ($rebuiltLast.length) {
+                        $rebuiltLast.attr('data-canonical-index', String(completedCanonicalIndex));
+                        hydrateDebugForCanonicalIndex($rebuiltLast, completedCanonicalIndex);
+                    }
                 }
             }
             currentRunId = null;
             currentRawText = '';
             $currentBubble = null;
+            resetThinkingStreamState(null);
+            finalizeRunDebugAfterDone(completedRunId, true);
             if (deferHistoryRebuildAfterStream) {
                 deferHistoryRebuildAfterStream = false;
                 historyWindowEnd = canonicalHistory.length - 1;
@@ -734,10 +1360,13 @@
             }
             var data = parsed.value;
             if (!data) return;
+            var erroredRunId = resolveEventRunId(data);
             appendMessage('error', 'Error: ' + data.error);
             announceToScreenReader('Agent error.');
             currentRunId = null;
             $currentBubble = null;
+            resetThinkingStreamState(null);
+            finalizeRunDebugAfterDone(erroredRunId, true);
         });
         
         eventSource.addEventListener('agent_message', function(e) {
@@ -853,22 +1482,24 @@
             var toolId = data.toolId;
             var inputStr = typeof data.input === 'string' ? data.input : JSON.stringify(data.input, null, 2);
             
-            // In normal mode, skip if thinking disabled
-            if (!isSupervising && !showThinking) return;
-            
-            var debugClass = isSupervising ? ' debug-content' : '';
-            var $toolCall = $('<div class="tool-call' + debugClass + '" data-tool-id="' + toolId + '">' +
-                '<div class="tool-call-header">' +
-                    '<span class="tool-call-icon"><i class="bi bi-gear-fill"></i></span>' +
-                    '<span class="tool-call-name">' + escapeHtml(data.toolName) + '</span>' +
-                    '<span class="tool-call-status running"><i class="bi bi-arrow-repeat spin"></i> Running</span>' +
-                '</div>' +
-                '<div class="tool-call-input">' + escapeHtml(inputStr) + '</div>' +
-            '</div>');
-            
-            $messages.append($toolCall);
-            scrollChatToBottom();
-            activeToolCalls[toolId] = $toolCall;
+            var runId = resolveEventRunId(data);
+            toolDebugLog('event:tool_start', {
+                toolName: data.toolName,
+                toolId: toolId,
+                payloadRunId: resolveRunIdFromData(data),
+                resolvedRunId: runId,
+                currentRunId: currentRunId,
+                domRunId: getCurrentRunIdFromDom(),
+                lastStartedRunId: lastStartedRunId,
+                panelKeys: Object.keys(toolPanelsByRun),
+            });
+            var panel = ensureToolPanel(runId);
+            if (!panel) return;
+            var rowKey = toolRowKeyForStart(panel, toolId, data.toolName);
+            createToolRow(panel, rowKey, data.toolName, inputStr);
+            if (shouldAutoscrollToolActivity()) {
+                scrollChatToBottom();
+            }
         });
         
         // Handle tool end (supervision: always render with debug-content class; normal: only if showThinking)
@@ -881,29 +1512,52 @@
             var data = parsed.value;
             if (!data) return;
             var toolId = data.toolId;
-            var $toolCall = activeToolCalls[toolId];
-            
-            // In normal mode, skip if thinking disabled (and we didn't create the element)
-            if (!isSupervising && !showThinking && !$toolCall) return;
-            
-            if ($toolCall) {
-                var statusClass = data.error ? 'error' : 'completed';
-                var statusIcon = data.error ? 'x-circle' : 'check-circle';
-                var statusText = data.error ? 'Error' : 'Completed';
-                var duration = data.durationMs ? ' (' + data.durationMs + 'ms)' : '';
-                
-                $toolCall.find('.tool-call-status')
-                    .removeClass('running')
-                    .addClass(statusClass)
-                    .html('<i class="bi bi-' + statusIcon + '"></i> ' + statusText + duration);
-                
-                // Add result/error
-                if (data.result || data.error) {
-                    var output = data.error || data.result;
-                    $toolCall.append('<div class="tool-call-output">' + escapeHtml(output) + '</div>');
+
+            var endRunId = resolveEventRunId(data);
+            toolDebugLog('event:tool_end:lookup', {
+                toolName: data.toolName,
+                toolId: toolId,
+                payloadRunId: resolveRunIdFromData(data),
+                resolvedRunId: endRunId,
+                panelKeys: Object.keys(toolPanelsByRun),
+            });
+            var panel = findPanelForToolEnd(endRunId, toolId, data.toolName);
+            if (!panel) {
+                toolDebugLog('event:tool_end:no-panel', {
+                    toolName: data.toolName,
+                    toolId: toolId,
+                    resolvedRunId: endRunId,
+                });
+                return;
+            }
+
+            var row = null;
+            if (toolId && panel.rowsByKey['id:' + toolId]) {
+                row = panel.rowsByKey['id:' + toolId];
+            } else {
+                var fallbackKey = findRunningToolRowKey(panel, data.toolName);
+                if (fallbackKey) {
+                    row = panel.rowsByKey[fallbackKey];
                 }
-                
-                delete activeToolCalls[toolId];
+            }
+            if (!row) {
+                toolDebugLog('event:tool_end:no-row', {
+                    runId: panel.runId,
+                    toolName: data.toolName,
+                    toolId: toolId,
+                    knownRowKeys: Object.keys(panel.rowsByKey),
+                    orderedKeys: panel.orderedKeys.slice(),
+                });
+                return;
+            }
+
+            updateToolRowResult(row, data);
+            toolDebugLog('event:tool_end:updated', {
+                runId: panel.runId,
+                rowKey: row.key,
+                status: row.status,
+            });
+            if (shouldAutoscrollToolActivity()) {
                 scrollChatToBottom();
             }
         });
@@ -920,18 +1574,24 @@
             }
             var data = parsed.value;
             if (!data) return;
-            var content = data.content || '';
-            var debugClass = isSupervising ? ' debug-content' : '';
-            
-            // Show reasoning content in collapsible element
-            var $thinking = $('<div class="thinking-content' + debugClass + '">' +
-                '<details>' +
-                    '<summary><i class="bi bi-lightbulb"></i> Reasoning</summary>' +
-                    '<div class="thinking-text">' + escapeHtml(content) + '</div>' +
-                '</details>' +
-            '</div>');
-            $messages.append($thinking);
-            scrollChatToBottom();
+            var thinkingRunId = resolveEventRunId(data);
+            if (thinkingRunId) {
+                currentThinkingRunId = thinkingRunId;
+            }
+            updateThinkingStreamText(data.content || '');
+        });
+
+        // Handle streaming thinking deltas
+        eventSource.addEventListener('thinking_delta', function(e) {
+            if (!isSupervising && !showThinking) return;
+            var parsed = safeParseJSON(e.type, e.data);
+            if (!parsed.ok) {
+                appendProtocolErrorBubble(e.type);
+                return;
+            }
+            var data = parsed.value;
+            if (!data) return;
+            appendThinkingDelta(data.content || '', resolveEventRunId(data));
         });
         
         eventSource.onerror = function(e) {
@@ -1422,6 +2082,28 @@
     // Make tool input/output collapsible
     $(document).on('click', '.tool-call-input, .tool-call-output', function() {
         $(this).toggleClass('expanded');
+    });
+
+    $(document).on('click', '.tool-activity-controls [data-tool-filter]', function(e) {
+        e.preventDefault();
+        var filter = String($(this).data('tool-filter') || '').toLowerCase();
+        var $panel = $(this).closest('.tool-activity-panel');
+        var runId = String($panel.data('run-id') || '');
+        var panel = toolPanelsByRun[runId];
+        if (!panel) return;
+        if (panel.runView) {
+            pinRunDebug(panel.runView);
+        }
+        setToolPanelFilter(panel, filter);
+    });
+
+    $(document).on('toggle', '.tool-activity-item details, .thinking-content details', function() {
+        var $msg = $(this).closest('.run-message');
+        if (!$msg.length) return;
+        var runId = String($msg.data('run-id') || '');
+        var runView = getRunView(runId);
+        if (!runView) return;
+        pinRunDebug(runView);
     });
 
     // P6: load earlier — button + near-top scroll (debounced, rate-limited)

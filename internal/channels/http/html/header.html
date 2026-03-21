@@ -365,6 +365,124 @@
             font-size: 0.8em;
             color: #6c757d;
         }
+
+        /* Tool activity panel (phase 1 compact list) */
+        .tool-activity-panel {
+            background: #f8f9fa;
+            border-left: 3px solid #6c757d;
+            border-radius: 0 0.5rem 0.5rem 0;
+            padding: 0.5rem 0.75rem;
+            margin: 0.5rem 0;
+        }
+        .tool-activity-panel details > summary {
+            cursor: pointer;
+            font-weight: 600;
+            color: #495057;
+            user-select: none;
+        }
+        .tool-activity-count {
+            color: #6c757d;
+            font-weight: 500;
+            margin-left: 0.25rem;
+        }
+        .tool-activity-list {
+            list-style: none;
+            margin: 0.5rem 0 0 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+        }
+        .tool-activity-controls {
+            margin-top: 0.5rem;
+            display: inline-flex;
+            gap: 0.35rem;
+            flex-wrap: wrap;
+        }
+        .tool-activity-controls .btn {
+            padding: 0.1rem 0.45rem;
+            font-size: 0.75rem;
+            line-height: 1.2;
+        }
+        .tool-activity-controls .btn.active {
+            background: #495057;
+            border-color: #495057;
+            color: #fff;
+        }
+        .tool-activity-item {
+            border: 1px solid #dee2e6;
+            border-radius: 0.4rem;
+            background: #fff;
+            padding: 0.2rem 0.5rem;
+        }
+        .tool-activity-item details > summary {
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            list-style: none;
+        }
+        .tool-activity-item details > summary::-webkit-details-marker {
+            margin-right: 0.25rem;
+        }
+        .tool-activity-name {
+            font-weight: 600;
+            color: #343a40;
+        }
+        .tool-activity-preview {
+            color: #6c757d;
+            font-size: 0.88em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            flex: 1;
+            min-width: 0;
+        }
+        .tool-activity-duration {
+            color: #6c757d;
+            font-size: 0.82em;
+            white-space: nowrap;
+        }
+        .tool-activity-status {
+            text-transform: uppercase;
+            font-size: 0.65em;
+            letter-spacing: 0.03em;
+        }
+        .tool-activity-status.running {
+            background: #0d6efd;
+        }
+        .tool-activity-status.completed {
+            background: #198754;
+        }
+        .tool-activity-status.error {
+            background: #dc3545;
+        }
+        .tool-activity-body {
+            margin-top: 0.45rem;
+            border-top: 1px dashed #e5e7eb;
+            padding-top: 0.45rem;
+        }
+        .tool-activity-section-label {
+            font-size: 0.76em;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            margin-bottom: 0.2rem;
+        }
+        .tool-activity-pre {
+            margin: 0 0 0.35rem 0;
+            background: #f3f4f6;
+            border-radius: 0.25rem;
+            padding: 0.35rem 0.5rem;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 180px;
+            overflow: auto;
+            font-size: 0.82em;
+        }
+        .run-debug-host {
+            margin-top: 0.5rem;
+        }
         
         /* Thinking/reasoning content */
         .thinking-content {
