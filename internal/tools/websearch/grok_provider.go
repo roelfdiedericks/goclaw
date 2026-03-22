@@ -24,22 +24,21 @@ func (d *grokDriver) Search(ctx context.Context, req SearchRequest, cfg Provider
 	}
 	model := strings.TrimSpace(cfg.Model)
 	if model == "" {
-		model = "grok-4-0709"
+		model = "grok-4-1-fast-reasoning"
 	}
 
 	payload := map[string]any{
 		"model": model,
-		"messages": []map[string]string{
-			{"role": "system", "content": "Answer using web search and include sources when available."},
+		"input": []map[string]string{
 			{"role": "user", "content": req.Query},
 		},
-		"tools": []map[string]string{
+		"tools": []map[string]any{
 			{"type": "web_search"},
 		},
 	}
 	data, _ := json.Marshal(payload)
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(data))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/responses", bytes.NewReader(data))
 	if err != nil {
 		return SearchResponse{}, newProviderError(providerGrok, "failed to build request", false, err)
 	}
@@ -62,32 +61,24 @@ func (d *grokDriver) Search(ctx context.Context, req SearchRequest, cfg Provider
 	}
 
 	var parsed struct {
-		Choices []struct {
-			Message struct {
-				Content any `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
+		OutputText string   `json:"output_text"`
+		Citations  []string `json:"citations"`
+		Output     []struct {
+			Type    string `json:"type"`
+			Text    string `json:"text"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return SearchResponse{}, newProviderError(providerGrok, "failed to parse response", false, err)
 	}
 
-	answer := ""
-	if len(parsed.Choices) > 0 {
-		switch content := parsed.Choices[0].Message.Content.(type) {
-		case string:
-			answer = content
-		case []any:
-			parts := make([]string, 0, len(content))
-			for _, part := range content {
-				if block, ok := part.(map[string]any); ok {
-					if txt, ok := block["text"].(string); ok && strings.TrimSpace(txt) != "" {
-						parts = append(parts, strings.TrimSpace(txt))
-					}
-				}
-			}
-			answer = strings.Join(parts, "\n")
-		}
+	answer := strings.TrimSpace(parsed.OutputText)
+	if answer == "" {
+		answer = extractXAIOutputText(parsed.Output)
 	}
 
 	if strings.TrimSpace(answer) == "" {
@@ -95,7 +86,43 @@ func (d *grokDriver) Search(ctx context.Context, req SearchRequest, cfg Provider
 	}
 
 	return SearchResponse{
-		Provider: providerGrok,
-		Answer:   answer,
+		Provider:  providerGrok,
+		Answer:    answer,
+		Citations: normalizeCitations(parsed.Citations),
 	}, nil
+}
+
+func extractXAIOutputText(outputs []struct {
+	Type    string `json:"type"`
+	Text    string `json:"text"`
+	Content []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+}) string {
+	for _, out := range outputs {
+		if strings.TrimSpace(out.Text) != "" {
+			return strings.TrimSpace(out.Text)
+		}
+		for _, block := range out.Content {
+			if strings.TrimSpace(block.Text) != "" {
+				return strings.TrimSpace(block.Text)
+			}
+		}
+	}
+	return ""
+}
+
+func normalizeCitations(in []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, c := range in {
+		c = strings.TrimSpace(c)
+		if c == "" || seen[c] {
+			continue
+		}
+		seen[c] = true
+		out = append(out, c)
+	}
+	return out
 }

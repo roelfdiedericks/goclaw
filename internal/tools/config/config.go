@@ -150,6 +150,7 @@ func ConfigFormDef() forms.FormDef {
 					{Name: "web.search.retry.maxBackoffMs", Title: "Retry Max Backoff (ms)", Type: forms.Number, Default: 5000},
 					{Name: "web.search.providers.brave.apiKey", Title: "Brave API Key", Type: forms.Secret},
 					{Name: "web.search.providers.grok.apiKey", Title: "Grok API Key", Type: forms.Secret},
+					{Name: "web.search.providers.grok.model", Title: "Grok Model", Type: forms.Text, Default: "grok-4-1-fast-reasoning"},
 					{Name: "web.search.providers.perplexity.apiKey", Title: "Perplexity API Key", Type: forms.Secret},
 					{Name: "web.search.providers.perplexity.baseUrl", Title: "Perplexity Base URL", Type: forms.Text},
 					{Name: "web.search.providers.perplexity.model", Title: "Perplexity Model", Type: forms.Text},
