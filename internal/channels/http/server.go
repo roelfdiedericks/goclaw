@@ -168,6 +168,9 @@ func (s *Server) setupRoutes() http.Handler {
 	s.mux.HandleFunc("/api/events", wrap(s.handleEvents))
 	s.mux.HandleFunc("/api/commands", wrap(s.handleCommands))
 	s.mux.HandleFunc("/api/status", wrap(s.handleStatus))
+	s.mux.HandleFunc("/api/runners", wrap(s.handleRunners))
+	s.mux.HandleFunc("/api/runners/events", wrap(s.handleRunnerEvents))
+	s.mux.HandleFunc("/api/runners/", wrap(s.handleRunnersAction))
 	s.mux.HandleFunc("/api/media", wrap(s.handleMedia))
 	s.mux.HandleFunc("/api/metrics", wrap(s.handleMetricsAPI))
 
@@ -178,6 +181,7 @@ func (s *Server) setupRoutes() http.Handler {
 	s.mux.HandleFunc("/", wrap(s.handleIndex))
 	s.mux.HandleFunc("/chat", wrap(s.handleChat))
 	s.mux.HandleFunc("/chat/transcript", wrap(s.handleTranscript))
+	s.mux.HandleFunc("/runners", wrap(s.handleRunnersPage))
 	s.mux.HandleFunc("/voice", wrap(s.handleVoice))
 	s.mux.HandleFunc("/metrics", wrap(s.handleMetrics))
 

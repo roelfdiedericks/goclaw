@@ -121,6 +121,18 @@ GoClaw includes a managed Chromium browser with auto-download/update:
 
 See [Browser Tool](docs/tools/browser.md) for full documentation.
 
+### Delegated Runs, Subagents, and Fanout
+
+GoClaw includes a first-class delegated execution architecture that powers isolated cron runs and owner-driven subagents:
+
+- **Delegated runner lane** — queued/running lifecycle with bounded global concurrency
+- **Subagent tools** — `subagent_spawn`, `subagent_status`, `subagent_cancel`, `subagent_fanout`
+- **Fanout coordinator** — bounded parallel child spawning, deterministic reduction, optional synthesis
+- **Result routing policies** — `store_only`, `deliver`, `handoff_main`, `return_to_requester`
+- **Control plane visibility** — `/runners` dashboard + SSE event stream + Telegram/TUI summaries
+
+See [Delegated Runs](docs/delegated-runs.md) for the architecture and operational model.
+
 ---
 
 ## Key Concepts
@@ -255,6 +267,7 @@ Full documentation available at [goclaw.org/docs](https://goclaw.org/docs/) or i
 
 - [Concepts Overview](docs/concepts.md) — Key concepts explained
 - [Architecture](docs/architecture.md) — System components
+- [Delegated Runs](docs/delegated-runs.md) — Delegated runner/subagent architecture
 - [Session Management](docs/session-management.md) — Context and compaction
 
 ### LLM Providers

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/delegatedrun"
 	"github.com/roelfdiedericks/goclaw/internal/delivery"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
@@ -34,6 +35,10 @@ type GatewayRunner interface {
 	SupervisionConfig() *gwtypes.SupervisionConfig
 	StopAllUserSessions(userID string) (int, error)
 	RequestShutdown(userID string) error
+	ListDelegatedRuns() []delegatedrun.RunRecord
+	GetDelegatedRun(runID string) (delegatedrun.RunRecord, bool)
+	CancelDelegatedRun(runID string) error
+	ListDelegatedRunEvents(sinceID int64, limit int) []delegatedrun.RunEvent
 }
 
 const maxEventBuffer = 200 // Keep last N events per session for replay

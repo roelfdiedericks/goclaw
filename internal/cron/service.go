@@ -2,6 +2,7 @@ package cron
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/roelfdiedericks/goclaw/internal/bus"
+	"github.com/roelfdiedericks/goclaw/internal/delegatedrun"
 	"github.com/roelfdiedericks/goclaw/internal/delivery"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
@@ -91,6 +93,9 @@ type Service struct {
 	gateway GatewayRunner
 	history *HistoryManager
 	execJob func(ctx context.Context, job *CronJob)
+	runner  delegatedrun.Runner
+	registry delegatedrun.Registry
+	delegatedLimits delegatedrun.SpawnLimits
 
 	mu      sync.Mutex
 	running bool
@@ -105,6 +110,8 @@ type Service struct {
 
 	// Job execution
 	jobTimeoutMinutes int // Timeout for job execution (0 = no timeout)
+	delegatedEnabled bool
+	delegatedSQLite  *delegatedrun.SQLiteRegistry
 
 	// Heartbeat
 	heartbeatConfig *HeartbeatState
@@ -124,6 +131,326 @@ func NewService(store *Store, gw GatewayRunner) *Service {
 	}
 	defaultService = s
 	return s
+}
+
+// SetDelegatedRunsEnabled toggles cron execution via delegated runner.
+// When enabled, runs are executed through delegatedrun.DefaultRunner while
+// preserving cron's external behavior.
+func (s *Service) SetDelegatedRunsEnabled(enabled bool, sqlitePath string, limits delegatedrun.SpawnLimits) {
+	s.delegatedEnabled = enabled
+	s.delegatedLimits = limits
+	L_info("cron: delegated runs config", "enabled", enabled, "sqlitePath", sqlitePath, "maxSpawnDepth", limits.MaxSpawnDepth, "maxActiveChildrenPerParent", limits.MaxActiveChildrenPerParent, "maxConcurrentRuns", limits.MaxConcurrentRuns)
+	if !enabled || s.runner != nil {
+		return
+	}
+
+	memReg := delegatedrun.NewMemoryRegistry()
+	var reg delegatedrun.Registry = memReg
+	if sqlitePath != "" {
+		sqlReg, err := delegatedrun.NewSQLiteRegistry(sqlitePath)
+		if err != nil {
+			L_warn("cron: delegated sqlite registry unavailable; using memory only", "path", sqlitePath, "error", err)
+		} else {
+			s.delegatedSQLite = sqlReg
+			reg = delegatedrun.NewCompositeRegistry(memReg, sqlReg)
+		}
+	}
+	emitter := delegatedrun.NewCompositeEmitter(
+		delegatedrun.NewRegistryEmitter(reg),
+		delegatedrun.NewBusBridgeEmitter(),
+	)
+	s.registry = reg
+
+	s.runner = delegatedrun.NewDefaultRunnerWithConcurrency(
+		func(ctx context.Context, spec delegatedrun.RunSpec) (delegatedrun.RunResult, error) {
+			req := AgentRequest{
+				Source:         spec.RequesterType,
+				UserMsg:        spec.Prompt,
+				FreshContext:   spec.FreshContext,
+				SessionID:      spec.SessionKey,
+				UserID:         spec.UserID,
+				Ephemeral:      spec.Ephemeral,
+				SkipMirror:     spec.SkipMirror,
+				EnableThinking: spec.EnableThinking,
+				JobName:        spec.JobName,
+				Purpose:        spec.Purpose,
+			}
+
+			events := make(chan AgentEvent, 100)
+			go s.gateway.RunAgentForCron(ctx, req, events)
+			var finalContent string
+			var execErr error
+			for event := range events {
+				switch e := event.(type) {
+				case AgentEndEvent:
+					finalContent = e.FinalText
+				case AgentErrorEvent:
+					execErr = fmt.Errorf("%s", e.Error)
+				}
+			}
+			return delegatedrun.RunResult{
+				FinalText: finalContent,
+				Error:     "",
+			}, execErr
+		},
+		reg,
+		emitter,
+		limits.MaxConcurrentRuns,
+	)
+	L_info("cron: delegated runner initialized", "sqliteBacked", s.delegatedSQLite != nil, "laneMaxConcurrentRuns", limits.MaxConcurrentRuns)
+}
+
+// ListDelegatedRuns returns delegated run records (newest first if backed by sqlite).
+func (s *Service) ListDelegatedRuns() []delegatedrun.RunRecord {
+	if s.delegatedSQLite != nil {
+		return s.delegatedSQLite.List()
+	}
+	if s.registry != nil {
+		return s.registry.List()
+	}
+	return nil
+}
+
+// StartDelegatedRun starts a delegated run asynchronously and returns run ID.
+func (s *Service) StartDelegatedRun(ctx context.Context, spec delegatedrun.RunSpec) (string, error) {
+	if s.runner == nil {
+		return "", fmt.Errorf("delegated runner not enabled")
+	}
+	if strings.TrimSpace(spec.Prompt) == "" {
+		return "", fmt.Errorf("prompt is required")
+	}
+	if spec.RequesterType == "" {
+		spec.RequesterType = "subagent"
+	}
+	if spec.RequesterID == "" {
+		spec.RequesterID = "tool"
+	}
+	if spec.Purpose == "" {
+		spec.Purpose = "subagent"
+	}
+	if strings.TrimSpace(spec.ResultMode) == "" {
+		spec.ResultMode = "store_only"
+	}
+	if strings.TrimSpace(spec.DispatchOrder) == "" {
+		spec.DispatchOrder = "queue_first"
+	}
+	if strings.TrimSpace(spec.FallbackMode) == "" {
+		spec.FallbackMode = "none"
+	}
+	if strings.TrimSpace(spec.InjectMode) == "" {
+		spec.InjectMode = "tool_result"
+	}
+	if spec.CompletionDispatchSeq <= 0 {
+		spec.CompletionDispatchSeq = 1
+	}
+	if spec.UserID == "" && s.gateway != nil {
+		spec.UserID = s.gateway.GetOwnerUserID()
+	}
+	if spec.UserID == "" {
+		return "", fmt.Errorf("user ID is required")
+	}
+	if spec.TimeoutSeconds <= 0 && s.delegatedLimits.DefaultTimeoutSeconds > 0 {
+		spec.TimeoutSeconds = s.delegatedLimits.DefaultTimeoutSeconds
+		L_debug("cron: delegated timeout default applied", "timeoutSeconds", spec.TimeoutSeconds, "requesterType", spec.RequesterType, "purpose", spec.Purpose)
+	}
+	if s.delegatedLimits.MaxTimeoutSeconds > 0 && spec.TimeoutSeconds > s.delegatedLimits.MaxTimeoutSeconds {
+		original := spec.TimeoutSeconds
+		spec.TimeoutSeconds = s.delegatedLimits.MaxTimeoutSeconds
+		L_warn("cron: delegated timeout capped", "requestedTimeoutSeconds", original, "maxTimeoutSeconds", s.delegatedLimits.MaxTimeoutSeconds, "requesterType", spec.RequesterType, "purpose", spec.Purpose)
+	}
+	L_debug("cron: delegated start requested", "requesterType", spec.RequesterType, "requesterID", spec.RequesterID, "parentRunID", spec.ParentRunID, "purpose", spec.Purpose, "resultMode", spec.ResultMode, "sessionKey", spec.SessionKey)
+	if err := s.enforceDelegatedSpawnLimits(spec); err != nil {
+		L_warn("cron: delegated start denied", "requesterType", spec.RequesterType, "requesterID", spec.RequesterID, "parentRunID", spec.ParentRunID, "purpose", spec.Purpose, "error", err)
+		return "", err
+	}
+	runID, err := s.runner.Start(ctx, spec)
+	if err != nil {
+		L_error("cron: delegated start failed", "requesterType", spec.RequesterType, "requesterID", spec.RequesterID, "parentRunID", spec.ParentRunID, "purpose", spec.Purpose, "error", err)
+		return "", err
+	}
+	L_info("cron: delegated start accepted", "runID", runID, "requesterType", spec.RequesterType, "parentRunID", spec.ParentRunID, "purpose", spec.Purpose)
+	return runID, nil
+}
+
+func (s *Service) enforceDelegatedSpawnLimits(spec delegatedrun.RunSpec) error {
+	// Preserve cron behavior; apply spawn policy to subagent-style delegation.
+	if strings.TrimSpace(spec.RequesterType) == "cron" {
+		return nil
+	}
+	recs := s.ListDelegatedRuns()
+	parentRunID := strings.TrimSpace(spec.ParentRunID)
+	if parentRunID == "" {
+		return nil
+	}
+
+	activeChildren := 0
+	for _, rec := range recs {
+		if rec.ParentRunID == parentRunID && delegatedrun.IsActiveState(rec.State) {
+			activeChildren++
+		}
+	}
+	if parentRunID != "" {
+		L_trace("cron: delegated spawn limit check", "parentRunID", parentRunID, "activeChildren", activeChildren, "maxActiveChildrenPerParent", s.delegatedLimits.MaxActiveChildrenPerParent, "maxSpawnDepth", s.delegatedLimits.MaxSpawnDepth)
+	}
+	if s.delegatedLimits.MaxActiveChildrenPerParent > 0 && activeChildren >= s.delegatedLimits.MaxActiveChildrenPerParent {
+		return fmt.Errorf("spawn denied: active child limit reached for parent %s (%d)", parentRunID, s.delegatedLimits.MaxActiveChildrenPerParent)
+	}
+
+	if s.delegatedLimits.MaxSpawnDepth > 0 {
+		parentDepth, err := s.resolveDelegatedDepth(parentRunID)
+		if err != nil {
+			return err
+		}
+		childDepth := parentDepth + 1
+		if childDepth > s.delegatedLimits.MaxSpawnDepth {
+			return fmt.Errorf("spawn denied: maxSpawnDepth exceeded (depth=%d, limit=%d)", childDepth, s.delegatedLimits.MaxSpawnDepth)
+		}
+	}
+	return nil
+}
+
+func (s *Service) resolveDelegatedDepth(parentRunID string) (int, error) {
+	depth := 0
+	seen := map[string]struct{}{}
+	cur := strings.TrimSpace(parentRunID)
+	for cur != "" {
+		if _, ok := seen[cur]; ok {
+			return 0, fmt.Errorf("spawn denied: parent run chain has a cycle at %s", cur)
+		}
+		seen[cur] = struct{}{}
+		rec, ok := s.GetDelegatedRun(cur)
+		if !ok {
+			return 0, fmt.Errorf("spawn denied: parent run not found: %s", cur)
+		}
+		depth++
+		cur = strings.TrimSpace(rec.ParentRunID)
+	}
+	return depth, nil
+}
+
+// WaitDelegatedRun waits for a delegated run to finish or context cancellation.
+func (s *Service) WaitDelegatedRun(ctx context.Context, runID string) (delegatedrun.RunResult, delegatedrun.RunState, error) {
+	if s.runner == nil {
+		return delegatedrun.RunResult{}, "", fmt.Errorf("delegated runner not enabled")
+	}
+	return s.runner.Wait(ctx, runID)
+}
+
+// MarkDelegatedCompletionDispatched stores the completion dispatch idempotency key.
+func (s *Service) MarkDelegatedCompletionDispatched(runID, dispatchKey string) error {
+	if s.registry == nil {
+		return fmt.Errorf("delegated registry unavailable")
+	}
+	return s.registry.MarkCompletionDispatched(runID, dispatchKey)
+}
+
+// RecordDelegatedDispatchPhase appends a dispatch phase event for observability.
+func (s *Service) RecordDelegatedDispatchPhase(runID, phase, status, detail string) error {
+	if s.registry == nil {
+		return fmt.Errorf("delegated registry unavailable")
+	}
+	return s.registry.RecordDispatchPhase(runID, phase, status, detail)
+}
+
+// AdvanceDelegatedCompletionDispatchSeq increments completion dispatch sequence for retries.
+func (s *Service) AdvanceDelegatedCompletionDispatchSeq(runID string) (int, error) {
+	if s.registry == nil {
+		return 0, fmt.Errorf("delegated registry unavailable")
+	}
+	return s.registry.AdvanceCompletionDispatchSeq(runID)
+}
+
+// GetDelegatedRun returns a specific delegated run by ID.
+func (s *Service) GetDelegatedRun(runID string) (delegatedrun.RunRecord, bool) {
+	if s.registry == nil {
+		return delegatedrun.RunRecord{}, false
+	}
+	return s.registry.Get(runID)
+}
+
+// CancelDelegatedRun cancels an active delegated run by ID.
+func (s *Service) CancelDelegatedRun(runID string) error {
+	if s.runner == nil {
+		return fmt.Errorf("delegated runner not enabled")
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return fmt.Errorf("run ID is required")
+	}
+	L_info("cron: delegated cancel requested", "runID", runID, "cascade", false)
+	err := s.runner.Cancel(runID)
+	if err != nil {
+		L_warn("cron: delegated cancel failed", "runID", runID, "error", err)
+		return err
+	}
+	L_debug("cron: delegated cancel accepted", "runID", runID)
+	return nil
+}
+
+// CancelDelegatedRunCascade cancels a delegated run and all its descendants.
+// Descendants are canceled first to avoid orphan active children.
+func (s *Service) CancelDelegatedRunCascade(runID string) error {
+	if s.runner == nil {
+		return fmt.Errorf("delegated runner not enabled")
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return fmt.Errorf("run ID is required")
+	}
+	if _, ok := s.GetDelegatedRun(runID); !ok {
+		return delegatedrun.ErrRunNotFound
+	}
+	L_info("cron: delegated cancel requested", "runID", runID, "cascade", true)
+
+	recs := s.ListDelegatedRuns()
+	childrenByParent := make(map[string][]string)
+	for _, rec := range recs {
+		parent := strings.TrimSpace(rec.ParentRunID)
+		if parent == "" {
+			continue
+		}
+		childrenByParent[parent] = append(childrenByParent[parent], rec.RunID)
+	}
+
+	// Collect subtree in parent-first order, then cancel in reverse for child-first semantics.
+	order := []string{runID}
+	for i := 0; i < len(order); i++ {
+		id := order[i]
+		order = append(order, childrenByParent[id]...)
+	}
+	L_debug("cron: delegated cascade subtree collected", "rootRunID", runID, "subtreeSize", len(order))
+
+	var firstErr error
+	for i := len(order) - 1; i >= 0; i-- {
+		id := order[i]
+		if err := s.runner.Cancel(id); err != nil {
+			// Non-active descendants may already be finished and return not found; ignore.
+			if errors.Is(err, delegatedrun.ErrRunNotFound) {
+				L_trace("cron: delegated cascade skip non-active child", "runID", id)
+				continue
+			}
+			L_warn("cron: delegated cascade cancel failed", "runID", id, "error", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		} else {
+			L_trace("cron: delegated cascade cancel accepted", "runID", id)
+		}
+	}
+	if firstErr != nil {
+		L_warn("cron: delegated cascade completed with errors", "rootRunID", runID, "error", firstErr)
+	} else {
+		L_info("cron: delegated cascade completed", "rootRunID", runID, "subtreeSize", len(order))
+	}
+	return firstErr
+}
+
+// ListDelegatedRunEvents returns delegated run events after the given event ID.
+func (s *Service) ListDelegatedRunEvents(sinceID int64, limit int) []delegatedrun.RunEvent {
+	if s.delegatedSQLite == nil {
+		return nil
+	}
+	return s.delegatedSQLite.ListEventsSince(sinceID, limit)
 }
 
 // SetHeartbeatConfig configures the heartbeat system.
@@ -256,6 +583,10 @@ func (s *Service) Stop() {
 	if s.backupTicker != nil {
 		s.backupTicker.Stop()
 		s.backupTicker = nil
+	}
+	if s.delegatedSQLite != nil {
+		_ = s.delegatedSQLite.Close()
+		s.delegatedSQLite = nil
 	}
 	if s.heartbeatTimer != nil {
 		s.heartbeatTimer.Stop()
@@ -697,7 +1028,14 @@ func (s *Service) executeJob(ctx context.Context, job *CronJob) {
 		return
 	}
 
-	finalContent, eventCount, execErr := s.runAssistantTask(ctx, job, userID)
+	finalContent := ""
+	eventCount := 0
+	var execErr error
+	if s.delegatedEnabled && s.runner != nil {
+		finalContent, eventCount, execErr = s.runDelegatedTask(ctx, job, userID)
+	} else {
+		finalContent, eventCount, execErr = s.runAssistantTask(ctx, job, userID)
+	}
 
 	duration := time.Since(startTime)
 
@@ -797,6 +1135,51 @@ func (s *Service) runAssistantTask(ctx context.Context, job *CronJob, userID str
 		}
 	}
 	return finalContent, eventCount, execErr
+}
+
+func (s *Service) runDelegatedTask(ctx context.Context, job *CronJob, userID string) (string, int, error) {
+	timeoutSeconds := 0
+	if job.Result.TimeoutSeconds > 0 {
+		timeoutSeconds = job.Result.TimeoutSeconds
+	} else if s.jobTimeoutMinutes > 0 {
+		timeoutSeconds = s.jobTimeoutMinutes * 60
+	}
+	spec := delegatedrun.RunSpec{
+		ParentRunID:    "",
+		RequesterType:  "cron",
+		RequesterID:    job.ID,
+		SessionKey:     fmt.Sprintf("cron:%s", job.ID),
+		Prompt:         job.Prompt,
+		Purpose:        "cron",
+		FreshContext:   true,
+		Ephemeral:      !job.ShouldPersistResult(),
+		TimeoutSeconds: timeoutSeconds,
+		UserID:         userID,
+		EnableThinking: false,
+		SkipMirror:     true,
+		JobName:        job.Name,
+	}
+	runID, err := s.StartDelegatedRun(ctx, spec)
+	if err != nil {
+		return "", 0, err
+	}
+	result, state, waitErr := s.runner.Wait(ctx, runID)
+	if waitErr != nil {
+		return result.FinalText, 0, waitErr
+	}
+	switch state {
+	case delegatedrun.RunStateCompleted:
+		return result.FinalText, 0, nil
+	case delegatedrun.RunStateTimeout:
+		return result.FinalText, 0, fmt.Errorf("delegated run timed out")
+	case delegatedrun.RunStateCanceled:
+		return result.FinalText, 0, fmt.Errorf("delegated run canceled")
+	default:
+		if result.Error != "" {
+			return result.FinalText, 0, fmt.Errorf("%s", result.Error)
+		}
+		return result.FinalText, 0, fmt.Errorf("delegated run failed")
+	}
 }
 
 func (s *Service) handleResult(ctx context.Context, job *CronJob, finalContent string) error {

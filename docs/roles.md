@@ -180,6 +180,37 @@ See [Session Supervision](supervision.md) for full documentation on:
 - Interrupt generation
 - Configuration options
 
+## Delegated Runs and Subagent Access
+
+Yes — delegated subagent tooling is owner-only by design.
+
+This includes:
+
+- `subagent_spawn`
+- `subagent_status`
+- `subagent_cancel`
+- `subagent_fanout`
+
+### How enforcement works
+
+Access is enforced in multiple layers:
+
+1. **Registration gate (config):**
+   - Tools are only registered when `tools.subagent.enabled=true`.
+2. **Runtime delegated engine gate (config):**
+   - Delegated runner path is controlled by `gateway.delegatedRuns.enabled`.
+3. **Execution authorization (hard check):**
+   - Each subagent tool checks `sessionCtx.User.IsOwner()` at execution time.
+   - Non-owner calls are rejected, even if a role/user tool allowlist includes the tool name.
+
+This means subagent/delegated orchestration cannot be granted to non-owner users by role config alone.
+
+### RBAC implications
+
+- Keep normal users on bounded/readonly tool sets (`read`, `memory_search`, etc.).
+- Treat delegated tooling as a privileged operator capability.
+- If you need non-owner async workflows, prefer narrowly scoped custom tools rather than exposing delegated subagent control.
+
 ## Unknown Users and Guest Role
 
 Users not in `users.json` are treated as guests. **By default, no `guest` role is defined**, which means unknown users have no access — this is secure by default.
@@ -260,3 +291,4 @@ In `users.json`:
 - [WhatsApp](whatsapp.md) — WhatsApp user setup
 - [Web UI](web-ui.md) — HTTP authentication
 - [Tools](tools.md) — Available tools
+- [Delegated Runs](delegated-runs.md) — Delegated/subagent architecture and controls

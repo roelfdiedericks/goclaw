@@ -167,7 +167,7 @@ The PromptCache uses fsnotify for immediate file change detection with hash poll
 
 ### Tool Registry (`internal/tools`)
 
-Available agent tools:
+Available agent tools (registered conditionally by config/feature flags):
 
 | Tool | Description |
 |------|-------------|
@@ -175,24 +175,31 @@ Available agent tools:
 | `write` | Write file contents |
 | `edit` | Edit file (string replace) |
 | `exec` | Execute shell commands (sandboxed) |
+| `jq` | JSON query/transformation |
 | `message` | Send messages to channels |
+| `media_display` | Display images/media to user |
+| `cron` | Schedule tasks |
+| `subagent_spawn` | Spawn delegated subagent run |
+| `subagent_status` | Inspect delegated run state |
+| `subagent_cancel` | Cancel delegated run (optional cascade) |
+| `subagent_fanout` | Bounded fanout + deterministic aggregation (+ optional synthesis) |
 | `memory_graph_recall` | Retrieve memories from graph |
 | `memory_graph_query` | Search/filter memory graph |
 | `memory_graph_store` | Add memory to graph |
 | `memory_graph_update` | Modify memory in graph |
 | `memory_graph_forget` | Remove memory from graph |
+| `memory_graph_search` | Legacy memory graph search (compat) |
 | `memory_search` | Semantic search over memory files |
+| `memory_get` | Fetch memory by ID |
 | `transcript` | Search/query conversation history |
-| `web_search` | Search the web (Brave API) |
+| `web_search` | Multi-provider web search (Brave/Grok/Perplexity/Gemini) |
 | `web_fetch` | Fetch web page content |
 | `browser` | Browser automation (Chromium) |
 | `hass` | Home Assistant control |
-| `cron` | Schedule tasks |
-| `jq` | JSON query/transformation |
 | `xai_imagine` | xAI image generation |
+| `xai_video` | xAI video generation |
 | `user_auth` | Role elevation requests |
 | `skills` | Skill management and installation |
-| `media_display` | Display images/media to user |
 | `goclaw_update` | Self-update GoClaw |
 
 ### Channels
@@ -558,6 +565,8 @@ goclaw/
 | Memory graph extractor | Extracts entities from conversations |
 | Transcript indexer | Indexes conversation history |
 | Voice sessions | Manages real-time voice WebSocket connections |
+| Delegated runner waits | Tracks subagent/cron delegated completions and dispatch |
+| Delegated SSE stream | Serves `/api/runners/events` lifecycle feed |
 
 ### Synchronization
 
@@ -575,5 +584,20 @@ goclaw/
 - [Memory Graph](memory-graph.md) — Semantic knowledge graph
 - [Configuration](configuration.md) — All config options
 - [Tools](tools.md) — Available agent tools
+- [Delegated Runs](delegated-runs.md) — Delegated execution model and control plane
 - [Embeddings](embeddings.md) — Semantic search infrastructure
 - [LLM Providers](llm-providers.md) — Provider configuration
+
+---
+
+## Delegated Runs
+
+GoClaw now treats cron-isolated runs and subagent runs as one delegated-run model.
+
+- **Core model:** `internal/delegatedrun` (`RunSpec`, `RunRecord`, `RunState`, typed lifecycle events).
+- **Runner path:** `internal/cron/service.go` routes cron execution through delegated runner when `gateway.delegatedRuns.enabled=true`.
+- **Result routing:** supports `store_only`, `deliver`, `handoff_main`, and `return_to_requester` (synthetic requester-session reinjection).
+- **Policy limits:** depth and per-parent active children are enforced in delegated start admission; global concurrency is enforced by a delegated runner lane scheduler (queue -> run on capacity).
+- **Fanout coordinator:** `subagent_fanout` performs bounded parallel child spawning, deterministic reduction of child outcomes in input order, and optional model-mediated synthesis.
+- **Visibility:** owner dashboard at `/runners` with snapshot (`/api/runners`) + SSE (`/api/runners/events`), plus concise Telegram/TUI summaries.
+- **Reference:** see [Delegated Runs](delegated-runs.md) for full architecture, lifecycle, policy, and routing details.

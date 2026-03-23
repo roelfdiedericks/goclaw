@@ -21,6 +21,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/contentguard"
 	gcontext "github.com/roelfdiedericks/goclaw/internal/context"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
+	"github.com/roelfdiedericks/goclaw/internal/delegatedrun"
 	"github.com/roelfdiedericks/goclaw/internal/delivery"
 	"github.com/roelfdiedericks/goclaw/internal/embeddings"
 	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
@@ -628,6 +629,107 @@ func (g *Gateway) DeliverToolMessage(ctx context.Context, params ToolMessagePara
 	return nil
 }
 
+// DeliverToolMessageToChannel persists a tool-generated message and delivers it
+// only to a single named channel. Use this for requester-scoped callbacks.
+func (g *Gateway) DeliverToolMessageToChannel(ctx context.Context, params ToolMessageParams, channelName string) error {
+	if params.User == nil {
+		return fmt.Errorf("user required for tool message delivery")
+	}
+	channelName = strings.TrimSpace(channelName)
+	if channelName == "" {
+		return fmt.Errorf("target channel required for scoped tool message delivery")
+	}
+
+	// Persist as assistant message (no user message for tool output)
+	enrichedMsg, err := g.PersistConversationTurn(ctx, PersistParams{
+		User:             params.User,
+		Source:           params.Source,
+		UserMessage:      "",
+		AssistantMessage: params.Message,
+		SkipUserMessage:  true,
+	})
+	if err != nil {
+		return fmt.Errorf("persist failed: %w", err)
+	}
+
+	ch, ok := g.channels[channelName]
+	if !ok {
+		return fmt.Errorf("target channel not found: %s", channelName)
+	}
+	if !ch.HasUser(params.User) {
+		return fmt.Errorf("target channel %s has no reachable user", channelName)
+	}
+
+	g.deliverAssistantMessage(ctx, params.User, enrichedMsg, []Channel{ch})
+	L_debug("deliver: scoped tool message delivered",
+		"source", params.Source,
+		"targetChannel", channelName,
+		"msgLen", len(enrichedMsg))
+	return nil
+}
+
+// InjectDelegatedReturnToSession appends a synthetic tool_use/tool_result pair
+// to the requester session so delegated completion is represented as tool output.
+func (g *Gateway) InjectDelegatedReturnToSession(
+	ctx context.Context,
+	u *user.User,
+	source, sessionKey, runID, message, toolError string,
+) error {
+	sessionKey = strings.TrimSpace(sessionKey)
+	runID = strings.TrimSpace(runID)
+	if sessionKey == "" {
+		return fmt.Errorf("session key is required")
+	}
+	if runID == "" {
+		return fmt.Errorf("run ID is required")
+	}
+	if g.sessions == nil {
+		return fmt.Errorf("sessions manager unavailable")
+	}
+
+	toolCallID := fmt.Sprintf("delegated_return:%s", runID)
+	toolInput, _ := json.Marshal(map[string]any{
+		"action":  "return_to_requester",
+		"runId":   runID,
+		"source":  strings.TrimSpace(source),
+		"session": sessionKey,
+	})
+
+	sess := g.sessions.Get(sessionKey)
+	toolUseMsgID := sess.AddToolUse(toolCallID, "subagent_spawn", toolInput, "", "")
+	toolResultMsgID := sess.AddToolResult(toolCallID, strings.TrimSpace(message), nil, "")
+
+	userID := ""
+	if u != nil {
+		userID = u.ID
+	}
+	g.persistMessage(ctx, PersistMessageParams{
+		MsgID:      toolUseMsgID,
+		SessionKey: sessionKey,
+		UserID:     userID,
+		Role:       "tool_use",
+		Source:     "delegated_return",
+		ToolCallID: toolCallID,
+		ToolName:   "subagent_spawn",
+		ToolInput:  toolInput,
+	})
+	g.persistMessage(ctx, PersistMessageParams{
+		MsgID:      toolResultMsgID,
+		SessionKey: sessionKey,
+		UserID:     userID,
+		Role:       "tool_result",
+		Content:    strings.TrimSpace(message),
+		Source:     "delegated_return",
+		ToolCallID: toolCallID,
+		ToolError:  strings.TrimSpace(toolError),
+	})
+	L_info("delegated: return_to_requester injected",
+		"runID", runID,
+		"sessionKey", sessionKey,
+		"toolError", strings.TrimSpace(toolError) != "")
+	return nil
+}
+
 // MediaStore returns the media store
 func (g *Gateway) MediaStore() *media.MediaStore {
 	return g.mediaStore
@@ -1202,6 +1304,14 @@ func (g *Gateway) StartCron(ctx context.Context) error {
 
 	// Create and start service
 	g.cronService = cron.NewService(store, g)
+	delegatedRegistryPath := filepath.Join(filepath.Dir(g.config.Session.StorePath), "delegated_runs.db")
+	g.cronService.SetDelegatedRunsEnabled(g.config.Gateway.DelegatedRuns.Enabled, delegatedRegistryPath, delegatedrun.SpawnLimits{
+		MaxSpawnDepth:              g.config.Gateway.DelegatedRuns.MaxSpawnDepth,
+		MaxActiveChildrenPerParent: g.config.Gateway.DelegatedRuns.MaxActiveChildrenPerParent,
+		MaxConcurrentRuns:          g.config.Gateway.DelegatedRuns.MaxConcurrentRuns,
+		DefaultTimeoutSeconds:      g.config.Gateway.DelegatedRuns.DefaultTimeoutSeconds,
+		MaxTimeoutSeconds:          g.config.Gateway.DelegatedRuns.MaxTimeoutSeconds,
+	})
 
 	// Set job timeout if configured
 	if g.config.Cron.JobTimeoutMinutes > 0 {
@@ -1238,6 +1348,38 @@ func (g *Gateway) StopCron() {
 // CronService returns the cron service (may be nil if not started).
 func (g *Gateway) CronService() *cron.Service {
 	return g.cronService
+}
+
+// ListDelegatedRuns returns delegated run records from cron's delegated runner registry.
+func (g *Gateway) ListDelegatedRuns() []delegatedrun.RunRecord {
+	if g.cronService == nil {
+		return nil
+	}
+	return g.cronService.ListDelegatedRuns()
+}
+
+// GetDelegatedRun returns a delegated run by ID.
+func (g *Gateway) GetDelegatedRun(runID string) (delegatedrun.RunRecord, bool) {
+	if g.cronService == nil {
+		return delegatedrun.RunRecord{}, false
+	}
+	return g.cronService.GetDelegatedRun(runID)
+}
+
+// CancelDelegatedRun cancels a delegated run by ID.
+func (g *Gateway) CancelDelegatedRun(runID string) error {
+	if g.cronService == nil {
+		return fmt.Errorf("cron service unavailable")
+	}
+	return g.cronService.CancelDelegatedRun(runID)
+}
+
+// ListDelegatedRunEvents returns delegated run events after sinceID.
+func (g *Gateway) ListDelegatedRunEvents(sinceID int64, limit int) []delegatedrun.RunEvent {
+	if g.cronService == nil {
+		return nil
+	}
+	return g.cronService.ListDelegatedRunEvents(sinceID, limit)
 }
 
 // RunAgentForCron implements the cron.GatewayRunner interface.
@@ -1909,6 +2051,8 @@ func (g *Gateway) ExecuteTool(ctx context.Context, params ToolExecutionParams) (
 		Channel:         params.Source,
 		ChatID:          params.ChatID,
 		OwnerChatID:     ownerChatID,
+		SessionKey:      "",
+		RunID:           "",
 		User:            params.User,
 		TranscriptScope: transcriptScope,
 	})
@@ -2866,6 +3010,8 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 							Channel:           req.Source,
 							ChatID:            req.ChatID,
 							OwnerChatID:       ownerChatID,
+							SessionKey:        sessionKey,
+							RunID:             runID,
 							User:              req.User,
 							TranscriptScope:   transcriptScope,
 							Session:           sess,
@@ -3083,6 +3229,8 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					Channel:           req.Source,
 					ChatID:            req.ChatID,
 					OwnerChatID:       ownerChatID,
+					SessionKey:        sessionKey,
+					RunID:             runID,
 					User:              req.User,
 					TranscriptScope:   transcriptScope,
 					Session:           sess,

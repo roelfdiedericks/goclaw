@@ -152,6 +152,43 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleRunnersPage serves the delegated runners dashboard page (owner only).
+func (s *Server) handleRunnersPage(w http.ResponseWriter, r *http.Request) {
+	if err := s.reloadTemplatesIfDev(); err != nil {
+		logging.L_error("http: template reload error", "error", err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+		return
+	}
+
+	u := getUserFromContext(r)
+	if u == nil {
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+	if !u.IsOwner() {
+		http.Error(w, "Forbidden - owner only", http.StatusForbidden)
+		return
+	}
+
+	data := struct {
+		Title     string
+		User      *UserTemplateData
+		Timestamp time.Time
+		ChatPage  bool
+	}{
+		Title:     "GoClaw - Runners",
+		User:      &UserTemplateData{Name: u.Name, Username: u.ID, Role: string(u.Role), IsOwner: u.IsOwner()},
+		Timestamp: time.Now(),
+		ChatPage:  false,
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.templates.ExecuteTemplate(w, "runners.html", data); err != nil {
+		logging.L_error("http: runners template error", "error", err)
+		http.Error(w, "Template error", http.StatusInternalServerError)
+	}
+}
+
 // handleTranscript serves a read-only transcript page that renders saved browser localStorage history.
 func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 	if err := s.reloadTemplatesIfDev(); err != nil {
@@ -981,6 +1018,204 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if err := json.NewEncoder(w).Encode(status); err != nil {
 		logging.L_warn("http: failed to encode status", "error", err)
+	}
+}
+
+// handleRunners handles GET /api/runners - delegated run listing (owner only).
+func (s *Server) handleRunners(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	u := getUserFromContext(r)
+	if u == nil {
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+	if !u.IsOwner() {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	if s.channel == nil || s.channel.gateway == nil {
+		http.Error(w, "Gateway unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	runs := s.channel.gateway.ListDelegatedRuns()
+	items := make([]map[string]interface{}, 0, len(runs))
+	for _, run := range runs {
+		item := map[string]interface{}{
+			"runId":         run.RunID,
+			"parentRunId":   run.ParentRunID,
+			"requesterType": run.RequesterType,
+			"requesterId":   run.RequesterID,
+			"sessionKey":    run.SessionKey,
+			"purpose":       run.Purpose,
+			"state":         run.State,
+			"startedAt":     run.StartedAt,
+			"result": map[string]interface{}{
+				"finalText": run.Result.FinalText,
+				"error":     run.Result.Error,
+				"usage":     run.Result.Usage,
+			},
+		}
+		if run.FinishedAt != nil {
+			item["finishedAt"] = *run.FinishedAt
+		} else {
+			item["finishedAt"] = nil
+		}
+		items = append(items, item)
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+		"items": items,
+	}); err != nil {
+		logging.L_warn("http: failed to encode delegated runners", "error", err)
+	}
+}
+
+func (s *Server) handleRunnersAction(w http.ResponseWriter, r *http.Request) {
+	u := getUserFromContext(r)
+	if u == nil {
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+	if !u.IsOwner() {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	if s.channel == nil || s.channel.gateway == nil {
+		http.Error(w, "Gateway unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/api/runners/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		http.Error(w, "Invalid runner path", http.StatusBadRequest)
+		return
+	}
+	runID := parts[0]
+	action := ""
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+
+	switch {
+	case r.Method == http.MethodGet && action == "":
+		run, ok := s.channel.gateway.GetDelegatedRun(runID)
+		if !ok {
+			http.Error(w, "Runner not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"run": run,
+		})
+		return
+	case r.Method == http.MethodPost && action == "cancel":
+		if err := s.channel.gateway.CancelDelegatedRun(runID); err != nil {
+			http.Error(w, "Cancel failed: "+err.Error(), http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":    true,
+			"runId": runID,
+		})
+		return
+	default:
+		http.Error(w, "Unknown action", http.StatusBadRequest)
+		return
+	}
+}
+
+// handleRunnerEvents handles GET /api/runners/events as SSE stream backed by delegated_run_events.
+func (s *Server) handleRunnerEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	u := getUserFromContext(r)
+	if u == nil {
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+	if !u.IsOwner() {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	if s.channel == nil || s.channel.gateway == nil {
+		http.Error(w, "Gateway unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	lastID := int64(0)
+	if v := strings.TrimSpace(r.Header.Get("Last-Event-ID")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+			lastID = n
+		}
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("since")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+			lastID = n
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	writeEvent := func(id int64, eventType string, payload interface{}) bool {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return false
+		}
+		if _, err := fmt.Fprintf(w, "event: %s\nid: %d\ndata: %s\n\n", eventType, id, data); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	ctx := r.Context()
+	ticker := time.NewTicker(1000 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		events := s.channel.gateway.ListDelegatedRunEvents(lastID, 200)
+		for _, ev := range events {
+			payload := map[string]interface{}{
+				"runId":         ev.RunID,
+				"eventType":     ev.EventType,
+				"payload":       ev.Payload,
+				"timestamp":     ev.Timestamp,
+				"schemaVersion": 1,
+			}
+			if ok := writeEvent(ev.ID, "delegated.run."+ev.EventType, payload); !ok {
+				return
+			}
+			lastID = ev.ID
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := fmt.Fprintf(w, ": heartbeat\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
 	}
 }
 

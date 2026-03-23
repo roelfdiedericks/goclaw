@@ -7,7 +7,18 @@ type GatewayConfig struct {
 	LogFile       string              `json:"logFile"`
 	PIDFile       string              `json:"pidFile"`
 	WorkingDir    string              `json:"workingDir"`
+	DelegatedRuns DelegatedRunsConfig `json:"delegatedRuns"`
 	ToolExecution ToolExecutionConfig `json:"toolExecution"`
+}
+
+// DelegatedRunsConfig controls delegated runner behavior and rollout.
+type DelegatedRunsConfig struct {
+	Enabled                    bool `json:"enabled" default:"true"`
+	MaxSpawnDepth              int  `json:"maxSpawnDepth" default:"4"`
+	MaxActiveChildrenPerParent int  `json:"maxActiveChildrenPerParent" default:"4"`
+	MaxConcurrentRuns          int  `json:"maxConcurrentRuns" default:"16"`
+	DefaultTimeoutSeconds      int  `json:"defaultTimeoutSeconds" default:"300"`
+	MaxTimeoutSeconds          int  `json:"maxTimeoutSeconds" default:"1800"`
 }
 
 // ToolExecutionConfig configures how the gateway executes model-requested tools.

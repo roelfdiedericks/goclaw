@@ -14,6 +14,7 @@ import (
 	tele "gopkg.in/telebot.v4"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
+	"github.com/roelfdiedericks/goclaw/internal/delegatedrun"
 	"github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
 	chtypes "github.com/roelfdiedericks/goclaw/internal/channels/types"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
@@ -51,6 +52,10 @@ type Bot struct {
 	running   bool
 	startedAt time.Time
 	lastError error
+
+	delegatedSubs []bus.SubscriptionID
+	delegatedMu   sync.Mutex
+	delegatedLast map[string]time.Time
 }
 
 // getChatPrefs returns preferences for a chat, creating if needed.
@@ -109,13 +114,112 @@ func New(cfg *config.Config, gw *gateway.Gateway, users *user.Registry) (*Bot, e
 		config:  cfg,
 		ctx:     ctx,
 		cancel:  cancel,
+		delegatedLast: make(map[string]time.Time),
 	}
 
 	// Register handlers
 	b.setupHandlers()
+	b.subscribeDelegatedRunEvents()
 	logging.L_debug("telegram: handlers registered")
 
 	return b, nil
+}
+
+func (b *Bot) subscribeDelegatedRunEvents() {
+	topics := []string{
+		"delegated.run.started",
+		"delegated.run.completed",
+		"delegated.run.failed",
+		"delegated.run.canceled",
+	}
+	for _, topic := range topics {
+		topic := topic
+		subID := bus.SubscribeEvent(topic, func(ev bus.Event) {
+			b.onDelegatedRunEvent(topic, ev.Data)
+		})
+		b.delegatedSubs = append(b.delegatedSubs, subID)
+	}
+}
+
+func (b *Bot) onDelegatedRunEvent(topic string, payload any) {
+	owner := b.users.Owner()
+	if owner == nil || owner.TelegramID == "" {
+		return
+	}
+
+	var text string
+	switch topic {
+	case "delegated.run.started":
+		ev, ok := payload.(delegatedrun.StartedEvent)
+		if !ok {
+			return
+		}
+		text = fmt.Sprintf("Runner started: %s (%s via %s)", shortRunID(ev.RunID), blankDefault(ev.Purpose, "unspecified"), ev.RequesterType)
+	case "delegated.run.completed":
+		ev, ok := payload.(delegatedrun.CompletedEvent)
+		if !ok {
+			return
+		}
+		elapsed := ev.FinishedAt.Sub(ev.StartedAt).Round(time.Second)
+		text = fmt.Sprintf("Runner completed: %s in %s", shortRunID(ev.RunID), elapsed)
+	case "delegated.run.failed":
+		ev, ok := payload.(delegatedrun.FailedEvent)
+		if !ok {
+			return
+		}
+		text = fmt.Sprintf("Runner failed: %s (%s)", shortRunID(ev.RunID), truncate(strings.TrimSpace(ev.Error), 120))
+	case "delegated.run.canceled":
+		ev, ok := payload.(delegatedrun.CanceledEvent)
+		if !ok {
+			return
+		}
+		text = fmt.Sprintf("Runner canceled: %s", shortRunID(ev.RunID))
+	default:
+		return
+	}
+
+	// De-dupe rapid duplicate lifecycle emits to keep owner notifications concise.
+	key := topic + ":" + text
+	b.delegatedMu.Lock()
+	lastAt, seen := b.delegatedLast[key]
+	if seen && time.Since(lastAt) < 2*time.Second {
+		b.delegatedMu.Unlock()
+		return
+	}
+	b.delegatedLast[key] = time.Now()
+	b.delegatedMu.Unlock()
+
+	chatID := parseInt64OrZero(owner.TelegramID)
+	if chatID <= 0 {
+		return
+	}
+	if _, err := b.SendText(chatID, text); err != nil {
+		logging.L_debug("telegram: delegated summary delivery failed", "topic", topic, "error", err)
+	}
+}
+
+func shortRunID(runID string) string {
+	runID = strings.TrimSpace(runID)
+	if len(runID) <= 8 {
+		return runID
+	}
+	return runID[:8]
+}
+
+func blankDefault(v, fallback string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return fallback
+	}
+	return v
+}
+
+func parseInt64OrZero(s string) int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // setupHandlers registers message handlers
@@ -1037,6 +1141,10 @@ func (b *Bot) Stop() error {
 	}
 
 	logging.L_info("telegram: stopping bot")
+	for _, sub := range b.delegatedSubs {
+		bus.UnsubscribeEvent(sub)
+	}
+	b.delegatedSubs = nil
 	b.cancel()
 	b.bot.Stop()
 

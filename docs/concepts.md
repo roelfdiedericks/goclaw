@@ -56,16 +56,37 @@ See [Channels](channels.md) for the full overview.
 | Category | Examples |
 |----------|----------|
 | File operations | read, write, edit |
-| System | exec (shell commands) |
-| Search | memory_search, transcript, web_search |
+| System | exec (shell commands), jq |
+| Search | memory_search, memory_get, transcript, web_search |
 | Memory Graph | memory_graph_recall/query/store/update/forget |
-| Integration | hass (Home Assistant), browser, cron |
+| Orchestration | cron, subagent_spawn/status/cancel, subagent_fanout |
+| Integration | hass (Home Assistant), browser |
 | Communication | message (send to channels) |
-| Utility | media_display, skills, goclaw_update |
+| Utility | media_display, skills, goclaw_update, user_auth |
+| Media generation | xai_imagine, xai_video |
 
-Tools are registered with the gateway and exposed to the LLM via function calling. The agent decides when and how to use them.
+Tools are registered with the gateway and exposed to the LLM via function calling. Many tools are conditionally enabled by configuration and channel/runtime availability (for example browser/HASS/subagent features).
+
+Recent architecture additions include delegated-run tools and fanout orchestration:
+
+- `subagent_spawn` for asynchronous delegated runs
+- `subagent_status` / `subagent_cancel` for operator control
+- `subagent_fanout` for bounded parallel child execution with deterministic aggregation (+ optional synthesis)
 
 See [Tools](tools.md) for the complete tool reference.
+
+## Delegated Runs & Subagents
+
+GoClaw uses a shared **delegated run** model for isolated background and nested agent execution:
+
+- cron jobs can execute through delegated runs
+- owner-only subagent tools can spawn delegated children
+- fanout mode can launch multiple children with bounded parallelism and deterministic aggregation
+- result routing and completion dispatch are policy-driven (`store_only`, `deliver`, `handoff_main`, `return_to_requester`)
+
+This is the core model behind `/runners` visibility, delegated lifecycle events, and subagent orchestration behavior.
+
+See [Delegated Runs](delegated-runs.md) for the full architecture and operational details.
 
 ## Skills
 
@@ -162,6 +183,7 @@ File operations are sandboxed to the workspace by default.
 ## See Also
 
 - [Architecture](architecture.md) — Technical system overview
+- [Delegated Runs](delegated-runs.md) — Delegated execution architecture
 - [Configuration](configuration.md) — All configuration options
 - [Session Management](session-management.md) — Context and compaction
 - [LLM Providers](llm-providers.md) — Provider setup

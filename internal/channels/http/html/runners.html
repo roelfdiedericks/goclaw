@@ -1,0 +1,292 @@
+{{template "header" .}}
+
+<h1>Delegated Runners</h1>
+
+<div class="row mb-3">
+    <div class="col">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="/">Home</a></li>
+                <li class="breadcrumb-item active" aria-current="page">Runners</li>
+            </ol>
+        </nav>
+    </div>
+    <div class="col-auto d-flex align-items-center me-2">
+        <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="runners-include-completed">
+            <label class="form-check-label small" for="runners-include-completed">Include completed</label>
+        </div>
+    </div>
+    <div class="col-auto">
+        <button class="btn btn-sm btn-primary" id="refresh-runners">
+            <i class="bi bi-arrow-clockwise"></i> Refresh
+        </button>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div><i class="bi bi-list-task"></i> Active and Recent Runs</div>
+                <small class="text-muted" id="runners-last-update">Never</small>
+            </div>
+            <div class="card-body">
+                <div id="runners-empty" class="text-muted">Loading...</div>
+                <div class="table-responsive" id="runners-table-wrap" style="display:none;">
+                    <table class="table table-sm table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Run ID</th>
+                                <th>State</th>
+                                <th>Requester</th>
+                                <th>Purpose</th>
+                                <th>Session</th>
+                                <th>Started</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="runners-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-3">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-journal-code"></i> Live Runner Events
+            </div>
+            <div class="card-body">
+                <pre id="runners-events-log" class="small mb-0" style="max-height:300px;overflow:auto;background:#111;color:#eee;padding:0.75rem;border-radius:0.4rem;">Connecting...</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="runner-detail-modal" tabindex="-1" aria-labelledby="runner-detail-title" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="runner-detail-title">Runner Detail</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <pre id="runner-detail-json" class="small mb-0" style="max-height:60vh;overflow:auto;background:#111;color:#eee;padding:0.75rem;border-radius:0.4rem;">Loading...</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    const state = {
+        items: [],
+        eventsSource: null,
+        lastEventId: 0,
+        detailModal: null,
+        includeCompleted: false
+    };
+
+    const $empty = $('#runners-empty');
+    const $tableWrap = $('#runners-table-wrap');
+    const $tbody = $('#runners-table-body');
+    const $eventsLog = $('#runners-events-log');
+    const $lastUpdate = $('#runners-last-update');
+    const $detailJson = $('#runner-detail-json');
+
+    function escapeHtml(text) {
+        return $('<div>').text(String(text || '')).html();
+    }
+
+    function stateBadge(stateName) {
+        const s = String(stateName || '').toLowerCase();
+        if (s === 'completed') return '<span class="badge bg-success">completed</span>';
+        if (s === 'running') return '<span class="badge bg-primary">running</span>';
+        if (s === 'failed' || s === 'timeout' || s === 'canceled') return '<span class="badge bg-danger">' + escapeHtml(s) + '</span>';
+        if (s === 'queued') return '<span class="badge bg-secondary">queued</span>';
+        return '<span class="badge bg-light text-dark">' + escapeHtml(s || 'unknown') + '</span>';
+    }
+
+    function formatTime(v) {
+        if (!v) return '-';
+        const d = new Date(v);
+        if (isNaN(d.getTime())) return '-';
+        return d.toLocaleString();
+    }
+
+    function upsertItem(next) {
+        const idx = state.items.findIndex(i => i.runId === next.runId);
+        if (idx === -1) state.items.push(next);
+        else state.items[idx] = Object.assign({}, state.items[idx], next);
+    }
+
+    function renderTable() {
+        const visibleItems = (state.items || []).filter(run => {
+            if (state.includeCompleted) return true;
+            return String(run.state || '').toLowerCase() !== 'completed';
+        });
+        if (visibleItems.length === 0) {
+            $tableWrap.hide();
+            $empty.text(state.includeCompleted ? 'No delegated runs found' : 'No active delegated runs found').show();
+            return;
+        }
+        $empty.hide();
+        $tableWrap.show();
+
+        visibleItems.sort((a, b) => {
+            const at = new Date(a.startedAt || 0).getTime();
+            const bt = new Date(b.startedAt || 0).getTime();
+            return bt - at;
+        });
+
+        let html = '';
+        visibleItems.forEach(run => {
+            html += '<tr>' +
+                '<td><code>' + escapeHtml(run.runId) + '</code></td>' +
+                '<td>' + stateBadge(run.state) + '</td>' +
+                '<td>' + escapeHtml((run.requesterType || '-') + ':' + (run.requesterId || '-')) + '</td>' +
+                '<td>' + escapeHtml(run.purpose || '-') + '</td>' +
+                '<td><code>' + escapeHtml(run.sessionKey || '-') + '</code></td>' +
+                '<td>' + escapeHtml(formatTime(run.startedAt)) + '</td>' +
+                '<td>' +
+                    '<button class="btn btn-sm btn-outline-secondary me-1 runner-detail-btn" data-run-id="' + escapeHtml(run.runId) + '">Detail</button>' +
+                    '<button class="btn btn-sm btn-outline-danger runner-cancel-btn" data-run-id="' + escapeHtml(run.runId) + '">Cancel</button>' +
+                '</td>' +
+            '</tr>';
+        });
+        $tbody.html(html);
+        $lastUpdate.text('Last updated: ' + new Date().toLocaleTimeString());
+    }
+
+    function appendLog(line) {
+        const now = new Date().toLocaleTimeString();
+        const prev = $eventsLog.text();
+        const next = '[' + now + '] ' + line + '\n' + (prev || '');
+        $eventsLog.text(next.slice(0, 12000));
+    }
+
+    async function loadRunners() {
+        try {
+            const res = await fetch('/api/runners');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+            state.items = Array.isArray(data.items) ? data.items : [];
+            renderTable();
+        } catch (err) {
+            $empty.text('Failed to load runners: ' + err.message).show();
+            $tableWrap.hide();
+        }
+    }
+
+    async function showDetail(runId) {
+        try {
+            const res = await fetch('/api/runners/' + encodeURIComponent(runId));
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+            $detailJson.text(JSON.stringify(data, null, 2));
+            if (state.detailModal) {
+                state.detailModal.show();
+            }
+            appendLog('detail opened for ' + runId);
+        } catch (err) {
+            appendLog('detail failed ' + runId + ': ' + err.message);
+        }
+    }
+
+    async function cancelRun(runId) {
+        try {
+            const res = await fetch('/api/runners/' + encodeURIComponent(runId) + '/cancel', { method: 'POST' });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            appendLog('cancel requested for ' + runId);
+            await loadRunners();
+        } catch (err) {
+            appendLog('cancel failed ' + runId + ': ' + err.message);
+        }
+    }
+
+    function connectEvents() {
+        if (state.eventsSource) {
+            state.eventsSource.close();
+            state.eventsSource = null;
+        }
+        const qs = state.lastEventId > 0 ? ('?since=' + state.lastEventId) : '';
+        const src = new EventSource('/api/runners/events' + qs);
+        state.eventsSource = src;
+        $eventsLog.text('Connected');
+
+        src.onmessage = function() {};
+
+        src.onopen = function() {
+            appendLog('events connected');
+        };
+        src.onerror = function() {
+            appendLog('events disconnected; retrying');
+        };
+
+        const handled = [
+            'delegated.run.started',
+            'delegated.run.progress',
+            'delegated.run.completed',
+            'delegated.run.failed',
+            'delegated.run.timeout',
+            'delegated.run.canceled',
+            'delegated.run.queued',
+            'delegated.run.running'
+        ];
+        handled.forEach(function(name) {
+            src.addEventListener(name, function(ev) {
+                if (ev.lastEventId) {
+                    const id = parseInt(ev.lastEventId, 10);
+                    if (!isNaN(id)) state.lastEventId = id;
+                }
+                try {
+                    const payload = JSON.parse(ev.data || '{}');
+                    const p = payload.payload || {};
+                    const runId = payload.runId || p.runId;
+                    if (runId) {
+                        upsertItem({
+                            runId: runId,
+                            parentRunId: p.parentRunId,
+                            requesterType: p.requesterType,
+                            requesterId: p.requesterId,
+                            purpose: p.purpose,
+                            sessionKey: p.sessionKey,
+                            state: p.state || payload.eventType,
+                            startedAt: p.startedAt,
+                            finishedAt: p.finishedAt
+                        });
+                        renderTable();
+                    }
+                    appendLog(name + ' run=' + (runId || '?'));
+                } catch (err) {
+                    appendLog(name + ' parse error: ' + err.message);
+                }
+            });
+        });
+    }
+
+    $(document).on('click', '.runner-detail-btn', function() {
+        showDetail($(this).data('run-id'));
+    });
+    $(document).on('click', '.runner-cancel-btn', function() {
+        cancelRun($(this).data('run-id'));
+    });
+    $('#refresh-runners').on('click', loadRunners);
+    $('#runners-include-completed').on('change', function() {
+        state.includeCompleted = !!$(this).is(':checked');
+        renderTable();
+    });
+
+    state.detailModal = new bootstrap.Modal(document.getElementById('runner-detail-modal'));
+    loadRunners();
+    connectEvents();
+    setInterval(loadRunners, 10000);
+})();
+</script>
+
+{{template "footer" .}}
+

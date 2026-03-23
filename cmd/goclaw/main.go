@@ -66,6 +66,10 @@ import (
 	toolmessage "github.com/roelfdiedericks/goclaw/internal/tools/message"
 	"github.com/roelfdiedericks/goclaw/internal/tools/read"
 	toolskills "github.com/roelfdiedericks/goclaw/internal/tools/skills"
+	toolsubagentcancel "github.com/roelfdiedericks/goclaw/internal/tools/subagent_cancel"
+	toolsubagentfanout "github.com/roelfdiedericks/goclaw/internal/tools/subagent_fanout"
+	toolsubagentspawn "github.com/roelfdiedericks/goclaw/internal/tools/subagent_spawn"
+	toolsubagentstatus "github.com/roelfdiedericks/goclaw/internal/tools/subagent_status"
 	tooltranscript "github.com/roelfdiedericks/goclaw/internal/tools/transcript"
 	toolupdate "github.com/roelfdiedericks/goclaw/internal/tools/update"
 	"github.com/roelfdiedericks/goclaw/internal/tools/userauth"
@@ -2880,6 +2884,27 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 
 	// Cron tool
 	reg.Register(toolcron.NewTool())
+	if cfg.Tools.Subagent.Enabled && cfg.Gateway.DelegatedRuns.Enabled {
+		reg.Register(toolsubagentspawn.NewTool(
+			func(ctx context.Context, u *user.User, source, sessionKey, runID, message, toolError string) error {
+				return gw.InjectDelegatedReturnToSession(ctx, u, source, sessionKey, runID, message, toolError)
+			},
+			func(ctx context.Context, u *user.User, source, message string) error {
+				return gw.DeliverToolMessageToChannel(ctx, gateway.ToolMessageParams{
+					User:    u,
+					Source:  source,
+					Message: message,
+				}, source)
+			},
+		))
+		reg.Register(toolsubagentstatus.NewTool())
+		reg.Register(toolsubagentcancel.NewTool())
+		reg.Register(toolsubagentfanout.NewTool())
+	} else if cfg.Tools.Subagent.Enabled && !cfg.Gateway.DelegatedRuns.Enabled {
+		L_warn("tools: subagent tools requested but delegated runs are disabled; skipping subagent tool registration",
+			"tools.subagent.enabled", cfg.Tools.Subagent.Enabled,
+			"gateway.delegatedRuns.enabled", cfg.Gateway.DelegatedRuns.Enabled)
+	}
 
 	// GoClaw update tool
 	reg.Register(toolupdate.NewTool(version))

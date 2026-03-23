@@ -2,9 +2,11 @@ package cron
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/delegatedrun"
 	"github.com/roelfdiedericks/goclaw/internal/delivery"
 )
 
@@ -17,6 +19,7 @@ type deliveryGatewayStub struct {
 }
 
 func (d *deliveryGatewayStub) RunAgentForCron(ctx context.Context, req AgentRequest, events chan<- AgentEvent) {
+	events <- AgentEndEvent{FinalText: "assistant path result"}
 	close(events)
 }
 
@@ -215,6 +218,156 @@ func TestNextRunChanged(t *testing.T) {
 
 func ptrTime(t time.Time) *time.Time {
 	return &t
+}
+
+type delegatedDeliveryRunnerStub struct {
+	startCalls int
+	runID      string
+	result     delegatedrun.RunResult
+	state      delegatedrun.RunState
+}
+
+func (r *delegatedDeliveryRunnerStub) Start(ctx context.Context, spec delegatedrun.RunSpec) (string, error) {
+	r.startCalls++
+	if r.runID != "" {
+		return r.runID, nil
+	}
+	return "delegated-test-run", nil
+}
+
+func (r *delegatedDeliveryRunnerStub) Cancel(runID string) error { return nil }
+
+func (r *delegatedDeliveryRunnerStub) Wait(ctx context.Context, runID string) (delegatedrun.RunResult, delegatedrun.RunState, error) {
+	return r.result, r.state, nil
+}
+
+type delegatedRunnerNoUseStub struct {
+	startCalls int
+}
+
+func (r *delegatedRunnerNoUseStub) Start(ctx context.Context, spec delegatedrun.RunSpec) (string, error) {
+	r.startCalls++
+	return "unused", nil
+}
+func (r *delegatedRunnerNoUseStub) Cancel(runID string) error { return nil }
+func (r *delegatedRunnerNoUseStub) Wait(ctx context.Context, runID string) (delegatedrun.RunResult, delegatedrun.RunState, error) {
+	return delegatedrun.RunResult{}, delegatedrun.RunStateCompleted, nil
+}
+
+func TestExecuteJobDelegatedPathPreservesResultSemantics(t *testing.T) {
+	tests := []struct {
+		name            string
+		mode            ResultMode
+		expectAssistant bool
+		expectHandoff   bool
+	}{
+		{name: "store_only stays silent", mode: ResultModeStoreOnly, expectAssistant: false, expectHandoff: false},
+		{name: "deliver uses assistant surface", mode: ResultModeDeliver, expectAssistant: true, expectHandoff: false},
+		{name: "handoff_main uses handoff path", mode: ResultModeHandoffMain, expectAssistant: false, expectHandoff: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			store := NewStore(filepath.Join(tmp, "jobs.json"), filepath.Join(tmp, "runs"))
+			job := &CronJob{
+				ID:      "job-1",
+				Name:    "delegated-job",
+				Enabled: true,
+				Schedule: Schedule{
+					Kind:    ScheduleKindEvery,
+					EveryMs: 60_000,
+				},
+				Prompt: "run delegated",
+				Result: ResultPolicy{Mode: tc.mode},
+			}
+			job.SetRunning()
+			store.jobs[job.ID] = job
+
+			gw := &deliveryGatewayStub{
+				ownerUserID: "owner",
+				report:      delivery.Report{Generated: true, DeliveredTo: 1},
+			}
+			runner := &delegatedDeliveryRunnerStub{
+				runID:  "delegated-test-run",
+				result: delegatedrun.RunResult{FinalText: "delegated final text"},
+				state:  delegatedrun.RunStateCompleted,
+			}
+			svc := &Service{
+				store:           store,
+				history:         NewHistoryManager(filepath.Join(tmp, "runs")),
+				gateway:         gw,
+				runner:          runner,
+				registry:        delegatedrun.NewMemoryRegistry(),
+				delegatedEnabled: true,
+			}
+
+			svc.executeJob(context.Background(), job)
+
+			if runner.startCalls != 1 {
+				t.Fatalf("expected delegated runner Start to be called once, got %d", runner.startCalls)
+			}
+
+			if tc.expectAssistant {
+				if gw.lastAssistant == nil {
+					t.Fatalf("expected assistant delivery for mode %s", tc.mode)
+				}
+				if gw.lastAssistant.Content != "delegated final text" {
+					t.Fatalf("expected delegated final text to be delivered, got %q", gw.lastAssistant.Content)
+				}
+			} else if gw.lastAssistant != nil {
+				t.Fatalf("expected no assistant delivery for mode %s", tc.mode)
+			}
+
+			if tc.expectHandoff {
+				if gw.lastHandoff != "delegated-job:delegated final text" {
+					t.Fatalf("expected delegated handoff, got %q", gw.lastHandoff)
+				}
+			} else if gw.lastHandoff != "" {
+				t.Fatalf("expected no handoff for mode %s, got %q", tc.mode, gw.lastHandoff)
+			}
+		})
+	}
+}
+
+func TestExecuteJobWithDelegatedDisabledUsesAssistantPath(t *testing.T) {
+	tmp := t.TempDir()
+	store := NewStore(filepath.Join(tmp, "jobs.json"), filepath.Join(tmp, "runs"))
+	job := &CronJob{
+		ID:      "job-1",
+		Name:    "assistant-fallback",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:    ScheduleKindEvery,
+			EveryMs: 60_000,
+		},
+		Prompt: "run assistant",
+		Result: ResultPolicy{Mode: ResultModeDeliver},
+	}
+	job.SetRunning()
+	store.jobs[job.ID] = job
+
+	gw := &deliveryGatewayStub{
+		ownerUserID: "owner",
+		report:      delivery.Report{Generated: true, DeliveredTo: 1},
+	}
+	runner := &delegatedRunnerNoUseStub{}
+	svc := &Service{
+		store:            store,
+		history:          NewHistoryManager(filepath.Join(tmp, "runs")),
+		gateway:          gw,
+		runner:           runner,
+		delegatedEnabled: false,
+	}
+
+	svc.executeJob(context.Background(), job)
+
+	if runner.startCalls != 0 {
+		t.Fatalf("expected delegated runner to remain unused when feature flag disabled, got %d starts", runner.startCalls)
+	}
+	if gw.lastAssistant == nil {
+		t.Fatalf("expected assistant delivery from non-delegated path")
+	}
 }
 
 func TestRunNowDetachesFromCallerContext(t *testing.T) {

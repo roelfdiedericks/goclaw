@@ -15,8 +15,14 @@ type ToolsConfig struct {
 	Web        WebToolsConfig     `json:"web"`
 	Browser    BrowserToolsConfig `json:"browser"`
 	Exec       ExecToolsConfig    `json:"exec"`
+	Subagent   SubagentToolsConfig `json:"subagent"`
 	XAIImagine XAIImagineConfig   `json:"xaiImagine"`
 	XAIVideo   XAIVideoConfig     `json:"xaiVideo"`
+}
+
+// SubagentToolsConfig contains delegated subagent tool settings.
+type SubagentToolsConfig struct {
+	Enabled bool `json:"enabled" default:"true"` // Enable subagent_spawn/status/cancel/fanout tools
 }
 
 // WebToolsConfig contains web tool settings
@@ -156,6 +162,12 @@ func ConfigFormDef() forms.FormDef {
 					{Name: "web.search.providers.perplexity.model", Title: "Perplexity Model", Type: forms.Text},
 					{Name: "web.search.providers.gemini.apiKey", Title: "Gemini API Key", Type: forms.Secret},
 					{Name: "web.search.providers.gemini.model", Title: "Gemini Model", Type: forms.Text},
+				},
+			},
+			{
+				Title: "Delegated Subagents",
+				Fields: []forms.Field{
+					{Name: "subagent.enabled", Title: "Enable Subagent Tools", Type: forms.Toggle, Default: true, Desc: "Registers subagent_spawn, subagent_status, subagent_cancel, and subagent_fanout tools (owner sessions only). Requires gateway.delegatedRuns.enabled."},
 				},
 			},
 			{

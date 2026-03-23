@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- delegated runs: add end-to-end reinjection hardening coverage (`subagent_spawn` completion -> synthetic requester `tool_use/tool_result`) including HTTP request-handler path
+- delegated runs: add cron delegated-path delivery semantics tests to ensure `store_only`/`deliver`/`handoff_main` behavior parity
+- delegated runs: add runners API tests for snapshot + SSE resume reconciliation (`since` / `Last-Event-ID`)
+- delegated runs: add `internal/delegatedrun` unit/concurrency coverage for completion/failed/cancel/timeout state transitions, mixed parallel outcomes, bus event schema payloads, and registry consistency
+- subagent_cancel: add integration test covering parent cascade cancellation through tool path
+- visibility: add concise Telegram delegated lifecycle summaries for owner and compact delegated run snapshot in TUI logs pane
+- delegated runs: auto-propagate `parentRunID` from current session run when `subagent_spawn` omits explicit lineage
+- delegated runs: harden `return_to_requester` retries by advancing persisted completion dispatch sequence after dispatch failure
+- delegated runs: add dedicated concurrency lane scheduler (`maxConcurrentRuns`) so excess runs remain queued and are admitted as slots free up
+- delegated runs: add `subagent_fanout` coordinator with bounded parallel child spawning and deterministic aggregation ordered by input index
+- delegated runs: add optional model-mediated synthesis pass for `subagent_fanout` (`synthesize` / `synthesisPrompt`) layered on top of deterministic fanout reduction
+- delegated runs: add fanout synthesis guardrails with bounded synthesis input payload + truncation metadata and per-synthesis timeout override (`synthesisTimeoutSeconds`)
+- runners dashboard: add "Include completed" toggle for active-focused triage view while preserving full history on demand
+- docs: add dedicated `docs/delegated-runs.md` architecture reference and link it from architecture/tools docs
+- docs: add delegated-runs concept section in `docs/concepts.md` and README feature/docs links for delegated architecture
+- gateway config: enable delegated runs by default (`gateway.delegatedRuns.enabled=true`) and clarify delegated lane capacity wording in setup form
+- docs: extend configuration reference with delegated runs and subagent tool knobs (`gateway.delegatedRuns.*`, `tools.subagent`)
+- tools: register subagent tool set only when both `tools.subagent.enabled` and `gateway.delegatedRuns.enabled` are true; log warning on invalid partial enablement
+- tools config: set delegated subagent tool toggle default to enabled and document dependency on delegated infrastructure toggle
+- setup UI: split delegated settings into a dedicated "Delegated Runs" section under Gateway config form
+- delegated runs: add central timeout policy knobs (`defaultTimeoutSeconds`, `maxTimeoutSeconds`) and enforce defaults/caps in delegated start path
+- subagent spawn/fanout: avoid auto-linking `parentRunID` from non-delegated main-session run IDs (prevents false "parent run not found" denials)
+
 
 
 

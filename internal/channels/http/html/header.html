@@ -555,14 +555,19 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item">
-                        <a class="nav-link" href="/"><i class="bi bi-house"></i> Dashboard</a>
+                        <a class="nav-link" data-nav-path="/" href="/"><i class="bi bi-house"></i> Dashboard</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="/chat"><i class="bi bi-chat"></i> Chat</a>
+                        <a class="nav-link" data-nav-path="/chat" href="/chat"><i class="bi bi-chat"></i> Chat</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="/voice"><i class="bi bi-mic"></i> Voice</a>
+                        <a class="nav-link" data-nav-path="/voice" href="/voice"><i class="bi bi-mic"></i> Voice</a>
                     </li>
+                    {{if .User.IsOwner}}
+                    <li class="nav-item">
+                        <a class="nav-link" data-nav-path="/runners" href="/runners"><i class="bi bi-list-task"></i> Runners</a>
+                    </li>
+                    {{end}}
                 </ul>
                 <button id="thinking-toggle" class="btn btn-outline-secondary btn-sm d-none" 
                         title="Thinking OFF (click to toggle)">
@@ -591,4 +596,24 @@
     {{else}}
     <main class="container mt-3 mb-2">
     {{end}}
+    <script>
+    (function() {
+        var path = window.location.pathname || "/";
+        var links = document.querySelectorAll('a.nav-link[data-nav-path]');
+        for (var i = 0; i < links.length; i++) {
+            var link = links[i];
+            var navPath = link.getAttribute('data-nav-path') || "/";
+            var active = false;
+            if (navPath === "/") {
+                active = path === "/";
+            } else {
+                active = path === navPath || path.indexOf(navPath + "/") === 0;
+            }
+            if (active) {
+                link.classList.add("active");
+                link.setAttribute("aria-current", "page");
+            }
+        }
+    })();
+    </script>
 {{end}}

@@ -15,6 +15,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/channels/tui/config"
 	"github.com/roelfdiedericks/goclaw/internal/channels/types"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
+	"github.com/roelfdiedericks/goclaw/internal/delegatedrun"
 	"github.com/roelfdiedericks/goclaw/internal/delivery"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
@@ -51,6 +52,7 @@ type Model struct {
 	height      int
 	chatLines   []string // Chat history as lines
 	logsLines   []string // Logs as lines
+	delegatedLines []string // Compact delegated run snapshot (for logs panel)
 	currentLine string   // Current streaming line (not yet complete)
 	streaming   bool
 	ready       bool
@@ -88,6 +90,9 @@ type mirrorMsg struct {
 }
 type agentDeliverMsg string // Final assistant output
 type systemMsg string
+type delegatedSummaryMsg struct {
+	lines []string
+}
 
 // New creates a new TUI model
 // showLogs controls whether the log panel is visible by default (true = normal layout, false = logs hidden)
@@ -154,6 +159,7 @@ func (m Model) Init() tea.Cmd {
 		m.waitForMirror(),
 		m.waitForAgentMsg(),
 		m.waitForSystem(),
+		m.waitForDelegatedSummary(),
 	)
 }
 
@@ -211,6 +217,19 @@ func (m *Model) waitForSystem() tea.Cmd {
 				return nil
 			}
 			return systemMsg(msg)
+		case <-m.ctx.Done():
+			return nil
+		}
+	}
+}
+
+func (m *Model) waitForDelegatedSummary() tea.Cmd {
+	return func() tea.Msg {
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return delegatedSummaryMsg{lines: m.buildDelegatedSummaryLines()}
 		case <-m.ctx.Done():
 			return nil
 		}
@@ -427,6 +446,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatViewport.GotoBottom()
 		// Continue listening for more system messages
 		cmds = append(cmds, m.waitForSystem())
+
+	case delegatedSummaryMsg:
+		m.delegatedLines = msg.lines
+		m.logsViewport.SetContent(m.getLogsContent())
+		cmds = append(cmds, m.waitForDelegatedSummary())
 	}
 
 	// Update focused component
@@ -711,7 +735,56 @@ func (m *Model) getChatContent() string {
 
 // getLogsContent returns the full logs content as a string
 func (m *Model) getLogsContent() string {
-	return strings.Join(m.logsLines, "\n")
+	if len(m.delegatedLines) == 0 {
+		return strings.Join(m.logsLines, "\n")
+	}
+	parts := make([]string, 0, len(m.delegatedLines)+len(m.logsLines)+2)
+	parts = append(parts, m.delegatedLines...)
+	parts = append(parts, "")
+	parts = append(parts, strings.Repeat("─", 24))
+	parts = append(parts, "")
+	parts = append(parts, m.logsLines...)
+	return strings.Join(parts, "\n")
+}
+
+func (m *Model) buildDelegatedSummaryLines() []string {
+	if m.gateway == nil {
+		return nil
+	}
+	runs := m.gateway.ListDelegatedRuns()
+	active := make([]delegatedrun.RunRecord, 0, len(runs))
+	for _, r := range runs {
+		if delegatedrun.IsActiveState(r.State) {
+			active = append(active, r)
+		}
+	}
+	if len(active) == 0 {
+		return []string{"Runners: no active delegated runs"}
+	}
+	limit := 6
+	if len(active) < limit {
+		limit = len(active)
+	}
+	lines := []string{fmt.Sprintf("Runners: %d active", len(active))}
+	for i := 0; i < limit; i++ {
+		r := active[i]
+		purpose := strings.TrimSpace(r.Purpose)
+		if purpose == "" {
+			purpose = "unspecified"
+		}
+		lines = append(lines, fmt.Sprintf("• %s  %s  %s", shortRunIDForTUI(r.RunID), r.State, purpose))
+	}
+	if len(active) > limit {
+		lines = append(lines, fmt.Sprintf("• ... and %d more", len(active)-limit))
+	}
+	return lines
+}
+
+func shortRunIDForTUI(runID string) string {
+	if len(runID) <= 8 {
+		return runID
+	}
+	return runID[:8]
 }
 
 // finishCurrentLine moves the current streaming line to chatLines

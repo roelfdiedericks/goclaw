@@ -139,6 +139,9 @@ GoClaw is configured via `goclaw.json` in the working directory.
       "useBrowser": "auto",
       "profile": "default",
       "headless": true
+    },
+    "subagent": {
+      "enabled": true
     }
   },
 
@@ -155,7 +158,15 @@ GoClaw is configured via `goclaw.json` in the working directory.
   "gateway": {
     "workingDir": "~/.goclaw/workspace",
     "logFile": "~/.goclaw/goclaw.log",
-    "pidFile": "~/.goclaw/goclaw.pid"
+    "pidFile": "~/.goclaw/goclaw.pid",
+    "delegatedRuns": {
+      "enabled": true,
+      "maxSpawnDepth": 4,
+      "maxActiveChildrenPerParent": 4,
+      "maxConcurrentRuns": 16,
+      "defaultTimeoutSeconds": 300,
+      "maxTimeoutSeconds": 1800
+    }
   }
 }
 ```
@@ -198,8 +209,12 @@ GoClaw is configured via `goclaw.json` in the working directory.
 | `tools.exec` | Shell command execution | [Tools](tools.md) |
 | `tools.browser` | Browser automation | [Browser Tool](tools/browser.md) |
 | `tools.web` | Web search and fetch | [Tools](tools.md) |
+| `tools.subagent` | Owner-only delegated subagent/fanout tools | [Delegated Runs](delegated-runs.md) |
 | `tools.xaiImagine` | xAI image generation | [Tools](tools.md) |
+| `tools.xaiVideo` | xAI video generation | [Tools](tools.md) |
 | `skills` | Skills system | [Skills](skills.md) |
+
+**Dependency note:** subagent tools are only registered when both `tools.subagent.enabled=true` and `gateway.delegatedRuns.enabled=true`.
 
 ### System
 
@@ -374,7 +389,13 @@ The prompt cache watches workspace identity files (SOUL.md, AGENTS.md, etc.) for
   "gateway": {
     "workingDir": "~/.goclaw/workspace",
     "logFile": "~/.goclaw/goclaw.log",
-    "pidFile": "~/.goclaw/goclaw.pid"
+    "pidFile": "~/.goclaw/goclaw.pid",
+    "delegatedRuns": {
+      "enabled": true,
+      "maxSpawnDepth": 4,
+      "maxActiveChildrenPerParent": 4,
+      "maxConcurrentRuns": 16
+    }
   }
 }
 ```
@@ -384,6 +405,12 @@ The prompt cache watches workspace identity files (SOUL.md, AGENTS.md, etc.) for
 | `workingDir` | string | `~/.goclaw/workspace` | Workspace directory |
 | `logFile` | string | - | Log file path |
 | `pidFile` | string | - | PID file path |
+| `delegatedRuns.enabled` | bool | `true` | Enable delegated runner path for cron/subagents |
+| `delegatedRuns.maxSpawnDepth` | int | `4` | Max parent-child delegated depth (0 = unlimited) |
+| `delegatedRuns.maxActiveChildrenPerParent` | int | `4` | Max active child runs per parent (0 = unlimited) |
+| `delegatedRuns.maxConcurrentRuns` | int | `16` | Delegated runner lane capacity (0 = unlimited) |
+| `delegatedRuns.defaultTimeoutSeconds` | int | `300` | Default delegated timeout applied when `timeoutSeconds` is omitted (0 = none) |
+| `delegatedRuns.maxTimeoutSeconds` | int | `1800` | Max delegated timeout cap for safety (0 = unlimited) |
 
 ### Speech-to-Text (STT)
 

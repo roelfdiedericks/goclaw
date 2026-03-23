@@ -266,3 +266,42 @@ See [Roles & Access Control](roles.md) for full RBAC documentation.
 - [Skills](skills.md) — Skills system and installation
 - [Configuration](configuration.md) — Full config reference
 - [Sandbox](sandbox.md) — Tool security
+
+---
+
+## Delegated Subagent Tools
+
+These tools are owner-only and are enabled behind `tools.subagent.enabled`.
+
+Canonical design and behavior documentation lives in [Delegated Runs](delegated-runs.md).
+
+- `subagent_spawn`
+  - Starts an asynchronous delegated run and returns `runId` immediately.
+  - Automatically propagates lineage from current session run to `parentRunID` when that session run exists in delegated-run registry; otherwise spawns as top-level.
+  - Supports `resultMode`:
+    - `store_only`
+    - `return_to_requester` (reinjected synthetic `tool_use`/`tool_result` into requester session)
+  - Supports dispatch policy fields for completion delivery hardening:
+    - `dispatchOrder` (`queue_first` / `direct_first`)
+    - `fallbackMode` (`none` / `queue_fallback` / `direct_fallback`)
+  - Failed `return_to_requester` dispatch attempts advance a persisted completion dispatch sequence so retries use a new idempotency key.
+- `subagent_status`
+  - Fetch a single delegated run by `runId` or list recent runs.
+- `subagent_cancel`
+  - Cancel a run by `runId`.
+  - `cascade=true` (default) cancels descendants as well.
+- `subagent_fanout`
+  - Spawns multiple delegated child runs from one request.
+  - Supports bounded `parallelism` and deterministic aggregation ordered by input index.
+  - Optional model-mediated synthesis pass via `synthesize=true` (with optional `synthesisPrompt`) while preserving deterministic aggregate output.
+  - Supports `synthesisTimeoutSeconds` to override timeout for synthesis only.
+  - Synthesis input is size-bounded; response includes truncation metadata (`truncated`, `includedItems`, `totalItems`).
+  - Uses delegated policy controls (depth/per-parent/global lane), retrying transient spawn-limit denials during bounded fanout admission.
+
+Operational UI/API for delegated runs:
+
+- `/runners` owner dashboard
+- `/api/runners`
+- `/api/runners/:runId`
+- `/api/runners/events`
+- `POST /api/runners/:runId/cancel`

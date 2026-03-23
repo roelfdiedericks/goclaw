@@ -39,6 +39,17 @@ func ConfigFormDef() forms.FormDef {
 				},
 			},
 			{
+				Title: "Delegated Runs",
+				Fields: []forms.Field{
+					{Name: "gateway.delegatedRuns.enabled", Title: "Enable Delegated Runs", Type: forms.Toggle, Default: true, Desc: "Enable delegated runner path for cron/subagents"},
+					{Name: "gateway.delegatedRuns.maxSpawnDepth", Title: "Delegated Max Spawn Depth", Type: forms.Number, Default: 4, Desc: "Maximum parent->child depth for spawned delegated runs (0 = unlimited)"},
+					{Name: "gateway.delegatedRuns.maxActiveChildrenPerParent", Title: "Delegated Max Active Children Per Parent", Type: forms.Number, Default: 4, Desc: "Maximum active child runs per parent run (0 = unlimited)"},
+					{Name: "gateway.delegatedRuns.maxConcurrentRuns", Title: "Delegated Max Concurrent Runs", Type: forms.Number, Default: 16, Desc: "Delegated runner lane capacity (0 = unlimited)"},
+					{Name: "gateway.delegatedRuns.defaultTimeoutSeconds", Title: "Delegated Default Timeout (seconds)", Type: forms.Number, Default: 300, Desc: "Applied when delegated runs omit timeoutSeconds (0 = no default timeout)"},
+					{Name: "gateway.delegatedRuns.maxTimeoutSeconds", Title: "Delegated Max Timeout (seconds)", Type: forms.Number, Default: 1800, Desc: "Safety cap for delegated run timeoutSeconds (0 = unlimited)"},
+				},
+			},
+			{
 				Title: "Agent Identity",
 				Fields: []forms.Field{
 					{Name: "agent.name", Title: "Agent Name", Type: forms.Text, Default: "GoClaw", Desc: "Display name for the agent"},
