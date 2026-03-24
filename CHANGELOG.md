@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+
+
+## [0.1.7] stable - 2026-03-24
+
 - browser: remote CDP profiles and HTTP discovery
 - browser: console/network capture, tracing and emulation controls
 - browser: MCP-style action aliases, drag support and related docs/tests/config UI
