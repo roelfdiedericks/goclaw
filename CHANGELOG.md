@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- browser: add remote CDP browser profiles with host allowlists, HTTP discovery support and preserved local `profile="chrome"` relay behavior
+- browser: add native console/network capture, performance trace and metrics actions, and page-scoped emulation controls
+- browser: add MCP-style browser action aliases plus drag support, and update browser docs/tests/config UI for the expanded capability set
 
 
 ## [0.1.6] stable - 2026-03-24

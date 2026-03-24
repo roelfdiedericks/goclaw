@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/devices"
 	"github.com/go-rod/rod/lib/input"
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/go-shiori/go-readability"
@@ -48,6 +52,69 @@ type TabInfo struct {
 	Title    string               `json:"title"`
 	Page     *rod.Page            `json:"-"`
 	Elements map[int]*rod.Element `json:"-"` // Indexed elements for click/type by ref
+	Capture  *TabCapture          `json:"-"`
+}
+
+// ConsoleMessage represents a browser console or exception message.
+type ConsoleMessage struct {
+	Type   string    `json:"type"`
+	Level  string    `json:"level"`
+	Text   string    `json:"text"`
+	URL    string    `json:"url,omitempty"`
+	Line   int       `json:"line,omitempty"`
+	Column int       `json:"column,omitempty"`
+	Time   time.Time `json:"time"`
+}
+
+// NetworkRecord represents one captured network request lifecycle.
+type NetworkRecord struct {
+	ID              string            `json:"id"`
+	URL             string            `json:"url"`
+	Method          string            `json:"method,omitempty"`
+	ResourceType    string            `json:"resourceType,omitempty"`
+	Status          int               `json:"status,omitempty"`
+	StatusText      string            `json:"statusText,omitempty"`
+	ErrorText       string            `json:"errorText,omitempty"`
+	RequestHeaders  map[string]string `json:"requestHeaders,omitempty"`
+	ResponseHeaders map[string]string `json:"responseHeaders,omitempty"`
+	StartedAt       time.Time         `json:"startedAt"`
+	ResponseAt      *time.Time        `json:"responseAt,omitempty"`
+	FinishedAt      *time.Time        `json:"finishedAt,omitempty"`
+}
+
+// TabCapture stores bounded observability data for a tab.
+type TabCapture struct {
+	Started bool
+
+	mu              sync.Mutex
+	ConsoleMessages []ConsoleMessage
+	NetworkByID     map[string]*NetworkRecord
+	NetworkOrder    []string
+	Trace           *TraceCapture
+	Emulation       EmulationState
+}
+
+// TraceCapture stores an in-progress performance trace for a tab.
+type TraceCapture struct {
+	Active      bool
+	StartedAt   time.Time
+	Events      []json.RawMessage
+	DataLoss    bool
+	LastArtifact string
+	Complete    chan traceCompleteResult
+}
+
+type traceCompleteResult struct {
+	DataLoss bool
+}
+
+// EmulationState tracks the current tab-scoped emulation overrides.
+type EmulationState struct {
+	DeviceProfile string  `json:"deviceProfile,omitempty"`
+	Width         int     `json:"width,omitempty"`
+	Height        int     `json:"height,omitempty"`
+	CPURate       float64 `json:"cpuRate,omitempty"`
+	NetworkPreset string  `json:"networkPreset,omitempty"`
 }
 
 // NewTool creates a new browser tool
@@ -86,6 +153,7 @@ Interaction (use ref from snapshot, e.g. "e1", "e12"):
 - type: Type text into element
 - press: Press keyboard key(s)
 - hover: Hover over element
+- drag: Drag from one element to another
 - scroll: Scroll page or to element
 - select: Select option in dropdown
 - fill: Fill form field (clears first)
@@ -94,6 +162,18 @@ Interaction (use ref from snapshot, e.g. "e1", "e12"):
 
 Advanced:
 - console: Get browser console logs
+- console_list: List captured console and exception messages
+- network_list: List captured network requests
+- network_get: Show one captured network request in detail
+- performance_trace_start: Start a performance trace for the active tab
+- performance_trace_stop: Stop the active performance trace and save the artifact
+- performance_metrics: Get a first-pass performance metric summary for the active tab
+- resize: Override viewport width and height for the active tab
+- emulate_device: Apply a named device emulation profile to the active tab
+- emulate_cpu: Apply CPU throttling to the active tab
+- emulate_network: Apply a named network throttling preset to the active tab
+- emulation_reset: Clear emulation overrides for the active tab
+- capture_reset: Clear captured console and network data
 - upload: Upload file to input element
 - dialog: Handle alert/confirm/prompt dialogs
 
@@ -106,7 +186,7 @@ func (t *Tool) Schema() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"enum":        []string{"tabs", "open", "focus", "close", "navigate", "snapshot", "screenshot", "pdf", "click", "type", "press", "hover", "scroll", "select", "fill", "wait", "evaluate", "console", "upload", "dialog"},
+				"enum":        []string{"tabs", "open", "focus", "close", "navigate", "snapshot", "screenshot", "pdf", "click", "type", "press", "hover", "drag", "scroll", "select", "fill", "wait", "evaluate", "console", "console_list", "network_list", "network_get", "performance_trace_start", "performance_trace_stop", "performance_metrics", "resize", "emulate_device", "emulate_cpu", "emulate_network", "emulation_reset", "capture_reset", "upload", "dialog", "new_page", "navigate_page", "take_snapshot", "take_screenshot", "evaluate_script", "list_console_messages", "list_network_requests", "get_network_request", "performance_start_trace", "performance_stop_trace", "performance_analyze_insight", "resize_page", "wait_for", "handle_dialog", "upload_file", "fill_form"},
 				"description": "Action to perform",
 			},
 			"url": map[string]interface{}{
@@ -141,6 +221,14 @@ func (t *Tool) Schema() map[string]interface{} {
 			"selector": map[string]interface{}{
 				"type":        "string",
 				"description": "CSS selector (alternative to ref for click/type/hover/fill/select/wait)",
+			},
+			"targetRef": map[string]interface{}{
+				"type":        "integer",
+				"description": "Target element reference for drag",
+			},
+			"targetSelector": map[string]interface{}{
+				"type":        "string",
+				"description": "Target CSS selector for drag",
 			},
 			"text": map[string]interface{}{
 				"type":        "string",
@@ -184,6 +272,36 @@ func (t *Tool) Schema() map[string]interface{} {
 				"type":        "boolean",
 				"description": "Run browser in headed (visible) mode for debugging (default: false/headless)",
 			},
+			"requestId": map[string]interface{}{
+				"type":        "string",
+				"description": "Captured network request ID for network_get",
+			},
+			"captureType": map[string]interface{}{
+				"type":        "string",
+				"enum":        []string{"all", "console", "network"},
+				"description": "Capture category for capture_reset (default: all)",
+			},
+			"width": map[string]interface{}{
+				"type":        "integer",
+				"description": "Viewport width for resize",
+			},
+			"height": map[string]interface{}{
+				"type":        "integer",
+				"description": "Viewport height for resize",
+			},
+			"deviceProfile": map[string]interface{}{
+				"type":        "string",
+				"description": "Device profile name for emulate_device, for example clear, laptop, iphone-x",
+			},
+			"cpuRate": map[string]interface{}{
+				"type":        "number",
+				"description": "CPU throttle rate for emulate_cpu (1 = no throttle, 2 = 2x slowdown)",
+			},
+			"networkPreset": map[string]interface{}{
+				"type":        "string",
+				"enum":        []string{"clear", "slow-3g", "fast-3g", "offline"},
+				"description": "Network preset for emulate_network",
+			},
 		},
 		"required": []string{"action"},
 	}
@@ -201,6 +319,8 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		Format       string `json:"format"`
 		Ref          *int   `json:"ref"`
 		Selector     string `json:"selector"`
+		TargetRef    *int   `json:"targetRef"`
+		TargetSelector string `json:"targetSelector"`
 		Text         string `json:"text"`
 		Key          string `json:"key"`
 		Direction    string `json:"direction"`
@@ -211,6 +331,13 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		DialogAction string `json:"dialogAction"`
 		DialogText   string `json:"dialogText"`
 		Headed       bool   `json:"headed"`
+		RequestID    string `json:"requestId"`
+		CaptureType  string `json:"captureType"`
+		Width        int    `json:"width"`
+		Height       int    `json:"height"`
+		DeviceProfile string `json:"deviceProfile"`
+		CPURate      float64 `json:"cpuRate"`
+		NetworkPreset string `json:"networkPreset"`
 	}
 
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -220,6 +347,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	if params.Action == "" {
 		return nil, fmt.Errorf("action is required")
 	}
+	params.Action = normalizeBrowserAction(params.Action)
 
 	if params.MaxLength <= 0 {
 		params.MaxLength = 15000
@@ -254,8 +382,9 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	}
 	// If profile is empty, profileDomains will be used in getOrCreateSession
 
-	// Use default session ID (could be passed from agent context later)
-	sessionID := "default"
+	// Use a stable session namespace, but isolate explicit profiles so
+	// default/chrome/remote sessions cannot accidentally reuse each other.
+	sessionID := sessionIDForProfile("default", params.Profile)
 
 	L_debug("browser: executing", "action", params.Action, "url", params.URL, "profile", params.Profile, "format", params.Format, "headed", params.Headed)
 
@@ -273,7 +402,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 
 	// Actions that return content FROM the page — flag as external/untrusted
 	switch params.Action {
-	case "snapshot", "evaluate", "console":
+	case "snapshot", "evaluate", "console", "console_list", "network_list", "network_get", "performance_metrics":
 		return types.ExternalTextResult(result, "browser"), nil
 	}
 
@@ -291,6 +420,8 @@ func (t *Tool) executeAction(ctx context.Context, sessionID string, params struc
 	Format       string `json:"format"`
 	Ref          *int   `json:"ref"`
 	Selector     string `json:"selector"`
+	TargetRef    *int   `json:"targetRef"`
+	TargetSelector string `json:"targetSelector"`
 	Text         string `json:"text"`
 	Key          string `json:"key"`
 	Direction    string `json:"direction"`
@@ -301,6 +432,13 @@ func (t *Tool) executeAction(ctx context.Context, sessionID string, params struc
 	DialogAction string `json:"dialogAction"`
 	DialogText   string `json:"dialogText"`
 	Headed       bool   `json:"headed"`
+	RequestID    string `json:"requestId"`
+	CaptureType  string `json:"captureType"`
+	Width        int    `json:"width"`
+	Height       int    `json:"height"`
+	DeviceProfile string `json:"deviceProfile"`
+	CPURate      float64 `json:"cpuRate"`
+	NetworkPreset string `json:"networkPreset"`
 }) (string, error) {
 	switch params.Action {
 	// Tab management
@@ -335,6 +473,8 @@ func (t *Tool) executeAction(ctx context.Context, sessionID string, params struc
 		return t.pressKey(ctx, sessionID, params.Key, params.Headed)
 	case "hover":
 		return t.hover(ctx, sessionID, params.Ref, params.Selector, params.Headed)
+	case "drag":
+		return t.drag(ctx, sessionID, params.Ref, params.Selector, params.TargetRef, params.TargetSelector, params.Headed)
 	case "scroll":
 		return t.scroll(ctx, sessionID, params.Direction, params.Ref, params.Selector, params.Headed)
 	case "select":
@@ -349,6 +489,30 @@ func (t *Tool) executeAction(ctx context.Context, sessionID string, params struc
 	// Advanced
 	case "console":
 		return t.getConsole(ctx, sessionID, params.Headed)
+	case "console_list":
+		return t.listConsole(ctx, sessionID, params.Headed)
+	case "network_list":
+		return t.listNetwork(ctx, sessionID, params.Headed)
+	case "network_get":
+		return t.getNetworkRequest(ctx, sessionID, params.RequestID, params.Headed)
+	case "performance_trace_start":
+		return t.startPerformanceTrace(ctx, sessionID, params.Headed)
+	case "performance_trace_stop":
+		return t.stopPerformanceTrace(ctx, sessionID, params.Headed)
+	case "performance_metrics":
+		return t.getPerformanceMetrics(ctx, sessionID, params.Headed)
+	case "resize":
+		return t.resizeViewport(ctx, sessionID, params.Width, params.Height, params.Headed)
+	case "emulate_device":
+		return t.emulateDevice(ctx, sessionID, params.DeviceProfile, params.Headed)
+	case "emulate_cpu":
+		return t.emulateCPU(ctx, sessionID, params.CPURate, params.Headed)
+	case "emulate_network":
+		return t.emulateNetwork(ctx, sessionID, params.NetworkPreset, params.Headed)
+	case "emulation_reset":
+		return t.resetEmulation(ctx, sessionID, params.Headed)
+	case "capture_reset":
+		return t.resetCapture(ctx, sessionID, params.CaptureType, params.Headed)
 	case "upload":
 		return t.uploadFile(ctx, sessionID, params.Ref, params.Selector, params.File, params.Headed)
 	case "dialog":
@@ -357,6 +521,53 @@ func (t *Tool) executeAction(ctx context.Context, sessionID string, params struc
 	default:
 		return "", fmt.Errorf("unknown action: %s", params.Action)
 	}
+}
+
+func normalizeBrowserAction(action string) string {
+	switch strings.TrimSpace(action) {
+	case "new_page":
+		return "open"
+	case "navigate_page":
+		return "navigate"
+	case "take_snapshot":
+		return "snapshot"
+	case "take_screenshot":
+		return "screenshot"
+	case "evaluate_script":
+		return "evaluate"
+	case "list_console_messages":
+		return "console_list"
+	case "list_network_requests":
+		return "network_list"
+	case "get_network_request":
+		return "network_get"
+	case "performance_start_trace":
+		return "performance_trace_start"
+	case "performance_stop_trace":
+		return "performance_trace_stop"
+	case "performance_analyze_insight":
+		return "performance_metrics"
+	case "resize_page":
+		return "resize"
+	case "wait_for":
+		return "wait"
+	case "handle_dialog":
+		return "dialog"
+	case "upload_file":
+		return "upload"
+	case "fill_form":
+		return "fill"
+	default:
+		return action
+	}
+}
+
+func sessionIDForProfile(baseSessionID, profile string) string {
+	profile = strings.TrimSpace(profile)
+	if profile == "" {
+		return baseSessionID
+	}
+	return baseSessionID + "::" + profile
 }
 
 // getOrCreateSession gets or creates a session with tabs
@@ -431,6 +642,9 @@ func (t *Tool) getOrCreateSession(sessionID string, profile string, headed bool)
 		t.sessions[actualSessionID] = session // Store first so syncTabs can find it
 		if err := t.syncTabs(session); err != nil {
 			L_warn("browser: initial tab sync failed", "error", err)
+		}
+		for _, tab := range session.Tabs {
+			t.ensureTabCapture(session, tab)
 		}
 		return session, nil
 	}
@@ -555,6 +769,7 @@ func (t *Tool) syncTabs(session *SessionTabs) error {
 		}
 
 		newTabs = append(newTabs, tab)
+		t.ensureTabCapture(session, tab)
 
 		// Track active tab by matching target ID
 		if targetID == activePageTarget {
@@ -668,11 +883,13 @@ func (t *Tool) getActivePage(sessionID string, profile string, headed bool) (*ro
 	}
 
 	tab := &TabInfo{
-		Index: 0,
-		URL:   "about:blank",
-		Title: "New Tab",
-		Page:  page,
+		Index:    0,
+		URL:      "about:blank",
+		Title:    "New Tab",
+		Page:     page,
+		Elements: make(map[int]*rod.Element),
 	}
+	t.ensureTabCapture(session, tab)
 	session.Tabs = append(session.Tabs, tab)
 	session.ActiveTab = 0
 
@@ -770,11 +987,13 @@ func (t *Tool) openTab(ctx context.Context, sessionID string, urlStr string, pro
 
 	newIndex := len(session.Tabs)
 	tab := &TabInfo{
-		Index: newIndex,
-		URL:   "about:blank",
-		Title: "New Tab",
-		Page:  page,
+		Index:    newIndex,
+		URL:      "about:blank",
+		Title:    "New Tab",
+		Page:     page,
+		Elements: make(map[int]*rod.Element),
 	}
+	t.ensureTabCapture(session, tab)
 
 	// Navigate if URL provided
 	if urlStr != "" {
@@ -1571,6 +1790,51 @@ func (t *Tool) hover(ctx context.Context, sessionID string, ref *int, selector s
 	return fmt.Sprintf("Hovered: %s", truncateString(label, 50)), nil
 }
 
+// drag drags from one element to another using the page mouse.
+func (t *Tool) drag(ctx context.Context, sessionID string, ref *int, selector string, targetRef *int, targetSelector string, headed bool) (string, error) {
+	source, err := t.getElement(sessionID, ref, selector, headed)
+	if err != nil {
+		return "", err
+	}
+	target, err := t.getElement(sessionID, targetRef, targetSelector, headed)
+	if err != nil {
+		return "", fmt.Errorf("target element: %w", err)
+	}
+
+	if err := source.ScrollIntoView(); err != nil {
+		L_warn("browser: failed to scroll source into view", "error", err)
+	}
+	if err := target.ScrollIntoView(); err != nil {
+		L_warn("browser: failed to scroll target into view", "error", err)
+	}
+
+	srcPoint, err := source.Interactable()
+	if err != nil {
+		return "", fmt.Errorf("source element is not interactable: %w", err)
+	}
+	dstPoint, err := target.Interactable()
+	if err != nil {
+		return "", fmt.Errorf("target element is not interactable: %w", err)
+	}
+
+	page := source.Page()
+	if err := page.Mouse.MoveTo(*srcPoint); err != nil {
+		return "", fmt.Errorf("failed to move mouse to source: %w", err)
+	}
+	if err := page.Mouse.Down(proto.InputMouseButtonLeft, 1); err != nil {
+		return "", fmt.Errorf("failed to press mouse button: %w", err)
+	}
+	if err := page.Mouse.MoveLinear(*dstPoint, 12); err != nil {
+		_ = page.Mouse.Up(proto.InputMouseButtonLeft, 1)
+		return "", fmt.Errorf("failed to drag to target: %w", err)
+	}
+	if err := page.Mouse.Up(proto.InputMouseButtonLeft, 1); err != nil {
+		return "", fmt.Errorf("failed to release mouse button: %w", err)
+	}
+
+	return fmt.Sprintf("Dragged from %s to %s", truncateString(getElementLabel(source), 40), truncateString(getElementLabel(target), 40)), nil
+}
+
 // scroll scrolls the page
 func (t *Tool) scroll(ctx context.Context, sessionID string, direction string, ref *int, selector string, headed bool) (string, error) {
 	page, err := t.getActivePage(sessionID, "", headed)
@@ -1849,41 +2113,683 @@ func (t *Tool) savePDF(ctx context.Context, sessionID string, headed bool) (stri
 	return fmt.Sprintf("PDF saved: %s\nPage: %s\nTitle: %s\nMEDIA:%s", relPath, info.URL, info.Title, relPath), nil
 }
 
-// ConsoleMessage represents a browser console message
-type ConsoleMessage struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+// getConsole returns recent console messages.
+func (t *Tool) getConsole(ctx context.Context, sessionID string, headed bool) (string, error) {
+	return t.listConsole(ctx, sessionID, headed)
 }
 
-// getConsole returns recent console messages
-func (t *Tool) getConsole(ctx context.Context, sessionID string, headed bool) (string, error) {
+func (t *Tool) listConsole(ctx context.Context, sessionID string, headed bool) (string, error) {
+	tab, err := t.getActiveTabInfo(sessionID, headed)
+	if err != nil {
+		return "", err
+	}
+	if tab.Capture == nil {
+		return "Console capture is not initialized for the active tab.", nil
+	}
+
+	tab.Capture.mu.Lock()
+	defer tab.Capture.mu.Unlock()
+
+	if len(tab.Capture.ConsoleMessages) == 0 {
+		return "No console messages captured for the active tab.", nil
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Console messages (%d):\n\n", len(tab.Capture.ConsoleMessages)))
+	for i, msg := range tab.Capture.ConsoleMessages {
+		b.WriteString(fmt.Sprintf("[%d] %s/%s %s\n", i+1, msg.Type, msg.Level, msg.Text))
+		if msg.URL != "" {
+			b.WriteString(fmt.Sprintf("    %s", msg.URL))
+			if msg.Line > 0 {
+				b.WriteString(fmt.Sprintf(":%d", msg.Line))
+				if msg.Column > 0 {
+					b.WriteString(fmt.Sprintf(":%d", msg.Column))
+				}
+			}
+			b.WriteString("\n")
+		}
+	}
+	return b.String(), nil
+}
+
+func (t *Tool) listNetwork(ctx context.Context, sessionID string, headed bool) (string, error) {
+	tab, err := t.getActiveTabInfo(sessionID, headed)
+	if err != nil {
+		return "", err
+	}
+	if tab.Capture == nil {
+		return "Network capture is not initialized for the active tab.", nil
+	}
+
+	tab.Capture.mu.Lock()
+	defer tab.Capture.mu.Unlock()
+
+	if len(tab.Capture.NetworkOrder) == 0 {
+		return "No network requests captured for the active tab.", nil
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Network requests (%d):\n\n", len(tab.Capture.NetworkOrder)))
+	for i, id := range tab.Capture.NetworkOrder {
+		rec := tab.Capture.NetworkByID[id]
+		if rec == nil {
+			continue
+		}
+		status := "pending"
+		switch {
+		case rec.ErrorText != "":
+			status = "failed: " + rec.ErrorText
+		case rec.Status > 0:
+			status = fmt.Sprintf("%d %s", rec.Status, rec.StatusText)
+		}
+		b.WriteString(fmt.Sprintf("[%d] %s %s\n", i+1, rec.Method, rec.URL))
+		b.WriteString(fmt.Sprintf("    id=%s type=%s status=%s\n", rec.ID, rec.ResourceType, status))
+	}
+	return b.String(), nil
+}
+
+func (t *Tool) getNetworkRequest(ctx context.Context, sessionID string, requestID string, headed bool) (string, error) {
+	if strings.TrimSpace(requestID) == "" {
+		return "", fmt.Errorf("requestId is required for network_get")
+	}
+	tab, err := t.getActiveTabInfo(sessionID, headed)
+	if err != nil {
+		return "", err
+	}
+	if tab.Capture == nil {
+		return "Network capture is not initialized for the active tab.", nil
+	}
+
+	tab.Capture.mu.Lock()
+	defer tab.Capture.mu.Unlock()
+
+	rec := tab.Capture.NetworkByID[requestID]
+	if rec == nil {
+		return "", fmt.Errorf("network request %q not found in active tab capture", requestID)
+	}
+
+	body, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize network request: %w", err)
+	}
+	return fmt.Sprintf("Network request detail:\n%s", string(body)), nil
+}
+
+func (t *Tool) resetCapture(ctx context.Context, sessionID string, captureType string, headed bool) (string, error) {
+	tab, err := t.getActiveTabInfo(sessionID, headed)
+	if err != nil {
+		return "", err
+	}
+	if tab.Capture == nil {
+		return "Capture state is not initialized for the active tab.", nil
+	}
+	if captureType == "" {
+		captureType = "all"
+	}
+
+	tab.Capture.mu.Lock()
+	defer tab.Capture.mu.Unlock()
+
+	switch captureType {
+	case "all":
+		tab.Capture.ConsoleMessages = nil
+		tab.Capture.NetworkByID = map[string]*NetworkRecord{}
+		tab.Capture.NetworkOrder = nil
+	case "console":
+		tab.Capture.ConsoleMessages = nil
+	case "network":
+		tab.Capture.NetworkByID = map[string]*NetworkRecord{}
+		tab.Capture.NetworkOrder = nil
+	default:
+		return "", fmt.Errorf("invalid captureType %q", captureType)
+	}
+
+	return fmt.Sprintf("Reset %s capture for active tab.", captureType), nil
+}
+
+func (t *Tool) startPerformanceTrace(ctx context.Context, sessionID string, headed bool) (string, error) {
+	tab, err := t.getActiveTabInfo(sessionID, headed)
+	if err != nil {
+		return "", err
+	}
+	if tab.Capture == nil {
+		return "Capture state is not initialized for the active tab.", nil
+	}
+
+	tab.Capture.mu.Lock()
+	if tab.Capture.Trace != nil && tab.Capture.Trace.Active {
+		tab.Capture.mu.Unlock()
+		return "", fmt.Errorf("a performance trace is already active for the current tab")
+	}
+
+	trace := &TraceCapture{
+		Active:    true,
+		StartedAt: time.Now(),
+		Complete:  make(chan traceCompleteResult, 1),
+	}
+	tab.Capture.Trace = trace
+	tab.Capture.mu.Unlock()
+
+	go tab.Page.EachEvent(
+		func(ev *proto.TracingDataCollected) {
+			tab.Capture.mu.Lock()
+			defer tab.Capture.mu.Unlock()
+			if tab.Capture.Trace == nil || !tab.Capture.Trace.Active {
+				return
+			}
+			for _, item := range ev.Value {
+				raw, err := json.Marshal(item)
+				if err == nil {
+					tab.Capture.Trace.Events = append(tab.Capture.Trace.Events, raw)
+				}
+			}
+		},
+		func(ev *proto.TracingTracingComplete) bool {
+			tab.Capture.mu.Lock()
+			defer tab.Capture.mu.Unlock()
+			if tab.Capture.Trace != nil {
+				tab.Capture.Trace.DataLoss = ev.DataLossOccurred
+				select {
+				case tab.Capture.Trace.Complete <- traceCompleteResult{DataLoss: ev.DataLossOccurred}:
+				default:
+				}
+			}
+			return true
+		},
+	)()
+
+	if err := (proto.TracingStart{
+		TransferMode: proto.TracingStartTransferModeReportEvents,
+	}).Call(tab.Page); err != nil {
+		tab.Capture.mu.Lock()
+		tab.Capture.Trace = nil
+		tab.Capture.mu.Unlock()
+		return "", fmt.Errorf("failed to start performance trace: %w", err)
+	}
+
+	return "Performance trace started for active tab.", nil
+}
+
+func (t *Tool) stopPerformanceTrace(ctx context.Context, sessionID string, headed bool) (string, error) {
+	tab, err := t.getActiveTabInfo(sessionID, headed)
+	if err != nil {
+		return "", err
+	}
+	if tab.Capture == nil {
+		return "Capture state is not initialized for the active tab.", nil
+	}
+
+	tab.Capture.mu.Lock()
+	trace := tab.Capture.Trace
+	tab.Capture.mu.Unlock()
+
+	if trace == nil || !trace.Active {
+		return "", fmt.Errorf("no active performance trace for the current tab")
+	}
+
+	if err := (proto.TracingEnd{}).Call(tab.Page); err != nil {
+		return "", fmt.Errorf("failed to stop performance trace: %w", err)
+	}
+
+	var complete traceCompleteResult
+	select {
+	case complete = <-trace.Complete:
+	case <-time.After(10 * time.Second):
+		return "", fmt.Errorf("timed out waiting for performance trace completion")
+	}
+
+	tab.Capture.mu.Lock()
+	defer tab.Capture.mu.Unlock()
+
+	trace.Active = false
+	trace.DataLoss = complete.DataLoss
+	payload := struct {
+		StartedAt time.Time         `json:"startedAt"`
+		EndedAt   time.Time         `json:"endedAt"`
+		Duration  string            `json:"duration"`
+		DataLoss  bool              `json:"dataLoss"`
+		Events    []json.RawMessage `json:"traceEvents"`
+	}{
+		StartedAt: trace.StartedAt,
+		EndedAt:   time.Now(),
+		Duration:  time.Since(trace.StartedAt).String(),
+		DataLoss:  trace.DataLoss,
+		Events:    trace.Events,
+	}
+
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize performance trace: %w", err)
+	}
+
+	artifactPath, err := t.saveTraceArtifact(data)
+	if err != nil {
+		return "", err
+	}
+
+	trace.LastArtifact = artifactPath
+	return fmt.Sprintf("Performance trace saved: %s\nEvents: %d\nData loss: %t", artifactPath, len(trace.Events), trace.DataLoss), nil
+}
+
+func (t *Tool) getPerformanceMetrics(ctx context.Context, sessionID string, headed bool) (string, error) {
 	page, err := t.getActivePage(sessionID, "", headed)
 	if err != nil {
 		return "", err
 	}
 
-	// Get console messages by evaluating JavaScript
-	result, err := page.Eval(`
-		(function() {
-			// Try to get console history if available
-			if (window.__goclaw_console) {
-				return JSON.stringify(window.__goclaw_console);
-			}
-			return '[]';
-		})()
-	`)
+	if err := (proto.PerformanceEnable{}).Call(page); err != nil {
+		return "", fmt.Errorf("failed to enable performance metrics: %w", err)
+	}
+	result, err := (proto.PerformanceGetMetrics{}).Call(page)
 	if err != nil {
-		return "", fmt.Errorf("failed to get console: %w", err)
+		return "", fmt.Errorf("failed to get performance metrics: %w", err)
 	}
 
-	// Note: This is a best-effort approach. For real-time console monitoring,
-	// we'd need to set up a page event listener before navigation.
-	consoleStr := result.Value.String()
-	if consoleStr == "[]" || consoleStr == "" {
-		return "No console messages captured.\n\nNote: Console messages are only captured if monitoring was set up before page load. Use evaluate action to access console.log() in real-time.", nil
+	metrics := make(map[string]float64, len(result.Metrics))
+	for _, metric := range result.Metrics {
+		metrics[metric.Name] = metric.Value
 	}
 
-	return fmt.Sprintf("Console messages:\n%s", consoleStr), nil
+	summary := []string{
+		fmt.Sprintf("Performance metrics (%d total):", len(result.Metrics)),
+		"",
+	}
+	appendMetric := func(label, key string) {
+		if val, ok := metrics[key]; ok {
+			summary = append(summary, fmt.Sprintf("- %s: %.3f", label, val))
+		}
+	}
+
+	appendMetric("Task duration", "TaskDuration")
+	appendMetric("Script duration", "ScriptDuration")
+	appendMetric("Layout duration", "LayoutDuration")
+	appendMetric("Recalc style duration", "RecalcStyleDuration")
+	appendMetric("JS heap used", "JSHeapUsedSize")
+	appendMetric("JS heap total", "JSHeapTotalSize")
+	appendMetric("Nodes", "Nodes")
+	appendMetric("Documents", "Documents")
+	appendMetric("Frames", "Frames")
+	appendMetric("Layout count", "LayoutCount")
+	appendMetric("Recalc style count", "RecalcStyleCount")
+
+	body, err := json.MarshalIndent(metrics, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize performance metrics: %w", err)
+	}
+	summary = append(summary, "", "Raw metrics JSON:", string(body))
+	return strings.Join(summary, "\n"), nil
+}
+
+func (t *Tool) resizeViewport(ctx context.Context, sessionID string, width int, height int, headed bool) (string, error) {
+	if width <= 0 || height <= 0 {
+		return "", fmt.Errorf("width and height must both be > 0")
+	}
+	tab, err := t.getActiveTabInfo(sessionID, headed)
+	if err != nil {
+		return "", err
+	}
+	if err := tab.Page.SetViewport(&proto.EmulationSetDeviceMetricsOverride{
+		Width:             width,
+		Height:            height,
+		DeviceScaleFactor: 1,
+		Mobile:            false,
+	}); err != nil {
+		return "", fmt.Errorf("failed to set viewport: %w", err)
+	}
+
+	tab.Capture.mu.Lock()
+	tab.Capture.Emulation.Width = width
+	tab.Capture.Emulation.Height = height
+	tab.Capture.mu.Unlock()
+	return fmt.Sprintf("Viewport set to %dx%d for the active tab.", width, height), nil
+}
+
+func (t *Tool) emulateDevice(ctx context.Context, sessionID string, deviceProfile string, headed bool) (string, error) {
+	if strings.TrimSpace(deviceProfile) == "" {
+		return "", fmt.Errorf("deviceProfile is required for emulate_device")
+	}
+	tab, err := t.getActiveTabInfo(sessionID, headed)
+	if err != nil {
+		return "", err
+	}
+
+	device, ok := ResolveDeviceStrict(deviceProfile)
+	if !ok {
+		return "", fmt.Errorf("unknown device profile %q", deviceProfile)
+	}
+	if err := tab.Page.Emulate(device); err != nil {
+		return "", fmt.Errorf("failed to emulate device %q: %w", deviceProfile, err)
+	}
+
+	tab.Capture.mu.Lock()
+	tab.Capture.Emulation.DeviceProfile = deviceProfile
+	tab.Capture.mu.Unlock()
+	return fmt.Sprintf("Applied device profile %q to the active tab.", deviceProfile), nil
+}
+
+func (t *Tool) emulateCPU(ctx context.Context, sessionID string, rate float64, headed bool) (string, error) {
+	if rate < 1 {
+		return "", fmt.Errorf("cpuRate must be >= 1")
+	}
+	tab, err := t.getActiveTabInfo(sessionID, headed)
+	if err != nil {
+		return "", err
+	}
+	if err := (proto.EmulationSetCPUThrottlingRate{Rate: rate}).Call(tab.Page); err != nil {
+		return "", fmt.Errorf("failed to apply CPU throttling: %w", err)
+	}
+
+	tab.Capture.mu.Lock()
+	tab.Capture.Emulation.CPURate = rate
+	tab.Capture.mu.Unlock()
+	return fmt.Sprintf("Applied CPU throttling rate %.2fx to the active tab.", rate), nil
+}
+
+func (t *Tool) emulateNetwork(ctx context.Context, sessionID string, preset string, headed bool) (string, error) {
+	if preset == "" {
+		preset = "clear"
+	}
+	tab, err := t.getActiveTabInfo(sessionID, headed)
+	if err != nil {
+		return "", err
+	}
+	if err := (proto.NetworkEnable{}).Call(tab.Page); err != nil {
+		return "", fmt.Errorf("failed to enable network domain for emulation: %w", err)
+	}
+	params, err := networkPresetParams(preset)
+	if err != nil {
+		return "", err
+	}
+	if err := params.Call(tab.Page); err != nil {
+		return "", fmt.Errorf("failed to apply network preset %q: %w", preset, err)
+	}
+
+	tab.Capture.mu.Lock()
+	tab.Capture.Emulation.NetworkPreset = preset
+	tab.Capture.mu.Unlock()
+	return fmt.Sprintf("Applied network preset %q to the active tab.", preset), nil
+}
+
+func (t *Tool) resetEmulation(ctx context.Context, sessionID string, headed bool) (string, error) {
+	tab, err := t.getActiveTabInfo(sessionID, headed)
+	if err != nil {
+		return "", err
+	}
+	if err := tab.Page.Emulate(devices.Clear); err != nil {
+		return "", fmt.Errorf("failed to clear device emulation: %w", err)
+	}
+	if err := (proto.EmulationSetCPUThrottlingRate{Rate: 1}).Call(tab.Page); err != nil {
+		return "", fmt.Errorf("failed to reset CPU throttling: %w", err)
+	}
+	if err := (proto.NetworkEnable{}).Call(tab.Page); err != nil {
+		return "", fmt.Errorf("failed to enable network domain for reset: %w", err)
+	}
+	if err := (proto.NetworkEmulateNetworkConditions{
+		Offline:            false,
+		Latency:            0,
+		DownloadThroughput: -1,
+		UploadThroughput:   -1,
+	}).Call(tab.Page); err != nil {
+		return "", fmt.Errorf("failed to reset network emulation: %w", err)
+	}
+
+	tab.Capture.mu.Lock()
+	tab.Capture.Emulation = EmulationState{}
+	tab.Capture.mu.Unlock()
+	return "Cleared emulation overrides for the active tab.", nil
+}
+
+func (t *Tool) getActiveTabInfo(sessionID string, headed bool) (*TabInfo, error) {
+	session, err := t.getOrCreateSession(sessionID, "", headed)
+	if err != nil {
+		return nil, err
+	}
+	if err := t.syncTabs(session); err != nil {
+		L_debug("browser: getActiveTabInfo sync failed", "error", err)
+	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
+
+	if session.ActiveTab < 0 || session.ActiveTab >= len(session.Tabs) {
+		return nil, fmt.Errorf("no active tab")
+	}
+	return session.Tabs[session.ActiveTab], nil
+}
+
+func (t *Tool) ensureTabCapture(session *SessionTabs, tab *TabInfo) {
+	if session == nil || tab == nil || tab.Page == nil {
+		return
+	}
+	if tab.Capture == nil {
+		tab.Capture = &TabCapture{NetworkByID: map[string]*NetworkRecord{}}
+	}
+	if tab.Capture.Started {
+		return
+	}
+	tab.Capture.Started = true
+
+	cfg := t.manager.Config().Advanced
+	page := tab.Page
+	capture := tab.Capture
+
+	go page.EachEvent(
+		func(ev *proto.RuntimeConsoleAPICalled) {
+			if !cfg.ConsoleCaptureEnabled {
+				return
+			}
+			msg := ConsoleMessage{
+				Type:  "console",
+				Level: string(ev.Type),
+				Text:  joinRemoteObjects(ev.Args),
+				Time:  time.Now(),
+			}
+			capture.mu.Lock()
+			capture.ConsoleMessages = appendBoundedConsole(capture.ConsoleMessages, msg, cfg.ConsoleCaptureMax)
+			capture.mu.Unlock()
+		},
+		func(ev *proto.RuntimeExceptionThrown) {
+			if !cfg.ConsoleCaptureEnabled {
+				return
+			}
+			msg := ConsoleMessage{
+				Type:   "exception",
+				Level:  "error",
+				Text:   ev.ExceptionDetails.Text,
+				URL:    ev.ExceptionDetails.URL,
+				Line:   int(ev.ExceptionDetails.LineNumber),
+				Column: int(ev.ExceptionDetails.ColumnNumber),
+				Time:   time.Now(),
+			}
+			capture.mu.Lock()
+			capture.ConsoleMessages = appendBoundedConsole(capture.ConsoleMessages, msg, cfg.ConsoleCaptureMax)
+			capture.mu.Unlock()
+		},
+		func(ev *proto.NetworkRequestWillBeSent) {
+			if !cfg.NetworkCaptureEnabled {
+				return
+			}
+			rec := &NetworkRecord{
+				ID:             string(ev.RequestID),
+				URL:            ev.Request.URL,
+				Method:         ev.Request.Method,
+				ResourceType:   string(ev.Type),
+				RequestHeaders: stringifyNetworkHeaders(ev.Request.Headers),
+				StartedAt:      time.Now(),
+			}
+			capture.mu.Lock()
+			upsertNetworkRecord(capture, rec, cfg.NetworkCaptureMax)
+			capture.mu.Unlock()
+		},
+		func(ev *proto.NetworkResponseReceived) {
+			if !cfg.NetworkCaptureEnabled {
+				return
+			}
+			now := time.Now()
+			capture.mu.Lock()
+			rec := ensureNetworkRecord(capture, string(ev.RequestID), cfg.NetworkCaptureMax)
+			rec.URL = ev.Response.URL
+			rec.ResourceType = string(ev.Type)
+			rec.Status = int(ev.Response.Status)
+			rec.StatusText = ev.Response.StatusText
+			rec.ResponseHeaders = stringifyNetworkHeaders(ev.Response.Headers)
+			rec.ResponseAt = &now
+			capture.mu.Unlock()
+		},
+		func(ev *proto.NetworkLoadingFinished) {
+			if !cfg.NetworkCaptureEnabled {
+				return
+			}
+			now := time.Now()
+			capture.mu.Lock()
+			rec := ensureNetworkRecord(capture, string(ev.RequestID), cfg.NetworkCaptureMax)
+			rec.FinishedAt = &now
+			capture.mu.Unlock()
+		},
+		func(ev *proto.NetworkLoadingFailed) {
+			if !cfg.NetworkCaptureEnabled {
+				return
+			}
+			now := time.Now()
+			capture.mu.Lock()
+			rec := ensureNetworkRecord(capture, string(ev.RequestID), cfg.NetworkCaptureMax)
+			rec.ErrorText = ev.ErrorText
+			rec.FinishedAt = &now
+			capture.mu.Unlock()
+		},
+	)()
+}
+
+func appendBoundedConsole(existing []ConsoleMessage, msg ConsoleMessage, max int) []ConsoleMessage {
+	existing = append(existing, msg)
+	if max > 0 && len(existing) > max {
+		existing = existing[len(existing)-max:]
+	}
+	return existing
+}
+
+func ensureNetworkRecord(capture *TabCapture, id string, max int) *NetworkRecord {
+	if capture.NetworkByID == nil {
+		capture.NetworkByID = map[string]*NetworkRecord{}
+	}
+	if rec, ok := capture.NetworkByID[id]; ok {
+		return rec
+	}
+	rec := &NetworkRecord{ID: id, StartedAt: time.Now()}
+	upsertNetworkRecord(capture, rec, max)
+	return rec
+}
+
+func upsertNetworkRecord(capture *TabCapture, rec *NetworkRecord, max int) {
+	if capture.NetworkByID == nil {
+		capture.NetworkByID = map[string]*NetworkRecord{}
+	}
+	if _, exists := capture.NetworkByID[rec.ID]; !exists {
+		capture.NetworkOrder = append(capture.NetworkOrder, rec.ID)
+	}
+	capture.NetworkByID[rec.ID] = rec
+	if max > 0 && len(capture.NetworkOrder) > max {
+		excess := len(capture.NetworkOrder) - max
+		for _, id := range capture.NetworkOrder[:excess] {
+			delete(capture.NetworkByID, id)
+		}
+		capture.NetworkOrder = capture.NetworkOrder[excess:]
+	}
+}
+
+func stringifyNetworkHeaders(headers proto.NetworkHeaders) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(headers))
+	keys := make([]string, 0, len(headers))
+	for k := range headers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		out[k] = fmt.Sprintf("%v", headers[k])
+	}
+	return out
+}
+
+func joinRemoteObjects(args []*proto.RuntimeRemoteObject) string {
+	if len(args) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg == nil {
+			continue
+		}
+		if arg.Value.Nil() {
+			if arg.Description != "" {
+				parts = append(parts, arg.Description)
+			}
+			continue
+		}
+		parts = append(parts, arg.Value.String())
+	}
+	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+func networkPresetParams(preset string) (proto.NetworkEmulateNetworkConditions, error) {
+	switch strings.ToLower(strings.TrimSpace(preset)) {
+	case "", "clear":
+		return proto.NetworkEmulateNetworkConditions{
+			Offline:            false,
+			Latency:            0,
+			DownloadThroughput: -1,
+			UploadThroughput:   -1,
+		}, nil
+	case "offline":
+		return proto.NetworkEmulateNetworkConditions{
+			Offline:            true,
+			Latency:            0,
+			DownloadThroughput: 0,
+			UploadThroughput:   0,
+			ConnectionType:     proto.NetworkConnectionTypeNone,
+		}, nil
+	case "fast-3g":
+		return proto.NetworkEmulateNetworkConditions{
+			Offline:            false,
+			Latency:            150,
+			DownloadThroughput: 1.6 * 1024 * 1024 / 8,
+			UploadThroughput:   750 * 1024 / 8,
+			ConnectionType:     proto.NetworkConnectionTypeCellular3g,
+		}, nil
+	case "slow-3g":
+		return proto.NetworkEmulateNetworkConditions{
+			Offline:            false,
+			Latency:            400,
+			DownloadThroughput: 500 * 1024 / 8,
+			UploadThroughput:   500 * 1024 / 8,
+			ConnectionType:     proto.NetworkConnectionTypeCellular3g,
+		}, nil
+	default:
+		return proto.NetworkEmulateNetworkConditions{}, fmt.Errorf("unsupported network preset %q", preset)
+	}
+}
+
+func (t *Tool) saveTraceArtifact(data []byte) (string, error) {
+	traceDir := strings.TrimSpace(t.manager.Config().Advanced.TraceDir)
+	if traceDir == "" {
+		_, relPath, err := t.mediaStore.Save(data, "browser/traces", ".json")
+		if err != nil {
+			return "", fmt.Errorf("failed to save trace artifact: %w", err)
+		}
+		return relPath, nil
+	}
+
+	if err := os.MkdirAll(traceDir, 0o700); err != nil {
+		return "", fmt.Errorf("failed to create trace directory: %w", err)
+	}
+	filename := fmt.Sprintf("trace-%d.json", time.Now().UnixNano())
+	path := filepath.Join(traceDir, filename)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return "", fmt.Errorf("failed to write trace artifact: %w", err)
+	}
+	return path, nil
 }
 
 // uploadFile uploads a file to a file input element

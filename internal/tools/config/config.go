@@ -80,7 +80,31 @@ type BrowserToolsConfig struct {
 	Stealth        bool                    `json:"stealth" default:"true"`           // Enable stealth mode
 	Device         string                  `json:"device" default:"clear"`           // Device emulation
 	ProfileDomains map[string]string       `json:"profileDomains"`                   // Domain → profile mapping (runtime default)
+	ChromeCDP      string                  `json:"chromeCDP" default:"ws://localhost:9222"` // CDP endpoint for local chrome relay profile
+	AllowAgentProfiles bool               `json:"allowAgentProfiles"`                // Allow explicit profile names in tool calls
+	Remote         RemoteBrowserConfig     `json:"remote"`                           // Remote browser access settings
+	Advanced       AdvancedCDPConfig       `json:"advanced"`                         // Advanced CDP settings for later phases
 	Bubblewrap     BrowserBubblewrapConfig `json:"bubblewrap"`                       // Sandbox settings
+}
+
+// RemoteBrowserConfig contains phase-1 remote browser access settings.
+type RemoteBrowserConfig struct {
+	Enabled              bool     `json:"enabled" default:"true"`                 // Enable named remote browser profiles
+	ProfilesText         string   `json:"profilesText"`                           // One entry per line: name=endpoint
+	AllowedHosts         []string `json:"allowedHosts"`                           // Optional allowlist for remote hosts or CIDRs
+	AllowDirectEndpoints bool     `json:"allowDirectEndpoints"`                   // Allow raw endpoint strings in future phases
+	AllowHTTPDiscovery   bool     `json:"allowHTTPDiscovery" default:"true"`      // Allow http(s) discovery endpoints that resolve to websocket CDP
+	ConnectionTimeout    string   `json:"connectionTimeout" default:"10s"`        // Timeout for remote endpoint connection/discovery
+}
+
+// AdvancedCDPConfig contains minimum CDP settings needed by later phases.
+type AdvancedCDPConfig struct {
+	NetworkCaptureEnabled bool   `json:"networkCaptureEnabled" default:"true"`    // Enable network capture when implemented
+	NetworkCaptureMax     int    `json:"networkCaptureMax" default:"200"`         // Max network entries to retain
+	ConsoleCaptureEnabled bool   `json:"consoleCaptureEnabled" default:"true"`    // Enable console capture when implemented
+	ConsoleCaptureMax     int    `json:"consoleCaptureMax" default:"200"`         // Max console entries to retain
+	TraceDir              string `json:"traceDir"`                                // Optional trace artifact directory override
+	TraceRetention        int    `json:"traceRetention" default:"20"`             // Max trace artifacts to keep
 }
 
 // BrowserBubblewrapConfig contains bubblewrap settings for browser tool
@@ -165,6 +189,58 @@ func ConfigFormDef() forms.FormDef {
 				},
 			},
 			{
+				Title:     "Browser",
+				Collapsed: true,
+				Desc:      "General managed-browser settings for local GoClaw browser profiles.",
+				Fields: []forms.Field{
+					{Name: "browser.enabled", Title: "Enable Browser Tool", Type: forms.Toggle, Default: true},
+					{Name: "browser.dir", Title: "Browser Data Directory", Type: forms.Text, Desc: "Empty uses ~/.goclaw/browser"},
+					{Name: "browser.autoDownload", Title: "Auto-Download Chromium", Type: forms.Toggle, Default: true},
+					{Name: "browser.revision", Title: "Chromium Revision", Type: forms.Text, Desc: "Leave empty for latest available revision"},
+					{Name: "browser.headless", Title: "Headless by Default", Type: forms.Toggle, Default: true},
+					{Name: "browser.noSandbox", Title: "Disable Chrome Sandbox", Type: forms.Toggle, Desc: "Only needed in restricted environments such as some containers"},
+					{Name: "browser.defaultProfile", Title: "Default Local Profile", Type: forms.Text, Default: "default"},
+					{Name: "browser.timeout", Title: "Default Action Timeout", Type: forms.Text, Default: "30s"},
+					{Name: "browser.stealth", Title: "Enable Stealth Mode", Type: forms.Toggle, Default: true},
+					{Name: "browser.device", Title: "Default Device Emulation", Type: forms.Text, Default: "clear", Desc: "Examples: clear, laptop, iphone-x"},
+				},
+			},
+			{
+				Title:     "Browser Relay",
+				Collapsed: true,
+				Desc:      "Settings for the local Chrome attach path used by profile='chrome'. This is your own local browser, not a remote machine.",
+				Fields: []forms.Field{
+					{Name: "browser.chromeCDP", Title: "Local Chrome Relay CDP Endpoint", Type: forms.Text, Default: "ws://localhost:9222", Desc: "Only used for profile='chrome'. Point this at the local Chrome relay/attach workflow on this machine."},
+					{Name: "browser.allowAgentProfiles", Title: "Allow Agent To Choose Named Profiles", Type: forms.Toggle, Desc: "When enabled, tool calls can explicitly request named profiles such as work, twitter, or remote:workstation instead of relying only on default/domain-based profile selection."},
+				},
+			},
+			{
+				Title:     "Remote Browsers",
+				Collapsed: true,
+				Desc:      "Named Chrome/CDP endpoints running on other machines. These are separate from the local profile='chrome' relay path.",
+				Fields: []forms.Field{
+					{Name: "browser.remote.enabled", Title: "Enable Remote Browsers", Type: forms.Toggle, Default: true, Desc: "Enable support for named remote browser profiles. This does nothing by itself until you define remote profiles below."},
+					{Name: "browser.remote.profilesText", Title: "Named Remote Browser Profiles", Type: forms.TextArea, Desc: "One per line: name=endpoint. Example: workstation=ws://192.168.1.50:9222/devtools/browser/abc123 or staging=http://10.0.0.20:9222"},
+					{Name: "browser.remote.allowedHosts", Title: "Allowed Remote Hosts", Type: forms.StringList, Desc: "Optional safety allowlist for remote browser hosts or CIDRs. If set, only these hosts may be used for remote browser connections."},
+					{Name: "browser.remote.allowDirectEndpoints", Title: "Allow Raw CDP URLs", Type: forms.Toggle, Desc: "Future-facing option. If enabled in later workflows, raw ws:// or http:// CDP endpoints could be used directly instead of only named remote profiles."},
+					{Name: "browser.remote.allowHTTPDiscovery", Title: "Allow Simple http://host:port Browser Addresses", Type: forms.Toggle, Default: true, Desc: "If enabled, a remote profile can use a simple address like http://host:9222 and GoClaw will automatically discover the real websocket CDP URL via /json/version."},
+					{Name: "browser.remote.connectionTimeout", Title: "Remote Browser Connection Timeout", Type: forms.Text, Default: "10s", Desc: "Maximum time to spend connecting to or discovering a configured remote browser endpoint."},
+				},
+			},
+			{
+				Title:     "Browser Diagnostics",
+				Collapsed: true,
+				Desc:      "Capture limits and artifact settings for console, network, and performance tooling.",
+				Fields: []forms.Field{
+					{Name: "browser.advanced.networkCaptureEnabled", Title: "Enable Network Capture", Type: forms.Toggle, Default: true, Desc: "Capture request, response, and failure events for observability actions"},
+					{Name: "browser.advanced.networkCaptureMax", Title: "Network Capture Limit", Type: forms.Number, Default: 200, Min: 1, Max: 5000},
+					{Name: "browser.advanced.consoleCaptureEnabled", Title: "Enable Console Capture", Type: forms.Toggle, Default: true, Desc: "Capture native console and exception events for observability actions"},
+					{Name: "browser.advanced.consoleCaptureMax", Title: "Console Capture Limit", Type: forms.Number, Default: 200, Min: 1, Max: 5000},
+					{Name: "browser.advanced.traceDir", Title: "Trace Artifact Directory", Type: forms.Text, Desc: "Optional override for performance trace output"},
+					{Name: "browser.advanced.traceRetention", Title: "Trace Retention", Type: forms.Number, Default: 20, Min: 1, Max: 5000},
+				},
+			},
+			{
 				Title: "Delegated Subagents",
 				Fields: []forms.Field{
 					{Name: "subagent.enabled", Title: "Enable Subagent Tools", Type: forms.Toggle, Default: true, Desc: "Registers subagent_spawn, subagent_status, subagent_cancel, and subagent_fanout tools (owner sessions only). Requires gateway.delegatedRuns.enabled."},
@@ -228,6 +304,7 @@ func handleApply(cmd bus.Command) bus.CommandResult {
 	}
 
 	L_info("tools: config applied",
+		"browser.enabled", cfg.Browser.Enabled,
 		"xaiImagine.enabled", cfg.XAIImagine.Enabled,
 		"xaiVideo.enabled", cfg.XAIVideo.Enabled,
 	)

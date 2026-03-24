@@ -945,16 +945,30 @@ func (b *BrowserDownloadCmd) Run(ctx *Context) error {
 
 	// Create browser config adapter
 	browserCfg := browser.ToolsConfigAdapter{
-		Dir:            cfg.Tools.Browser.Dir,
-		AutoDownload:   true, // Force for this command
-		Revision:       cfg.Tools.Browser.Revision,
-		Headless:       cfg.Tools.Browser.Headless,
-		NoSandbox:      cfg.Tools.Browser.NoSandbox,
-		DefaultProfile: cfg.Tools.Browser.DefaultProfile,
-		Timeout:        cfg.Tools.Browser.Timeout,
-		Stealth:        cfg.Tools.Browser.Stealth,
-		Device:         cfg.Tools.Browser.Device,
-		ProfileDomains: cfg.Tools.Browser.ProfileDomains,
+		Dir:                          cfg.Tools.Browser.Dir,
+		AutoDownload:                 true, // Force for this command
+		Revision:                     cfg.Tools.Browser.Revision,
+		Headless:                     cfg.Tools.Browser.Headless,
+		NoSandbox:                    cfg.Tools.Browser.NoSandbox,
+		DefaultProfile:               cfg.Tools.Browser.DefaultProfile,
+		Timeout:                      cfg.Tools.Browser.Timeout,
+		Stealth:                      cfg.Tools.Browser.Stealth,
+		Device:                       cfg.Tools.Browser.Device,
+		ProfileDomains:               cfg.Tools.Browser.ProfileDomains,
+		ChromeCDP:                    cfg.Tools.Browser.ChromeCDP,
+		AllowAgentProfiles:           cfg.Tools.Browser.AllowAgentProfiles,
+		RemoteEnabled:                cfg.Tools.Browser.Remote.Enabled,
+		RemoteProfilesText:           cfg.Tools.Browser.Remote.ProfilesText,
+		RemoteAllowedHosts:           cfg.Tools.Browser.Remote.AllowedHosts,
+		RemoteAllowDirectEndpoints:   cfg.Tools.Browser.Remote.AllowDirectEndpoints,
+		RemoteAllowHTTPDiscovery:     cfg.Tools.Browser.Remote.AllowHTTPDiscovery,
+		RemoteConnectionTimeout:      cfg.Tools.Browser.Remote.ConnectionTimeout,
+		AdvancedNetworkCaptureEnabled: cfg.Tools.Browser.Advanced.NetworkCaptureEnabled,
+		AdvancedNetworkCaptureMax:     cfg.Tools.Browser.Advanced.NetworkCaptureMax,
+		AdvancedConsoleCaptureEnabled: cfg.Tools.Browser.Advanced.ConsoleCaptureEnabled,
+		AdvancedConsoleCaptureMax:     cfg.Tools.Browser.Advanced.ConsoleCaptureMax,
+		AdvancedTraceDir:              cfg.Tools.Browser.Advanced.TraceDir,
+		AdvancedTraceRetention:        cfg.Tools.Browser.Advanced.TraceRetention,
 	}.ToConfig()
 
 	// Create downloader
@@ -1013,16 +1027,30 @@ func (b *BrowserSetupCmd) Run(ctx *Context) error {
 
 	// Create browser config
 	browserCfg := browser.ToolsConfigAdapter{
-		Dir:            cfg.Tools.Browser.Dir,
-		AutoDownload:   cfg.Tools.Browser.AutoDownload,
-		Revision:       cfg.Tools.Browser.Revision,
-		Headless:       false, // Headed for setup
-		NoSandbox:      cfg.Tools.Browser.NoSandbox,
-		DefaultProfile: cfg.Tools.Browser.DefaultProfile,
-		Timeout:        cfg.Tools.Browser.Timeout,
-		Stealth:        cfg.Tools.Browser.Stealth,
-		Device:         cfg.Tools.Browser.Device,
-		ProfileDomains: cfg.Tools.Browser.ProfileDomains,
+		Dir:                          cfg.Tools.Browser.Dir,
+		AutoDownload:                 cfg.Tools.Browser.AutoDownload,
+		Revision:                     cfg.Tools.Browser.Revision,
+		Headless:                     false, // Headed for setup
+		NoSandbox:                    cfg.Tools.Browser.NoSandbox,
+		DefaultProfile:               cfg.Tools.Browser.DefaultProfile,
+		Timeout:                      cfg.Tools.Browser.Timeout,
+		Stealth:                      cfg.Tools.Browser.Stealth,
+		Device:                       cfg.Tools.Browser.Device,
+		ProfileDomains:               cfg.Tools.Browser.ProfileDomains,
+		ChromeCDP:                    cfg.Tools.Browser.ChromeCDP,
+		AllowAgentProfiles:           cfg.Tools.Browser.AllowAgentProfiles,
+		RemoteEnabled:                cfg.Tools.Browser.Remote.Enabled,
+		RemoteProfilesText:           cfg.Tools.Browser.Remote.ProfilesText,
+		RemoteAllowedHosts:           cfg.Tools.Browser.Remote.AllowedHosts,
+		RemoteAllowDirectEndpoints:   cfg.Tools.Browser.Remote.AllowDirectEndpoints,
+		RemoteAllowHTTPDiscovery:     cfg.Tools.Browser.Remote.AllowHTTPDiscovery,
+		RemoteConnectionTimeout:      cfg.Tools.Browser.Remote.ConnectionTimeout,
+		AdvancedNetworkCaptureEnabled: cfg.Tools.Browser.Advanced.NetworkCaptureEnabled,
+		AdvancedNetworkCaptureMax:     cfg.Tools.Browser.Advanced.NetworkCaptureMax,
+		AdvancedConsoleCaptureEnabled: cfg.Tools.Browser.Advanced.ConsoleCaptureEnabled,
+		AdvancedConsoleCaptureMax:     cfg.Tools.Browser.Advanced.ConsoleCaptureMax,
+		AdvancedTraceDir:              cfg.Tools.Browser.Advanced.TraceDir,
+		AdvancedTraceRetention:        cfg.Tools.Browser.Advanced.TraceRetention,
 	}.ToConfig()
 
 	// Initialize manager
@@ -1100,8 +1128,22 @@ func (b *BrowserProfilesCmd) Run(ctx *Context) error {
 
 	// Create browser config
 	browserCfg := browser.ToolsConfigAdapter{
-		Dir:            cfg.Tools.Browser.Dir,
-		DefaultProfile: cfg.Tools.Browser.DefaultProfile,
+		Dir:                          cfg.Tools.Browser.Dir,
+		DefaultProfile:               cfg.Tools.Browser.DefaultProfile,
+		ChromeCDP:                    cfg.Tools.Browser.ChromeCDP,
+		AllowAgentProfiles:           cfg.Tools.Browser.AllowAgentProfiles,
+		RemoteEnabled:                cfg.Tools.Browser.Remote.Enabled,
+		RemoteProfilesText:           cfg.Tools.Browser.Remote.ProfilesText,
+		RemoteAllowedHosts:           cfg.Tools.Browser.Remote.AllowedHosts,
+		RemoteAllowDirectEndpoints:   cfg.Tools.Browser.Remote.AllowDirectEndpoints,
+		RemoteAllowHTTPDiscovery:     cfg.Tools.Browser.Remote.AllowHTTPDiscovery,
+		RemoteConnectionTimeout:      cfg.Tools.Browser.Remote.ConnectionTimeout,
+		AdvancedNetworkCaptureEnabled: cfg.Tools.Browser.Advanced.NetworkCaptureEnabled,
+		AdvancedNetworkCaptureMax:     cfg.Tools.Browser.Advanced.NetworkCaptureMax,
+		AdvancedConsoleCaptureEnabled: cfg.Tools.Browser.Advanced.ConsoleCaptureEnabled,
+		AdvancedConsoleCaptureMax:     cfg.Tools.Browser.Advanced.ConsoleCaptureMax,
+		AdvancedTraceDir:              cfg.Tools.Browser.Advanced.TraceDir,
+		AdvancedTraceRetention:        cfg.Tools.Browser.Advanced.TraceRetention,
 	}.ToConfig()
 
 	profilesDir := browserCfg.ResolveProfilesDir(home)
@@ -1166,8 +1208,22 @@ func (b *BrowserClearCmd) Run(ctx *Context) error {
 
 	// Create browser config
 	browserCfg := browser.ToolsConfigAdapter{
-		Dir:            cfg.Tools.Browser.Dir,
-		DefaultProfile: cfg.Tools.Browser.DefaultProfile,
+		Dir:                          cfg.Tools.Browser.Dir,
+		DefaultProfile:               cfg.Tools.Browser.DefaultProfile,
+		ChromeCDP:                    cfg.Tools.Browser.ChromeCDP,
+		AllowAgentProfiles:           cfg.Tools.Browser.AllowAgentProfiles,
+		RemoteEnabled:                cfg.Tools.Browser.Remote.Enabled,
+		RemoteProfilesText:           cfg.Tools.Browser.Remote.ProfilesText,
+		RemoteAllowedHosts:           cfg.Tools.Browser.Remote.AllowedHosts,
+		RemoteAllowDirectEndpoints:   cfg.Tools.Browser.Remote.AllowDirectEndpoints,
+		RemoteAllowHTTPDiscovery:     cfg.Tools.Browser.Remote.AllowHTTPDiscovery,
+		RemoteConnectionTimeout:      cfg.Tools.Browser.Remote.ConnectionTimeout,
+		AdvancedNetworkCaptureEnabled: cfg.Tools.Browser.Advanced.NetworkCaptureEnabled,
+		AdvancedNetworkCaptureMax:     cfg.Tools.Browser.Advanced.NetworkCaptureMax,
+		AdvancedConsoleCaptureEnabled: cfg.Tools.Browser.Advanced.ConsoleCaptureEnabled,
+		AdvancedConsoleCaptureMax:     cfg.Tools.Browser.Advanced.ConsoleCaptureMax,
+		AdvancedTraceDir:              cfg.Tools.Browser.Advanced.TraceDir,
+		AdvancedTraceRetention:        cfg.Tools.Browser.Advanced.TraceRetention,
 	}.ToConfig()
 
 	profilesDir := browserCfg.ResolveProfilesDir(home)
@@ -1228,10 +1284,24 @@ func (b *BrowserStatusCmd) Run(ctx *Context) error {
 
 	// Create browser config
 	browserCfg := browser.ToolsConfigAdapter{
-		Dir:            cfg.Tools.Browser.Dir,
-		AutoDownload:   cfg.Tools.Browser.AutoDownload,
-		Revision:       cfg.Tools.Browser.Revision,
-		DefaultProfile: cfg.Tools.Browser.DefaultProfile,
+		Dir:                          cfg.Tools.Browser.Dir,
+		AutoDownload:                 cfg.Tools.Browser.AutoDownload,
+		Revision:                     cfg.Tools.Browser.Revision,
+		DefaultProfile:               cfg.Tools.Browser.DefaultProfile,
+		ChromeCDP:                    cfg.Tools.Browser.ChromeCDP,
+		AllowAgentProfiles:           cfg.Tools.Browser.AllowAgentProfiles,
+		RemoteEnabled:                cfg.Tools.Browser.Remote.Enabled,
+		RemoteProfilesText:           cfg.Tools.Browser.Remote.ProfilesText,
+		RemoteAllowedHosts:           cfg.Tools.Browser.Remote.AllowedHosts,
+		RemoteAllowDirectEndpoints:   cfg.Tools.Browser.Remote.AllowDirectEndpoints,
+		RemoteAllowHTTPDiscovery:     cfg.Tools.Browser.Remote.AllowHTTPDiscovery,
+		RemoteConnectionTimeout:      cfg.Tools.Browser.Remote.ConnectionTimeout,
+		AdvancedNetworkCaptureEnabled: cfg.Tools.Browser.Advanced.NetworkCaptureEnabled,
+		AdvancedNetworkCaptureMax:     cfg.Tools.Browser.Advanced.NetworkCaptureMax,
+		AdvancedConsoleCaptureEnabled: cfg.Tools.Browser.Advanced.ConsoleCaptureEnabled,
+		AdvancedConsoleCaptureMax:     cfg.Tools.Browser.Advanced.ConsoleCaptureMax,
+		AdvancedTraceDir:              cfg.Tools.Browser.Advanced.TraceDir,
+		AdvancedTraceRetention:        cfg.Tools.Browser.Advanced.TraceRetention,
 	}.ToConfig()
 
 	// Check download status
@@ -2447,22 +2517,36 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	// Initialize browser manager for web_fetch fallback and browser tool
 	if cfg.Tools.Browser.Enabled {
 		browserCfg := browser.ToolsConfigAdapter{
-			Dir:               cfg.Tools.Browser.Dir,
-			AutoDownload:      cfg.Tools.Browser.AutoDownload,
-			Revision:          cfg.Tools.Browser.Revision,
-			Headless:          cfg.Tools.Browser.Headless,
-			NoSandbox:         cfg.Tools.Browser.NoSandbox,
-			DefaultProfile:    cfg.Tools.Browser.DefaultProfile,
-			Timeout:           cfg.Tools.Browser.Timeout,
-			Stealth:           cfg.Tools.Browser.Stealth,
-			Device:            cfg.Tools.Browser.Device,
-			ProfileDomains:    cfg.Tools.Browser.ProfileDomains,
-			Workspace:         cfg.Gateway.WorkingDir,
-			BubblewrapEnabled: cfg.Sandbox.IsBrowserEnabled(),
-			BubblewrapPath:    cfg.Sandbox.GetBackendPath(),
-			BubblewrapGPU:     cfg.Tools.Browser.Bubblewrap.GPU,
-			ExtraRoBind:       cfg.Tools.Browser.Bubblewrap.ExtraRoBind,
-			ExtraBind:         cfg.Tools.Browser.Bubblewrap.ExtraBind,
+			Dir:                          cfg.Tools.Browser.Dir,
+			AutoDownload:                 cfg.Tools.Browser.AutoDownload,
+			Revision:                     cfg.Tools.Browser.Revision,
+			Headless:                     cfg.Tools.Browser.Headless,
+			NoSandbox:                    cfg.Tools.Browser.NoSandbox,
+			DefaultProfile:               cfg.Tools.Browser.DefaultProfile,
+			Timeout:                      cfg.Tools.Browser.Timeout,
+			Stealth:                      cfg.Tools.Browser.Stealth,
+			Device:                       cfg.Tools.Browser.Device,
+			ProfileDomains:               cfg.Tools.Browser.ProfileDomains,
+			ChromeCDP:                    cfg.Tools.Browser.ChromeCDP,
+			AllowAgentProfiles:           cfg.Tools.Browser.AllowAgentProfiles,
+			RemoteEnabled:                cfg.Tools.Browser.Remote.Enabled,
+			RemoteProfilesText:           cfg.Tools.Browser.Remote.ProfilesText,
+			RemoteAllowedHosts:           cfg.Tools.Browser.Remote.AllowedHosts,
+			RemoteAllowDirectEndpoints:   cfg.Tools.Browser.Remote.AllowDirectEndpoints,
+			RemoteAllowHTTPDiscovery:     cfg.Tools.Browser.Remote.AllowHTTPDiscovery,
+			RemoteConnectionTimeout:      cfg.Tools.Browser.Remote.ConnectionTimeout,
+			AdvancedNetworkCaptureEnabled: cfg.Tools.Browser.Advanced.NetworkCaptureEnabled,
+			AdvancedNetworkCaptureMax:     cfg.Tools.Browser.Advanced.NetworkCaptureMax,
+			AdvancedConsoleCaptureEnabled: cfg.Tools.Browser.Advanced.ConsoleCaptureEnabled,
+			AdvancedConsoleCaptureMax:     cfg.Tools.Browser.Advanced.ConsoleCaptureMax,
+			AdvancedTraceDir:              cfg.Tools.Browser.Advanced.TraceDir,
+			AdvancedTraceRetention:        cfg.Tools.Browser.Advanced.TraceRetention,
+			Workspace:                    cfg.Gateway.WorkingDir,
+			BubblewrapEnabled:            cfg.Sandbox.IsBrowserEnabled(),
+			BubblewrapPath:               cfg.Sandbox.GetBackendPath(),
+			BubblewrapGPU:                cfg.Tools.Browser.Bubblewrap.GPU,
+			ExtraRoBind:                  cfg.Tools.Browser.Bubblewrap.ExtraRoBind,
+			ExtraBind:                    cfg.Tools.Browser.Bubblewrap.ExtraBind,
 		}.ToConfig()
 
 		browserMgr, err := browser.InitManager(browserCfg)

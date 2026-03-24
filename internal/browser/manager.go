@@ -1,7 +1,11 @@
 package browser
 
 import (
+	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -295,6 +299,22 @@ func (m *Manager) GetBrowser(profile string, headed bool) (*rod.Browser, error) 
 		return browser, nil
 	}
 
+	// Named remote profiles connect to external browsers over CDP.
+	if IsRemoteProfile(profile) {
+		browser, err := m.connectToRemoteProfile(RemoteProfileName(profile))
+		if err != nil {
+			return nil, err
+		}
+		m.browsers[profile] = &browserInstance{
+			browser:   browser,
+			headed:    true,
+			profile:   profile,
+			createdAt: time.Now(),
+		}
+		go m.monitorBrowser(profile, browser)
+		return browser, nil
+	}
+
 	// Launch new browser with requested mode
 	browser, err := m.launchBrowser(profile, headed)
 	if err != nil {
@@ -434,8 +454,8 @@ func (m *Manager) connectToChrome() (*rod.Browser, error) {
 
 	L_info("browser: connecting to Chrome", "endpoint", endpoint)
 
-	browser := rod.New().ControlURL(endpoint)
-	if err := browser.Connect(); err != nil {
+	browser, err := m.connectToEndpoint(endpoint, false)
+	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Chrome at %s (is Chrome running with extension?): %w", endpoint, err)
 	}
 
@@ -443,10 +463,138 @@ func (m *Manager) connectToChrome() (*rod.Browser, error) {
 	return browser, nil
 }
 
+// connectToRemoteProfile connects to a named remote browser profile.
+func (m *Manager) connectToRemoteProfile(name string) (*rod.Browser, error) {
+	if !m.config.Remote.Enabled {
+		return nil, fmt.Errorf("remote browser profiles are disabled")
+	}
+
+	profile, ok := m.config.ResolveRemoteProfile(name)
+	if !ok {
+		return nil, fmt.Errorf("remote browser profile %q is not configured", name)
+	}
+	if strings.TrimSpace(profile.Endpoint) == "" {
+		return nil, fmt.Errorf("remote browser profile %q has no endpoint", name)
+	}
+
+	L_info("browser: connecting to remote profile", "profile", name, "endpoint", profile.Endpoint)
+
+	browser, err := m.connectToEndpoint(profile.Endpoint, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to remote browser profile %q: %w", name, err)
+	}
+
+	L_info("browser: connected to remote profile", "profile", name)
+	return browser, nil
+}
+
+func (m *Manager) connectToEndpoint(endpoint string, validateRemoteHost bool) (*rod.Browser, error) {
+	resolved, err := m.resolveControlURL(endpoint, validateRemoteHost)
+	if err != nil {
+		return nil, err
+	}
+
+	browser := rod.New().ControlURL(resolved)
+	if err := browser.Connect(); err != nil {
+		return nil, err
+	}
+	return browser, nil
+}
+
+func (m *Manager) resolveControlURL(endpoint string, validateRemoteHost bool) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil {
+		return "", fmt.Errorf("invalid browser endpoint %q: %w", endpoint, err)
+	}
+
+	switch u.Scheme {
+	case "ws", "wss":
+		if validateRemoteHost {
+			if err := m.validateRemoteHost(u.Hostname()); err != nil {
+				return "", err
+			}
+		}
+		return u.String(), nil
+	case "http", "https":
+		if validateRemoteHost {
+			if err := m.validateRemoteHost(u.Hostname()); err != nil {
+				return "", err
+			}
+		}
+		if !m.config.Remote.AllowHTTPDiscovery {
+			return "", fmt.Errorf("http discovery endpoints are disabled for remote browsers")
+		}
+		return m.discoverBrowserWebSocketURL(u)
+	default:
+		return "", fmt.Errorf("unsupported browser endpoint scheme %q", u.Scheme)
+	}
+}
+
+func (m *Manager) discoverBrowserWebSocketURL(base *url.URL) (string, error) {
+	discoveryURL := *base
+	if discoveryURL.Path == "" || discoveryURL.Path == "/" {
+		discoveryURL.Path = "/json/version"
+	}
+
+	client := &http.Client{Timeout: m.config.ResolveRemoteConnectionTimeout()}
+	resp, err := client.Get(discoveryURL.String()) //nolint:gosec // remote CDP discovery is an explicit configured operator action
+	if err != nil {
+		return "", fmt.Errorf("failed remote browser discovery at %s: %w", discoveryURL.String(), err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("remote browser discovery returned status %d", resp.StatusCode)
+	}
+
+	var payload struct {
+		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", fmt.Errorf("failed to decode remote browser discovery response: %w", err)
+	}
+	if strings.TrimSpace(payload.WebSocketDebuggerURL) == "" {
+		return "", fmt.Errorf("remote browser discovery did not return webSocketDebuggerUrl")
+	}
+	return payload.WebSocketDebuggerURL, nil
+}
+
+func (m *Manager) validateRemoteHost(host string) error {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return fmt.Errorf("remote browser endpoint is missing a host")
+	}
+
+	allowed := m.config.Remote.AllowedHosts
+	if len(allowed) == 0 {
+		return nil
+	}
+
+	for _, rule := range allowed {
+		rule = strings.TrimSpace(rule)
+		if rule == "" {
+			continue
+		}
+		if rule == "*" || strings.EqualFold(host, rule) {
+			return nil
+		}
+		if strings.HasPrefix(rule, "*.") && strings.HasSuffix(host, strings.TrimPrefix(rule, "*")) {
+			return nil
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			if _, cidr, err := net.ParseCIDR(rule); err == nil && cidr.Contains(ip) {
+				return nil
+			}
+		}
+	}
+
+	return fmt.Errorf("remote browser host %q is not allowed by configuration", host)
+}
+
 // IsExternalProfile returns true if the profile connects to an external browser
 // that should not be closed by GoClaw (e.g., profile="chrome").
 func (m *Manager) IsExternalProfile(profile string) bool {
-	return profile == "chrome"
+	return profile == "chrome" || IsRemoteProfile(profile)
 }
 
 // CloseBrowser explicitly closes the browser for a specific profile.
