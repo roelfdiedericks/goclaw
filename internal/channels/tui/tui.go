@@ -47,16 +47,16 @@ type Model struct {
 	input        textarea.Model
 
 	// State
-	focus       Focus
-	width       int
-	height      int
-	chatLines   []string // Chat history as lines
-	logsLines   []string // Logs as lines
+	focus          Focus
+	width          int
+	height         int
+	chatLines      []string // Chat history as lines
+	logsLines      []string // Logs as lines
 	delegatedLines []string // Compact delegated run snapshot (for logs panel)
-	currentLine string   // Current streaming line (not yet complete)
-	streaming   bool
-	ready       bool
-	layout      LayoutMode // Current layout mode
+	currentLine    string   // Current streaming line (not yet complete)
+	streaming      bool
+	ready          bool
+	layout         LayoutMode // Current layout mode
 
 	// Event channel for current agent run
 	eventsChan <-chan gateway.AgentEvent

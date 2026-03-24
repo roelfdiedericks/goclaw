@@ -356,4 +356,3 @@ func dispatchSeqFromKey(runID, key string) (int, error) {
 	}
 	return seq, nil
 }
-

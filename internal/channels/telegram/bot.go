@@ -14,10 +14,10 @@ import (
 	tele "gopkg.in/telebot.v4"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
-	"github.com/roelfdiedericks/goclaw/internal/delegatedrun"
 	"github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
 	chtypes "github.com/roelfdiedericks/goclaw/internal/channels/types"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
+	"github.com/roelfdiedericks/goclaw/internal/delegatedrun"
 	"github.com/roelfdiedericks/goclaw/internal/delivery"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
@@ -108,12 +108,12 @@ func New(cfg *config.Config, gw *gateway.Gateway, users *user.Registry) (*Bot, e
 	ctx, cancel := context.WithCancel(context.Background())
 
 	b := &Bot{
-		bot:     bot,
-		gateway: gw,
-		users:   users,
-		config:  cfg,
-		ctx:     ctx,
-		cancel:  cancel,
+		bot:           bot,
+		gateway:       gw,
+		users:         users,
+		config:        cfg,
+		ctx:           ctx,
+		cancel:        cancel,
 		delegatedLast: make(map[string]time.Time),
 	}
 
@@ -744,9 +744,9 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 
 	// Tool activity summary (Option A): one editable status message for all tools in this run.
 	type toolRow struct {
-		Name       string
-		Status     string // running | completed | error
-		DurationMs int64
+		Name        string
+		Status      string // running | completed | error
+		DurationMs  int64
 		ArgsPreview string
 		OutLabel    string // "result" | "error"
 		OutPreview  string

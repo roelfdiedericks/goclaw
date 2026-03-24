@@ -12,12 +12,12 @@ import (
 
 // ToolsConfig contains tool-specific settings
 type ToolsConfig struct {
-	Web        WebToolsConfig     `json:"web"`
-	Browser    BrowserToolsConfig `json:"browser"`
-	Exec       ExecToolsConfig    `json:"exec"`
+	Web        WebToolsConfig      `json:"web"`
+	Browser    BrowserToolsConfig  `json:"browser"`
+	Exec       ExecToolsConfig     `json:"exec"`
 	Subagent   SubagentToolsConfig `json:"subagent"`
-	XAIImagine XAIImagineConfig   `json:"xaiImagine"`
-	XAIVideo   XAIVideoConfig     `json:"xaiVideo"`
+	XAIImagine XAIImagineConfig    `json:"xaiImagine"`
+	XAIVideo   XAIVideoConfig      `json:"xaiVideo"`
 }
 
 // SubagentToolsConfig contains delegated subagent tool settings.
@@ -27,18 +27,18 @@ type SubagentToolsConfig struct {
 
 // WebToolsConfig contains web tool settings
 type WebToolsConfig struct {
-	BraveAPIKey string `json:"braveApiKey"`
+	BraveAPIKey string          `json:"braveApiKey"`
 	Search      WebSearchConfig `json:"search"`
-	UseBrowser  string `json:"useBrowser" default:"auto"` // Browser fallback: "auto" (on 403/bot), "always", "never"
-	Profile     string `json:"profile" default:"default"` // Browser profile for web_fetch
-	Headless    bool   `json:"headless" default:"true"`   // Run browser headless
+	UseBrowser  string          `json:"useBrowser" default:"auto"` // Browser fallback: "auto" (on 403/bot), "always", "never"
+	Profile     string          `json:"profile" default:"default"` // Browser profile for web_fetch
+	Headless    bool            `json:"headless" default:"true"`   // Run browser headless
 }
 
 // WebSearchConfig contains web_search provider and fallback settings.
 type WebSearchConfig struct {
 	Enabled             bool                     `json:"enabled" default:"true"`
 	Provider            string                   `json:"provider" default:"auto"` // auto|grok|brave|perplexity|gemini
-	FallbackProviders   []string                 `json:"fallbackProviders"`        // ordered provider fallback chain override
+	FallbackProviders   []string                 `json:"fallbackProviders"`       // ordered provider fallback chain override
 	MaxFallbackAttempts int                      `json:"maxFallbackAttempts" default:"3"`
 	Retry               WebSearchRetryConfig     `json:"retry"`
 	Providers           WebSearchProvidersConfig `json:"providers"`

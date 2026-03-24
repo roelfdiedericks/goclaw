@@ -8,12 +8,12 @@ import (
 
 // CompletionDispatchAdapter moves completion dispatch lifecycle out of tool handlers.
 type CompletionDispatchAdapter struct {
-	GetRun         func(runID string) (RunRecord, bool)
-	RecordPhase    func(runID, phase, status, detail string) error
-	MarkDispatched func(runID, dispatchKey string) error
-	ClaimDispatch  func(runID, claimToken string, seq int) (bool, error)
-	ReleaseClaim   func(runID, claimToken string) error
-	AdvanceSeq     func(runID string) (int, error)
+	GetRun          func(runID string) (RunRecord, bool)
+	RecordPhase     func(runID, phase, status, detail string) error
+	MarkDispatched  func(runID, dispatchKey string) error
+	ClaimDispatch   func(runID, claimToken string, seq int) (bool, error)
+	ReleaseClaim    func(runID, claimToken string) error
+	AdvanceSeq      func(runID string) (int, error)
 	UpdateLifecycle func(runID string, update CompletionLifecycleUpdate) error
 	CanDispatchPath func(rec RunRecord, path DispatchPath) (bool, string)
 }

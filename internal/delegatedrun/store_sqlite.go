@@ -371,10 +371,10 @@ func (r *SQLiteRegistry) UpdateRequesterBinding(runID string, update RequesterBi
 		return err
 	}
 	return r.appendEvent(runID, "requester_binding", map[string]any{
-		"state":           rec.RequesterBindingState,
-		"reason":          rec.RequesterBindingReason,
-		"updatedAt":       updatedAt,
-		"lastActiveAt":    lastActiveAt,
+		"state":        rec.RequesterBindingState,
+		"reason":       rec.RequesterBindingReason,
+		"updatedAt":    updatedAt,
+		"lastActiveAt": lastActiveAt,
 	})
 }
 
@@ -539,6 +539,9 @@ func (r *SQLiteRegistry) List() []RunRecord {
 		}
 		out = append(out, rec)
 	}
+	if err := rows.Err(); err != nil {
+		return out
+	}
 	return out
 }
 
@@ -610,6 +613,8 @@ func (r *SQLiteRegistry) ListEventsSince(sinceID int64, limit int) []RunEvent {
 		}
 		out = append(out, ev)
 	}
+	if err := rows.Err(); err != nil {
+		return out
+	}
 	return out
 }
-

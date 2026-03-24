@@ -191,7 +191,7 @@ func providerIDs(chain []providerAttempt) []string {
 
 func formatSearchResponse(resp SearchResponse) string {
 	lines := make([]string, 0, 12+len(resp.Items)*4)
-	resultType := "results"
+	var resultType string
 	hasAnswer := strings.TrimSpace(resp.Answer) != ""
 	hasItems := len(resp.Items) > 0
 	switch {

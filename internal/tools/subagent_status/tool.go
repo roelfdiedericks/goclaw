@@ -118,8 +118,8 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		}
 		updated, _ := service.GetDelegatedRun(runID)
 		out, _ := json.MarshalIndent(map[string]any{
-			"action": action,
-			"run": normalizeRecord(updated),
+			"action":               action,
+			"run":                  normalizeRecord(updated),
 			"previousBindingState": rec.RequesterBindingState,
 		}, "", "  ")
 		return types.TextResult(string(out)), nil
@@ -147,11 +147,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 			return nil, err
 		}
 		out, _ := json.MarshalIndent(map[string]any{
-			"action":    action,
-			"runId":     runID,
+			"action":     action,
+			"runId":      runID,
 			"sessionKey": rec.SessionKey,
-			"delivered": true,
-			"invokeLLM": invokeLLM,
+			"delivered":  true,
+			"invokeLLM":  invokeLLM,
 		}, "", "  ")
 		return types.TextResult(string(out)), nil
 	}
@@ -198,7 +198,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		}
 		out, _ := json.MarshalIndent(map[string]any{
 			"action": "info",
-			"run": normalizeRecord(rec),
+			"run":    normalizeRecord(rec),
 		}, "", "  ")
 		L_debug("subagent_status: single run returned", "runID", runID, "state", rec.State)
 		return types.TextResult(string(out)), nil
@@ -219,8 +219,8 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	}
 	out, _ := json.MarshalIndent(map[string]any{
 		"action": "list",
-		"items": items,
-		"count": len(items),
+		"items":  items,
+		"count":  len(items),
 	}, "", "  ")
 	return types.TextResult(string(out)), nil
 }
@@ -229,33 +229,33 @@ func normalizeRecord(rec delegatedrun.RunRecord) map[string]any {
 	now := time.Now()
 	bindingAgeSeconds, bindingIdleSeconds, canDirectDispatch, directDispatchReason := delegatedrun.BindingTelemetry(rec, now)
 	return map[string]any{
-		"runId":         rec.RunID,
-		"parentRunId":   rec.ParentRunID,
-		"requesterType": rec.RequesterType,
-		"requesterId":   rec.RequesterID,
-		"requesterSessionKey": rec.RequesterSessionKey,
-		"requesterBindingState": rec.RequesterBindingState,
-		"requesterBindingReason": rec.RequesterBindingReason,
-		"requesterBindingUpdatedAt": rec.RequesterBindingUpdatedAt,
+		"runId":                        rec.RunID,
+		"parentRunId":                  rec.ParentRunID,
+		"requesterType":                rec.RequesterType,
+		"requesterId":                  rec.RequesterID,
+		"requesterSessionKey":          rec.RequesterSessionKey,
+		"requesterBindingState":        rec.RequesterBindingState,
+		"requesterBindingReason":       rec.RequesterBindingReason,
+		"requesterBindingUpdatedAt":    rec.RequesterBindingUpdatedAt,
 		"requesterBindingLastActiveAt": rec.RequesterBindingLastActiveAt,
-		"requesterBindingAgeSeconds": bindingAgeSeconds,
-		"requesterBindingIdleSeconds": bindingIdleSeconds,
-		"canDirectDispatch": canDirectDispatch,
-		"directDispatchReason": directDispatchReason,
-		"sessionKey":    rec.SessionKey,
-		"purpose":       rec.Purpose,
-		"resultMode":    rec.ResultMode,
-		"dispatchOrder": rec.DispatchOrder,
-		"fallbackMode":  rec.FallbackMode,
-		"cleanupState":  rec.CleanupState,
-		"deferredReason": rec.DeferredReason,
-		"continuationState": rec.ContinuationState,
-		"continuationReason": rec.ContinuationReason,
-		"continuationWakeAt": rec.ContinuationWakeAt,
-		"dispatchPhases": rec.DispatchPhases,
-		"state":         rec.State,
-		"startedAt":     rec.StartedAt,
-		"finishedAt":    rec.FinishedAt,
+		"requesterBindingAgeSeconds":   bindingAgeSeconds,
+		"requesterBindingIdleSeconds":  bindingIdleSeconds,
+		"canDirectDispatch":            canDirectDispatch,
+		"directDispatchReason":         directDispatchReason,
+		"sessionKey":                   rec.SessionKey,
+		"purpose":                      rec.Purpose,
+		"resultMode":                   rec.ResultMode,
+		"dispatchOrder":                rec.DispatchOrder,
+		"fallbackMode":                 rec.FallbackMode,
+		"cleanupState":                 rec.CleanupState,
+		"deferredReason":               rec.DeferredReason,
+		"continuationState":            rec.ContinuationState,
+		"continuationReason":           rec.ContinuationReason,
+		"continuationWakeAt":           rec.ContinuationWakeAt,
+		"dispatchPhases":               rec.DispatchPhases,
+		"state":                        rec.State,
+		"startedAt":                    rec.StartedAt,
+		"finishedAt":                   rec.FinishedAt,
 		"result": map[string]any{
 			"finalText": rec.Result.FinalText,
 			"error":     rec.Result.Error,
@@ -263,4 +263,3 @@ func normalizeRecord(rec delegatedrun.RunRecord) map[string]any {
 		},
 	}
 }
-

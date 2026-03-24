@@ -9,15 +9,15 @@ import (
 type CompletionDispatchErrorCode string
 
 const (
-	DispatchErrRunIDRequired               CompletionDispatchErrorCode = "run_id_required"
-	DispatchErrAdapterMisconfigured        CompletionDispatchErrorCode = "adapter_misconfigured"
-	DispatchErrPrimaryPathNone             CompletionDispatchErrorCode = "primary_path_none"
-	DispatchErrFallbackDuplicatesPrimary   CompletionDispatchErrorCode = "fallback_duplicates_primary"
-	DispatchErrPathIneligible              CompletionDispatchErrorCode = "path_ineligible"
-	DispatchErrDirectChannelUnreachable    CompletionDispatchErrorCode = "direct_channel_unreachable"
-	DispatchErrPathUnavailable             CompletionDispatchErrorCode = "path_unavailable"
-	DispatchErrUnknownPath                 CompletionDispatchErrorCode = "unknown_path"
-	DispatchErrPathFailed                  CompletionDispatchErrorCode = "path_failed"
+	DispatchErrRunIDRequired             CompletionDispatchErrorCode = "run_id_required"
+	DispatchErrAdapterMisconfigured      CompletionDispatchErrorCode = "adapter_misconfigured"
+	DispatchErrPrimaryPathNone           CompletionDispatchErrorCode = "primary_path_none"
+	DispatchErrFallbackDuplicatesPrimary CompletionDispatchErrorCode = "fallback_duplicates_primary"
+	DispatchErrPathIneligible            CompletionDispatchErrorCode = "path_ineligible"
+	DispatchErrDirectChannelUnreachable  CompletionDispatchErrorCode = "direct_channel_unreachable"
+	DispatchErrPathUnavailable           CompletionDispatchErrorCode = "path_unavailable"
+	DispatchErrUnknownPath               CompletionDispatchErrorCode = "unknown_path"
+	DispatchErrPathFailed                CompletionDispatchErrorCode = "path_failed"
 )
 
 // CompletionDispatchError carries retryability classification for completion dispatch failures.

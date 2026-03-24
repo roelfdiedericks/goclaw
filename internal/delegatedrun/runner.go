@@ -25,4 +25,3 @@ type activeRun struct {
 	start  time.Time
 	spec   RunSpec
 }
-

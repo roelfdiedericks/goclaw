@@ -46,10 +46,10 @@ type PromptParams struct {
 	MemoryBulletin  string // Memory bulletin content (if injection="prompt")
 	ContextBulletin string // Context bulletin content (if injection="prompt")
 	// Tool batching and parallel-execution hints (runtime capabilities)
-	ParallelToolBatching   bool     // If true, model should consider batching independent tool calls in one turn
-	ParallelExecution      bool     // If true, gateway may execute eligible tool calls concurrently
-	ParallelMaxConcurrent  int      // Max concurrent eligible tools
-	ParallelEligibleTools  []string // Effective allowlist of tools eligible for parallel execution
+	ParallelToolBatching  bool     // If true, model should consider batching independent tool calls in one turn
+	ParallelExecution     bool     // If true, gateway may execute eligible tool calls concurrently
+	ParallelMaxConcurrent int      // Max concurrent eligible tools
+	ParallelEligibleTools []string // Effective allowlist of tools eligible for parallel execution
 }
 
 // BuildSystemPrompt builds the full system prompt with workspace context injection

@@ -1,202 +1,228 @@
 ---
 title: "Delegated Runs"
-description: "Architecture and operational model for delegated runs, subagents, fanout, and result routing"
+description: "Use subagents and fanout to delegate work, monitor runs, and manage background task results"
 section: "About"
 weight: 9
 ---
 
 # Delegated Runs
 
-Delegated runs are the shared execution model used by both:
+GoClaw lets you delegate work to **subagents**: isolated worker agents that can do a task for you in the background or in parallel.
 
-- cron-isolated agent work
-- owner-triggered subagent tools
+If you have used `subagent_spawn` or `subagent_fanout`, you are already using delegated runs. Internally GoClaw tracks them all in one system, but the user-facing idea is simple:
 
-This gives GoClaw one lifecycle/state system for background and nested agent work, instead of separate code paths.
+- `subagent_spawn` starts one worker
+- `subagent_fanout` starts several workers in parallel
+- `subagent_status` lets you inspect or steer them
+- `subagent_cancel` stops them
 
-## Why This Exists
+## What Subagents Are
 
-Delegated runs provide:
+Subagents are useful when a task should be split away from the main conversation:
 
-- isolated execution contexts per run (`sessionKey`, timeout, purpose)
-- consistent lifecycle tracking (`queued`, `running`, `completed`, `failed`, `timeout`, `canceled`)
-- shared policy enforcement for depth, parent-child limits, and global lane concurrency
-- predictable result routing back to requester/session/channel
-- one control plane for HTTP/TUI/Telegram visibility
+- long-running research
+- background follow-up work
+- parallel reading or investigation across several files/sources
+- work you may want to inspect or cancel later
 
-## Core Components
+Each subagent gets its own isolated run, its own run ID, and its own timeout/limits.
 
-- `internal/delegatedrun`
-  - core contracts (`RunSpec`, `RunRecord`, `RunResult`, `RunState`)
-  - runner implementation (`DefaultRunner`) with bounded concurrency lane support
-  - registry interface with memory + SQLite backing
-  - typed emitters and bus projection (`delegated.run.*`)
-- `internal/cron/service.go`
-  - orchestrates delegated run startup/wait/cancel
-  - centralizes spawn policy checks and lineage/depth validation
-  - wires delegated execution into cron when `gateway.delegatedRuns.enabled=true`
-- Tools
-  - `subagent_spawn`, `subagent_status`, `subagent_cancel`, `subagent_fanout`
-- HTTP control plane
-  - `/runners`, `/api/runners`, `/api/runners/:runId`, `/api/runners/events`, cancel endpoint
+## Spawn vs Fanout
 
-## Lifecycle and State Machine
+Use `subagent_spawn` when:
 
-Typical delegated path:
+- you want one worker
+- you want to keep going now and hear back later
+- you want a run ID immediately
 
-1. `StartDelegatedRun(...)` validates policy and defaults.
-2. Run is recorded as `queued`.
-3. Runner lane admits run -> transitions to `running`.
-4. Execution completes as one terminal state:
-  - `completed`
-  - `failed`
-  - `timeout`
-  - `canceled`
-5. Registry/event log and bus events are updated for observers.
+Default behavior:
 
-## Result Routing Semantics
+- returns a `runId` immediately
+- sends a later completion callback by default
 
-Delegated runs snapshot result policy at spawn time and honor it on completion:
+Use `subagent_fanout` when:
 
-- `store_only`
-- `return_to_requester`
+- you want several workers in parallel
+- you want their results back in the current turn
+- you want to compare or interpret the worker outputs yourself
 
-For `return_to_requester`, GoClaw supports:
+Default behavior:
 
-- session reinjection as synthetic `tool_use`/`tool_result`
-- dispatch ordering (`queue_first`/`direct_first`)
-- fallback mode (`none`/`queue_fallback`/`direct_fallback`)
-- persisted idempotency keys (`completionDispatchKey`) and sequences
-- dispatch-phase event logging for observability
+- returns worker results in the current turn
+- does **not** send a later completion callback unless you ask for it
 
-Agent-facing defaults:
+## How Results Come Back
 
-- `subagent_spawn` is async-first:
-  - returns `runId` immediately
-  - later completion callback is on by default
-- `subagent_fanout` is immediate-result-first:
-  - returns worker results in the current turn
-  - later completion callback is off by default
+`subagent_spawn` and `subagent_fanout` return results differently on purpose.
 
-Direct routing safety policy:
+### `subagent_spawn`
 
-- if focused requester channel is unreachable, direct delivery is not retried
-- fallback path is used deterministically (typically queue/session reinjection)
-- completion remains discoverable in session/transcript history
+`subagent_spawn` is for work that should continue separately.
 
-Completion message contract:
+Typical flow:
 
-- direct channel delivery uses human-readable completion text only
-- internal requester reinjection stores structured payload with:
-  - `schema=delegated_completion.v1`
-  - `kind=task_completion`
-  - `meta` (run/source/session/toolError/injectMode)
-  - `replyInstruction` (internal orchestration hint)
-  - `untrustedChildOutput` (bounded/truncated text payload)
-- `replyInstruction` remains in structured payload but is not rendered in direct channel text
+1. Start a worker
+2. Get a `runId` immediately
+3. Receive a later completion callback when it finishes
 
-Requester binding model:
+### `subagent_fanout`
 
-- each run persists requester binding metadata (focus state, reason, timestamps)
-- operator controls are available via `subagent_status` actions (`focus`, `unfocus`)
-- timer guards are disabled by default (manual focus/unfocus first)
+`subagent_fanout` is for parallel work that you want back now.
 
-Deferred completion wake behavior:
+Typical flow:
 
-- when descendants are still active, completion dispatch defers immediately and stores `continuationWakeAt`
-- shared wake scheduler (run-ID keyed) re-enters completion orchestration on wake
-- repeated deferrals update wake metadata; latest scheduled wake replaces older pending timer for that run
+1. Start several workers in parallel
+2. Wait for them to finish
+3. Get their results in the same turn
 
-## Policy and Safety Controls
+By default, `subagent_fanout` tries to return the worker outputs inline.
 
-Delegated policy controls include:
+If everything fits:
 
-- `maxSpawnDepth`
-- `maxActiveChildrenPerParent`
-- `maxConcurrentRuns` (runner lane capacity, queued admission model)
+- the worker results come back directly in the tool result
 
-Lineage behavior:
+If not everything fits:
 
-- explicit `parentRunId` is supported
-- when omitted, subagent tooling propagates parent lineage from current session run context only if that run exists in delegated-run registry; otherwise it spawns as top-level
+- GoClaw returns as many complete results as fit
+- the rest come back as explicit `runId` handles in `overflow`
+- use `subagent_status action=info` with those `runId` values to inspect the missing results
 
-Purpose behavior:
+## What `ok=false` Means In Fanout
 
-- `purpose` is a freeform run metadata tag (dashboard/filter/logging)
-- delegated subagent tooling uses the delegated/subagent model chain internally by default
+For `subagent_fanout`, a tool result can return partial work and still tell you that the overall fanout did **not** fully succeed.
 
-## Fanout Coordinator (`subagent_fanout`)
+If `ok=false`, treat that as a real failure or partial failure.
 
-Fanout is implemented as a coordinator over delegated child runs:
+Read:
 
-- bounded `parallelism`
-- deterministic aggregation ordered by input prompt index
-- default contract: return detailed child outputs to the caller in the current turn
-- optional extra summary pass (`includeSummary=true`)
-- extra summary guardrails:
-  - bounded synthesis input size
-  - complete summaries only: if the summary would only cover some worker outputs, GoClaw skips it and reports that in `extraSummaryStatus`
-  - independent summary timeout (`summaryTimeoutSeconds`)
-- session-derived inline budgeting:
-  - uses current session context headroom plus the compaction reserve floor
-  - returns as many complete child outputs inline as fit
-  - when not all outputs fit, returns explicit overflow handles (`runId` values + inspect path) for the omitted children instead of silent preview-only truncation
-- completion handoff no longer requires an extra summarizer model run:
-  - completion summary text is built directly from deterministic fanout outcomes
-  - if an optional extra summary exists, that text is incorporated into the final completion summary
-  - async completion dispatch still uses the shared delegated completion pipeline
+- `status`
+- `message`
+- `stats`
 
-Delegated control actions:
+This means one or more worker runs:
 
-- `subagent_status action="steer"` injects guidance into a delegated child session and triggers one agent turn
-- `subagent_status action="send"` injects a ghostwritten assistant message into the delegated child session without triggering the model
+- failed
+- timed out
+- were canceled
+- or failed to start
 
-## Observability and Operations
+You may still get useful child outputs back, but the fanout should not be treated as fully successful.
 
-Operator surfaces:
+## Optional Extra Summary
 
-- HTTP runners dashboard with live SSE
-- owner Telegram run lifecycle summaries
-- TUI delegated run summary panel
+`subagent_fanout` supports `includeSummary=true` for one extra machine-generated summary across the worker outputs.
 
-Registry/event durability:
+This summary is secondary. The main result is still the worker outputs themselves.
 
-- memory registry for fast in-process state
-- SQLite event/history support for restart-safe run history
+GoClaw only returns `extraSummary` when:
+
+- the worker outcomes were healthy
+- and the summary covered all worker outputs
+
+If not, GoClaw skips it and explains why in `extraSummaryStatus`.
+
+This makes the rule simple for agents:
+
+- if `extraSummary` exists, it is complete enough to use
+- if it was skipped, use the main worker results instead
+
+## Monitor And Control Subagents
+
+You can monitor and control subagents in a few ways.
+
+### Web UI
+
+The runners page at `:1337/runners` shows:
+
+- active and recent runs
+- parent/child relationships
+- structured run detail
+- live runner events
+
+This is useful when you want to see what workers are doing, inspect a run, or cancel active work.
+
+### `subagent_status`
+
+Use `subagent_status` to:
+
+- list workers
+- inspect one worker by `runId`
+- fetch a stored result with `action=info`
+- read event logs with `action=log`
+- steer a running worker
+- send a message into a running worker session
+
+### `subagent_cancel`
+
+Use `subagent_cancel` to stop work:
+
+- `self` stops one run
+- `subtree` also stops its child runs
+
+## Timeouts And Limits
+
+Subagents are not unlimited. GoClaw applies safety limits to keep delegated work from running away.
+
+Examples include:
+
+- timeout limits
+- maximum parallel delegated runs
+- parent/child depth and fanout limits
+
+If a worker exceeds its time limit, it can time out. If a fanout hits limits or unhealthy child outcomes, the returned status reflects that.
 
 ## Configuration
 
-Primary switches:
+The main switches are:
 
 - `gateway.delegatedRuns.enabled`
-- delegated run limits under `gateway.delegatedRuns.*`
 - `tools.subagent.enabled`
-- `llm.subagent.models` (dedicated subagent/delegated model chain)
-- `llm.agent.models` (fallback chain when `llm.subagent.models` is empty)
 
-Recommended baseline:
+Useful limit controls live under:
+
+- `gateway.delegatedRuns.*`
+
+Useful timeout controls include:
+
+- `gateway.delegatedRuns.defaultTimeoutSeconds`
+- `gateway.delegatedRuns.maxTimeoutSeconds`
+
+If you want subagents available at all, both delegated runs and subagent tools need to be enabled.
+
+## Access Control
+
+Subagent tools are owner-only:
+
+- `subagent_spawn`
+- `subagent_status`
+- `subagent_cancel`
+- `subagent_fanout`
+
+If these tools do not appear, check that:
 
 - `gateway.delegatedRuns.enabled=true`
 - `tools.subagent.enabled=true`
 
-Timeout policy knobs:
+## When To Use This
 
-- `gateway.delegatedRuns.defaultTimeoutSeconds` sets a default when caller tools/jobs omit `timeoutSeconds`
-- `gateway.delegatedRuns.maxTimeoutSeconds` caps excessively large delegated timeouts for safety
+Use subagents when:
 
-## Access Control
+- the task is large enough to split off
+- you want parallel workers
+- you want a run you can inspect or cancel later
 
-Delegated subagent tools are owner-only (`subagent_spawn`, `subagent_status`, `subagent_cancel`, `subagent_fanout`).
+Stay in the main agent turn when:
 
-Enforcement is layered:
+- the work is small
+- you do not need a separate run
+- parallelism would not help
 
-- registration gate: `tools.subagent.enabled`
-- delegated engine gate: `gateway.delegatedRuns.enabled`
-- runtime authorization gate: each subagent tool requires `sessionCtx.User.IsOwner()`
+## Next Steps
 
-Subagent tools are only registered when **both** toggles are enabled.
-
-So non-owner users cannot execute delegated subagent tools even if role tool lists include those names.
+- See [Tools](tools.md) for the tool index
+- See [Tools: Cron](tools/cron.md) for scheduled background work
+- See [Channels](channels.md) for where delegated results can show up
+- See [Roles & Access Control](roles.md) for owner-only tool access
 
 ## See Also
 

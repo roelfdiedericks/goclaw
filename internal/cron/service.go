@@ -95,12 +95,12 @@ type delegatedMessageInjector interface {
 
 // Service manages cron job scheduling and execution.
 type Service struct {
-	store   *Store
-	gateway GatewayRunner
-	history *HistoryManager
-	execJob func(ctx context.Context, job *CronJob)
-	runner  delegatedrun.Runner
-	registry delegatedrun.Registry
+	store           *Store
+	gateway         GatewayRunner
+	history         *HistoryManager
+	execJob         func(ctx context.Context, job *CronJob)
+	runner          delegatedrun.Runner
+	registry        delegatedrun.Registry
 	delegatedLimits delegatedrun.SpawnLimits
 
 	mu      sync.Mutex
@@ -116,8 +116,8 @@ type Service struct {
 
 	// Job execution
 	jobTimeoutMinutes int // Timeout for job execution (0 = no timeout)
-	delegatedEnabled bool
-	delegatedSQLite  *delegatedrun.SQLiteRegistry
+	delegatedEnabled  bool
+	delegatedSQLite   *delegatedrun.SQLiteRegistry
 
 	// Heartbeat
 	heartbeatConfig *HeartbeatState
@@ -323,29 +323,29 @@ func (s *Service) CreateSyntheticDelegatedCompletion(spec delegatedrun.RunSpec, 
 	runID := uuid.NewString()
 	startedAt := time.Now()
 	record := delegatedrun.RunRecord{
-		RunID:                       runID,
-		ParentRunID:                 spec.ParentRunID,
-		RequesterType:               spec.RequesterType,
-		RequesterID:                 spec.RequesterID,
-		RequesterSessionKey:         spec.RequesterSessionKey,
-		RequesterBindingState:       spec.RequesterBindingState,
-		RequesterBindingReason:      spec.RequesterBindingReason,
-		RequesterBindingUpdatedAt:   spec.RequesterBindingUpdatedAt,
+		RunID:                        runID,
+		ParentRunID:                  spec.ParentRunID,
+		RequesterType:                spec.RequesterType,
+		RequesterID:                  spec.RequesterID,
+		RequesterSessionKey:          spec.RequesterSessionKey,
+		RequesterBindingState:        spec.RequesterBindingState,
+		RequesterBindingReason:       spec.RequesterBindingReason,
+		RequesterBindingUpdatedAt:    spec.RequesterBindingUpdatedAt,
 		RequesterBindingLastActiveAt: spec.RequesterBindingLastActiveAt,
-		SessionKey:                  spec.SessionKey,
-		Purpose:                     spec.Purpose,
-		ResultMode:                  spec.ResultMode,
-		ExpectsCompletionMessage:    spec.ExpectsCompletionMessage,
-		DispatchOrder:               spec.DispatchOrder,
-		FallbackMode:                spec.FallbackMode,
-		InjectMode:                  spec.InjectMode,
-		CompletionDispatchSeq:       spec.CompletionDispatchSeq,
-		CleanupState:                spec.CleanupState,
-		DeferredReason:              spec.DeferredReason,
-		ContinuationState:           spec.ContinuationState,
-		ContinuationReason:          spec.ContinuationReason,
-		State:                       delegatedrun.RunStateQueued,
-		StartedAt:                   startedAt,
+		SessionKey:                   spec.SessionKey,
+		Purpose:                      spec.Purpose,
+		ResultMode:                   spec.ResultMode,
+		ExpectsCompletionMessage:     spec.ExpectsCompletionMessage,
+		DispatchOrder:                spec.DispatchOrder,
+		FallbackMode:                 spec.FallbackMode,
+		InjectMode:                   spec.InjectMode,
+		CompletionDispatchSeq:        spec.CompletionDispatchSeq,
+		CleanupState:                 spec.CleanupState,
+		DeferredReason:               spec.DeferredReason,
+		ContinuationState:            spec.ContinuationState,
+		ContinuationReason:           spec.ContinuationReason,
+		State:                        delegatedrun.RunStateQueued,
+		StartedAt:                    startedAt,
 	}
 	if err := s.registry.Create(record); err != nil {
 		return "", err

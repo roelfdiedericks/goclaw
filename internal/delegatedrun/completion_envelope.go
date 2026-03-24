@@ -12,16 +12,16 @@ const DefaultReplyInstruction = "Interpret this delegated completion event, then
 
 // CompletionEnvelope is the shared payload source for requester completion delivery.
 type CompletionEnvelope struct {
-	RunID              string
-	State              RunState
-	NormalizedStatus   string
-	StatusLabel        string
-	WaitError          string
-	ToolError          string
-	ResultText         string
-	ResultFallback     string
-	UsageLine          string
-	ReplyInstruction   string
+	RunID            string
+	State            RunState
+	NormalizedStatus string
+	StatusLabel      string
+	WaitError        string
+	ToolError        string
+	ResultText       string
+	ResultFallback   string
+	UsageLine        string
+	ReplyInstruction string
 }
 
 // BuildCompletionEnvelope normalizes delegated completion state into a reusable envelope.

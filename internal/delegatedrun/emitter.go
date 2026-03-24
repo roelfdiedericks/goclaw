@@ -54,4 +54,3 @@ func (c *CompositeEmitter) EmitCanceled(ctx context.Context, ev CanceledEvent) e
 	}
 	return nil
 }
-

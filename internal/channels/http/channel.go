@@ -587,13 +587,13 @@ func (c *HTTPChannel) convertEvent(event gateway.AgentEvent) *SSEEvent {
 			displayResult = displayResult[:1024] + "..."
 		}
 		return &SSEEvent{Event: "tool_end", Data: map[string]interface{}{
-			"runId":      e.RunID,
-			"toolName":   e.ToolName,
-			"toolId":     e.ToolID,
-			"result":     result,
+			"runId":         e.RunID,
+			"toolName":      e.ToolName,
+			"toolId":        e.ToolID,
+			"result":        result,
 			"displayResult": displayResult,
-			"error":      e.Error,
-			"durationMs": e.DurationMs,
+			"error":         e.Error,
+			"durationMs":    e.DurationMs,
 		}}
 
 	case gateway.EventAgentEnd:

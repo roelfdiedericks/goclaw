@@ -2,7 +2,8 @@ package websearch
 
 import (
 	"context"
-	"math/rand"
+	cryptorand "crypto/rand"
+	"math/big"
 	"time"
 )
 
@@ -27,8 +28,20 @@ func retryBackoff(baseMs, maxMs, attempt int) time.Duration {
 	if jitterRange <= 0 {
 		return time.Duration(backoff) * time.Millisecond
 	}
-	jitter := rand.Intn(2*jitterRange+1) - jitterRange
+	jitter := secureIntn(2*jitterRange+1) - jitterRange
 	return time.Duration(backoff+jitter) * time.Millisecond
+}
+
+func secureIntn(max int) int {
+	if max <= 1 {
+		return 0
+	}
+	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(max)))
+	if err != nil {
+		// Very unlikely; fallback to deterministic behavior.
+		return 0
+	}
+	return int(n.Int64())
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) error {

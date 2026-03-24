@@ -46,29 +46,29 @@ func (r *DefaultRunner) Start(ctx context.Context, spec RunSpec) (string, error)
 	startedAt := time.Now()
 
 	record := RunRecord{
-		RunID:         runID,
-		ParentRunID:   spec.ParentRunID,
-		RequesterType: spec.RequesterType,
-		RequesterID:   spec.RequesterID,
-		RequesterSessionKey: spec.RequesterSessionKey,
-		RequesterBindingState: spec.RequesterBindingState,
-		RequesterBindingReason: spec.RequesterBindingReason,
-		RequesterBindingUpdatedAt: spec.RequesterBindingUpdatedAt,
+		RunID:                        runID,
+		ParentRunID:                  spec.ParentRunID,
+		RequesterType:                spec.RequesterType,
+		RequesterID:                  spec.RequesterID,
+		RequesterSessionKey:          spec.RequesterSessionKey,
+		RequesterBindingState:        spec.RequesterBindingState,
+		RequesterBindingReason:       spec.RequesterBindingReason,
+		RequesterBindingUpdatedAt:    spec.RequesterBindingUpdatedAt,
 		RequesterBindingLastActiveAt: spec.RequesterBindingLastActiveAt,
-		SessionKey:    spec.SessionKey,
-		Purpose:       spec.Purpose,
-		ResultMode:    spec.ResultMode,
-		ExpectsCompletionMessage: spec.ExpectsCompletionMessage,
-		DispatchOrder: spec.DispatchOrder,
-		FallbackMode:  spec.FallbackMode,
-		InjectMode:    spec.InjectMode,
-		CompletionDispatchSeq: spec.CompletionDispatchSeq,
-		CleanupState:  spec.CleanupState,
-		DeferredReason: spec.DeferredReason,
-		ContinuationState: spec.ContinuationState,
-		ContinuationReason: spec.ContinuationReason,
-		State:         RunStateQueued,
-		StartedAt:     startedAt,
+		SessionKey:                   spec.SessionKey,
+		Purpose:                      spec.Purpose,
+		ResultMode:                   spec.ResultMode,
+		ExpectsCompletionMessage:     spec.ExpectsCompletionMessage,
+		DispatchOrder:                spec.DispatchOrder,
+		FallbackMode:                 spec.FallbackMode,
+		InjectMode:                   spec.InjectMode,
+		CompletionDispatchSeq:        spec.CompletionDispatchSeq,
+		CleanupState:                 spec.CleanupState,
+		DeferredReason:               spec.DeferredReason,
+		ContinuationState:            spec.ContinuationState,
+		ContinuationReason:           spec.ContinuationReason,
+		State:                        RunStateQueued,
+		StartedAt:                    startedAt,
 	}
 	if r.reg != nil {
 		_ = r.reg.Create(record)
@@ -87,8 +87,10 @@ func (r *DefaultRunner) Start(ctx context.Context, spec RunSpec) (string, error)
 		})
 	}
 
-	runCtx := ctx
-	cancel := func() {}
+	var (
+		runCtx context.Context
+		cancel context.CancelFunc
+	)
 	if spec.TimeoutSeconds > 0 {
 		runCtx, cancel = context.WithTimeout(ctx, time.Duration(spec.TimeoutSeconds)*time.Second)
 	} else {
@@ -312,4 +314,3 @@ func (r *DefaultRunner) Wait(ctx context.Context, runID string) (RunResult, RunS
 		return wr.result, wr.state, wr.err
 	}
 }
-

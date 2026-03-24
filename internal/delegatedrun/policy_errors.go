@@ -6,13 +6,13 @@ import (
 )
 
 const (
-	PolicyReasonNotOwner        = "not_owner"
-	PolicyReasonUnsupportedAction = "unsupported_action"
-	PolicyReasonUnsupportedMode = "unsupported_mode"
-	PolicyReasonUnsupportedScope = "unsupported_scope"
-	PolicyReasonRunNotActive    = "run_not_active"
-	PolicyReasonUnsafeKillScope = "unsafe_kill_scope"
-	PolicyReasonRestrictedScope = "restricted_scope"
+	PolicyReasonNotOwner           = "not_owner"
+	PolicyReasonUnsupportedAction  = "unsupported_action"
+	PolicyReasonUnsupportedMode    = "unsupported_mode"
+	PolicyReasonUnsupportedScope   = "unsupported_scope"
+	PolicyReasonRunNotActive       = "run_not_active"
+	PolicyReasonUnsafeKillScope    = "unsafe_kill_scope"
+	PolicyReasonRestrictedScope    = "restricted_scope"
 	PolicyReasonLogDepthExceedsMax = "log_depth_exceeds_max"
 )
 
@@ -26,4 +26,3 @@ func PolicyDenied(reason, detail string) error {
 	}
 	return fmt.Errorf("policy_denied:%s:%s", reason, detail)
 }
-

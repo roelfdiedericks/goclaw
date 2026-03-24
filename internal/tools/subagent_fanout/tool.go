@@ -188,18 +188,18 @@ type fanoutStats struct {
 }
 
 type fanoutPayload struct {
-	OK                 bool                   `json:"ok"`
-	Status             string                 `json:"status"`
-	Message            string                 `json:"message"`
-	Stats              fanoutStats            `json:"stats"`
-	ParentRunID        string                 `json:"parentRunId,omitempty"`
-	Parallelism        int                    `json:"parallelism"`
-	NotifyOnComplete   bool                   `json:"notifyOnComplete"`
-	Items              []returnedChildOutcome `json:"items"`
-	Overflow           fanoutOverflow         `json:"overflow"`
-	ExtraSummaryStatus fanoutSummaryStatus    `json:"extraSummaryStatus"`
+	OK                 bool                    `json:"ok"`
+	Status             string                  `json:"status"`
+	Message            string                  `json:"message"`
+	Stats              fanoutStats             `json:"stats"`
+	ParentRunID        string                  `json:"parentRunId,omitempty"`
+	Parallelism        int                     `json:"parallelism"`
+	NotifyOnComplete   bool                    `json:"notifyOnComplete"`
+	Items              []returnedChildOutcome  `json:"items"`
+	Overflow           fanoutOverflow          `json:"overflow"`
+	ExtraSummaryStatus fanoutSummaryStatus     `json:"extraSummaryStatus"`
 	ExtraSummary       *fanoutSynthesisOutcome `json:"extraSummary,omitempty"`
-	CompletionCallback map[string]any         `json:"completionCallback"`
+	CompletionCallback map[string]any          `json:"completionCallback"`
 }
 
 func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
@@ -511,16 +511,16 @@ func (t *Tool) runSynthesis(
 	if err != nil {
 		L_warn("subagent_fanout: extra summary spawn failed", "parentRunID", parentRunID, "error", err)
 		return &fanoutSynthesisOutcome{
-			OK:    false,
-			Error: err.Error(),
-		}, fanoutSummaryStatus{
-			Requested:     true,
-			Included:      false,
-			Reason:        "summary_failed_to_start",
-			Message:       "Extra summary could not be started.",
-			IncludedItems: included,
-			TotalItems:    len(outcomes),
-		}
+				OK:    false,
+				Error: err.Error(),
+			}, fanoutSummaryStatus{
+				Requested:     true,
+				Included:      false,
+				Reason:        "summary_failed_to_start",
+				Message:       "Extra summary could not be started.",
+				IncludedItems: included,
+				TotalItems:    len(outcomes),
+			}
 	}
 	L_debug("subagent_fanout: extra summary spawned", "runID", runID, "parentRunID", parentRunID)
 	result, state, waitErr := service.WaitDelegatedRun(ctx, runID)
@@ -826,9 +826,9 @@ func packFanoutPayload(sessionCtx *types.SessionContext, outcomes []childOutcome
 
 	includedCount := 0
 	baseCandidate := fanoutPayload{
-			OK:                 ok,
-			Status:             status,
-			Message:            message,
+		OK:                 ok,
+		Status:             status,
+		Message:            message,
 		Stats:              stats,
 		ParentRunID:        parentRunID,
 		Parallelism:        parallelism,
@@ -974,4 +974,3 @@ func fanoutOutcome(stats fanoutStats) (bool, string, string, delegatedrun.RunSta
 	}
 	return false, "partial_failure", fmt.Sprintf("Fanout finished with failures: completed=%d failed=%d timedOut=%d canceled=%d spawnFailed=%d.", stats.Completed, stats.Failed, stats.TimedOut, stats.Canceled, stats.SpawnFailed), delegatedrun.RunStateFailed
 }
-

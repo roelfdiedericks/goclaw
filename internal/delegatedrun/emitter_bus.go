@@ -36,4 +36,3 @@ func (e *BusBridgeEmitter) EmitCanceled(_ context.Context, ev CanceledEvent) err
 	bus.PublishEvent("delegated.run.canceled", ev)
 	return nil
 }
-

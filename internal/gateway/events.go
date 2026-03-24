@@ -36,13 +36,13 @@ func (EventToolStart) agentEvent() {}
 
 // EventToolEnd is emitted when a tool execution completes
 type EventToolEnd struct {
-	RunID      string `json:"runId"`
-	ToolName   string `json:"toolName"`
-	ToolID     string `json:"toolId"`
-	Result     string `json:"result"`
+	RunID         string `json:"runId"`
+	ToolName      string `json:"toolName"`
+	ToolID        string `json:"toolId"`
+	Result        string `json:"result"`
 	DisplayResult string `json:"displayResult,omitempty"` // Human-readable result for UI/debug (unwrapped)
-	Error      string `json:"error,omitempty"`
-	DurationMs int64  `json:"durationMs,omitempty"`
+	Error         string `json:"error,omitempty"`
+	DurationMs    int64  `json:"durationMs,omitempty"`
 }
 
 func (EventToolEnd) agentEvent() {}

@@ -62,4 +62,3 @@ type CanceledEvent struct {
 	FinishedAt    time.Time `json:"finishedAt"`
 	SchemaVersion int       `json:"schemaVersion"`
 }
-

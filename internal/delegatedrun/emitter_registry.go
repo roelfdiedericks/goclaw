@@ -29,4 +29,3 @@ func (e *RegistryEmitter) EmitFailed(_ context.Context, _ FailedEvent) error {
 func (e *RegistryEmitter) EmitCanceled(_ context.Context, _ CanceledEvent) error {
 	return nil
 }
-

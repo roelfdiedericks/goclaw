@@ -2460,22 +2460,22 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 	// Build prompt params with bulletin injection based on config
 	promptParams := gcontext.PromptParams{
-		WorkspaceDir:         g.config.Gateway.WorkingDir,
-		VisibleHomeDir:       sandbox.GetManager().ResolvePolicy().VisibleHomeDir,
-		SandboxMode:          sandbox.GetManager().GetMode(),
-		Tools:                g.tools,
-		Model:                g.llm.Model(),
-		Channel:              req.Source,
-		User:                 req.User,
-		TotalTokens:          sess.GetTotalTokens(),
-		MaxTokens:            sess.GetMaxTokens(),
-		WorkspaceFiles:       workspaceFiles,
-		SkillsPrompt:         skillsPrompt,
-		IncludeMemory:        includeMemory,
-		RoleSystemPrompt:     roleSystemPrompt,
-		RoleSystemPromptFile: roleSystemPromptFile,
-		TimeInSystemPrompt:   g.config.PromptCache.TimeInSystemPrompt,
-		AgentExtraction:      agentExtraction,
+		WorkspaceDir:          g.config.Gateway.WorkingDir,
+		VisibleHomeDir:        sandbox.GetManager().ResolvePolicy().VisibleHomeDir,
+		SandboxMode:           sandbox.GetManager().GetMode(),
+		Tools:                 g.tools,
+		Model:                 g.llm.Model(),
+		Channel:               req.Source,
+		User:                  req.User,
+		TotalTokens:           sess.GetTotalTokens(),
+		MaxTokens:             sess.GetMaxTokens(),
+		WorkspaceFiles:        workspaceFiles,
+		SkillsPrompt:          skillsPrompt,
+		IncludeMemory:         includeMemory,
+		RoleSystemPrompt:      roleSystemPrompt,
+		RoleSystemPromptFile:  roleSystemPromptFile,
+		TimeInSystemPrompt:    g.config.PromptCache.TimeInSystemPrompt,
+		AgentExtraction:       agentExtraction,
 		ParallelToolBatching:  true,
 		ParallelExecution:     g.config.Gateway.ToolExecution.ParallelEnabled,
 		ParallelMaxConcurrent: g.parallelToolMaxConcurrent(),
@@ -2983,12 +2983,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					"responseGroupID", responseGroupID)
 
 				type parallelToolResult struct {
-					resultText string
+					resultText  string
 					displayText string
-					content    []types.ContentBlock
-					errStr     string
-					durationMs int64
-					handled    bool
+					content     []types.ContentBlock
+					errStr      string
+					durationMs  int64
+					handled     bool
 				}
 				results := make([]parallelToolResult, len(response.ToolCalls))
 				execIndexes := make([]int, 0, len(response.ToolCalls))
@@ -2998,36 +2998,36 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					if !req.User.CanUseTool(tc.Name) {
 						result := fmt.Sprintf("Permission denied: %s cannot use tool %s", req.User.Name, tc.Name)
 						sendEvent(EventToolEnd{
-							RunID:    runID,
-							ToolName: tc.Name,
-							ToolID:   tc.ID,
-							Result:   result,
+							RunID:         runID,
+							ToolName:      tc.Name,
+							ToolID:        tc.ID,
+							Result:        result,
 							DisplayResult: result,
-							Error:    "permission_denied",
+							Error:         "permission_denied",
 						})
 						results[i] = parallelToolResult{
-							resultText: result,
+							resultText:  result,
 							displayText: result,
-							errStr:     "permission_denied",
-							handled:    true,
+							errStr:      "permission_denied",
+							handled:     true,
 						}
 						continue
 					}
 					if g.isToolDeniedForPurpose(tc.Name, purpose) {
 						result := fmt.Sprintf("Permission denied: tool %s is not available for purpose %q", tc.Name, purpose)
 						sendEvent(EventToolEnd{
-							RunID:    runID,
-							ToolName: tc.Name,
-							ToolID:   tc.ID,
-							Result:   result,
+							RunID:         runID,
+							ToolName:      tc.Name,
+							ToolID:        tc.ID,
+							Result:        result,
 							DisplayResult: result,
-							Error:    "purpose_denied",
+							Error:         "purpose_denied",
 						})
 						results[i] = parallelToolResult{
-							resultText: result,
+							resultText:  result,
 							displayText: result,
-							errStr:     "purpose_denied",
-							handled:    true,
+							errStr:      "purpose_denied",
+							handled:     true,
 						}
 						continue
 					}
@@ -3052,18 +3052,18 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 							defer func() { <-sem }()
 						case <-agentCtx.Done():
 							sendEvent(EventToolEnd{
-								RunID:    runID,
-								ToolName: tc.Name,
-								ToolID:   tc.ID,
-								Result:   "Tool execution cancelled",
+								RunID:         runID,
+								ToolName:      tc.Name,
+								ToolID:        tc.ID,
+								Result:        "Tool execution cancelled",
 								DisplayResult: "Tool execution cancelled",
-								Error:    "cancelled",
+								Error:         "cancelled",
 							})
 							results[i] = parallelToolResult{
-								resultText: "Tool execution cancelled",
+								resultText:  "Tool execution cancelled",
 								displayText: "Tool execution cancelled",
-								errStr:     "cancelled",
-								handled:    true,
+								errStr:      "cancelled",
+								handled:     true,
 							}
 							return
 						}
@@ -3117,21 +3117,21 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 						}
 
 						sendEvent(EventToolEnd{
-							RunID:      runID,
-							ToolName:   tc.Name,
-							ToolID:     tc.ID,
-							Result:     resultText,
+							RunID:         runID,
+							ToolName:      tc.Name,
+							ToolID:        tc.ID,
+							Result:        resultText,
 							DisplayResult: displayText,
-							Error:      errStr,
-							DurationMs: toolDuration.Milliseconds(),
+							Error:         errStr,
+							DurationMs:    toolDuration.Milliseconds(),
 						})
 						results[i] = parallelToolResult{
-							resultText: resultText,
+							resultText:  resultText,
 							displayText: displayText,
-							content:    toolResult.Content,
-							errStr:     errStr,
-							durationMs: toolDuration.Milliseconds(),
-							handled:    true,
+							content:     toolResult.Content,
+							errStr:      errStr,
+							durationMs:  toolDuration.Milliseconds(),
+							handled:     true,
 						}
 					}(idx, tc)
 				}
@@ -3142,7 +3142,6 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					r := results[i]
 					if !r.handled {
 						r.resultText = "Tool execution failed: no result"
-						r.displayText = r.resultText
 						r.errStr = "no_result"
 					}
 
@@ -3205,12 +3204,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				if !req.User.CanUseTool(tc.Name) {
 					result := fmt.Sprintf("Permission denied: %s cannot use tool %s", req.User.Name, tc.Name)
 					sendEvent(EventToolEnd{
-						RunID:    runID,
-						ToolName: tc.Name,
-						ToolID:   tc.ID,
-						Result:   result,
+						RunID:         runID,
+						ToolName:      tc.Name,
+						ToolID:        tc.ID,
+						Result:        result,
 						DisplayResult: result,
-						Error:    "permission_denied",
+						Error:         "permission_denied",
 					})
 					toolUseID := sess.AddToolUse(tc.ID, tc.Name, tc.Input, response.Thinking, responseGroupID)
 					toolResultID := sess.AddToolResult(tc.ID, result, nil, responseGroupID)
@@ -3246,12 +3245,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					L_warn("gateway: tool denied for purpose", "tool", tc.Name, "purpose", purpose)
 					result := fmt.Sprintf("Permission denied: tool %s is not available for purpose %q", tc.Name, purpose)
 					sendEvent(EventToolEnd{
-						RunID:    runID,
-						ToolName: tc.Name,
-						ToolID:   tc.ID,
-						Result:   result,
+						RunID:         runID,
+						ToolName:      tc.Name,
+						ToolID:        tc.ID,
+						Result:        result,
 						DisplayResult: result,
-						Error:    "purpose_denied",
+						Error:         "purpose_denied",
 					})
 					toolUseID := sess.AddToolUse(tc.ID, tc.Name, tc.Input, response.Thinking, responseGroupID)
 					toolResultID := sess.AddToolResult(tc.ID, result, nil, responseGroupID)
@@ -3347,13 +3346,13 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				}
 
 				sendEvent(EventToolEnd{
-					RunID:      runID,
-					ToolName:   tc.Name,
-					ToolID:     tc.ID,
-					Result:     resultText,
+					RunID:         runID,
+					ToolName:      tc.Name,
+					ToolID:        tc.ID,
+					Result:        resultText,
 					DisplayResult: displayText,
-					Error:      errStr,
-					DurationMs: toolDuration.Milliseconds(),
+					Error:         errStr,
+					DurationMs:    toolDuration.Milliseconds(),
 				})
 
 				// Add to session
@@ -3956,22 +3955,22 @@ func (g *Gateway) BuildSystemPromptForVoice(ctx context.Context, params VoicePro
 
 	// Build base prompt params
 	promptParams := gcontext.PromptParams{
-		WorkspaceDir:         g.config.Gateway.WorkingDir,
-		VisibleHomeDir:       sandbox.GetManager().ResolvePolicy().VisibleHomeDir,
-		SandboxMode:          sandbox.GetManager().GetMode(),
-		Tools:                g.tools,
-		Model:                g.llm.Model(),
-		Channel:              params.Source,
-		User:                 params.User,
-		TotalTokens:          0, // voice sessions don't track tokens the same way
-		MaxTokens:            0,
-		WorkspaceFiles:       workspaceFiles,
-		SkillsPrompt:         skillsPrompt,
-		IncludeMemory:        includeMemory,
-		RoleSystemPrompt:     roleSystemPrompt,
-		RoleSystemPromptFile: roleSystemPromptFile,
-		TimeInSystemPrompt:   g.config.PromptCache.TimeInSystemPrompt,
-		AgentExtraction:      agentExtraction,
+		WorkspaceDir:          g.config.Gateway.WorkingDir,
+		VisibleHomeDir:        sandbox.GetManager().ResolvePolicy().VisibleHomeDir,
+		SandboxMode:           sandbox.GetManager().GetMode(),
+		Tools:                 g.tools,
+		Model:                 g.llm.Model(),
+		Channel:               params.Source,
+		User:                  params.User,
+		TotalTokens:           0, // voice sessions don't track tokens the same way
+		MaxTokens:             0,
+		WorkspaceFiles:        workspaceFiles,
+		SkillsPrompt:          skillsPrompt,
+		IncludeMemory:         includeMemory,
+		RoleSystemPrompt:      roleSystemPrompt,
+		RoleSystemPromptFile:  roleSystemPromptFile,
+		TimeInSystemPrompt:    g.config.PromptCache.TimeInSystemPrompt,
+		AgentExtraction:       agentExtraction,
 		ParallelToolBatching:  true,
 		ParallelExecution:     g.config.Gateway.ToolExecution.ParallelEnabled,
 		ParallelMaxConcurrent: g.parallelToolMaxConcurrent(),

@@ -14,20 +14,20 @@ const (
 // It is derived from run record fields so completion continuation can resolve the
 // same target session/channel without relying on transient tool-local state.
 type RequesterBinding struct {
-	Channel    string
-	ChatID     string
-	SessionKey string
-	State      string
-	Reason     string
-	UpdatedAt  *time.Time
+	Channel      string
+	ChatID       string
+	SessionKey   string
+	State        string
+	Reason       string
+	UpdatedAt    *time.Time
 	LastActiveAt *time.Time
 }
 
 type RequesterBindingUpdate struct {
-	State           string
-	Reason          string
-	UpdatedAt       *time.Time
-	LastActiveAt    *time.Time
+	State        string
+	Reason       string
+	UpdatedAt    *time.Time
+	LastActiveAt *time.Time
 }
 
 // BuildRequesterID composes the canonical requester ID format.
@@ -57,12 +57,12 @@ func ParseRequesterID(requesterID string) (channel, chatID string) {
 func ResolveRequesterBinding(rec RunRecord) RequesterBinding {
 	channel, chatID := ParseRequesterID(rec.RequesterID)
 	return RequesterBinding{
-		Channel:    channel,
-		ChatID:     chatID,
-		SessionKey: strings.TrimSpace(rec.RequesterSessionKey),
-		State:      strings.TrimSpace(rec.RequesterBindingState),
-		Reason:     strings.TrimSpace(rec.RequesterBindingReason),
-		UpdatedAt:  rec.RequesterBindingUpdatedAt,
+		Channel:      channel,
+		ChatID:       chatID,
+		SessionKey:   strings.TrimSpace(rec.RequesterSessionKey),
+		State:        strings.TrimSpace(rec.RequesterBindingState),
+		Reason:       strings.TrimSpace(rec.RequesterBindingReason),
+		UpdatedAt:    rec.RequesterBindingUpdatedAt,
 		LastActiveAt: rec.RequesterBindingLastActiveAt,
 	}
 }
@@ -108,4 +108,3 @@ func BindingTelemetry(rec RunRecord, now time.Time) (ageSeconds int64, idleSecon
 	canDirect, reason = CanDirectDispatchForBinding(ResolveRequesterBinding(rec), now)
 	return ageSeconds, idleSeconds, canDirect, reason
 }
-

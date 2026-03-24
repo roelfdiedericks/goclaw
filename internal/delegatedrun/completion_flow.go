@@ -198,7 +198,10 @@ func lockCompletionRun(runID string) func() {
 		return func() {}
 	}
 	value, _ := completionRunGuards.LoadOrStore(key, &sync.Mutex{})
-	mu := value.(*sync.Mutex)
+	mu, ok := value.(*sync.Mutex)
+	if !ok || mu == nil {
+		return func() {}
+	}
 	mu.Lock()
 	return func() {
 		mu.Unlock()

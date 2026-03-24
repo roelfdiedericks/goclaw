@@ -79,15 +79,15 @@ func (t *Tool) Schema() map[string]any {
 }
 
 type spawnInput struct {
-	Prompt         string `json:"prompt"`
-	Purpose        string `json:"purpose"`
-	LLMPurpose     string `json:"llmPurpose"`
-	TimeoutSeconds int    `json:"timeoutSeconds"`
-	FreshContext   *bool  `json:"freshContext"`
-	Ephemeral      *bool  `json:"ephemeral"`
-	EnableThinking bool   `json:"enableThinking"`
-	ParentRunID    string `json:"parentRunId"`
-	NotifyOnComplete *bool `json:"notifyOnComplete"`
+	Prompt           string `json:"prompt"`
+	Purpose          string `json:"purpose"`
+	LLMPurpose       string `json:"llmPurpose"`
+	TimeoutSeconds   int    `json:"timeoutSeconds"`
+	FreshContext     *bool  `json:"freshContext"`
+	Ephemeral        *bool  `json:"ephemeral"`
+	EnableThinking   bool   `json:"enableThinking"`
+	ParentRunID      string `json:"parentRunId"`
+	NotifyOnComplete *bool  `json:"notifyOnComplete"`
 }
 
 func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
@@ -126,21 +126,21 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	}
 
 	spec := delegatedrun.RunSpec{
-		ParentRunID:    strings.TrimSpace(in.ParentRunID),
-		RequesterType:  requesterType,
-		RequesterID:    requesterID,
+		ParentRunID:         strings.TrimSpace(in.ParentRunID),
+		RequesterType:       requesterType,
+		RequesterID:         requesterID,
 		RequesterSessionKey: strings.TrimSpace(sessionCtx.SessionKey),
-		SessionKey:     sessionKey,
-		Prompt:         strings.TrimSpace(in.Prompt),
-		Purpose:        strings.TrimSpace(in.Purpose),
-		LLMPurpose:     strings.TrimSpace(in.LLMPurpose),
-		FreshContext:   freshContext,
-		Ephemeral:      ephemeral,
-		TimeoutSeconds: in.TimeoutSeconds,
-		UserID:         sessionCtx.User.ID,
-		EnableThinking: in.EnableThinking,
-		SkipMirror:     true,
-		JobName:        "subagent",
+		SessionKey:          sessionKey,
+		Prompt:              strings.TrimSpace(in.Prompt),
+		Purpose:             strings.TrimSpace(in.Purpose),
+		LLMPurpose:          strings.TrimSpace(in.LLMPurpose),
+		FreshContext:        freshContext,
+		Ephemeral:           ephemeral,
+		TimeoutSeconds:      in.TimeoutSeconds,
+		UserID:              sessionCtx.User.ID,
+		EnableThinking:      in.EnableThinking,
+		SkipMirror:          true,
+		JobName:             "subagent",
 	}
 	if spec.LLMPurpose == "" {
 		spec.LLMPurpose = "subagent"
@@ -210,12 +210,12 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 func (t *Tool) waitAndNotify(runID string, service *cronpkg.Service, requesterUser *user.User, requesterSource, requesterSessionKey string) {
 	ctx := context.Background()
 	adapter := delegatedrun.CompletionDispatchAdapter{
-		GetRun:         service.GetDelegatedRun,
-		RecordPhase:    service.RecordDelegatedDispatchPhase,
-		MarkDispatched: service.MarkDelegatedCompletionDispatched,
-		ClaimDispatch:  service.ClaimDelegatedCompletionDispatch,
-		ReleaseClaim:   service.ReleaseDelegatedCompletionDispatch,
-		AdvanceSeq:     service.AdvanceDelegatedCompletionDispatchSeq,
+		GetRun:          service.GetDelegatedRun,
+		RecordPhase:     service.RecordDelegatedDispatchPhase,
+		MarkDispatched:  service.MarkDelegatedCompletionDispatched,
+		ClaimDispatch:   service.ClaimDelegatedCompletionDispatch,
+		ReleaseClaim:    service.ReleaseDelegatedCompletionDispatch,
+		AdvanceSeq:      service.AdvanceDelegatedCompletionDispatchSeq,
 		UpdateLifecycle: service.UpdateDelegatedCompletionLifecycle,
 		CanDispatchPath: func(rec delegatedrun.RunRecord, path delegatedrun.DispatchPath) (bool, string) {
 			if path != delegatedrun.DispatchPathDirect {
@@ -304,5 +304,3 @@ func (t *Tool) waitAndNotify(runID string, service *cronpkg.Service, requesterUs
 	}
 	L_info("subagent_spawn: return_to_requester delivered", "runID", runID, "state", envelope.State)
 }
-
-

@@ -461,12 +461,12 @@ func (s *Server) supervisionEventToSSE(event interface{}) *SSEEvent {
 			displayResult = displayResult[:2048] + "..."
 		}
 		return &SSEEvent{Event: "tool_end", Data: map[string]interface{}{
-			"runId":        e.RunID,
-			"toolName":     e.ToolName,
-			"toolId":       e.ToolID,
-			"result":       result,
+			"runId":         e.RunID,
+			"toolName":      e.ToolName,
+			"toolId":        e.ToolID,
+			"result":        result,
 			"displayResult": displayResult,
-			"isError":      e.Error != "",
+			"isError":       e.Error != "",
 		}}
 
 	case gateway.EventAgentEnd:

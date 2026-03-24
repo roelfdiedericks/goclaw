@@ -124,7 +124,7 @@ func isRetryableProviderError(err error) bool {
 
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		return netErr.Timeout() || netErr.Temporary()
+		return netErr.Timeout()
 	}
 
 	return errors.Is(err, context.DeadlineExceeded)

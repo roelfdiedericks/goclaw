@@ -36,4 +36,3 @@ func (s CompletionLifecycleState) NextDispatchKey(runID string) string {
 func (s CompletionLifecycleState) IsDuplicateDispatch(candidate string) bool {
 	return strings.TrimSpace(candidate) != "" && strings.TrimSpace(s.DispatchKey) == strings.TrimSpace(candidate)
 }
-

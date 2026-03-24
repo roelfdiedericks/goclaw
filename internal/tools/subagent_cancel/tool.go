@@ -118,4 +118,3 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	}, "", "  ")
 	return types.TextResult(string(out)), nil
 }
-
