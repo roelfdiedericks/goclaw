@@ -2574,7 +2574,10 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		defer supervision.ClearCancelFunc()
 	}
 
-	var finalText string
+	var (
+		finalText  string
+		finalPhase string
+	)
 	const maxOverflowRetries = 2 // Max times to retry after compaction
 
 	// Resolve purpose once before the loop
@@ -3421,6 +3424,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 
 		// No tool use - we're done
 		finalText = response.Text
+		finalPhase = response.Phase
 		if finalText == "" && successfulStreamText != "" {
 			L_info("agent: using streamed delta fallback for final text",
 				"runID", runID,
@@ -3465,7 +3469,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		L_debug("gateway: response suppressed (matched silent token)", "session", sessionKey, "responseLen", len(finalText))
 		finalText = ""
 	} else if finalText != "" {
-		assistantMsgID := sess.AddAssistantMessage(finalText)
+		assistantMsgID := sess.AddAssistantMessageWithPhase(finalText, finalPhase)
 		// Persist assistant message (skip for ephemeral runs)
 		if !ephemeralRun {
 			g.persistMessage(ctx, PersistMessageParams{
@@ -3474,6 +3478,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 				UserID:     userID,
 				Role:       "assistant",
 				Content:    finalText,
+				Phase:      finalPhase,
 			})
 		}
 	}
@@ -4409,6 +4414,7 @@ type PersistMessageParams struct {
 	UserID           string
 	Role             string // "user", "assistant", "tool_use", "tool_result"
 	Content          string
+	Phase            string // Assistant phase metadata ("commentary", "final_answer")
 	Source           string
 	ToolCallID       string
 	ToolName         string
@@ -4439,6 +4445,7 @@ func (g *Gateway) persistMessage(ctx context.Context, p PersistMessageParams) {
 		Timestamp:        time.Now(),
 		Role:             p.Role,
 		Content:          p.Content,
+		Phase:            p.Phase,
 		Source:           p.Source,
 		UserID:           p.UserID,
 		ToolCallID:       p.ToolCallID,

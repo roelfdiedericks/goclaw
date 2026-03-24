@@ -24,6 +24,7 @@ type oaiRequest struct {
 type oaiInputItem struct {
 	Type      string           `json:"type"`                // "message", "function_call", "function_call_output"
 	Role      string           `json:"role,omitempty"`      // "user", "assistant", "developer"
+	Phase     string           `json:"phase,omitempty"`     // Assistant message phase ("commentary", "final_answer")
 	Content   []oaiContentPart `json:"content,omitempty"`   // for messages
 	ID        string           `json:"id,omitempty"`        // for function_call (the call's own ID)
 	CallID    string           `json:"call_id,omitempty"`   // for function_call and function_call_output
@@ -97,6 +98,7 @@ type oaiOutputItem struct {
 	Type      string           `json:"type"`                // "message", "function_call", "web_search_call", "code_interpreter_call"
 	ID        string           `json:"id,omitempty"`        // unique item ID
 	Role      string           `json:"role,omitempty"`      // for messages ("assistant")
+	Phase     string           `json:"phase,omitempty"`     // Assistant message phase ("commentary", "final_answer")
 	Content   []oaiContentPart `json:"content,omitempty"`   // for messages
 	CallID    string           `json:"call_id,omitempty"`   // for function_call
 	Name      string           `json:"name,omitempty"`      // for function_call (tool name)

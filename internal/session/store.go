@@ -101,6 +101,7 @@ type StoredMessage struct {
 	// Core fields (explicit, not JSON)
 	Role    string // "user", "assistant", "system", "tool_use", "tool_result"
 	Content string // Text content
+	Phase   string // Assistant phase metadata for Responses replay ("commentary", "final_answer")
 
 	// For tool interactions (nullable)
 	ToolCallID      string // tool_use ID or tool_result's referenced ID

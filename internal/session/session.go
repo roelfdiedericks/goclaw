@@ -205,6 +205,11 @@ func (s *Session) AddUserMessageWithContent(content, source string, blocks []Con
 
 // AddAssistantMessage adds an assistant message to the session and returns the message ID
 func (s *Session) AddAssistantMessage(content string) string {
+	return s.AddAssistantMessageWithPhase(content, "")
+}
+
+// AddAssistantMessageWithPhase adds an assistant message with optional phase metadata.
+func (s *Session) AddAssistantMessageWithPhase(content, phase string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -213,6 +218,7 @@ func (s *Session) AddAssistantMessage(content string) string {
 		ID:        id,
 		Role:      "assistant",
 		Content:   content,
+		Phase:     phase,
 		Timestamp: time.Now(),
 	})
 	s.UpdatedAt = time.Now()

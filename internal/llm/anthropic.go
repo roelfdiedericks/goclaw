@@ -77,6 +77,7 @@ type Response struct {
 	ToolCalls  []ToolCallInfo // All tool calls from this response
 	StopReason string         // "end_turn", "tool_use", etc.
 	Thinking   string         // reasoning/thinking content (Kimi, Deepseek, etc.)
+	Phase      string         // assistant phase metadata when provider supports it ("commentary", "final_answer")
 
 	InputTokens         int
 	OutputTokens        int

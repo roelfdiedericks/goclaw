@@ -264,6 +264,7 @@ func mergeMessagesByTimestamp(openclawMsgs []Message, goclawMsgs []StoredMessage
 			ID:              sm.ID,
 			Role:            sm.Role,
 			Content:         content, // Use resolved content (handles tool_result)
+			Phase:           sm.Phase,
 			Source:          sm.Source,
 			Timestamp:       sm.Timestamp,
 			ToolUseID:       sm.ToolCallID,
@@ -338,6 +339,7 @@ func (m *Manager) importOpenClawMessages(openclawMsgs []Message, goclawMsgs []St
 			Timestamp:  msg.Timestamp,
 			Role:       msg.Role,
 			Content:    msg.Content,
+			Phase:      msg.Phase,
 			Source:     "openclaw",
 			ToolCallID: msg.ToolUseID,
 			ToolName:   msg.ToolName,
@@ -431,6 +433,7 @@ func storedToMessages(stored []StoredMessage) []Message {
 			ID:              sm.ID,
 			Role:            sm.Role,
 			Content:         sm.Content,
+			Phase:           sm.Phase,
 			Source:          sm.Source,
 			Timestamp:       sm.Timestamp,
 			ToolUseID:       sm.ToolCallID,

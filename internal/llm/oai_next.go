@@ -526,8 +526,9 @@ func (p *OaiNextProvider) convertMessage(msg types.Message) []oaiInputItem {
 			return nil
 		}
 		return []oaiInputItem{{
-			Type: oaiItemTypeMessage,
-			Role: "assistant",
+			Type:  oaiItemTypeMessage,
+			Role:  "assistant",
+			Phase: msg.Phase,
 			Content: []oaiContentPart{{
 				Type: "output_text",
 				Text: msg.Content,
@@ -683,6 +684,7 @@ func (p *OaiNextProvider) processEvents(
 		responseID       string
 		usage            *oaiUsage
 		clientToolCalls  []*oaiOutputItem // All client tool calls
+		assistantPhase   string
 	)
 
 	for {
@@ -727,7 +729,7 @@ func (p *OaiNextProvider) processEvents(
 
 		case oaiEventOutputItemDone:
 			if event.Item != nil {
-				p.handleOutputItemDone(event.Item, opts, clientToolNames, &clientToolCalls)
+				p.handleOutputItemDone(event.Item, opts, clientToolNames, &clientToolCalls, &assistantPhase, &textBuilder)
 			}
 
 		case oaiEventResponseDone, oaiEventResponseCompleted:
@@ -736,6 +738,24 @@ func (p *OaiNextProvider) processEvents(
 					responseID = event.Response.ID
 				}
 				usage = event.Response.Usage
+				// Fallback: some servers only include assistant message content on response.done.
+				if assistantPhase == "" || textBuilder.Len() == 0 {
+					for _, item := range event.Response.Output {
+						if item.Type != oaiItemTypeMessage || item.Role != "assistant" {
+							continue
+						}
+						if assistantPhase == "" && item.Phase != "" {
+							assistantPhase = item.Phase
+						}
+						if textBuilder.Len() == 0 {
+							for _, part := range item.Content {
+								if part.Type == "output_text" && part.Text != "" {
+									textBuilder.WriteString(part.Text)
+								}
+							}
+						}
+					}
+				}
 			}
 			goto done
 
@@ -768,6 +788,11 @@ done:
 	resp := &Response{
 		Text:     textBuilder.String(),
 		Thinking: reasoningBuilder.String(),
+		Phase:    assistantPhase,
+	}
+	if resp.Phase == "" && resp.Text != "" {
+		// Default assistant text responses to final answer when provider doesn't emit phase.
+		resp.Phase = "final_answer"
 	}
 
 	if usage != nil {
@@ -818,8 +843,25 @@ func (p *OaiNextProvider) handleOutputItemDone(
 	opts *StreamOptions,
 	clientToolNames map[string]bool,
 	clientToolCalls *[]*oaiOutputItem,
+	assistantPhase *string,
+	textBuilder *strings.Builder,
 ) {
 	switch item.Type {
+	case oaiItemTypeMessage:
+		if item.Role == "assistant" {
+			if item.Phase != "" {
+				*assistantPhase = item.Phase
+			}
+			// Some providers emit only output_item.done content without output_text.delta events.
+			if textBuilder != nil && textBuilder.Len() == 0 {
+				for _, part := range item.Content {
+					if part.Type == "output_text" && part.Text != "" {
+						textBuilder.WriteString(part.Text)
+					}
+				}
+			}
+		}
+
 	case oaiItemTypeFunctionCall:
 		if clientToolNames[item.Name] {
 			*clientToolCalls = append(*clientToolCalls, item)

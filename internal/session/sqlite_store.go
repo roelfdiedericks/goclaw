@@ -20,7 +20,7 @@ type SQLiteStore struct {
 }
 
 // Schema version for migrations
-const currentSchemaVersion = 7
+const currentSchemaVersion = 8
 
 // NewSQLiteStore creates a new SQLite store
 func NewSQLiteStore(cfg StoreConfig) (*SQLiteStore, error) {
@@ -90,6 +90,7 @@ func (s *SQLiteStore) Migrate() error {
 		migrateV5,
 		migrateV6,
 		migrateV7,
+		migrateV8,
 	}
 
 	for i := version; i < len(migrations); i++ {
@@ -333,6 +334,20 @@ func migrateV7(db *sql.DB) error {
 	return err
 }
 
+// migrateV8 adds phase column for assistant phase replay metadata.
+func migrateV8(db *sql.DB) error {
+	schema := `
+	-- Add phase column to preserve assistant message phase for Responses API replay
+	ALTER TABLE messages ADD COLUMN phase TEXT DEFAULT NULL;
+
+	-- Update schema version
+	INSERT INTO schema_version (version, applied_at) VALUES (8, ?);
+	`
+
+	_, err := db.Exec(schema, time.Now().Unix())
+	return err
+}
+
 // Close closes the database connection
 func (s *SQLiteStore) Close() error {
 	L_debug("sqlite: closing store")
@@ -466,14 +481,14 @@ func (s *SQLiteStore) AppendMessage(ctx context.Context, sessionKey string, msg 
 		INSERT INTO messages (id, session_key, parent_id, timestamp,
 		                      role, content, tool_call_id, tool_name, tool_input,
 		                      tool_result, tool_is_error, source, channel_id, user_id,
-		                      input_tokens, output_tokens, raw_json, thinking,
+		                      input_tokens, output_tokens, raw_json, thinking, phase,
 		                      supervisor, intervention_type, response_group_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		msg.ID, sessionKey, nullString(msg.ParentID), msg.Timestamp.Unix(),
 		msg.Role, msg.Content, nullString(msg.ToolCallID), nullString(msg.ToolName), msg.ToolInput,
 		nullString(msg.ToolResult), msg.ToolIsError, nullString(msg.Source), nullString(msg.ChannelID), nullString(msg.UserID),
-		msg.InputTokens, msg.OutputTokens, msg.RawJSON, nullString(msg.Thinking),
+		msg.InputTokens, msg.OutputTokens, msg.RawJSON, nullString(msg.Thinking), nullString(msg.Phase),
 		nullString(msg.Supervisor), nullString(msg.InterventionType), nullString(msg.ResponseGroupID),
 	)
 
@@ -495,7 +510,7 @@ func (s *SQLiteStore) GetMessages(ctx context.Context, sessionKey string, opts M
 	query := `
 		SELECT id, session_key, parent_id, timestamp, role, content,
 		       tool_call_id, tool_name, tool_input, tool_result, tool_is_error,
-		       source, channel_id, user_id, input_tokens, output_tokens, raw_json, thinking,
+		       source, channel_id, user_id, input_tokens, output_tokens, raw_json, thinking, phase,
 		       supervisor, intervention_type, response_group_id
 		FROM messages
 		WHERE session_key = ?
@@ -540,14 +555,14 @@ func (s *SQLiteStore) GetMessages(ctx context.Context, sessionKey string, opts M
 	for rows.Next() {
 		var msg StoredMessage
 		var ts int64
-		var parentID, toolCallID, toolName, toolResult, source, channelID, userID, thinking sql.NullString
+		var parentID, toolCallID, toolName, toolResult, source, channelID, userID, thinking, phase sql.NullString
 		var supervisor, interventionType, responseGroupID sql.NullString
 		var toolInput, rawJSON []byte
 
 		if err := rows.Scan(
 			&msg.ID, &msg.SessionKey, &parentID, &ts, &msg.Role, &msg.Content,
 			&toolCallID, &toolName, &toolInput, &toolResult, &msg.ToolIsError,
-			&source, &channelID, &userID, &msg.InputTokens, &msg.OutputTokens, &rawJSON, &thinking,
+			&source, &channelID, &userID, &msg.InputTokens, &msg.OutputTokens, &rawJSON, &thinking, &phase,
 			&supervisor, &interventionType, &responseGroupID,
 		); err != nil {
 			return nil, err
@@ -563,6 +578,7 @@ func (s *SQLiteStore) GetMessages(ctx context.Context, sessionKey string, opts M
 		msg.ChannelID = channelID.String
 		msg.UserID = userID.String
 		msg.Thinking = thinking.String
+		msg.Phase = phase.String
 		msg.Supervisor = supervisor.String
 		msg.InterventionType = interventionType.String
 		msg.ResponseGroupID = responseGroupID.String
@@ -898,7 +914,7 @@ func (s *SQLiteStore) GetMessagesInRange(ctx context.Context, sessionKey string,
 			SELECT id, session_key, parent_id, timestamp,
 			       role, content, tool_call_id, tool_name, tool_input,
 			       tool_result, tool_is_error, source, channel_id, user_id,
-			       input_tokens, output_tokens, thinking, response_group_id
+			       input_tokens, output_tokens, thinking, phase, response_group_id
 			FROM messages
 			WHERE session_key = ? AND id < ?
 			ORDER BY timestamp ASC
@@ -910,7 +926,7 @@ func (s *SQLiteStore) GetMessagesInRange(ctx context.Context, sessionKey string,
 			SELECT id, session_key, parent_id, timestamp,
 			       role, content, tool_call_id, tool_name, tool_input,
 			       tool_result, tool_is_error, source, channel_id, user_id,
-			       input_tokens, output_tokens, thinking, response_group_id
+			       input_tokens, output_tokens, thinking, phase, response_group_id
 			FROM messages
 			WHERE session_key = ? AND id > ? AND id < ?
 			ORDER BY timestamp ASC
@@ -929,13 +945,13 @@ func (s *SQLiteStore) GetMessagesInRange(ctx context.Context, sessionKey string,
 		var msg StoredMessage
 		var ts int64
 		var parentID, toolCallID, toolName, toolInput, toolResult sql.NullString
-		var source, channelID, userID, thinking, responseGroupID sql.NullString
+		var source, channelID, userID, thinking, phase, responseGroupID sql.NullString
 
 		if err := rows.Scan(
 			&msg.ID, &msg.SessionKey, &parentID, &ts,
 			&msg.Role, &msg.Content, &toolCallID, &toolName, &toolInput,
 			&toolResult, &msg.ToolIsError, &source, &channelID, &userID,
-			&msg.InputTokens, &msg.OutputTokens, &thinking, &responseGroupID,
+			&msg.InputTokens, &msg.OutputTokens, &thinking, &phase, &responseGroupID,
 		); err != nil {
 			return nil, err
 		}
@@ -952,6 +968,7 @@ func (s *SQLiteStore) GetMessagesInRange(ctx context.Context, sessionKey string,
 		msg.ChannelID = channelID.String
 		msg.UserID = userID.String
 		msg.Thinking = thinking.String
+		msg.Phase = phase.String
 		msg.ResponseGroupID = responseGroupID.String
 
 		messages = append(messages, msg)

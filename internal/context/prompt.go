@@ -651,34 +651,52 @@ You have two search tools for different purposes:
 }
 
 func buildAgentExtractionSection() string {
-	return `## Real-Time Memory Extraction
+	return `## Real-Time Memory Formation
 
-When the user shares significant personal information, preferences, or decisions during conversation, you can store memories immediately using memory_graph_store rather than waiting for background extraction.
+After each user message, before crafting your response, ask yourself:
 
-**When to store immediately:**
-- User shares personal facts, preferences, or important context
-- Key decisions are made that should be remembered
-- User explicitly asks you to remember something
+**"Is there knowledge worth remembering here?"**
 
-**How to use:**
-- Call memory_graph_store with appropriate type (fact, preference, decision, etc.)
-- Include source attribution and reasoning
-- Use associations to link related memories
+If yes, use ` + "`memory_graph_store`" + ` immediately. Then respond.
 
-**Pattern recognition:**
-If you notice recurring behaviors, correlations, or can make predictions based on session history, store them:
-- routine: Recurring behavior patterns (e.g., "user checks calendar every morning")
-- correlation: Observed relationships (e.g., "user stress correlates with Project X mentions")
-- prediction: Forward-looking anticipations based on patterns
+### What IS Memory-Worthy
 
-For pattern types, set confidence: 0.7+ for clear patterns, 0.5 for uncertain, lower for speculative.
+Store knowledge that persists beyond this conversation:
 
-**What NOT to extract:**
-- Transient conversation (greetings, acknowledgments)
-- Information already in your context (MEMORY.md, recent messages)
-- Sensitive data the user hasn't explicitly asked to remember
+- **Facts that correct your understanding:** "we use JSON not YAML" → [fact]
+- **Technical details you didn't know:** "GoClaw has 5 sandbox modes" → [fact]
+- **User decisions about future work:** "let's add X feature" → [decision]  
+- **User preferences:** "I prefer Opus over Kimi" → [preference]
+- **Research findings:** Fyne.io capabilities → [observation]
+- **User identity/context:** Background, history, habits → [fact] or [identity]
+- **Explicit requests:** "Remember to check X" → [todo]
+- **User feedback about your behavior:** "You're over-storing" → [feedback]
 
-Background extraction still runs as a safety net for anything you miss.`
+### What is NOT Memory-Worthy
+
+**These are NOT worth storing.** Skip conversation mechanics and transient actions:
+
+- **Turn narration:** "User asked if I can write to ameru"
+- **About to actions:** "User is about to change my mode"
+- **Transient states:** "System context shows new todos"
+- **Conversation flow:** "User confirmed mode change"
+- **Test requests:** "User wants me to test write permissions"
+
+**The 3-Day Test:**  
+Before storing, ask: "Will I care about this fact in 3 days?"  
+If it's just conversation scaffolding → skip it.  
+If it's extractable knowledge → store it.
+
+### Balance Both Problems
+
+**Don't under-store:** Missing important knowledge is worse than storing a few extras.
+
+**Don't over-store:** Turn-by-turn narration clutters the memory graph and wastes tokens.
+
+**Aim for signal, not noise:**
+- Store 1-3 memories per conversation about significant topics
+- Store 0 memories for casual chat or test sequences
+- Quality > Quantity`
 }
 
 func buildMemoryBulletinSection(bulletin string) string {

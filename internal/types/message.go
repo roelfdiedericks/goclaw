@@ -13,6 +13,7 @@ type Message struct {
 	ID            string          `json:"id"`
 	Role          string          `json:"role"` // "user", "assistant", "tool_use", "tool_result"
 	Content       string          `json:"content"`
+	Phase         string          `json:"phase,omitempty"`         // Assistant phase for Responses API replay ("commentary", "final_answer")
 	ContentBlocks []ContentBlock  `json:"contentBlocks,omitempty"` // Structured content (images, audio, etc.)
 	Source        string          `json:"source"`                  // "tui", "telegram", etc.
 	Timestamp     time.Time       `json:"timestamp"`
