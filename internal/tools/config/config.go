@@ -69,42 +69,42 @@ type WebSearchProviderConfig struct {
 
 // BrowserToolsConfig contains browser tool settings
 type BrowserToolsConfig struct {
-	Enabled        bool                    `json:"enabled" default:"true"`           // Enable headless browser tool
-	Dir            string                  `json:"dir"`                              // Browser data directory (empty = ~/.goclaw/browser)
-	AutoDownload   bool                    `json:"autoDownload" default:"true"`      // Download Chromium if missing
-	Revision       string                  `json:"revision"`                         // Chromium revision (empty = latest)
-	Headless       bool                    `json:"headless" default:"true"`          // Run browser in headless mode
-	NoSandbox      bool                    `json:"noSandbox"`                        // Disable Chrome sandbox (needed for Docker/root)
-	DefaultProfile string                  `json:"defaultProfile" default:"default"` // Default profile name
-	Timeout        string                  `json:"timeout" default:"30s"`            // Default action timeout
-	Stealth        bool                    `json:"stealth" default:"true"`           // Enable stealth mode
-	Device         string                  `json:"device" default:"clear"`           // Device emulation
-	ProfileDomains map[string]string       `json:"profileDomains"`                   // Domain → profile mapping (runtime default)
-	ChromeCDP      string                  `json:"chromeCDP" default:"ws://localhost:9222"` // CDP endpoint for local chrome relay profile
-	AllowAgentProfiles bool               `json:"allowAgentProfiles"`                // Allow explicit profile names in tool calls
-	Remote         RemoteBrowserConfig     `json:"remote"`                           // Remote browser access settings
-	Advanced       AdvancedCDPConfig       `json:"advanced"`                         // Advanced CDP settings for later phases
-	Bubblewrap     BrowserBubblewrapConfig `json:"bubblewrap"`                       // Sandbox settings
+	Enabled            bool                    `json:"enabled" default:"true"`                  // Enable headless browser tool
+	Dir                string                  `json:"dir"`                                     // Browser data directory (empty = ~/.goclaw/browser)
+	AutoDownload       bool                    `json:"autoDownload" default:"true"`             // Download Chromium if missing
+	Revision           string                  `json:"revision"`                                // Chromium revision (empty = latest)
+	Headless           bool                    `json:"headless" default:"true"`                 // Run browser in headless mode
+	NoSandbox          bool                    `json:"noSandbox"`                               // Disable Chrome sandbox (needed for Docker/root)
+	DefaultProfile     string                  `json:"defaultProfile" default:"default"`        // Default profile name
+	Timeout            string                  `json:"timeout" default:"30s"`                   // Default action timeout
+	Stealth            bool                    `json:"stealth" default:"true"`                  // Enable stealth mode
+	Device             string                  `json:"device" default:"clear"`                  // Device emulation
+	ProfileDomains     map[string]string       `json:"profileDomains"`                          // Domain → profile mapping (runtime default)
+	ChromeCDP          string                  `json:"chromeCDP" default:"ws://localhost:9222"` // CDP endpoint for local chrome relay profile
+	AllowAgentProfiles bool                    `json:"allowAgentProfiles"`                      // Allow explicit profile names in tool calls
+	Remote             RemoteBrowserConfig     `json:"remote"`                                  // Remote browser access settings
+	Advanced           AdvancedCDPConfig       `json:"advanced"`                                // Advanced CDP settings for later phases
+	Bubblewrap         BrowserBubblewrapConfig `json:"bubblewrap"`                              // Sandbox settings
 }
 
 // RemoteBrowserConfig contains phase-1 remote browser access settings.
 type RemoteBrowserConfig struct {
-	Enabled              bool     `json:"enabled" default:"true"`                 // Enable named remote browser profiles
-	ProfilesText         string   `json:"profilesText"`                           // One entry per line: name=endpoint
-	AllowedHosts         []string `json:"allowedHosts"`                           // Optional allowlist for remote hosts or CIDRs
-	AllowDirectEndpoints bool     `json:"allowDirectEndpoints"`                   // Allow raw endpoint strings in future phases
-	AllowHTTPDiscovery   bool     `json:"allowHTTPDiscovery" default:"true"`      // Allow http(s) discovery endpoints that resolve to websocket CDP
-	ConnectionTimeout    string   `json:"connectionTimeout" default:"10s"`        // Timeout for remote endpoint connection/discovery
+	Enabled              bool     `json:"enabled" default:"true"`            // Enable named remote browser profiles
+	ProfilesText         string   `json:"profilesText"`                      // One entry per line: name=endpoint
+	AllowedHosts         []string `json:"allowedHosts"`                      // Optional allowlist for remote hosts or CIDRs
+	AllowDirectEndpoints bool     `json:"allowDirectEndpoints"`              // Allow raw endpoint strings in future phases
+	AllowHTTPDiscovery   bool     `json:"allowHTTPDiscovery" default:"true"` // Allow http(s) discovery endpoints that resolve to websocket CDP
+	ConnectionTimeout    string   `json:"connectionTimeout" default:"10s"`   // Timeout for remote endpoint connection/discovery
 }
 
 // AdvancedCDPConfig contains minimum CDP settings needed by later phases.
 type AdvancedCDPConfig struct {
-	NetworkCaptureEnabled bool   `json:"networkCaptureEnabled" default:"true"`    // Enable network capture when implemented
-	NetworkCaptureMax     int    `json:"networkCaptureMax" default:"200"`         // Max network entries to retain
-	ConsoleCaptureEnabled bool   `json:"consoleCaptureEnabled" default:"true"`    // Enable console capture when implemented
-	ConsoleCaptureMax     int    `json:"consoleCaptureMax" default:"200"`         // Max console entries to retain
-	TraceDir              string `json:"traceDir"`                                // Optional trace artifact directory override
-	TraceRetention        int    `json:"traceRetention" default:"20"`             // Max trace artifacts to keep
+	NetworkCaptureEnabled bool   `json:"networkCaptureEnabled" default:"true"` // Enable network capture when implemented
+	NetworkCaptureMax     int    `json:"networkCaptureMax" default:"200"`      // Max network entries to retain
+	ConsoleCaptureEnabled bool   `json:"consoleCaptureEnabled" default:"true"` // Enable console capture when implemented
+	ConsoleCaptureMax     int    `json:"consoleCaptureMax" default:"200"`      // Max console entries to retain
+	TraceDir              string `json:"traceDir"`                             // Optional trace artifact directory override
+	TraceRetention        int    `json:"traceRetention" default:"20"`          // Max trace artifacts to keep
 }
 
 // BrowserBubblewrapConfig contains bubblewrap settings for browser tool

@@ -96,12 +96,12 @@ type TabCapture struct {
 
 // TraceCapture stores an in-progress performance trace for a tab.
 type TraceCapture struct {
-	Active      bool
-	StartedAt   time.Time
-	Events      []json.RawMessage
-	DataLoss    bool
+	Active       bool
+	StartedAt    time.Time
+	Events       []json.RawMessage
+	DataLoss     bool
 	LastArtifact string
-	Complete    chan traceCompleteResult
+	Complete     chan traceCompleteResult
 }
 
 type traceCompleteResult struct {
@@ -310,34 +310,34 @@ func (t *Tool) Schema() map[string]interface{} {
 // Execute runs the browser action
 func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	var params struct {
-		Action       string `json:"action"`
-		URL          string `json:"url"`
-		TabIndex     *int   `json:"tabIndex"`
-		FullPage     bool   `json:"fullPage"`
-		MaxLength    int    `json:"maxLength"`
-		Profile      string `json:"profile"`
-		Format       string `json:"format"`
-		Ref          *int   `json:"ref"`
-		Selector     string `json:"selector"`
-		TargetRef    *int   `json:"targetRef"`
-		TargetSelector string `json:"targetSelector"`
-		Text         string `json:"text"`
-		Key          string `json:"key"`
-		Direction    string `json:"direction"`
-		Value        string `json:"value"`
-		Timeout      int    `json:"timeout"`
-		Code         string `json:"code"`
-		File         string `json:"file"`
-		DialogAction string `json:"dialogAction"`
-		DialogText   string `json:"dialogText"`
-		Headed       bool   `json:"headed"`
-		RequestID    string `json:"requestId"`
-		CaptureType  string `json:"captureType"`
-		Width        int    `json:"width"`
-		Height       int    `json:"height"`
-		DeviceProfile string `json:"deviceProfile"`
-		CPURate      float64 `json:"cpuRate"`
-		NetworkPreset string `json:"networkPreset"`
+		Action         string  `json:"action"`
+		URL            string  `json:"url"`
+		TabIndex       *int    `json:"tabIndex"`
+		FullPage       bool    `json:"fullPage"`
+		MaxLength      int     `json:"maxLength"`
+		Profile        string  `json:"profile"`
+		Format         string  `json:"format"`
+		Ref            *int    `json:"ref"`
+		Selector       string  `json:"selector"`
+		TargetRef      *int    `json:"targetRef"`
+		TargetSelector string  `json:"targetSelector"`
+		Text           string  `json:"text"`
+		Key            string  `json:"key"`
+		Direction      string  `json:"direction"`
+		Value          string  `json:"value"`
+		Timeout        int     `json:"timeout"`
+		Code           string  `json:"code"`
+		File           string  `json:"file"`
+		DialogAction   string  `json:"dialogAction"`
+		DialogText     string  `json:"dialogText"`
+		Headed         bool    `json:"headed"`
+		RequestID      string  `json:"requestId"`
+		CaptureType    string  `json:"captureType"`
+		Width          int     `json:"width"`
+		Height         int     `json:"height"`
+		DeviceProfile  string  `json:"deviceProfile"`
+		CPURate        float64 `json:"cpuRate"`
+		NetworkPreset  string  `json:"networkPreset"`
 	}
 
 	if err := json.Unmarshal(input, &params); err != nil {
@@ -411,34 +411,34 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 
 // executeAction dispatches to the appropriate action handler
 func (t *Tool) executeAction(ctx context.Context, sessionID string, params struct {
-	Action       string `json:"action"`
-	URL          string `json:"url"`
-	TabIndex     *int   `json:"tabIndex"`
-	FullPage     bool   `json:"fullPage"`
-	MaxLength    int    `json:"maxLength"`
-	Profile      string `json:"profile"`
-	Format       string `json:"format"`
-	Ref          *int   `json:"ref"`
-	Selector     string `json:"selector"`
-	TargetRef    *int   `json:"targetRef"`
-	TargetSelector string `json:"targetSelector"`
-	Text         string `json:"text"`
-	Key          string `json:"key"`
-	Direction    string `json:"direction"`
-	Value        string `json:"value"`
-	Timeout      int    `json:"timeout"`
-	Code         string `json:"code"`
-	File         string `json:"file"`
-	DialogAction string `json:"dialogAction"`
-	DialogText   string `json:"dialogText"`
-	Headed       bool   `json:"headed"`
-	RequestID    string `json:"requestId"`
-	CaptureType  string `json:"captureType"`
-	Width        int    `json:"width"`
-	Height       int    `json:"height"`
-	DeviceProfile string `json:"deviceProfile"`
-	CPURate      float64 `json:"cpuRate"`
-	NetworkPreset string `json:"networkPreset"`
+	Action         string  `json:"action"`
+	URL            string  `json:"url"`
+	TabIndex       *int    `json:"tabIndex"`
+	FullPage       bool    `json:"fullPage"`
+	MaxLength      int     `json:"maxLength"`
+	Profile        string  `json:"profile"`
+	Format         string  `json:"format"`
+	Ref            *int    `json:"ref"`
+	Selector       string  `json:"selector"`
+	TargetRef      *int    `json:"targetRef"`
+	TargetSelector string  `json:"targetSelector"`
+	Text           string  `json:"text"`
+	Key            string  `json:"key"`
+	Direction      string  `json:"direction"`
+	Value          string  `json:"value"`
+	Timeout        int     `json:"timeout"`
+	Code           string  `json:"code"`
+	File           string  `json:"file"`
+	DialogAction   string  `json:"dialogAction"`
+	DialogText     string  `json:"dialogText"`
+	Headed         bool    `json:"headed"`
+	RequestID      string  `json:"requestId"`
+	CaptureType    string  `json:"captureType"`
+	Width          int     `json:"width"`
+	Height         int     `json:"height"`
+	DeviceProfile  string  `json:"deviceProfile"`
+	CPURate        float64 `json:"cpuRate"`
+	NetworkPreset  string  `json:"networkPreset"`
 }) (string, error) {
 	switch params.Action {
 	// Tab management

@@ -21,14 +21,14 @@ type Config struct {
 
 // LiveExtractionConfig configures automatic memory extraction from conversations
 type LiveExtractionConfig struct {
-	Enabled             bool     `json:"enabled" default:"true"`             // Enable live extraction
-	AgentExtraction     bool     `json:"agentExtraction" default:"true"`     // Enable agent-driven extraction
-	IntervalSeconds     int      `json:"intervalSeconds" default:"120"`      // Check interval
-	HandoffDelaySeconds int      `json:"handoffDelaySeconds" default:"90"`   // Age threshold before background picks up unmarked messages
-	MinMessages         int      `json:"minMessages" default:"5"`            // Minimum messages before extraction
-	MaxTurns            int      `json:"maxTurns" default:"10"`              // Max extraction loop turns
-	BatchSize           int      `json:"batchSize" default:"50"`             // Max messages per batch
-	ExcludeSources      []string `json:"excludeSources"`                     // Message sources to exclude (runtime default)
+	Enabled             bool     `json:"enabled" default:"true"`           // Enable live extraction
+	AgentExtraction     bool     `json:"agentExtraction" default:"true"`   // Enable agent-driven extraction
+	IntervalSeconds     int      `json:"intervalSeconds" default:"120"`    // Check interval
+	HandoffDelaySeconds int      `json:"handoffDelaySeconds" default:"90"` // Age threshold before background picks up unmarked messages
+	MinMessages         int      `json:"minMessages" default:"5"`          // Minimum messages before extraction
+	MaxTurns            int      `json:"maxTurns" default:"10"`            // Max extraction loop turns
+	BatchSize           int      `json:"batchSize" default:"50"`           // Max messages per batch
+	ExcludeSources      []string `json:"excludeSources"`                   // Message sources to exclude (runtime default)
 }
 
 // DefaultExcludeSources returns the default sources to exclude from extraction.

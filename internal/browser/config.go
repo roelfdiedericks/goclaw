@@ -11,18 +11,18 @@ import (
 // ConfigFromToolsConfig creates a browser.Config from the tools config structure.
 // This allows the config package to remain independent of the browser package.
 type ToolsConfigAdapter struct {
-	Enabled        bool
-	Dir            string
-	AutoDownload   bool
-	Revision       string
-	Headless       bool
-	NoSandbox      bool
-	DefaultProfile string
-	Timeout        string
-	Stealth        bool
-	Device         string // Device emulation profile (friendly name)
-	ProfileDomains map[string]string
-	ChromeCDP      string
+	Enabled            bool
+	Dir                string
+	AutoDownload       bool
+	Revision           string
+	Headless           bool
+	NoSandbox          bool
+	DefaultProfile     string
+	Timeout            string
+	Stealth            bool
+	Device             string // Device emulation profile (friendly name)
+	ProfileDomains     map[string]string
+	ChromeCDP          string
 	AllowAgentProfiles bool
 
 	// Remote browser access
@@ -112,12 +112,12 @@ type RemoteBrowserProfileConfig struct {
 
 // RemoteBrowserConfig holds phase-1 remote browser access settings.
 type RemoteBrowserConfig struct {
-	Enabled              bool                               `json:"enabled"`
+	Enabled              bool                                  `json:"enabled"`
 	Profiles             map[string]RemoteBrowserProfileConfig `json:"profiles"`
-	AllowedHosts         []string                           `json:"allowedHosts"`
-	AllowDirectEndpoints bool                               `json:"allowDirectEndpoints"`
-	AllowHTTPDiscovery   bool                               `json:"allowHTTPDiscovery"`
-	ConnectionTimeout    string                             `json:"connectionTimeout"`
+	AllowedHosts         []string                              `json:"allowedHosts"`
+	AllowDirectEndpoints bool                                  `json:"allowDirectEndpoints"`
+	AllowHTTPDiscovery   bool                                  `json:"allowHTTPDiscovery"`
+	ConnectionTimeout    string                                `json:"connectionTimeout"`
 }
 
 // AdvancedCDPConfig holds minimum CDP feature settings used by later phases.
@@ -132,18 +132,18 @@ type AdvancedCDPConfig struct {
 
 // BrowserConfig holds browser configuration
 type BrowserConfig struct {
-	Dir                string            `json:"dir"`                // Browser data directory (empty = ~/.goclaw/browser)
-	AutoDownload       bool              `json:"autoDownload"`       // Download Chromium if missing
-	Revision           string            `json:"revision"`           // Chromium revision (empty = latest)
-	Headless           bool              `json:"headless"`           // Run in headless mode
-	NoSandbox          bool              `json:"noSandbox"`          // Disable sandbox (needed for Docker/root)
-	DefaultProfile     string            `json:"defaultProfile"`     // Default profile name
-	Timeout            string            `json:"timeout"`            // Default action timeout (e.g., "30s")
-	Stealth            bool              `json:"stealth"`            // Enable stealth mode
-	Device             string            `json:"device"`             // Device emulation: "clear", "laptop", "iphone-x", etc.
-	ProfileDomains     map[string]string `json:"profileDomains"`     // Domain → profile mapping
-	ChromeCDP          string            `json:"chromeCDP"`          // CDP endpoint for profile="chrome" (default: ws://localhost:9222)
-	AllowAgentProfiles bool              `json:"allowAgentProfiles"` // Allow agent to specify any profile (default: false, only "chrome" honored)
+	Dir                string              `json:"dir"`                // Browser data directory (empty = ~/.goclaw/browser)
+	AutoDownload       bool                `json:"autoDownload"`       // Download Chromium if missing
+	Revision           string              `json:"revision"`           // Chromium revision (empty = latest)
+	Headless           bool                `json:"headless"`           // Run in headless mode
+	NoSandbox          bool                `json:"noSandbox"`          // Disable sandbox (needed for Docker/root)
+	DefaultProfile     string              `json:"defaultProfile"`     // Default profile name
+	Timeout            string              `json:"timeout"`            // Default action timeout (e.g., "30s")
+	Stealth            bool                `json:"stealth"`            // Enable stealth mode
+	Device             string              `json:"device"`             // Device emulation: "clear", "laptop", "iphone-x", etc.
+	ProfileDomains     map[string]string   `json:"profileDomains"`     // Domain → profile mapping
+	ChromeCDP          string              `json:"chromeCDP"`          // CDP endpoint for profile="chrome" (default: ws://localhost:9222)
+	AllowAgentProfiles bool                `json:"allowAgentProfiles"` // Allow agent to specify any profile (default: false, only "chrome" honored)
 	Remote             RemoteBrowserConfig `json:"remote"`
 	Advanced           AdvancedCDPConfig   `json:"advanced"`
 

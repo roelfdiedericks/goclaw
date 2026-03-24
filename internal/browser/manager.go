@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -537,7 +538,11 @@ func (m *Manager) discoverBrowserWebSocketURL(base *url.URL) (string, error) {
 	}
 
 	client := &http.Client{Timeout: m.config.ResolveRemoteConnectionTimeout()}
-	resp, err := client.Get(discoveryURL.String()) //nolint:gosec // remote CDP discovery is an explicit configured operator action
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, discoveryURL.String(), nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create remote browser discovery request: %w", err)
+	}
+	resp, err := client.Do(req) //nolint:gosec // remote CDP discovery is an explicit configured operator action
 	if err != nil {
 		return "", fmt.Errorf("failed remote browser discovery at %s: %w", discoveryURL.String(), err)
 	}
