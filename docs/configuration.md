@@ -212,12 +212,12 @@ GoClaw is configured via `goclaw.json` in the working directory.
 | `tools.exec` | Shell command execution | [Tools](tools.md) |
 | `tools.browser` | Browser automation | [Browser Tool](tools/browser.md) |
 | `tools.web` | Web search and fetch | [Tools](tools.md) |
-| `tools.subagent` | Owner-only delegated subagent/fanout tools | [Delegated Runs](delegated-runs.md) |
+| `tools.subagent` | Owner-only subagent and fanout tools | [Delegated Runs](delegated-runs.md) |
 | `tools.xaiImagine` | xAI image generation | [Tools](tools.md) |
 | `tools.xaiVideo` | xAI video generation | [Tools](tools.md) |
 | `skills` | Skills system | [Skills](skills.md) |
 
-**Dependency note:** subagent tools are only registered when both `tools.subagent.enabled=true` and `gateway.delegatedRuns.enabled=true`.
+**Dependency note:** subagent tools only appear when both `tools.subagent.enabled=true` and `gateway.delegatedRuns.enabled=true`.
 
 ### System
 
@@ -271,7 +271,7 @@ GoClaw is configured via `goclaw.json` in the working directory.
 |-------|------|-------------|
 | `providers` | object | Named provider instances (alias → config) |
 | `agent` | object | Model chain for main conversation |
-| `subagent` | object | Dedicated model chain for delegated subagent/fanout runs (falls back to `agent`) |
+| `subagent` | object | Model chain used internally for subagent and fanout runs (falls back to `agent`) |
 | `summarization` | object | Model chain for compaction/checkpoints |
 | `embeddings` | object | Model chain for semantic search |
 
@@ -412,12 +412,12 @@ The prompt cache watches workspace identity files (SOUL.md, AGENTS.md, etc.) for
 | `workingDir` | string | `~/.goclaw/workspace` | Workspace directory |
 | `logFile` | string | - | Log file path |
 | `pidFile` | string | - | PID file path |
-| `delegatedRuns.enabled` | bool | `true` | Enable delegated runner path for cron/subagents |
-| `delegatedRuns.maxSpawnDepth` | int | `4` | Max parent-child delegated depth (0 = unlimited) |
+| `delegatedRuns.enabled` | bool | `true` | Enable subagents, fanout, and other delegated background runs |
+| `delegatedRuns.maxSpawnDepth` | int | `4` | Max parent-child subagent depth (0 = unlimited) |
 | `delegatedRuns.maxActiveChildrenPerParent` | int | `4` | Max active child runs per parent (0 = unlimited) |
-| `delegatedRuns.maxConcurrentRuns` | int | `16` | Delegated runner lane capacity (0 = unlimited) |
-| `delegatedRuns.defaultTimeoutSeconds` | int | `300` | Default delegated timeout applied when `timeoutSeconds` is omitted (0 = none) |
-| `delegatedRuns.maxTimeoutSeconds` | int | `1800` | Max delegated timeout cap for safety (0 = unlimited) |
+| `delegatedRuns.maxConcurrentRuns` | int | `16` | Max delegated/background runs at once (0 = unlimited) |
+| `delegatedRuns.defaultTimeoutSeconds` | int | `300` | Default time limit for delegated runs when a tool/job does not set one |
+| `delegatedRuns.maxTimeoutSeconds` | int | `1800` | Maximum delegated run timeout for safety (0 = unlimited) |
 
 ### Speech-to-Text (STT)
 

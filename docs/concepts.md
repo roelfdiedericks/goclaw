@@ -67,28 +67,27 @@ See [Channels](channels.md) for the full overview.
 
 Tools are registered with the gateway and exposed to the LLM via function calling. Many tools are conditionally enabled by configuration and channel/runtime availability (for example browser/HASS/subagent features).
 
-Recent architecture additions include delegated-run tools and fanout orchestration:
+GoClaw also supports **subagents** for delegated and parallel work:
 
-- `subagent_spawn` for asynchronous delegated runs
-- `subagent_status` / `subagent_cancel` for operator control
-- `subagent_fanout` for bounded parallel child execution with deterministic aggregation (+ optional synthesis)
+- `subagent_spawn` starts one worker and reports back later by default
+- `subagent_status` / `subagent_cancel` let you inspect or stop worker runs
+- `subagent_fanout` starts several workers in parallel and returns their results in the current turn
 
 See [Tools](tools.md) for the complete tool reference.
 
-## Delegated Runs & Subagents
+## Subagents
 
-GoClaw uses a shared **delegated run** model for isolated background and nested agent execution:
+Subagents are isolated worker agents you can use for background work or parallel work.
 
-- cron jobs can execute through delegated runs
-- owner-only subagent tools can spawn delegated children
-- fanout mode can launch multiple children with bounded parallelism and deterministic aggregation
-- result routing and completion dispatch are policy-driven (`store_only`, `return_to_requester`)
+Use them when:
 
-For `return_to_requester`, direct delivery is attempted only when requester binding/channel eligibility passes; otherwise fallback routing (typically session reinjection) preserves completion visibility.
+- one task should continue separately from the main conversation
+- several tasks can be done in parallel
+- you want a run you can inspect or cancel later
 
-This is the core model behind `/runners` visibility, delegated lifecycle events, and subagent orchestration behavior.
+This is also the system behind the runners dashboard and delegated background execution such as cron-driven work.
 
-See [Delegated Runs](delegated-runs.md) for the full architecture and operational details.
+See [Delegated Runs](delegated-runs.md) for the user guide to subagents, fanout, monitoring, and control.
 
 ## Skills
 

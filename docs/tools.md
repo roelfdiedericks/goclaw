@@ -277,34 +277,23 @@ Canonical design and behavior documentation lives in [Delegated Runs](delegated-
 
 - `subagent_spawn`
   - Starts one background worker and returns `runId` immediately.
-  - Automatically propagates lineage from current session run to `parentRunID` when that session run exists in delegated-run registry; otherwise spawns as top-level.
-  - `purpose` is a freeform run tag (metadata only).
-  - `notifyOnComplete=true` by default, so the worker sends a later completion callback unless explicitly disabled.
-  - If requester direct channel is unreachable, direct delivery is skipped and fallback routing is used internally (typically queue/session reinjection).
-  - Direct channel completion text excludes internal orchestration hints; structured reinjection payload retains `replyInstruction` and bounded `untrustedChildOutput`.
-  - Failed `return_to_requester` dispatch attempts advance a persisted completion dispatch sequence so retries use a new idempotency key.
+  - Best when you want work to continue separately and hear back later.
+  - `notifyOnComplete=true` by default, so the worker reports back when it finishes.
 - `subagent_status`
-  - Fetch a single delegated run by `runId`, list recent runs, review event logs, or message a running worker.
-  - Supports control actions: `list`, `info`, `log`, `focus`, `unfocus`, `steer`, `send`.
-  - `steer` injects guidance into the delegated run session and triggers one model turn.
-  - `send` injects a ghostwritten assistant message into the delegated run session without invoking the model.
+  - List workers, inspect one worker by `runId`, read logs, or message a running worker.
+  - Use `action=info` when you want the stored result for one worker.
+  - Use `steer` to guide a worker and `send` to place a message into its session.
 - `subagent_cancel`
-  - Cancel a run by `runId`.
-  - `cascade=true` (default) cancels descendants as well.
-  - `mode="kill"` is a distinct hard-stop request and only supports `scope="self"`.
+  - Stop a run by `runId`.
+  - `cascade=true` (default) also stops child runs.
+  - `kill` is the hard-stop version and only works on the run itself.
 - `subagent_fanout`
-  - Spawns multiple delegated child workers from one request.
-  - Supports bounded `parallelism` and deterministic aggregation ordered by input index.
-  - `purpose` is freeform metadata.
-  - Returns child worker results in the current turn by default so the calling agent can interpret them directly.
-  - `includeSummary=true` adds one optional extra machine-generated summary across the worker results.
-  - `notifyOnComplete=false` by default; enable it only if you also want a later completion callback after the immediate result.
-  - Completion callback uses direct shared completion dispatch built from deterministic outcomes; no extra summarizer model run is required.
-  - Supports `summaryTimeoutSeconds` to override timeout for the optional extra summary pass only.
-  - Summary input is size-bounded; if the optional summary would only cover some worker outputs, GoClaw skips it and explains why in `extraSummaryStatus` instead of returning a partial summary.
-  - Tool output now returns full child `output` text inline when the current session has enough headroom.
-  - If the current session budget cannot fit every full child output inline, the response includes as many complete child outputs as fit plus an `overflow` section with omitted child `runId` handles and the `subagent_status` inspect path.
-  - Uses delegated policy controls (depth/per-parent/global lane), retrying transient spawn-limit denials during bounded fanout admission.
+  - Starts several workers in parallel from one request.
+  - Best when you want several results back in the current turn so you can compare or interpret them yourself.
+  - Returns worker results inline when they fit. If not, it returns as many full results as fit plus `runId` handles for the rest.
+  - `includeSummary=true` adds one optional extra summary, but the main result is still the worker outputs.
+  - If a worker fails, times out, is canceled, or fails to start, fanout returns `ok=false` with a status/message explaining that the overall fanout was only partially successful.
+  - `notifyOnComplete=false` by default; enable it only if you also want a later callback after the immediate result.
 
 Operational UI/API for delegated runs:
 

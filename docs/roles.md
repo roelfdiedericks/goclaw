@@ -182,7 +182,7 @@ See [Session Supervision](supervision.md) for full documentation on:
 
 ## Delegated Runs and Subagent Access
 
-Yes — delegated subagent tooling is owner-only by design.
+Yes — subagent tooling is owner-only by design.
 
 This includes:
 
@@ -197,13 +197,13 @@ Access is enforced in multiple layers:
 
 1. **Registration gate (config):**
    - Tools are only registered when `tools.subagent.enabled=true`.
-2. **Runtime delegated engine gate (config):**
-   - Delegated runner path is controlled by `gateway.delegatedRuns.enabled`.
+2. **Delegated background-work gate (config):**
+   - Subagents and related background runs are controlled by `gateway.delegatedRuns.enabled`.
 3. **Execution authorization (hard check):**
    - Each subagent tool checks `sessionCtx.User.IsOwner()` at execution time.
    - Non-owner calls are rejected, even if a role/user tool allowlist includes the tool name.
 
-This means subagent/delegated orchestration cannot be granted to non-owner users by role config alone.
+This means subagent access cannot be granted to non-owner users by role config alone.
 
 ### RBAC implications
 
