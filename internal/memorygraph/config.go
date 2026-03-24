@@ -21,13 +21,14 @@ type Config struct {
 
 // LiveExtractionConfig configures automatic memory extraction from conversations
 type LiveExtractionConfig struct {
-	Enabled         bool     `json:"enabled" default:"true"`         // Enable live extraction
-	AgentExtraction bool     `json:"agentExtraction" default:"true"` // Enable agent-driven extraction
-	IntervalSeconds int      `json:"intervalSeconds" default:"120"`  // Check interval
-	MinMessages     int      `json:"minMessages" default:"5"`        // Minimum messages before extraction
-	MaxTurns        int      `json:"maxTurns" default:"10"`          // Max extraction loop turns
-	BatchSize       int      `json:"batchSize" default:"50"`         // Max messages per batch
-	ExcludeSources  []string `json:"excludeSources"`                 // Message sources to exclude (runtime default)
+	Enabled             bool     `json:"enabled" default:"true"`             // Enable live extraction
+	AgentExtraction     bool     `json:"agentExtraction" default:"true"`     // Enable agent-driven extraction
+	IntervalSeconds     int      `json:"intervalSeconds" default:"120"`      // Check interval
+	HandoffDelaySeconds int      `json:"handoffDelaySeconds" default:"90"`   // Age threshold before background picks up unmarked messages
+	MinMessages         int      `json:"minMessages" default:"5"`            // Minimum messages before extraction
+	MaxTurns            int      `json:"maxTurns" default:"10"`              // Max extraction loop turns
+	BatchSize           int      `json:"batchSize" default:"50"`             // Max messages per batch
+	ExcludeSources      []string `json:"excludeSources"`                     // Message sources to exclude (runtime default)
 }
 
 // DefaultExcludeSources returns the default sources to exclude from extraction.
@@ -327,6 +328,15 @@ func LiveExtractionFormDef(cfg LiveExtractionConfig) forms.FormDef {
 						Min:     30,
 						Max:     3600,
 						Desc:    "How often to check for new messages to extract (in seconds)",
+					},
+					{
+						Name:    "handoffDelaySeconds",
+						Title:   "Agent Handoff Delay",
+						Type:    forms.Number,
+						Default: 90,
+						Min:     0,
+						Max:     3600,
+						Desc:    "How long to wait before the background extractor treats recent unmarked messages as its responsibility",
 					},
 					{
 						Name:    "minMessages",
@@ -759,6 +769,9 @@ func ValidateConfig(cfg *Config) error {
 	// Validate live extraction settings
 	if cfg.LiveExtraction.IntervalSeconds < 30 {
 		return fmt.Errorf("intervalSeconds must be at least 30")
+	}
+	if cfg.LiveExtraction.HandoffDelaySeconds < 0 {
+		return fmt.Errorf("handoffDelaySeconds must be 0 or greater")
 	}
 	if cfg.LiveExtraction.MinMessages < 1 {
 		return fmt.Errorf("minMessages must be at least 1")

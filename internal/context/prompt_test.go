@@ -129,3 +129,17 @@ func TestBuildSystemPromptIncludesSubagentGuidanceWhenToolsAvailable(t *testing.
 		}
 	}
 }
+
+func TestBuildAgentExtractionSectionUsesRecallFirstGuidance(t *testing.T) {
+	prompt := buildAgentExtractionSection()
+	required := []string{
+		"memory_graph_recall",
+		"decide whether to store something new, enrich/update something, or skip",
+		"Recall First, Then Decide",
+	}
+	for _, snippet := range required {
+		if !strings.Contains(prompt, snippet) {
+			t.Fatalf("expected extraction section to contain %q", snippet)
+		}
+	}
+}

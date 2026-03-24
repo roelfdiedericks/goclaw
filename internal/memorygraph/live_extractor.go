@@ -84,6 +84,7 @@ func (e *LiveExtractor) UpdateConfig(cfg LiveExtractionConfig) {
 	L_debug("live extractor: config updated",
 		"enabled", cfg.Enabled,
 		"intervalSeconds", cfg.IntervalSeconds,
+		"handoffDelaySeconds", cfg.HandoffDelaySeconds,
 		"minMessages", cfg.MinMessages,
 	)
 }
@@ -194,7 +195,7 @@ func (e *LiveExtractor) getUnextractedConversations(ctx context.Context) []Conve
 
 	// Get already-extracted message IDs from memory_graph.db (ingestion_state is in that DB, not sessions.db)
 	extractedIDs := make(map[string]bool)
-	extractedRows, err := e.manager.DB().QueryContext(ctx, `SELECT source_path FROM ingestion_state WHERE source_type = 'live'`)
+	extractedRows, err := e.manager.DB().QueryContext(ctx, `SELECT source_path FROM ingestion_state WHERE source_type IN ('live', 'agent')`)
 	if err == nil {
 		defer extractedRows.Close()
 		for extractedRows.Next() {
@@ -285,21 +286,30 @@ func (e *LiveExtractor) getUnextractedConversations(ctx context.Context) []Conve
 
 	// Build conversation batches
 	var batches []ConversationBatch
+	now := time.Now()
+	handoffDelay := time.Duration(e.config.HandoffDelaySeconds) * time.Second
 	for sessionKey, messages := range sessionMessages {
-		if len(messages) < e.config.MinMessages {
+		filtered := make([]messageRow, 0, len(messages))
+		for _, msg := range messages {
+			if handoffDelay > 0 && !msg.Timestamp.IsZero() && now.Sub(msg.Timestamp) < handoffDelay {
+				continue
+			}
+			filtered = append(filtered, msg)
+		}
+		if len(filtered) < e.config.MinMessages {
 			continue
 		}
 
 		// Limit to batch size
-		if len(messages) > e.config.BatchSize {
-			messages = messages[:e.config.BatchSize]
+		if len(filtered) > e.config.BatchSize {
+			filtered = filtered[:e.config.BatchSize]
 		}
 
 		// Format conversation
 		var content strings.Builder
 		var messageIDs []string
 
-		for _, m := range messages {
+		for _, m := range filtered {
 			fmt.Fprintf(&content, "%s: %s\n\n", m.Role, m.Content)
 			messageIDs = append(messageIDs, m.ID)
 		}
@@ -310,7 +320,7 @@ func (e *LiveExtractor) getUnextractedConversations(ctx context.Context) []Conve
 			SessionKey:       sessionKey,
 			Content:          content.String(),
 			MessageIDs:       messageIDs,
-			FirstMessageTime: sessionFirstTime[sessionKey],
+			FirstMessageTime: filtered[0].Timestamp,
 		})
 	}
 

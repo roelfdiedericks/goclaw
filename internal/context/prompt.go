@@ -657,7 +657,12 @@ After each user message, before crafting your response, ask yourself:
 
 **"Is there knowledge worth remembering here?"**
 
-If yes, use ` + "`memory_graph_store`" + ` immediately. Then respond.
+If yes, use this pattern:
+
+1. ` + "`memory_graph_recall`" + ` first to check what already exists
+2. decide whether to store something new, enrich/update something, or skip
+3. use ` + "`memory_graph_store`" + ` only when there is genuinely new or significant knowledge
+4. then respond normally
 
 ### What IS Memory-Worthy
 
@@ -686,6 +691,13 @@ Store knowledge that persists beyond this conversation:
 Before storing, ask: "Will I care about this fact in 3 days?"  
 If it's just conversation scaffolding → skip it.  
 If it's extractable knowledge → store it.
+
+### Recall First, Then Decide
+
+- **Recall first** when the topic may already exist in memory
+- **Store new** when the knowledge is significant and not already captured
+- **Enrich or update** when the new message adds detail to something that already exists
+- **Skip** when it is small talk, narration, or a one-off transient detail
 
 ### Balance Both Problems
 
