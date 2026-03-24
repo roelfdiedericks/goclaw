@@ -82,7 +82,9 @@ GoClaw uses a shared **delegated run** model for isolated background and nested 
 - cron jobs can execute through delegated runs
 - owner-only subagent tools can spawn delegated children
 - fanout mode can launch multiple children with bounded parallelism and deterministic aggregation
-- result routing and completion dispatch are policy-driven (`store_only`, `deliver`, `handoff_main`, `return_to_requester`)
+- result routing and completion dispatch are policy-driven (`store_only`, `return_to_requester`)
+
+For `return_to_requester`, direct delivery is attempted only when requester binding/channel eligibility passes; otherwise fallback routing (typically session reinjection) preserves completion visibility.
 
 This is the core model behind `/runners` visibility, delegated lifecycle events, and subagent orchestration behavior.
 

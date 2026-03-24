@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/roelfdiedericks/goclaw/internal/types"
@@ -40,7 +41,7 @@ func TestAllowsAgentFallbackPurposeRules(t *testing.T) {
 	if allowsAgentFallback("embeddings") {
 		t.Fatalf("embeddings should not fallback to agent chain")
 	}
-	for _, purpose := range []string{"summarization", "heartbeat", "cron", "hass", "memory_extraction"} {
+	for _, purpose := range []string{"subagent", "summarization", "heartbeat", "cron", "hass", "memory_extraction"} {
 		if !allowsAgentFallback(purpose) {
 			t.Fatalf("%s should fallback to agent chain", purpose)
 		}
@@ -68,6 +69,27 @@ func TestGetProviderUsesAgentFallbackForSummarization(t *testing.T) {
 	}
 }
 
+func TestGetProviderUsesAgentFallbackForSubagent(t *testing.T) {
+	r := &Registry{
+		providers: map[string]providerInstance{
+			"p1": {provider: &mockProvider{name: "p1", typ: "mock", model: "base"}},
+		},
+		purposes: map[string]LLMPurposeConfig{
+			"agent":      {Models: []string{"p1/agent-model"}},
+			"subagent":   {Models: nil},
+			"embeddings": {Models: nil},
+		},
+	}
+
+	p, err := r.GetProvider("subagent")
+	if err != nil {
+		t.Fatalf("expected subagent provider via agent fallback, got error: %v", err)
+	}
+	if p.Model() != "agent-model" {
+		t.Fatalf("expected fallback model agent-model, got %q", p.Model())
+	}
+}
+
 func TestGetProviderDoesNotFallbackForEmbeddings(t *testing.T) {
 	r := &Registry{
 		providers: map[string]providerInstance{
@@ -82,5 +104,39 @@ func TestGetProviderDoesNotFallbackForEmbeddings(t *testing.T) {
 	_, err := r.GetProvider("embeddings")
 	if err == nil {
 		t.Fatalf("expected error when embeddings chain is empty")
+	}
+}
+
+func TestBuildAllModelsFailedErrorReportsCooldownExhaustionClearly(t *testing.T) {
+	err := buildAllModelsFailedError("subagent", []FailoverAttempt{
+		{Model: "p1/a", Skipped: true},
+		{Model: "p2/b", Skipped: true},
+	}, nil)
+	if err == nil {
+		t.Fatalf("expected cooldown exhaustion error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "all models unavailable for subagent") {
+		t.Fatalf("expected unavailable wording, got %q", msg)
+	}
+	if !strings.Contains(msg, "skipped because they are in cooldown") {
+		t.Fatalf("expected cooldown explanation, got %q", msg)
+	}
+}
+
+func TestBuildAllModelsFailedErrorDoesNotEmitNilWrapFormatting(t *testing.T) {
+	err := buildAllModelsFailedError("subagent", []FailoverAttempt{
+		{Model: "p1/a", Skipped: false},
+		{Model: "p2/b", Skipped: true},
+	}, nil)
+	if err == nil {
+		t.Fatalf("expected generic all-models-failed error")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "%!w(<nil>)") {
+		t.Fatalf("expected no nil wrap formatting, got %q", msg)
+	}
+	if !strings.Contains(msg, "attempted=1 skipped=1") {
+		t.Fatalf("expected attempted/skipped counts, got %q", msg)
 	}
 }

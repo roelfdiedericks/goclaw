@@ -88,3 +88,37 @@ func TestSubagentCancelCascadeCancelsParentAndChildren(t *testing.T) {
 	t.Fatalf("expected both parent and child canceled; parent=%s child=%s", parentRec.State, childRec.State)
 }
 
+func TestSubagentKillMarksBindingUnfocused(t *testing.T) {
+	svc := cron.NewService(cron.NewStore("", ""), &cancelToolGatewayStub{})
+	svc.SetDelegatedRunsEnabled(true, "", delegatedrun.SpawnLimits{})
+
+	runID, err := svc.StartDelegatedRun(context.Background(), delegatedrun.RunSpec{
+		RequesterType: "subagent",
+		RequesterID:   "http:chat-1",
+		SessionKey:    "subagent:kill",
+		Prompt:        "long running",
+		Purpose:       "test",
+	})
+	if err != nil {
+		t.Fatalf("start run failed: %v", err)
+	}
+
+	tool := NewTool()
+	_, err = tool.Execute(ownerCtx(), json.RawMessage(`{"runId":"`+runID+`","mode":"kill","scope":"self"}`))
+	if err != nil {
+		t.Fatalf("subagent_cancel kill execute failed: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		rec, ok := svc.GetDelegatedRun(runID)
+		if ok && rec.State == delegatedrun.RunStateCanceled && rec.RequesterBindingState == delegatedrun.RequesterBindingUnfocused {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	rec, _ := svc.GetDelegatedRun(runID)
+	t.Fatalf("expected canceled + unfocused binding, got state=%s binding=%s reason=%s", rec.State, rec.RequesterBindingState, rec.RequesterBindingReason)
+}
+

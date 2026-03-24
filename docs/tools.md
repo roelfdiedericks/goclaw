@@ -276,26 +276,34 @@ These tools are owner-only and are enabled behind `tools.subagent.enabled`.
 Canonical design and behavior documentation lives in [Delegated Runs](delegated-runs.md).
 
 - `subagent_spawn`
-  - Starts an asynchronous delegated run and returns `runId` immediately.
+  - Starts one background worker and returns `runId` immediately.
   - Automatically propagates lineage from current session run to `parentRunID` when that session run exists in delegated-run registry; otherwise spawns as top-level.
-  - Supports `resultMode`:
-    - `store_only`
-    - `return_to_requester` (reinjected synthetic `tool_use`/`tool_result` into requester session)
-  - Supports dispatch policy fields for completion delivery hardening:
-    - `dispatchOrder` (`queue_first` / `direct_first`)
-    - `fallbackMode` (`none` / `queue_fallback` / `direct_fallback`)
+  - `purpose` is a freeform run tag (metadata only).
+  - `notifyOnComplete=true` by default, so the worker sends a later completion callback unless explicitly disabled.
+  - If requester direct channel is unreachable, direct delivery is skipped and fallback routing is used internally (typically queue/session reinjection).
+  - Direct channel completion text excludes internal orchestration hints; structured reinjection payload retains `replyInstruction` and bounded `untrustedChildOutput`.
   - Failed `return_to_requester` dispatch attempts advance a persisted completion dispatch sequence so retries use a new idempotency key.
 - `subagent_status`
-  - Fetch a single delegated run by `runId` or list recent runs.
+  - Fetch a single delegated run by `runId`, list recent runs, review event logs, or message a running worker.
+  - Supports control actions: `list`, `info`, `log`, `focus`, `unfocus`, `steer`, `send`.
+  - `steer` injects guidance into the delegated run session and triggers one model turn.
+  - `send` injects a ghostwritten assistant message into the delegated run session without invoking the model.
 - `subagent_cancel`
   - Cancel a run by `runId`.
   - `cascade=true` (default) cancels descendants as well.
+  - `mode="kill"` is a distinct hard-stop request and only supports `scope="self"`.
 - `subagent_fanout`
-  - Spawns multiple delegated child runs from one request.
+  - Spawns multiple delegated child workers from one request.
   - Supports bounded `parallelism` and deterministic aggregation ordered by input index.
-  - Optional model-mediated synthesis pass via `synthesize=true` (with optional `synthesisPrompt`) while preserving deterministic aggregate output.
-  - Supports `synthesisTimeoutSeconds` to override timeout for synthesis only.
-  - Synthesis input is size-bounded; response includes truncation metadata (`truncated`, `includedItems`, `totalItems`).
+  - `purpose` is freeform metadata.
+  - Returns child worker results in the current turn by default so the calling agent can interpret them directly.
+  - `includeSummary=true` adds one optional extra machine-generated summary across the worker results.
+  - `notifyOnComplete=false` by default; enable it only if you also want a later completion callback after the immediate result.
+  - Completion callback uses direct shared completion dispatch built from deterministic outcomes; no extra summarizer model run is required.
+  - Supports `summaryTimeoutSeconds` to override timeout for the optional extra summary pass only.
+  - Summary input is size-bounded; if the optional summary would only cover some worker outputs, GoClaw skips it and explains why in `extraSummaryStatus` instead of returning a partial summary.
+  - Tool output now returns full child `output` text inline when the current session has enough headroom.
+  - If the current session budget cannot fit every full child output inline, the response includes as many complete child outputs as fit plus an `overflow` section with omitted child `runId` handles and the `subagent_status` inspect path.
   - Uses delegated policy controls (depth/per-parent/global lane), retrying transient spawn-limit denials during bounded fanout admission.
 
 Operational UI/API for delegated runs:

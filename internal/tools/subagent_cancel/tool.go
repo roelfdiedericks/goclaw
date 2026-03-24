@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	cronpkg "github.com/roelfdiedericks/goclaw/internal/cron"
+	"github.com/roelfdiedericks/goclaw/internal/delegatedrun"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
@@ -28,11 +29,21 @@ func (t *Tool) Schema() map[string]any {
 		"properties": map[string]any{
 			"runId": map[string]any{
 				"type":        "string",
-				"description": "Delegated run ID to cancel",
+				"description": "The runId to stop.",
+			},
+			"mode": map[string]any{
+				"type":        "string",
+				"enum":        []string{"cancel", "kill"},
+				"description": "How to stop it. cancel is the normal stop. kill is a hard stop and only works on the run itself.",
+			},
+			"scope": map[string]any{
+				"type":        "string",
+				"enum":        []string{"self", "subtree"},
+				"description": "What to stop. self stops only this run. subtree also stops its child runs.",
 			},
 			"cascade": map[string]any{
 				"type":        "boolean",
-				"description": "If true (default), cancel child delegated runs as well",
+				"description": "If true, also stop child runs. Default true.",
 			},
 		},
 		"required": []string{"runId"},
@@ -41,6 +52,8 @@ func (t *Tool) Schema() map[string]any {
 
 type cancelInput struct {
 	RunID   string `json:"runId"`
+	Mode    string `json:"mode"`
+	Scope   string `json:"scope"`
 	Cascade *bool  `json:"cascade"`
 }
 
@@ -55,8 +68,11 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	}
 
 	sessionCtx := types.GetSessionContext(ctx)
-	if sessionCtx == nil || sessionCtx.User == nil || !sessionCtx.User.IsOwner() {
-		return nil, fmt.Errorf("subagent tools are owner-only")
+	if sessionCtx == nil || sessionCtx.User == nil {
+		return nil, delegatedrun.EnsureSubagentOwner(false)
+	}
+	if err := delegatedrun.EnsureSubagentOwner(sessionCtx.User.IsOwner()); err != nil {
+		return nil, err
 	}
 
 	service := cronpkg.GetService()
@@ -64,27 +80,41 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		return nil, fmt.Errorf("cron service is not running")
 	}
 
-	cascade := true
-	if in.Cascade != nil {
-		cascade = *in.Cascade
+	control, err := delegatedrun.NormalizeCancelControl(delegatedrun.CancelControlInput{
+		Mode:    in.Mode,
+		Scope:   in.Scope,
+		Cascade: in.Cascade,
+	})
+	if err != nil {
+		return nil, err
+	}
+	rec, ok := service.GetDelegatedRun(runID)
+	if !ok {
+		return nil, fmt.Errorf("run not found: %s", runID)
+	}
+	if err := delegatedrun.ValidateCancelControlForRun(rec, control); err != nil {
+		return nil, err
 	}
 
-	var err error
-	if cascade {
+	if control.Mode == "kill" {
+		err = service.KillDelegatedRun(runID)
+	} else if control.Cascade {
 		err = service.CancelDelegatedRunCascade(runID)
 	} else {
 		err = service.CancelDelegatedRun(runID)
 	}
 	if err != nil {
-		L_warn("subagent_cancel: failed", "runID", runID, "error", err)
+		L_warn("subagent_cancel: failed", "runID", runID, "mode", control.Mode, "scope", control.Scope, "error", err)
 		return nil, err
 	}
 
-	L_info("subagent_cancel: requested", "runID", runID, "cascade", cascade)
+	L_info("subagent_cancel: requested", "runID", runID, "mode", control.Mode, "scope", control.Scope, "cascade", control.Cascade)
 	out, _ := json.MarshalIndent(map[string]any{
 		"ok":      true,
 		"runId":   runID,
-		"cascade": cascade,
+		"mode":    control.Mode,
+		"scope":   control.Scope,
+		"cascade": control.Cascade,
 	}, "", "  ")
 	return types.TextResult(string(out)), nil
 }

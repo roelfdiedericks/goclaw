@@ -155,3 +155,58 @@ func TestStartDelegatedRunCapsTimeoutAtMax(t *testing.T) {
 	}
 }
 
+func TestStartDelegatedRunDefaultsLLMPurposeByRequesterType(t *testing.T) {
+	reg := delegatedrun.NewMemoryRegistry()
+	runner := &delegatedStartRunnerStub{}
+	svc := &Service{
+		runner:   runner,
+		registry: reg,
+	}
+
+	_, err := svc.StartDelegatedRun(context.Background(), delegatedrun.RunSpec{
+		RequesterType: "subagent",
+		Prompt:        "test",
+		UserID:        "owner",
+	})
+	if err != nil {
+		t.Fatalf("expected subagent start success, got: %v", err)
+	}
+	if runner.lastSpec.LLMPurpose != "subagent" {
+		t.Fatalf("expected default llmPurpose=subagent, got %q", runner.lastSpec.LLMPurpose)
+	}
+
+	_, err = svc.StartDelegatedRun(context.Background(), delegatedrun.RunSpec{
+		RequesterType: "cron",
+		Prompt:        "cron test",
+		UserID:        "owner",
+	})
+	if err != nil {
+		t.Fatalf("expected cron start success, got: %v", err)
+	}
+	if runner.lastSpec.LLMPurpose != "cron" {
+		t.Fatalf("expected default llmPurpose=cron for cron requester, got %q", runner.lastSpec.LLMPurpose)
+	}
+}
+
+func TestStartDelegatedRunNormalizesUnknownLLMPurposeToSubagent(t *testing.T) {
+	reg := delegatedrun.NewMemoryRegistry()
+	runner := &delegatedStartRunnerStub{}
+	svc := &Service{
+		runner:   runner,
+		registry: reg,
+	}
+
+	_, err := svc.StartDelegatedRun(context.Background(), delegatedrun.RunSpec{
+		RequesterType: "subagent",
+		Prompt:        "test",
+		UserID:        "owner",
+		LLMPurpose:    "research",
+	})
+	if err != nil {
+		t.Fatalf("expected start success, got: %v", err)
+	}
+	if runner.lastSpec.LLMPurpose != "subagent" {
+		t.Fatalf("expected unknown llmPurpose normalized to subagent, got %q", runner.lastSpec.LLMPurpose)
+	}
+}
+

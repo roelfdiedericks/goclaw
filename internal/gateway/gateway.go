@@ -639,13 +639,14 @@ func (g *Gateway) DeliverToolMessageToChannel(ctx context.Context, params ToolMe
 	if channelName == "" {
 		return fmt.Errorf("target channel required for scoped tool message delivery")
 	}
+	message := formatScopedToolMessage(params.Message)
 
 	// Persist as assistant message (no user message for tool output)
 	enrichedMsg, err := g.PersistConversationTurn(ctx, PersistParams{
 		User:             params.User,
 		Source:           params.Source,
 		UserMessage:      "",
-		AssistantMessage: params.Message,
+		AssistantMessage: message,
 		SkipUserMessage:  true,
 	})
 	if err != nil {
@@ -659,6 +660,19 @@ func (g *Gateway) DeliverToolMessageToChannel(ctx context.Context, params ToolMe
 	if !ch.HasUser(params.User) {
 		return fmt.Errorf("target channel %s has no reachable user", channelName)
 	}
+	if aware, ok := ch.(deliveryReachability); ok {
+		if reachable, reason := aware.DeliveryReachable(params.User); !reachable {
+			if strings.TrimSpace(reason) == "" {
+				reason = delivery.ReasonUnreachable
+			}
+			return delegatedrun.NewNonRetryableDispatchError(
+				delegatedrun.DispatchErrDirectChannelUnreachable,
+				delegatedrun.DispatchPathDirect,
+				reason,
+				nil,
+			)
+		}
+	}
 
 	g.deliverAssistantMessage(ctx, params.User, enrichedMsg, []Channel{ch})
 	L_debug("deliver: scoped tool message delivered",
@@ -666,6 +680,10 @@ func (g *Gateway) DeliverToolMessageToChannel(ctx context.Context, params ToolMe
 		"targetChannel", channelName,
 		"msgLen", len(enrichedMsg))
 	return nil
+}
+
+func formatScopedToolMessage(message string) string {
+	return strings.TrimSpace(message)
 }
 
 // InjectDelegatedReturnToSession appends a synthetic tool_use/tool_result pair
@@ -689,15 +707,18 @@ func (g *Gateway) InjectDelegatedReturnToSession(
 
 	toolCallID := fmt.Sprintf("delegated_return:%s", runID)
 	toolInput, _ := json.Marshal(map[string]any{
-		"action":  "return_to_requester",
-		"runId":   runID,
-		"source":  strings.TrimSpace(source),
-		"session": sessionKey,
+		"action":     "return_to_requester",
+		"runId":      runID,
+		"source":     strings.TrimSpace(source),
+		"session":    sessionKey,
+		"injectMode": "tool_result",
+		"schema":     "delegated_completion.v1",
 	})
+	toolResultPayload := buildDelegatedCompletionToolResultPayload(runID, source, sessionKey, message, toolError)
 
 	sess := g.sessions.Get(sessionKey)
 	toolUseMsgID := sess.AddToolUse(toolCallID, "subagent_spawn", toolInput, "", "")
-	toolResultMsgID := sess.AddToolResult(toolCallID, strings.TrimSpace(message), nil, "")
+	toolResultMsgID := sess.AddToolResult(toolCallID, toolResultPayload, nil, "")
 
 	userID := ""
 	if u != nil {
@@ -718,7 +739,7 @@ func (g *Gateway) InjectDelegatedReturnToSession(
 		SessionKey: sessionKey,
 		UserID:     userID,
 		Role:       "tool_result",
-		Content:    strings.TrimSpace(message),
+		Content:    toolResultPayload,
 		Source:     "delegated_return",
 		ToolCallID: toolCallID,
 		ToolError:  strings.TrimSpace(toolError),
@@ -728,6 +749,39 @@ func (g *Gateway) InjectDelegatedReturnToSession(
 		"sessionKey", sessionKey,
 		"toolError", strings.TrimSpace(toolError) != "")
 	return nil
+}
+
+const delegatedToolResultMaxChars = 12000
+
+func buildDelegatedCompletionToolResultPayload(runID, source, sessionKey, message, toolError string) string {
+	raw := strings.TrimSpace(message)
+	truncated := false
+	if len(raw) > delegatedToolResultMaxChars {
+		raw = raw[:delegatedToolResultMaxChars] + "...(truncated)"
+		truncated = true
+	}
+	payload := map[string]any{
+		"schema": delegatedrun.CompletionPayloadSchema,
+		"kind":   delegatedrun.CompletionPayloadKind,
+		"meta": map[string]any{
+			"runId":      strings.TrimSpace(runID),
+			"source":     strings.TrimSpace(source),
+			"session":    strings.TrimSpace(sessionKey),
+			"toolError":  strings.TrimSpace(toolError) != "",
+			"injectMode": "tool_result",
+		},
+		"replyInstruction": delegatedrun.DefaultReplyInstruction,
+		"untrustedChildOutput": map[string]any{
+			"format":    "text/plain",
+			"truncated": truncated,
+			"text":      raw,
+		},
+	}
+	b, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("{\"schema\":%q,\"kind\":%q,\"meta\":{\"runId\":%q},\"untrustedChildOutput\":{\"format\":\"text/plain\",\"truncated\":false,\"text\":%q}}", delegatedrun.CompletionPayloadSchema, delegatedrun.CompletionPayloadKind, strings.TrimSpace(runID), raw)
+	}
+	return string(b)
 }
 
 // MediaStore returns the media store
@@ -2047,12 +2101,17 @@ func (g *Gateway) ExecuteTool(ctx context.Context, params ToolExecutionParams) (
 	}
 
 	// Build session context
+	reserveTokens := 0
+	if g.compactor != nil {
+		reserveTokens = g.compactor.GetReserveTokens()
+	}
 	toolCtx := tools.WithSessionContext(ctx, &tools.SessionContext{
 		Channel:         params.Source,
 		ChatID:          params.ChatID,
 		OwnerChatID:     ownerChatID,
 		SessionKey:      "",
 		RunID:           "",
+		ReserveTokens:   reserveTokens,
 		User:            params.User,
 		TranscriptScope: transcriptScope,
 	})
@@ -2907,6 +2966,10 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			if owner := g.users.Owner(); owner != nil {
 				ownerChatID = owner.TelegramID
 			}
+			reserveTokens := 0
+			if g.compactor != nil {
+				reserveTokens = g.compactor.GetReserveTokens()
+			}
 			transcriptScope := "own" // Default to restrictive
 			if resolvedRole, err := g.users.ResolveUserRole(req.User); err == nil {
 				transcriptScope = resolvedRole.GetTranscriptScope()
@@ -3012,6 +3075,9 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 							OwnerChatID:       ownerChatID,
 							SessionKey:        sessionKey,
 							RunID:             runID,
+							TotalTokens:       sess.GetTotalTokens(),
+							MaxTokens:         sess.GetMaxTokens(),
+							ReserveTokens:     reserveTokens,
 							User:              req.User,
 							TranscriptScope:   transcriptScope,
 							Session:           sess,
@@ -3231,6 +3297,9 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					OwnerChatID:       ownerChatID,
 					SessionKey:        sessionKey,
 					RunID:             runID,
+					TotalTokens:       sess.GetTotalTokens(),
+					MaxTokens:         sess.GetMaxTokens(),
+					ReserveTokens:     reserveTokens,
 					User:              req.User,
 					TranscriptScope:   transcriptScope,
 					Session:           sess,

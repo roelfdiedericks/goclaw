@@ -2899,7 +2899,18 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 		))
 		reg.Register(toolsubagentstatus.NewTool())
 		reg.Register(toolsubagentcancel.NewTool())
-		reg.Register(toolsubagentfanout.NewTool())
+		reg.Register(toolsubagentfanout.NewToolWithReturnToRequester(
+			func(ctx context.Context, u *user.User, source, sessionKey, runID, message, toolError string) error {
+				return gw.InjectDelegatedReturnToSession(ctx, u, source, sessionKey, runID, message, toolError)
+			},
+			func(ctx context.Context, u *user.User, source, message string) error {
+				return gw.DeliverToolMessageToChannel(ctx, gateway.ToolMessageParams{
+					User:    u,
+					Source:  source,
+					Message: message,
+				}, source)
+			},
+		))
 	} else if cfg.Tools.Subagent.Enabled && !cfg.Gateway.DelegatedRuns.Enabled {
 		L_warn("tools: subagent tools requested but delegated runs are disabled; skipping subagent tool registration",
 			"tools.subagent.enabled", cfg.Tools.Subagent.Enabled,

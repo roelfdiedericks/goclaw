@@ -88,6 +88,7 @@ var purposeCapabilities = map[string]purposeCapReq{
 type RegistryConfig struct {
 	Providers        map[string]LLMProviderConfig `json:"providers"`
 	Agent            LLMPurposeConfig             `json:"agent"`
+	Subagent         LLMPurposeConfig             `json:"subagent,omitempty"`
 	Summarization    LLMPurposeConfig             `json:"summarization"`
 	Embeddings       LLMPurposeConfig             `json:"embeddings"`
 	Heartbeat        LLMPurposeConfig             `json:"heartbeat,omitempty"`
@@ -102,6 +103,7 @@ func NewRegistry(cfg RegistryConfig) (*Registry, error) {
 		providers: make(map[string]providerInstance),
 		purposes: map[string]LLMPurposeConfig{
 			"agent":             cfg.Agent,
+			"subagent":          cfg.Subagent,
 			"summarization":     cfg.Summarization,
 			"embeddings":        cfg.Embeddings,
 			"heartbeat":         cfg.Heartbeat,
@@ -121,7 +123,7 @@ func NewRegistry(cfg RegistryConfig) (*Registry, error) {
 
 	// Validate models for all purposes (skip empty chains — most purposes can
 	// fall back to agent; embeddings remains strict and requires explicit models).
-	for _, purpose := range []string{"agent", "summarization", "embeddings", "heartbeat", "cron", "hass", "memory_extraction"} {
+	for _, purpose := range []string{"agent", "subagent", "summarization", "embeddings", "heartbeat", "cron", "hass", "memory_extraction"} {
 		if len(r.purposes[purpose].Models) == 0 {
 			continue
 		}
@@ -679,6 +681,25 @@ type FailoverResult struct {
 	Recovered  *RecoveryInfo     // Non-nil if provider recovered from cooldown
 }
 
+func buildAllModelsFailedError(purpose string, attempts []FailoverAttempt, lastErr error) error {
+	skipped := 0
+	attempted := 0
+	for _, attempt := range attempts {
+		if attempt.Skipped {
+			skipped++
+			continue
+		}
+		attempted++
+	}
+	if attempted == 0 && skipped > 0 {
+		return fmt.Errorf("all models unavailable for %s: %d provider candidates skipped because they are in cooldown", purpose, skipped)
+	}
+	if lastErr == nil {
+		return fmt.Errorf("all models failed for %s: attempted=%d skipped=%d", purpose, attempted, skipped)
+	}
+	return fmt.Errorf("all models failed for %s: attempted=%d skipped=%d last error: %w", purpose, attempted, skipped, lastErr)
+}
+
 // StreamMessageWithFailover tries models in the chain for a purpose, handling
 // failover and cooldowns. Returns detailed result for notification purposes.
 // stateAccessor is used for stateful providers (like xAI) to load/save session state.
@@ -833,7 +854,7 @@ func (r *Registry) StreamMessageWithFailover(
 	}
 
 	// All models failed
-	return result, fmt.Errorf("all models failed for %s (last: %w)", purpose, lastErr)
+	return result, buildAllModelsFailedError(purpose, result.Attempts, lastErr)
 }
 
 // SimpleMessageResult contains the result of a failover-enabled simple message call
@@ -974,5 +995,5 @@ func (r *Registry) SimpleMessageWithFailover(
 	}
 
 	// All models failed
-	return result, fmt.Errorf("all models failed for %s (last: %w)", purpose, lastErr)
+	return result, buildAllModelsFailedError(purpose, nil, lastErr)
 }

@@ -130,12 +130,10 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, ses
 	logging.L_info("http: supervision started", "session", sessionKey, "supervisor", u.ID)
 
 	// Set SSE headers
-	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
+	configureSSEHeaders(w)
+	rc := configureSSEWriteDeadline(w, "/api/sessions/events")
 
-	flusher, ok := w.(http.Flusher)
+	_, ok = w.(http.Flusher)
 	if !ok {
 		http.Error(w, "SSE not supported", http.StatusInternalServerError)
 		return
@@ -151,8 +149,12 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, ses
 		"maxTokens":   sess.GetMaxTokens(),
 	}
 	data, _ := json.Marshal(connectData)
-	fmt.Fprintf(w, "event: connected\ndata: %s\n\n", data)
-	flusher.Flush()
+	if !sseWritef(w, rc, "/api/sessions/events", "retry: 2000\n\n") {
+		return
+	}
+	if !sseWritef(w, rc, "/api/sessions/events", "event: connected\ndata: %s\n\n", data) {
+		return
+	}
 
 	// Send existing message history
 	messages := sess.GetMessages()
@@ -178,9 +180,10 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, ses
 			msgData["interventionType"] = msg.InterventionType
 		}
 		data, _ := json.Marshal(msgData)
-		fmt.Fprintf(w, "event: history\ndata: %s\n\n", data)
+		if !sseWritef(w, rc, "/api/sessions/events", "event: history\ndata: %s\n\n", data) {
+			return
+		}
 	}
-	flusher.Flush()
 
 	// Subscribe to real-time events
 	eventChan := supervision.Subscribe()
@@ -199,8 +202,9 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, ses
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			fmt.Fprintf(w, ": heartbeat\n\n")
-			flusher.Flush()
+			if !sseWritef(w, rc, "/api/sessions/events", ": heartbeat\n\n") {
+				return
+			}
 		case ev, ok := <-eventChan:
 			if !ok {
 				// Channel closed
@@ -210,8 +214,9 @@ func (s *Server) handleSessionEvents(w http.ResponseWriter, r *http.Request, ses
 			sseEvent := s.supervisionEventToSSE(ev)
 			if sseEvent != nil {
 				data, _ := json.Marshal(sseEvent.Data)
-				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", sseEvent.Event, data)
-				flusher.Flush()
+				if !sseWritef(w, rc, "/api/sessions/events", "event: %s\ndata: %s\n\n", sseEvent.Event, data) {
+					return
+				}
 			}
 		}
 	}

@@ -68,6 +68,20 @@ func TestInjectDelegatedReturnToSessionAddsSyntheticToolMessages(t *testing.T) {
 	if toolResult.Content == "" {
 		t.Fatalf("expected non-empty tool_result content")
 	}
+	var resultPayload map[string]any
+	if err := json.Unmarshal([]byte(toolResult.Content), &resultPayload); err != nil {
+		t.Fatalf("expected tool_result payload JSON, got error: %v", err)
+	}
+	if resultPayload["schema"] != "delegated_completion.v1" {
+		t.Fatalf("expected delegated completion schema, got %#v", resultPayload["schema"])
+	}
+	untrusted, ok := resultPayload["untrustedChildOutput"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected untrustedChildOutput payload section, got %#v", resultPayload["untrustedChildOutput"])
+	}
+	if strings.TrimSpace(asString(untrusted["text"])) == "" {
+		t.Fatalf("expected non-empty untrusted child output text")
+	}
 }
 
 type delegatedGatewayRunnerStub struct{}
@@ -108,10 +122,7 @@ func TestSubagentSpawnReturnToRequesterInjectsIntoRequesterSession(t *testing.T)
 
 	tool := toolsubagentspawn.NewTool(g.InjectDelegatedReturnToSession, nil)
 	result, err := tool.Execute(ctx, json.RawMessage(`{
-		"prompt":"integration reinjection test",
-		"resultMode":"return_to_requester",
-		"dispatchOrder":"queue_first",
-		"fallbackMode":"none"
+		"prompt":"integration reinjection test"
 	}`))
 	if err != nil {
 		t.Fatalf("expected spawn success, got error: %v", err)
@@ -150,5 +161,24 @@ func TestSubagentSpawnReturnToRequesterInjectsIntoRequesterSession(t *testing.T)
 	if toolResult.ToolUseID != toolUse.ToolUseID {
 		t.Fatalf("expected tool_result to reference tool_use id, got %q vs %q", toolResult.ToolUseID, toolUse.ToolUseID)
 	}
+	var resultPayload map[string]any
+	if err := json.Unmarshal([]byte(toolResult.Content), &resultPayload); err != nil {
+		t.Fatalf("expected structured tool_result payload, got error: %v", err)
+	}
+	if resultPayload["kind"] != "task_completion" {
+		t.Fatalf("expected task_completion payload kind, got %#v", resultPayload["kind"])
+	}
+	meta, ok := resultPayload["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected meta object in tool_result payload")
+	}
+	if strings.TrimSpace(asString(meta["runId"])) == "" {
+		t.Fatalf("expected runId in tool_result payload meta")
+	}
+}
+
+func asString(v any) string {
+	s, _ := v.(string)
+	return s
 }
 

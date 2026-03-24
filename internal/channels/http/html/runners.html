@@ -2,6 +2,175 @@
 
 <h1>Delegated Runners</h1>
 
+<style>
+.runners-main-card,
+.runners-detail-card {
+    min-height: 32rem;
+}
+
+.runners-tree-scroll {
+    max-height: 32rem;
+    overflow: auto;
+}
+
+.runners-tree-scroll table {
+    table-layout: fixed;
+    width: 100%;
+}
+
+.runner-tree-row {
+    cursor: pointer;
+}
+
+.runner-tree-row.is-selected {
+    background: rgba(13, 110, 253, 0.10);
+}
+
+.runner-tree-cell {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.runner-tree-label {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.runner-tree-runid {
+    font-family: var(--bs-font-monospace);
+    font-size: 0.875rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 12rem;
+    display: inline-block;
+}
+
+.runner-tree-toggle {
+    width: 1.6rem;
+    height: 1.6rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+}
+
+.runner-tree-toggle.is-placeholder {
+    visibility: hidden;
+}
+
+.runner-detail-empty,
+.runner-tree-empty {
+    color: var(--bs-secondary-color);
+}
+
+.runner-detail-section + .runner-detail-section {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--bs-border-color);
+}
+
+.runner-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    gap: 0.85rem 1rem;
+}
+
+.runner-detail-item .label {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--bs-secondary-color);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    margin-bottom: 0.2rem;
+}
+
+.runner-detail-item .value {
+    word-break: break-word;
+}
+
+.runner-detail-pre {
+    max-height: 11rem;
+    overflow: auto;
+    background: var(--bs-tertiary-bg);
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.4rem;
+    padding: 0.75rem;
+    white-space: pre-wrap;
+    margin-bottom: 0;
+}
+
+.runner-console {
+    height: 18rem;
+    overflow: auto;
+    background: #111;
+    color: #eee;
+    border-radius: 0.4rem;
+    padding: 0.75rem;
+    font-family: var(--bs-font-monospace);
+    font-size: 0.8rem;
+    line-height: 1.35;
+    white-space: pre-wrap;
+}
+
+.runner-col-run { width: 18%; }
+.runner-col-state { width: 14%; }
+.runner-col-requester { width: 30%; }
+.runner-col-purpose { width: 22%; }
+.runner-col-started { width: 10%; }
+.runner-col-actions { width: 6rem; }
+
+.runner-cell-clip {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.runner-transcript-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.runner-transcript-item {
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.45rem;
+    padding: 0.75rem;
+    background: var(--bs-body-bg);
+}
+
+.runner-transcript-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    margin-bottom: 0.45rem;
+}
+
+.runner-transcript-content {
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: var(--bs-font-monospace);
+    font-size: 0.85rem;
+}
+
+@media (max-width: 991.98px) {
+    .runners-main-card,
+    .runners-detail-card {
+        min-height: 0;
+    }
+
+    .runners-tree-scroll,
+    .runner-console {
+        max-height: none;
+        height: auto;
+    }
+}
+</style>
+
 <div class="row mb-3">
     <div class="col">
         <nav aria-label="breadcrumb">
@@ -11,44 +180,59 @@
             </ol>
         </nav>
     </div>
-    <div class="col-auto d-flex align-items-center me-2">
-        <div class="form-check form-switch">
+    <div class="col-auto d-flex align-items-center gap-3 flex-wrap">
+        <span class="badge rounded-pill text-bg-secondary" id="runners-live-state">connecting</span>
+        <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" role="switch" id="runners-auto-scroll" checked>
+            <label class="form-check-label small" for="runners-auto-scroll">Auto-scroll live</label>
+        </div>
+        <div class="form-check form-switch mb-0">
             <input class="form-check-input" type="checkbox" role="switch" id="runners-include-completed">
             <label class="form-check-label small" for="runners-include-completed">Include completed</label>
         </div>
-    </div>
-    <div class="col-auto">
         <button class="btn btn-sm btn-primary" id="refresh-runners">
             <i class="bi bi-arrow-clockwise"></i> Refresh
         </button>
     </div>
 </div>
 
-<div class="row">
-    <div class="col-12">
-        <div class="card">
+<div class="row g-3">
+    <div class="col-lg-7">
+        <div class="card runners-main-card">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <div><i class="bi bi-list-task"></i> Active and Recent Runs</div>
+                <div><i class="bi bi-diagram-3"></i> Run Tree</div>
                 <small class="text-muted" id="runners-last-update">Never</small>
             </div>
-            <div class="card-body">
-                <div id="runners-empty" class="text-muted">Loading...</div>
-                <div class="table-responsive" id="runners-table-wrap" style="display:none;">
-                    <table class="table table-sm table-hover mb-0">
-                        <thead>
+            <div class="card-body p-0">
+                <div id="runners-tree-empty" class="runner-tree-empty p-3">Loading runners...</div>
+                <div class="table-responsive runners-tree-scroll d-none" id="runners-tree-wrap">
+                    <table class="table table-sm table-hover mb-0 align-middle">
+                        <thead class="table-light sticky-top">
                             <tr>
-                                <th>Run ID</th>
-                                <th>State</th>
-                                <th>Requester</th>
-                                <th>Purpose</th>
-                                <th>Session</th>
-                                <th>Started</th>
-                                <th>Actions</th>
+                                <th class="runner-col-run">Run</th>
+                                <th class="runner-col-state">State</th>
+                                <th class="runner-col-requester">Requester</th>
+                                <th class="runner-col-purpose">Purpose</th>
+                                <th class="runner-col-started">Started</th>
+                                <th class="runner-col-actions text-end">Actions</th>
                             </tr>
                         </thead>
-                        <tbody id="runners-table-body"></tbody>
+                        <tbody id="runners-tree-body"></tbody>
                     </table>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-5">
+        <div class="card runners-detail-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div><i class="bi bi-card-text"></i> Run Detail</div>
+                <small class="text-muted" id="runner-detail-status">Nothing selected</small>
+            </div>
+            <div class="card-body">
+                <div id="runner-detail-empty" class="runner-detail-empty">Select a run on the left to inspect its detail.</div>
+                <div id="runner-detail-content" class="d-none"></div>
             </div>
         </div>
     </div>
@@ -57,25 +241,28 @@
 <div class="row mt-3">
     <div class="col-12">
         <div class="card">
-            <div class="card-header">
-                <i class="bi bi-journal-code"></i> Live Runner Events
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div><i class="bi bi-journal-code"></i> Live Runner Events</div>
+                <small class="text-muted">Snapshot + SSE</small>
             </div>
             <div class="card-body">
-                <pre id="runners-events-log" class="small mb-0" style="max-height:300px;overflow:auto;background:#111;color:#eee;padding:0.75rem;border-radius:0.4rem;">Connecting...</pre>
+                <div id="runners-events-log" class="runner-console">Connecting...</div>
             </div>
         </div>
     </div>
 </div>
 
-<div class="modal fade" id="runner-detail-modal" tabindex="-1" aria-labelledby="runner-detail-title" aria-hidden="true">
+<div class="modal fade" id="runner-transcript-modal" tabindex="-1" aria-labelledby="runner-transcript-title" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title" id="runner-detail-title">Runner Detail</h5>
+                <h5 class="modal-title" id="runner-transcript-title">Runner Transcript</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <pre id="runner-detail-json" class="small mb-0" style="max-height:60vh;overflow:auto;background:#111;color:#eee;padding:0.75rem;border-radius:0.4rem;">Loading...</pre>
+                <div id="runner-transcript-body" class="runner-transcript-list">
+                    <div class="text-muted">Loading transcript...</div>
+                </div>
             </div>
         </div>
     </div>
@@ -87,19 +274,48 @@
         items: [],
         eventsSource: null,
         lastEventId: 0,
-        detailModal: null,
-        includeCompleted: false
+        transcriptModal: null,
+        includeCompleted: false,
+        autoScrollLive: true,
+        lastDisconnectLogAt: 0,
+        refreshPending: false,
+        renderPending: false,
+        detailRefreshPending: false,
+        selectedRunId: null,
+        detailById: {},
+        transcriptByRunId: {},
+        expandedRunIds: {},
+        eventLines: [],
+        runnersRefreshDelayMs: 900,
+        completedRowLingerMs: 5 * 60 * 1000
     };
 
-    const $empty = $('#runners-empty');
-    const $tableWrap = $('#runners-table-wrap');
-    const $tbody = $('#runners-table-body');
+    const $treeEmpty = $('#runners-tree-empty');
+    const $treeWrap = $('#runners-tree-wrap');
+    const $tbody = $('#runners-tree-body');
     const $eventsLog = $('#runners-events-log');
     const $lastUpdate = $('#runners-last-update');
-    const $detailJson = $('#runner-detail-json');
+    const $detailStatus = $('#runner-detail-status');
+    const $detailEmpty = $('#runner-detail-empty');
+    const $detailContent = $('#runner-detail-content');
+    const $liveState = $('#runners-live-state');
+    const $transcriptBody = $('#runner-transcript-body');
 
     function escapeHtml(text) {
         return $('<div>').text(String(text || '')).html();
+    }
+
+    function badgeClass(kind) {
+        if (kind === 'live') return 'text-bg-success';
+        if (kind === 'reconnecting') return 'text-bg-warning';
+        if (kind === 'disconnected') return 'text-bg-danger';
+        return 'text-bg-secondary';
+    }
+
+    function setLiveState(kind, label) {
+        $liveState.removeClass('text-bg-success text-bg-warning text-bg-danger text-bg-secondary')
+            .addClass(badgeClass(kind))
+            .text(label);
     }
 
     function stateBadge(stateName) {
@@ -118,55 +334,200 @@
         return d.toLocaleString();
     }
 
+    function formatShortTime(v) {
+        if (!v) return '-';
+        const d = new Date(v);
+        if (isNaN(d.getTime())) return '-';
+        return d.toLocaleTimeString();
+    }
+
+    function formatDuration(startedAt, finishedAt) {
+        if (!startedAt) return '-';
+        const start = new Date(startedAt).getTime();
+        if (!start || isNaN(start)) return '-';
+        const end = finishedAt ? new Date(finishedAt).getTime() : Date.now();
+        if (!end || isNaN(end) || end < start) return '-';
+        const seconds = Math.floor((end - start) / 1000);
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        if (mins > 0) return mins + 'm ' + secs + 's';
+        return secs + 's';
+    }
+
+    function textPreview(text, max) {
+        const raw = String(text || '').trim();
+        if (!raw) return '-';
+        if (!max || raw.length <= max) return raw;
+        return raw.slice(0, max) + '...';
+    }
+
+    function shortRunId(runId) {
+        const raw = String(runId || '');
+        if (raw.length <= 12) return raw;
+        return raw.slice(0, 8) + '...' + raw.slice(-4);
+    }
+
+    function isTerminalState(stateName) {
+        const s = String(stateName || '').toLowerCase();
+        return s === 'completed' || s === 'failed' || s === 'timeout' || s === 'canceled';
+    }
+
+    function isActiveState(stateName) {
+        const s = String(stateName || '').toLowerCase();
+        return s === 'queued' || s === 'running';
+    }
+
+    function lifecycleBadge(run) {
+        const cleanup = String(run.cleanupState || '').toLowerCase();
+        if (cleanup === 'dispatched') return '<span class="badge bg-success">dispatched</span>';
+        if (cleanup === 'deferred') return '<span class="badge bg-warning text-dark">deferred</span>';
+        if (cleanup === 'expired') return '<span class="badge bg-danger">expired</span>';
+        if (cleanup === 'dispatching') return '<span class="badge bg-primary">dispatching</span>';
+        if (cleanup === 'none') return '<span class="badge bg-secondary">none</span>';
+        return '<span class="badge bg-light text-dark">' + escapeHtml(cleanup || '-') + '</span>';
+    }
+
+    function dispatchSummary(run) {
+        const order = run.dispatchOrder || '-';
+        const fallback = run.fallbackMode || '-';
+        const seq = Number(run.completionDispatchSeq || 0);
+        const retries = seq > 1 ? (seq - 1) : 0;
+        return escapeHtml(order + ' / ' + fallback) + (retries > 0 ? ('<br><span class="text-warning small">retries: ' + retries + '</span>') : '');
+    }
+
+    function descendantSummary(run) {
+        const count = Number(run.activeDescendantCount || 0);
+        if (!count) return '<span class="badge bg-secondary">none</span>';
+        return '<span class="badge bg-warning text-dark">active: ' + count + '</span>';
+    }
+
+    function queueRender() {
+        if (state.renderPending) return;
+        state.renderPending = true;
+        window.requestAnimationFrame(function() {
+            state.renderPending = false;
+            renderTree();
+        });
+    }
+
+    function scheduleRefresh() {
+        if (state.refreshPending) return;
+        state.refreshPending = true;
+        setTimeout(function() {
+            state.refreshPending = false;
+            loadRunners();
+        }, state.runnersRefreshDelayMs);
+    }
+
     function upsertItem(next) {
         const idx = state.items.findIndex(i => i.runId === next.runId);
         if (idx === -1) state.items.push(next);
         else state.items[idx] = Object.assign({}, state.items[idx], next);
     }
 
-    function renderTable() {
-        const visibleItems = (state.items || []).filter(run => {
-            if (state.includeCompleted) return true;
-            return String(run.state || '').toLowerCase() !== 'completed';
-        });
-        if (visibleItems.length === 0) {
-            $tableWrap.hide();
-            $empty.text(state.includeCompleted ? 'No delegated runs found' : 'No active delegated runs found').show();
-            return;
-        }
-        $empty.hide();
-        $tableWrap.show();
-
-        visibleItems.sort((a, b) => {
+    function sortRuns(items) {
+        return items.sort((a, b) => {
             const at = new Date(a.startedAt || 0).getTime();
             const bt = new Date(b.startedAt || 0).getTime();
             return bt - at;
         });
+    }
 
+    function visibleItems() {
+        const now = Date.now();
+        const visibleItems = (state.items || []).filter(run => {
+            if (state.includeCompleted) return true;
+            if (!isTerminalState(run.state)) return true;
+            if (!run.finishedAt) return false;
+            const finishedAtMs = new Date(run.finishedAt).getTime();
+            if (!finishedAtMs || isNaN(finishedAtMs)) return false;
+            return (finishedAtMs + state.completedRowLingerMs) > now;
+        });
+        return sortRuns(visibleItems);
+    }
+
+    function buildTree(items) {
+        const byParent = {};
+        const visibleIds = new Set(items.map(run => run.runId));
+        const roots = [];
+        items.forEach(function(run) {
+            const parentId = run.parentRunId;
+            if (parentId && visibleIds.has(parentId)) {
+                if (!byParent[parentId]) byParent[parentId] = [];
+                byParent[parentId].push(run);
+            } else {
+                roots.push(run);
+            }
+        });
+        Object.keys(byParent).forEach(function(key) {
+            byParent[key] = sortRuns(byParent[key]);
+        });
+        return { roots: sortRuns(roots), byParent: byParent };
+    }
+
+    function renderTreeRows(rows, childrenByParent, level) {
         let html = '';
-        visibleItems.forEach(run => {
-            html += '<tr>' +
-                '<td><code>' + escapeHtml(run.runId) + '</code></td>' +
-                '<td>' + stateBadge(run.state) + '</td>' +
-                '<td>' + escapeHtml((run.requesterType || '-') + ':' + (run.requesterId || '-')) + '</td>' +
-                '<td>' + escapeHtml(run.purpose || '-') + '</td>' +
-                '<td><code>' + escapeHtml(run.sessionKey || '-') + '</code></td>' +
-                '<td>' + escapeHtml(formatTime(run.startedAt)) + '</td>' +
+        rows.forEach(function(run) {
+            const children = childrenByParent[run.runId] || [];
+            const hasChildren = children.length > 0;
+            const isExpanded = !!state.expandedRunIds[run.runId];
+            const isSelected = state.selectedRunId === run.runId;
+            const padding = 0.5 + (level * 1.1);
+            html += '<tr class="runner-tree-row' + (isSelected ? ' is-selected' : '') + '" data-run-id="' + escapeHtml(run.runId) + '">' +
                 '<td>' +
-                    '<button class="btn btn-sm btn-outline-secondary me-1 runner-detail-btn" data-run-id="' + escapeHtml(run.runId) + '">Detail</button>' +
-                    '<button class="btn btn-sm btn-outline-danger runner-cancel-btn" data-run-id="' + escapeHtml(run.runId) + '">Cancel</button>' +
+                    '<div class="runner-tree-cell" style="padding-left:' + padding + 'rem;">' +
+                        '<button class="runner-tree-toggle' + (hasChildren ? '' : ' is-placeholder') + '" data-run-id="' + escapeHtml(run.runId) + '" ' + (hasChildren ? '' : 'tabindex="-1" aria-hidden="true"') + '>' +
+                            (hasChildren ? (isExpanded ? '&#9662;' : '&#9656;') : '&#9656;') +
+                        '</button>' +
+                        '<div class="runner-tree-label">' +
+                            '<span class="runner-tree-runid" title="' + escapeHtml(run.runId) + '">' + escapeHtml(shortRunId(run.runId)) + '</span>' +
+                        '</div>' +
+                    '</div>' +
+                '</td>' +
+                '<td>' + stateBadge(run.state) + '</td>' +
+                '<td class="runner-cell-clip" title="' + escapeHtml((run.requesterType || '-') + ':' + (run.requesterId || '-')) + '">' + escapeHtml((run.requesterType || '-') + ':' + (run.requesterId || '-')) + '</td>' +
+                '<td class="runner-cell-clip" title="' + escapeHtml(run.purpose || '-') + '">' + escapeHtml(run.purpose || '-') + '</td>' +
+                '<td>' + escapeHtml(formatShortTime(run.startedAt)) + '</td>' +
+                '<td class="text-end">' +
+                    (isActiveState(run.state)
+                        ? '<button class="btn btn-sm btn-outline-danger runner-cancel-btn" data-run-id="' + escapeHtml(run.runId) + '">Cancel</button>'
+                        : '<span class="text-muted small">-</span>') +
                 '</td>' +
             '</tr>';
+            if (hasChildren && isExpanded) {
+                html += renderTreeRows(children, childrenByParent, level + 1);
+            }
         });
-        $tbody.html(html);
+        return html;
+    }
+
+    function renderTree() {
+        const items = visibleItems();
+        if (items.length === 0) {
+            $treeWrap.addClass('d-none');
+            $treeEmpty.text(state.includeCompleted ? 'No delegated runs found.' : 'No active delegated runs found.').show();
+            return;
+        }
+        $treeEmpty.hide();
+        $treeWrap.removeClass('d-none');
+
+        const tree = buildTree(items);
+        $tbody.html(renderTreeRows(tree.roots, tree.byParent, 0));
         $lastUpdate.text('Last updated: ' + new Date().toLocaleTimeString());
     }
 
     function appendLog(line) {
         const now = new Date().toLocaleTimeString();
-        const prev = $eventsLog.text();
-        const next = '[' + now + '] ' + line + '\n' + (prev || '');
-        $eventsLog.text(next.slice(0, 12000));
+        const el = $eventsLog.get(0);
+        const shouldStick = state.autoScrollLive && (el.scrollTop + el.clientHeight >= el.scrollHeight - 8);
+        state.eventLines.push('[' + now + '] ' + line);
+        if (state.eventLines.length > 400) {
+            state.eventLines = state.eventLines.slice(state.eventLines.length - 400);
+        }
+        $eventsLog.text(state.eventLines.join('\n'));
+        if (shouldStick) {
+            el.scrollTop = el.scrollHeight;
+        }
     }
 
     async function loadRunners() {
@@ -175,25 +536,154 @@
             if (!res.ok) throw new Error('HTTP ' + res.status);
             const data = await res.json();
             state.items = Array.isArray(data.items) ? data.items : [];
-            renderTable();
+            if (!state.selectedRunId && state.items.length > 0) {
+                state.selectedRunId = state.items[0].runId;
+            }
+            if (state.selectedRunId && !state.items.some(function(item) { return item.runId === state.selectedRunId; })) {
+                state.selectedRunId = state.items.length ? state.items[0].runId : null;
+            }
+            queueRender();
+            renderDetail();
+            if (state.selectedRunId) {
+                scheduleDetailRefresh();
+            }
         } catch (err) {
-            $empty.text('Failed to load runners: ' + err.message).show();
-            $tableWrap.hide();
+            $treeEmpty.text('Failed to load runners: ' + err.message).show();
+            $treeWrap.addClass('d-none');
         }
     }
 
-    async function showDetail(runId) {
+    function selectedSummaryRun() {
+        return (state.items || []).find(function(item) {
+            return item.runId === state.selectedRunId;
+        }) || null;
+    }
+
+    function renderDetail() {
+        const summaryRun = selectedSummaryRun();
+        const detail = state.selectedRunId ? state.detailById[state.selectedRunId] : null;
+        const run = detail || summaryRun;
+        if (!state.selectedRunId || !run) {
+            $detailStatus.text('Nothing selected');
+            $detailContent.addClass('d-none').empty();
+            $detailEmpty.removeClass('d-none');
+            return;
+        }
+        $detailEmpty.addClass('d-none');
+        $detailContent.removeClass('d-none');
+        $detailStatus.text(run.runId);
+        const childRuns = (state.items || []).filter(function(item) {
+            return item.parentRunId === run.runId;
+        });
+        const html = '' +
+            '<div class="runner-detail-section">' +
+                '<div class="runner-detail-grid">' +
+                    '<div class="runner-detail-item"><span class="label">Run ID</span><div class="value"><code>' + escapeHtml(run.runId || '-') + '</code></div></div>' +
+                    '<div class="runner-detail-item"><span class="label">State</span><div class="value">' + stateBadge(run.state) + ' <span class="small text-muted">(' + escapeHtml(formatDuration(run.startedAt, run.finishedAt)) + ')</span></div></div>' +
+                    '<div class="runner-detail-item"><span class="label">Requester</span><div class="value">' + escapeHtml((run.requesterType || '-') + ':' + (run.requesterId || '-')) + '</div></div>' +
+                    '<div class="runner-detail-item"><span class="label">Session</span><div class="value"><code>' + escapeHtml(run.sessionKey || '-') + '</code></div></div>' +
+                    '<div class="runner-detail-item"><span class="label">Purpose</span><div class="value">' + escapeHtml(run.purpose || '-') + '</div></div>' +
+                    '<div class="runner-detail-item"><span class="label">Started</span><div class="value">' + escapeHtml(formatTime(run.startedAt)) + '</div></div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="runner-detail-section">' +
+                '<div class="runner-detail-grid">' +
+                    '<div class="runner-detail-item"><span class="label">Lifecycle</span><div class="value">' + lifecycleBadge(run) + (run.deferredReason ? ('<div class="small text-muted mt-1">' + escapeHtml(run.deferredReason) + '</div>') : '') + '</div></div>' +
+                    '<div class="runner-detail-item"><span class="label">Dispatch</span><div class="value">' + dispatchSummary(run) + '</div></div>' +
+                    '<div class="runner-detail-item"><span class="label">Descendants</span><div class="value">' + descendantSummary(run) + '</div></div>' +
+                    '<div class="runner-detail-item"><span class="label">Binding</span><div class="value">' + escapeHtml(run.requesterBindingState || '-') + '</div></div>' +
+                '</div>' +
+            '</div>' +
+            '<div class="runner-detail-section">' +
+                '<div class="runner-detail-item"><span class="label">Prompt Preview</span><div class="value"><pre class="runner-detail-pre">' + escapeHtml(run.promptPreview || '-') + '</pre></div></div>' +
+            '</div>' +
+            '<div class="runner-detail-section">' +
+                '<div class="runner-detail-item"><span class="label">Result Preview</span><div class="value"><pre class="runner-detail-pre">' + escapeHtml((run.result && run.result.finalText) ? textPreview(run.result.finalText, 1200) : '-') + '</pre></div></div>' +
+            '</div>' +
+            '<div class="runner-detail-section">' +
+                '<div class="runner-detail-item"><span class="label">Child Runs</span><div class="value">' + (childRuns.length ? childRuns.map(function(child) {
+                    return '<div><code>' + escapeHtml(child.runId) + '</code> ' + stateBadge(child.state) + '</div>';
+                }).join('') : '<span class="text-muted">No child runs</span>') + '</div></div>' +
+            '</div>' +
+            '<div class="runner-detail-section d-flex gap-2 flex-wrap">' +
+                '<button class="btn btn-sm btn-outline-primary runner-open-transcript-btn" data-run-id="' + escapeHtml(run.runId) + '">Open Transcript</button>' +
+                (isActiveState(run.state)
+                    ? '<button class="btn btn-sm btn-outline-danger runner-cancel-btn" data-run-id="' + escapeHtml(run.runId) + '">Cancel</button>'
+                    : '') +
+            '</div>';
+        $detailContent.html(html);
+    }
+
+    function selectRun(runId) {
+        if (!runId) return;
+        state.selectedRunId = runId;
+        queueRender();
+        renderDetail();
+        loadRunnerDetail(runId);
+    }
+
+    function scheduleDetailRefresh() {
+        if (state.detailRefreshPending || !state.selectedRunId) return;
+        state.detailRefreshPending = true;
+        setTimeout(function() {
+            state.detailRefreshPending = false;
+            if (state.selectedRunId) {
+                loadRunnerDetail(state.selectedRunId);
+            }
+        }, 250);
+    }
+
+    async function loadRunnerDetail(runId) {
+        renderDetail();
         try {
             const res = await fetch('/api/runners/' + encodeURIComponent(runId));
             if (!res.ok) throw new Error('HTTP ' + res.status);
             const data = await res.json();
-            $detailJson.text(JSON.stringify(data, null, 2));
-            if (state.detailModal) {
-                state.detailModal.show();
-            }
-            appendLog('detail opened for ' + runId);
+            state.detailById[runId] = data.run || {};
+            renderDetail();
         } catch (err) {
             appendLog('detail failed ' + runId + ': ' + err.message);
+        }
+    }
+
+    function transcriptItemHtml(item) {
+        const content = String(item.content || '').trim();
+        let body = content;
+        if (!body && item.toolName) {
+            body = 'Tool: ' + item.toolName;
+            if (item.toolInput) {
+                body += '\n' + item.toolInput;
+            }
+        }
+        if (!body) body = '(no text content)';
+        return '' +
+            '<div class="runner-transcript-item">' +
+                '<div class="runner-transcript-meta">' +
+                    '<span class="badge text-bg-secondary">' + escapeHtml(item.role || 'unknown') + '</span>' +
+                    (item.toolName ? '<span class="badge text-bg-light">tool: ' + escapeHtml(item.toolName) + '</span>' : '') +
+                    '<span class="small text-muted">' + escapeHtml(formatTime(item.timestamp)) + '</span>' +
+                '</div>' +
+                '<div class="runner-transcript-content">' + escapeHtml(body) + '</div>' +
+            '</div>';
+    }
+
+    async function showTranscript(runId) {
+        $transcriptBody.html('<div class="text-muted">Loading transcript...</div>');
+        if (state.transcriptModal) state.transcriptModal.show();
+        try {
+            const res = await fetch('/api/runners/' + encodeURIComponent(runId) + '/transcript');
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+            const items = Array.isArray(data.items) ? data.items : [];
+            if (!items.length) {
+                $transcriptBody.html('<div class="text-muted">No transcript messages found for this runner.</div>');
+                return;
+            }
+            $transcriptBody.html(items.map(transcriptItemHtml).join(''));
+            appendLog('transcript opened for ' + runId);
+        } catch (err) {
+            $transcriptBody.html('<div class="text-danger">Transcript failed: ' + escapeHtml(err.message) + '</div>');
+            appendLog('transcript failed ' + runId + ': ' + err.message);
         }
     }
 
@@ -216,15 +706,25 @@
         const qs = state.lastEventId > 0 ? ('?since=' + state.lastEventId) : '';
         const src = new EventSource('/api/runners/events' + qs);
         state.eventsSource = src;
-        $eventsLog.text('Connected');
+        state.eventLines = ['Connecting...'];
+        $eventsLog.text(state.eventLines.join('\n'));
+        setLiveState('connecting', 'connecting');
 
         src.onmessage = function() {};
 
         src.onopen = function() {
+            state.lastDisconnectLogAt = 0;
+            setLiveState('live', 'live');
             appendLog('events connected');
         };
         src.onerror = function() {
-            appendLog('events disconnected; retrying');
+            setLiveState('reconnecting', 'reconnecting');
+            const now = Date.now();
+            // EventSource auto-retries; suppress repeated disconnect noise bursts.
+            if (state.lastDisconnectLogAt === 0 || (now - state.lastDisconnectLogAt) >= 5000) {
+                appendLog('events disconnected; retrying');
+                state.lastDisconnectLogAt = now;
+            }
         };
 
         const handled = [
@@ -235,7 +735,11 @@
             'delegated.run.timeout',
             'delegated.run.canceled',
             'delegated.run.queued',
-            'delegated.run.running'
+            'delegated.run.running',
+            'delegated.run.dispatch_phase',
+            'delegated.run.dispatch_marked',
+            'delegated.run.dispatch_seq_advanced',
+            'delegated.run.completion_lifecycle'
         ];
         handled.forEach(function(name) {
             src.addEventListener(name, function(ev) {
@@ -247,20 +751,7 @@
                     const payload = JSON.parse(ev.data || '{}');
                     const p = payload.payload || {};
                     const runId = payload.runId || p.runId;
-                    if (runId) {
-                        upsertItem({
-                            runId: runId,
-                            parentRunId: p.parentRunId,
-                            requesterType: p.requesterType,
-                            requesterId: p.requesterId,
-                            purpose: p.purpose,
-                            sessionKey: p.sessionKey,
-                            state: p.state || payload.eventType,
-                            startedAt: p.startedAt,
-                            finishedAt: p.finishedAt
-                        });
-                        renderTable();
-                    }
+                    scheduleRefresh();
                     appendLog(name + ' run=' + (runId || '?'));
                 } catch (err) {
                     appendLog(name + ' parse error: ' + err.message);
@@ -269,19 +760,39 @@
         });
     }
 
-    $(document).on('click', '.runner-detail-btn', function() {
-        showDetail($(this).data('run-id'));
+    $(document).on('click', '.runner-tree-row', function(e) {
+        if ($(e.target).closest('button').length) return;
+        selectRun($(this).data('run-id'));
     });
-    $(document).on('click', '.runner-cancel-btn', function() {
+    $(document).on('click', '.runner-tree-toggle', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const runId = $(this).data('run-id');
+        if (!runId) return;
+        state.expandedRunIds[runId] = !state.expandedRunIds[runId];
+        queueRender();
+    });
+    $(document).on('click', '.runner-cancel-btn', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
         cancelRun($(this).data('run-id'));
+    });
+    $(document).on('click', '.runner-open-transcript-btn', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        showTranscript($(this).data('run-id'));
     });
     $('#refresh-runners').on('click', loadRunners);
     $('#runners-include-completed').on('change', function() {
         state.includeCompleted = !!$(this).is(':checked');
-        renderTable();
+        queueRender();
+        renderDetail();
+    });
+    $('#runners-auto-scroll').on('change', function() {
+        state.autoScrollLive = !!$(this).is(':checked');
     });
 
-    state.detailModal = new bootstrap.Modal(document.getElementById('runner-detail-modal'));
+    state.transcriptModal = new bootstrap.Modal(document.getElementById('runner-transcript-modal'));
     loadRunners();
     connectEvents();
     setInterval(loadRunners, 10000);

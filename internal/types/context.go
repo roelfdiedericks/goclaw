@@ -19,6 +19,9 @@ type SessionContext struct {
 	OwnerChatID       string          // Owner's telegram chat ID (fallback for cron/heartbeat)
 	SessionKey        string          // Current session key (for delegated return routing)
 	RunID             string          // Current agent run ID (for delegated lineage propagation)
+	TotalTokens       int             // Current estimated session token count
+	MaxTokens         int             // Current session context window
+	ReserveTokens     int             // Reserved token floor before compaction/overflow
 	User              *user.User      // Current user (for permission checks in tools)
 	TranscriptScope   string          // Transcript access scope: "all", "own", or "none"
 	Session           SessionElevator // Session for role elevation (user_auth tool)

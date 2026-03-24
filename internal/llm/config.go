@@ -20,6 +20,7 @@ import (
 type LLMConfig struct {
 	Providers        map[string]LLMProviderConfig `json:"providers"`
 	Agent            LLMPurposeConfig             `json:"agent"`
+	Subagent         LLMPurposeConfig             `json:"subagent,omitempty"`
 	Summarization    LLMPurposeConfig             `json:"summarization"`
 	Embeddings       LLMPurposeConfig             `json:"embeddings"`
 	Heartbeat        LLMPurposeConfig             `json:"heartbeat,omitempty"`
@@ -483,6 +484,7 @@ func handleApply(cmd bus.Command) bus.CommandResult {
 	regCfg := RegistryConfig{
 		Providers:        cfg.Providers,
 		Agent:            cfg.Agent,
+		Subagent:         cfg.Subagent,
 		Summarization:    cfg.Summarization,
 		Embeddings:       cfg.Embeddings,
 		Heartbeat:        cfg.Heartbeat,
@@ -691,6 +693,15 @@ func ConfigFormDef() forms.FormDef {
 				Fields: []forms.Field{
 					{Name: "models", Title: "Models", Desc: "Primary model and fallbacks for main chat", Type: forms.ModelChain, Purpose: "agent"},
 					{Name: "autoRebuild", Title: "Auto Rebuild", Desc: "Rebuild chain on failure", Type: forms.Toggle},
+				},
+			},
+			{
+				Title:     "Subagent (Delegated Runs)",
+				FieldName: "subagent",
+				Collapsed: true,
+				Fields: []forms.Field{
+					{Name: "models", Title: "Models", Desc: "Primary model and fallbacks for delegated subagent runs (falls back to Agent chain when empty)", Type: forms.ModelChain, Purpose: "subagent"},
+					{Name: "autoRebuild", Title: "Auto Rebuild", Type: forms.Toggle},
 				},
 			},
 			{

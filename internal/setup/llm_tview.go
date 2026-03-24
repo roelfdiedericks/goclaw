@@ -51,6 +51,7 @@ func (e *LLMEditor) createMenu() *forms.MenuListResult {
 
 	providerCount := len(e.cfg.Providers)
 	agentModels := len(e.cfg.Agent.Models)
+	subagentModels := len(e.cfg.Subagent.Models)
 	summarizationModels := len(e.cfg.Summarization.Models)
 	embeddingModels := len(e.cfg.Embeddings.Models)
 
@@ -76,6 +77,7 @@ func (e *LLMEditor) createMenu() *forms.MenuListResult {
 	items := []forms.MenuItem{
 		{Label: fmt.Sprintf("Providers (%d configured)", providerCount), OnSelect: e.showProviderList},
 		{Label: fmt.Sprintf("Agent (%d models)", agentModels), OnSelect: func() { e.editPurpose("agent", &e.cfg.Agent) }},
+		{Label: purposeLabel("Subagent", subagentModels), OnSelect: func() { e.editPurpose("subagent", &e.cfg.Subagent) }},
 		{Label: fmt.Sprintf("Summarization (%d models)", summarizationModels), OnSelect: func() { e.editPurpose("summarization", &e.cfg.Summarization) }},
 		{Label: fmt.Sprintf("Embeddings (%d models)", embeddingModels), OnSelect: func() { e.editPurpose("embeddings", &e.cfg.Embeddings) }},
 		{Label: purposeLabel("Heartbeat", len(e.cfg.Heartbeat.Models)), OnSelect: func() { e.editPurpose("heartbeat", &e.cfg.Heartbeat) }},

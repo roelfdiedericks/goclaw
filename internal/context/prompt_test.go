@@ -1,9 +1,25 @@
 package context
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	itools "github.com/roelfdiedericks/goclaw/internal/tools"
+	"github.com/roelfdiedericks/goclaw/internal/types"
 )
+
+type promptTestTool struct {
+	name, description string
+}
+
+func (t promptTestTool) Name() string               { return t.name }
+func (t promptTestTool) Description() string        { return t.description }
+func (t promptTestTool) Schema() map[string]any     { return map[string]any{} }
+func (t promptTestTool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
+	return nil, nil
+}
 
 func TestBuildSystemPromptIncludesCronHandoffSectionOnlyForCronHandoffChannel(t *testing.T) {
 	base := PromptParams{
@@ -80,5 +96,36 @@ func TestBuildSystemPromptIncludesVisibleHomeWithoutBackingLeak(t *testing.T) {
 	}
 	if strings.Contains(prompt, ".goclaw/sandbox/home") {
 		t.Fatalf("did not expect backing sandbox path leak, prompt: %s", prompt)
+	}
+}
+
+func TestBuildSystemPromptIncludesSubagentGuidanceWhenToolsAvailable(t *testing.T) {
+	reg := itools.NewRegistry()
+	reg.Register(promptTestTool{name: "subagent_spawn", description: "start one worker"})
+	reg.Register(promptTestTool{name: "subagent_fanout", description: "start many workers"})
+	reg.Register(promptTestTool{name: "subagent_status", description: "inspect workers"})
+
+	prompt := BuildSystemPrompt(PromptParams{
+		WorkspaceDir:   "/tmp/workspace",
+		Channel:        "telegram",
+		WorkspaceFiles: []WorkspaceFile{},
+		IncludeMemory:  true,
+		Tools:          reg,
+	})
+
+	required := []string{
+		"## Delegated Subagents",
+		"`subagent_spawn`: start one worker. It returns a `runId` immediately and, by default, sends a completion callback later.",
+		"`subagent_fanout`: start several workers in parallel and get their results in the current turn. It tries to return full child outputs inline. If everything does not fit in the current session headroom, it returns as many full results as fit plus explicit run IDs for the rest. By default it does not send a later completion callback.",
+		"`subagent_fanout` returns `ok=false` when one or more worker runs failed, timed out, were canceled, or failed to start",
+		"Optional `extraSummary` is secondary. GoClaw only returns it when the summary covered all worker outputs and the worker outcomes were healthy.",
+		"Use `subagent_fanout` when you want several worker results back in the current turn so you can interpret them yourself.",
+		"If `subagent_fanout` returns `ok=false`, treat it as a real failure or partial failure.",
+		"Use `subagent_status action=info` only when fanout tells you some results did not fit inline, or when you want to inspect one worker more closely.",
+	}
+	for _, snippet := range required {
+		if !strings.Contains(prompt, snippet) {
+			t.Fatalf("expected prompt to contain %q", snippet)
+		}
 	}
 }

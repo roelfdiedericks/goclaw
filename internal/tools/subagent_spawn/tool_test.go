@@ -105,10 +105,7 @@ func TestReturnToRequesterPrimaryFailFallbackQueue(t *testing.T) {
 	)
 
 	input := json.RawMessage(`{
-		"prompt":"test fallback",
-		"resultMode":"return_to_requester",
-		"dispatchOrder":"direct_first",
-		"fallbackMode":"queue_fallback"
+		"prompt":"test fallback"
 	}`)
 	result, err := tool.Execute(ownerToolContext(), input)
 	if err != nil {
@@ -146,10 +143,7 @@ func TestReturnToRequesterDuplicateSuppressed(t *testing.T) {
 	)
 
 	input := json.RawMessage(`{
-		"prompt":"test dedupe",
-		"resultMode":"return_to_requester",
-		"dispatchOrder":"queue_first",
-		"fallbackMode":"none"
+		"prompt":"test dedupe"
 	}`)
 	result, err := tool.Execute(ownerToolContext(), input)
 	if err != nil {
@@ -191,10 +185,7 @@ func TestReturnToRequesterRecordsDispatchPhasesInSQLite(t *testing.T) {
 	)
 
 	result, err := tool.Execute(ownerToolContext(), json.RawMessage(`{
-		"prompt":"test sqlite phases",
-		"resultMode":"return_to_requester",
-		"dispatchOrder":"direct_first",
-		"fallbackMode":"queue_fallback"
+		"prompt":"test sqlite phases"
 	}`))
 	if err != nil {
 		t.Fatalf("expected spawn success, got error: %v", err)
@@ -271,7 +262,8 @@ func TestSpawnAutoPropagatesParentRunIDFromSessionRun(t *testing.T) {
 	}
 	_, _, _ = svc.WaitDelegatedRun(context.Background(), parentRunID)
 	result, err := tool.Execute(ownerToolContextWithRunID(parentRunID), json.RawMessage(`{
-		"prompt":"test parent auto propagation"
+		"prompt":"test parent auto propagation",
+		"notifyOnComplete":false
 	}`))
 	if err != nil {
 		t.Fatalf("expected spawn success, got error: %v", err)
@@ -293,7 +285,8 @@ func TestSpawnSkipsAutoParentWhenSessionRunNotDelegated(t *testing.T) {
 
 	const nonDelegatedSessionRunID = "gateway-run-not-in-delegated-registry"
 	result, err := tool.Execute(ownerToolContextWithRunID(nonDelegatedSessionRunID), json.RawMessage(`{
-		"prompt":"test unknown parent skip"
+		"prompt":"test unknown parent skip",
+		"notifyOnComplete":false
 	}`))
 	if err != nil {
 		t.Fatalf("expected spawn success, got error: %v", err)
@@ -318,10 +311,7 @@ func TestReturnToRequesterFailureAdvancesDispatchSequence(t *testing.T) {
 	)
 
 	result, err := tool.Execute(ownerToolContext(), json.RawMessage(`{
-		"prompt":"test dispatch seq advance",
-		"resultMode":"return_to_requester",
-		"dispatchOrder":"queue_first",
-		"fallbackMode":"none"
+		"prompt":"test dispatch seq advance"
 	}`))
 	if err != nil {
 		t.Fatalf("expected spawn success, got error: %v", err)

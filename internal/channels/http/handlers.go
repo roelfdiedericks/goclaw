@@ -16,6 +16,7 @@ import (
 
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/config"
+	"github.com/roelfdiedericks/goclaw/internal/delegatedrun"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
@@ -25,6 +26,39 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/user"
 	"github.com/roelfdiedericks/goclaw/internal/voicellm"
 )
+
+type runnerHistoryProvider interface {
+	History(sessionID string) ([]session.Message, error)
+}
+
+func configureSSEHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+}
+
+func configureSSEWriteDeadline(w http.ResponseWriter, endpoint string) *http.ResponseController {
+	rc := http.NewResponseController(w)
+	// SSE streams are long-lived; disable per-response write deadline so slow clients/tab
+	// throttling don't get the stream force-closed mid-chunk.
+	if err := rc.SetWriteDeadline(time.Time{}); err != nil && err != http.ErrNotSupported {
+		logging.L_trace("http: sse set write deadline unsupported", "endpoint", endpoint, "error", err)
+	}
+	return rc
+}
+
+func sseWritef(w http.ResponseWriter, rc *http.ResponseController, endpoint, format string, args ...any) bool {
+	if _, err := fmt.Fprintf(w, format, args...); err != nil {
+		logging.L_warn("http: sse write failed", "endpoint", endpoint, "error", err)
+		return false
+	}
+	if err := rc.Flush(); err != nil && err != http.ErrNotSupported {
+		logging.L_warn("http: sse flush failed", "endpoint", endpoint, "error", err)
+		return false
+	}
+	return true
+}
 
 // handleIndex serves the dashboard page
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -862,12 +896,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set SSE headers
-	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+	configureSSEHeaders(w)
+	rc := configureSSEWriteDeadline(w, "/api/events")
 
-	flusher, ok := w.(http.Flusher)
+	_, ok := w.(http.Flusher)
 	if !ok {
 		logging.L_error("http: SSE failed - flusher not supported", "user", u.ID)
 		http.Error(w, "SSE not supported", http.StatusInternalServerError)
@@ -911,16 +943,21 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	sess.bufferMu.Lock()
 	currentEventID := sess.nextEventID - 1
 	sess.bufferMu.Unlock()
-	fmt.Fprintf(w, "event: connected\nid: %d\ndata: {\"user\":\"%s\",\"lastEventId\":%d}\n\n", currentEventID, u.ID, currentEventID)
-	flusher.Flush()
+	if !sseWritef(w, rc, "/api/events", "retry: 2000\n\n") {
+		return
+	}
+	if !sseWritef(w, rc, "/api/events", "event: connected\nid: %d\ndata: {\"user\":\"%s\",\"lastEventId\":%d}\n\n", currentEventID, u.ID, currentEventID) {
+		return
+	}
 
 	// Send current preferences
 	prefData, _ := json.Marshal(map[string]interface{}{
 		"key":   "thinking",
 		"value": sess.ShowThinking,
 	})
-	fmt.Fprintf(w, "event: preference\ndata: %s\n\n", prefData)
-	flusher.Flush()
+	if !sseWritef(w, rc, "/api/events", "event: preference\ndata: %s\n\n", prefData) {
+		return
+	}
 
 	// Replay missed events
 	for _, buffered := range replay {
@@ -929,8 +966,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			logging.L_error("http: failed to marshal replay event", "error", err)
 			continue
 		}
-		fmt.Fprintf(w, "event: %s\nid: %d\ndata: %s\n\n", buffered.Event.Event, buffered.ID, data)
-		flusher.Flush()
+		if !sseWritef(w, rc, "/api/events", "event: %s\nid: %d\ndata: %s\n\n", buffered.Event.Event, buffered.ID, data) {
+			return
+		}
 	}
 	if len(replay) > 0 {
 		logging.L_info("http: replayed events", "count", len(replay), "session", sessionID[:8]+"...")
@@ -960,12 +998,14 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			sess.bufferMu.Lock()
 			eventID := sess.nextEventID - 1 // Last assigned ID
 			sess.bufferMu.Unlock()
-			fmt.Fprintf(w, "event: %s\nid: %d\ndata: %s\n\n", event.Event, eventID, data)
-			flusher.Flush()
+			if !sseWritef(w, rc, "/api/events", "event: %s\nid: %d\ndata: %s\n\n", event.Event, eventID, data) {
+				return
+			}
 		case <-ticker.C:
 			// Send heartbeat comment (doesn't need ID)
-			fmt.Fprintf(w, ": heartbeat\n\n")
-			flusher.Flush()
+			if !sseWritef(w, rc, "/api/events", ": heartbeat\n\n") {
+				return
+			}
 		}
 	}
 }
@@ -1043,30 +1083,7 @@ func (s *Server) handleRunners(w http.ResponseWriter, r *http.Request) {
 	}
 
 	runs := s.channel.gateway.ListDelegatedRuns()
-	items := make([]map[string]interface{}, 0, len(runs))
-	for _, run := range runs {
-		item := map[string]interface{}{
-			"runId":         run.RunID,
-			"parentRunId":   run.ParentRunID,
-			"requesterType": run.RequesterType,
-			"requesterId":   run.RequesterID,
-			"sessionKey":    run.SessionKey,
-			"purpose":       run.Purpose,
-			"state":         run.State,
-			"startedAt":     run.StartedAt,
-			"result": map[string]interface{}{
-				"finalText": run.Result.FinalText,
-				"error":     run.Result.Error,
-				"usage":     run.Result.Usage,
-			},
-		}
-		if run.FinishedAt != nil {
-			item["finishedAt"] = *run.FinishedAt
-		} else {
-			item["finishedAt"] = nil
-		}
-		items = append(items, item)
-	}
+	items := normalizeRunnerItems(runs)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if err := json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1105,14 +1122,53 @@ func (s *Server) handleRunnersAction(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.Method == http.MethodGet && action == "":
-		run, ok := s.channel.gateway.GetDelegatedRun(runID)
-		if !ok {
+		runs := s.channel.gateway.ListDelegatedRuns()
+		run, found := findRunnerRecord(runs, runID)
+		if !found {
 			http.Error(w, "Runner not found", http.StatusNotFound)
+			return
+		}
+		details := normalizeRunnerItems(runs)
+		var normalized map[string]interface{}
+		for _, item := range details {
+			if item["runId"] == runID {
+				normalized = item
+				break
+			}
+		}
+		if normalized == nil {
+			normalized = normalizeRunnerRecord(run, runs)
+		}
+		if promptPreview := runnerPromptPreview(s.channel.gateway, run.SessionKey); promptPreview != "" {
+			normalized["promptPreview"] = promptPreview
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"run": normalized,
+		})
+		return
+	case r.Method == http.MethodGet && action == "transcript":
+		runs := s.channel.gateway.ListDelegatedRuns()
+		run, found := findRunnerRecord(runs, runID)
+		if !found {
+			http.Error(w, "Runner not found", http.StatusNotFound)
+			return
+		}
+		historyGateway, ok := s.channel.gateway.(runnerHistoryProvider)
+		if !ok {
+			http.Error(w, "Transcript unavailable", http.StatusNotImplemented)
+			return
+		}
+		msgs, err := historyGateway.History(run.SessionKey)
+		if err != nil {
+			http.Error(w, "Transcript unavailable: "+err.Error(), http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"run": run,
+			"runId":      runID,
+			"sessionKey": run.SessionKey,
+			"items":      normalizeRunnerTranscript(msgs),
 		})
 		return
 	case r.Method == http.MethodPost && action == "cancel":
@@ -1130,6 +1186,122 @@ func (s *Server) handleRunnersAction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unknown action", http.StatusBadRequest)
 		return
 	}
+}
+
+func findRunnerRecord(runs []delegatedrun.RunRecord, runID string) (delegatedrun.RunRecord, bool) {
+	for _, item := range runs {
+		if item.RunID == runID {
+			return item, true
+		}
+	}
+	return delegatedrun.RunRecord{}, false
+}
+
+func runnerPromptPreview(gw interface{}, sessionKey string) string {
+	historyGateway, ok := gw.(runnerHistoryProvider)
+	if !ok || strings.TrimSpace(sessionKey) == "" {
+		return ""
+	}
+	msgs, err := historyGateway.History(sessionKey)
+	if err != nil {
+		return ""
+	}
+	for _, msg := range msgs {
+		text := strings.TrimSpace(msg.Content)
+		if msg.Role == "user" && text != "" {
+			return truncateRunnerText(text, 180)
+		}
+	}
+	for _, msg := range msgs {
+		text := strings.TrimSpace(msg.Content)
+		if text != "" {
+			return truncateRunnerText(text, 180)
+		}
+	}
+	return ""
+}
+
+func normalizeRunnerTranscript(msgs []session.Message) []map[string]interface{} {
+	items := make([]map[string]interface{}, 0, len(msgs))
+	for _, msg := range msgs {
+		items = append(items, map[string]interface{}{
+			"id":               msg.ID,
+			"role":             msg.Role,
+			"content":          strings.TrimSpace(msg.Content),
+			"source":           msg.Source,
+			"timestamp":        msg.Timestamp,
+			"toolName":         msg.ToolName,
+			"toolInput":        string(msg.ToolInput),
+			"toolUseId":        msg.ToolUseID,
+			"supervisor":       msg.Supervisor,
+			"interventionType": msg.InterventionType,
+		})
+	}
+	return items
+}
+
+func truncateRunnerText(text string, max int) string {
+	text = strings.TrimSpace(text)
+	if max <= 0 || len(text) <= max {
+		return text
+	}
+	return text[:max] + "..."
+}
+
+func normalizeRunnerItems(runs []delegatedrun.RunRecord) []map[string]interface{} {
+	items := make([]map[string]interface{}, 0, len(runs))
+	for _, run := range runs {
+		items = append(items, normalizeRunnerRecord(run, runs))
+	}
+	return items
+}
+
+func normalizeRunnerRecord(run delegatedrun.RunRecord, all []delegatedrun.RunRecord) map[string]interface{} {
+	coordinator := delegatedrun.NewGraphDescendantCoordinator(all)
+	hasActiveDescendants, activeDescendantCount := coordinator.HasActiveDescendants(run.RunID)
+	now := time.Now()
+	bindingAgeSeconds, bindingIdleSeconds, canDirectDispatch, directDispatchReason := delegatedrun.BindingTelemetry(run, now)
+	item := map[string]interface{}{
+		"runId":                   run.RunID,
+		"parentRunId":             run.ParentRunID,
+		"requesterType":           run.RequesterType,
+		"requesterId":             run.RequesterID,
+		"requesterSessionKey":     run.RequesterSessionKey,
+		"requesterBindingState":   run.RequesterBindingState,
+		"requesterBindingReason":  run.RequesterBindingReason,
+		"requesterBindingUpdatedAt": run.RequesterBindingUpdatedAt,
+		"requesterBindingLastActiveAt": run.RequesterBindingLastActiveAt,
+		"requesterBindingAgeSeconds": bindingAgeSeconds,
+		"requesterBindingIdleSeconds": bindingIdleSeconds,
+		"canDirectDispatch": canDirectDispatch,
+		"directDispatchReason": directDispatchReason,
+		"sessionKey":              run.SessionKey,
+		"purpose":                 run.Purpose,
+		"resultMode":              run.ResultMode,
+		"expectsCompletionMessage": run.ExpectsCompletionMessage,
+		"dispatchOrder":           run.DispatchOrder,
+		"fallbackMode":            run.FallbackMode,
+		"injectMode":              run.InjectMode,
+		"completionDispatchKey":   run.CompletionDispatchKey,
+		"completionDispatchSeq":   run.CompletionDispatchSeq,
+		"cleanupState":            run.CleanupState,
+		"deferredReason":          run.DeferredReason,
+		"dispatchPhases":          run.DispatchPhases,
+		"continuationState":       run.ContinuationState,
+		"continuationReason":      run.ContinuationReason,
+		"continuationWakeAt":      run.ContinuationWakeAt,
+		"hasActiveDescendants":    hasActiveDescendants,
+		"activeDescendantCount":   activeDescendantCount,
+		"state":                   run.State,
+		"startedAt":               run.StartedAt,
+		"finishedAt":              run.FinishedAt,
+		"result": map[string]interface{}{
+			"finalText": run.Result.FinalText,
+			"error":     run.Result.Error,
+			"usage":     run.Result.Usage,
+		},
+	}
+	return item
 }
 
 // handleRunnerEvents handles GET /api/runners/events as SSE stream backed by delegated_run_events.
@@ -1164,12 +1336,10 @@ func (s *Server) handleRunnerEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
+	configureSSEHeaders(w)
+	rc := configureSSEWriteDeadline(w, "/api/runners/events")
 
-	flusher, ok := w.(http.Flusher)
+	_, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "SSE not supported", http.StatusInternalServerError)
 		return
@@ -1178,43 +1348,45 @@ func (s *Server) handleRunnerEvents(w http.ResponseWriter, r *http.Request) {
 	writeEvent := func(id int64, eventType string, payload interface{}) bool {
 		data, err := json.Marshal(payload)
 		if err != nil {
+			logging.L_warn("http: runners sse marshal failed", "eventType", eventType, "error", err)
 			return false
 		}
-		if _, err := fmt.Fprintf(w, "event: %s\nid: %d\ndata: %s\n\n", eventType, id, data); err != nil {
-			return false
-		}
-		flusher.Flush()
-		return true
+		return sseWritef(w, rc, "/api/runners/events", "event: %s\nid: %d\ndata: %s\n\n", eventType, id, data)
 	}
 
 	ctx := r.Context()
-	ticker := time.NewTicker(1000 * time.Millisecond)
-	defer ticker.Stop()
+	pollTicker := time.NewTicker(1000 * time.Millisecond)
+	heartbeatTicker := time.NewTicker(15 * time.Second)
+	defer pollTicker.Stop()
+	defer heartbeatTicker.Stop()
+
+	if !sseWritef(w, rc, "/api/runners/events", "retry: 2000\n\n") {
+		return
+	}
 
 	for {
-		events := s.channel.gateway.ListDelegatedRunEvents(lastID, 200)
-		for _, ev := range events {
-			payload := map[string]interface{}{
-				"runId":         ev.RunID,
-				"eventType":     ev.EventType,
-				"payload":       ev.Payload,
-				"timestamp":     ev.Timestamp,
-				"schemaVersion": 1,
-			}
-			if ok := writeEvent(ev.ID, "delegated.run."+ev.EventType, payload); !ok {
-				return
-			}
-			lastID = ev.ID
-		}
-
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			if _, err := fmt.Fprintf(w, ": heartbeat\n\n"); err != nil {
+		case <-pollTicker.C:
+			events := s.channel.gateway.ListDelegatedRunEvents(lastID, 200)
+			for _, ev := range events {
+				payload := map[string]interface{}{
+					"runId":         ev.RunID,
+					"eventType":     ev.EventType,
+					"payload":       ev.Payload,
+					"timestamp":     ev.Timestamp,
+					"schemaVersion": 1,
+				}
+				if ok := writeEvent(ev.ID, "delegated.run."+ev.EventType, payload); !ok {
+					return
+				}
+				lastID = ev.ID
+			}
+		case <-heartbeatTicker.C:
+			if !sseWritef(w, rc, "/api/runners/events", ": heartbeat\n\n") {
 				return
 			}
-			flusher.Flush()
 		}
 	}
 }

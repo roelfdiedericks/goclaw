@@ -92,6 +92,13 @@ func BuildSystemPrompt(params PromptParams) string {
 		sections = append(sections, s)
 	}
 
+	// 2c. Subagent guidance (main agent only, when subagent tools are available)
+	if !isMinimal && params.Tools != nil && (params.Tools.Has("subagent_spawn") || params.Tools.Has("subagent_fanout") || params.Tools.Has("subagent_status")) {
+		s := buildSubagentToolSection(params.Tools)
+		toolsText += s
+		sections = append(sections, s)
+	}
+
 	// 3. Tool Call Style (main agent only)
 	if !isMinimal {
 		s := buildToolCallStyleSection()
@@ -343,6 +350,32 @@ Use 'message' with 'filePath' to send saved files to the user.
 
 **DO NOT** assume the browser or other tools send media to channels directly.
 The 'message' tool is the explicit way to communicate with users via channels.`, channelNote)
+}
+
+func buildSubagentToolSection(reg *tools.Registry) string {
+	var lines []string
+	lines = append(lines, "## Delegated Subagents")
+	lines = append(lines, "Subagent tools are for delegating work to background worker agents.")
+	lines = append(lines, "")
+	if reg.Has("subagent_spawn") {
+		lines = append(lines, "- `subagent_spawn`: start one worker. It returns a `runId` immediately and, by default, sends a completion callback later.")
+	}
+	if reg.Has("subagent_fanout") {
+		lines = append(lines, "- `subagent_fanout`: start several workers in parallel and get their results in the current turn. It tries to return full child outputs inline. If everything does not fit in the current session headroom, it returns as many full results as fit plus explicit run IDs for the rest. By default it does not send a later completion callback.")
+		lines = append(lines, "- `subagent_fanout` returns `ok=false` when one or more worker runs failed, timed out, were canceled, or failed to start, even if some worker results were returned.")
+		lines = append(lines, "- Optional `extraSummary` is secondary. GoClaw only returns it when the summary covered all worker outputs and the worker outcomes were healthy. Otherwise it is skipped and `extraSummaryStatus` explains why. Check `overflow` to tell whether anything was omitted from the main fanout result.")
+	}
+	if reg.Has("subagent_status") {
+		lines = append(lines, "- `subagent_status`: inspect a worker, fetch the full result for a specific `runId`, review logs, or intervene in a running worker with `steer` or `send`.")
+	}
+	lines = append(lines, "")
+	lines = append(lines, "Default advice:")
+	lines = append(lines, "- Use `subagent_spawn` when you want to keep going now and hear back later.")
+	lines = append(lines, "- Use `subagent_fanout` when you want several worker results back in the current turn so you can interpret them yourself.")
+	lines = append(lines, "- If `subagent_fanout` returns `ok=false`, treat it as a real failure or partial failure. Read `status`, `message`, and `stats` before deciding what to do next.")
+	lines = append(lines, "- Use `subagent_status action=info` only when fanout tells you some results did not fit inline, or when you want to inspect one worker more closely.")
+	lines = append(lines, "- Prefer the default completion behavior unless you specifically need something different.")
+	return strings.Join(lines, "\n")
 }
 
 func buildToolCallStyleSection() string {

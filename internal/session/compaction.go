@@ -117,6 +117,14 @@ func (m *CompactionManager) GetMaxMessages() int {
 	return m.config.MaxMessages
 }
 
+// GetReserveTokens returns the configured token reserve floor.
+func (m *CompactionManager) GetReserveTokens() int {
+	if m == nil || m.config == nil {
+		return 0
+	}
+	return m.config.ReserveTokens
+}
+
 // GetStatus returns the current health state of the compaction manager
 func (m *CompactionManager) GetStatus(ctx context.Context) CompactionStatus {
 	if m == nil {

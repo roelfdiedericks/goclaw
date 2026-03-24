@@ -23,6 +23,9 @@ GoClaw is configured via `goclaw.json` in the working directory.
     },
     "agent": {
       "models": ["anthropic/claude-sonnet-4-20250514"]
+    },
+    "subagent": {
+      "models": []
     }
   },
 
@@ -254,6 +257,9 @@ GoClaw is configured via `goclaw.json` in the working directory.
     "agent": {
       "models": ["anthropic/claude-sonnet-4-20250514"]
     },
+    "subagent": {
+      "models": []
+    },
     "embeddings": {
       "models": ["hugot-local/KnightsAnalytics/all-MiniLM-L6-v2"]
     }
@@ -265,6 +271,7 @@ GoClaw is configured via `goclaw.json` in the working directory.
 |-------|------|-------------|
 | `providers` | object | Named provider instances (alias → config) |
 | `agent` | object | Model chain for main conversation |
+| `subagent` | object | Dedicated model chain for delegated subagent/fanout runs (falls back to `agent`) |
 | `summarization` | object | Model chain for compaction/checkpoints |
 | `embeddings` | object | Model chain for semantic search |
 

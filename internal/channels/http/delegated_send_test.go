@@ -59,10 +59,7 @@ func (s *delegatedAgentRunnerStub) RunAgent(ctx context.Context, req gateway.Age
 	)
 
 	_, err := tool.Execute(toolCtx, json.RawMessage(`{
-		"prompt":"http send integration",
-		"resultMode":"return_to_requester",
-		"dispatchOrder":"queue_first",
-		"fallbackMode":"none"
+		"prompt":"http send integration"
 	}`))
 	if err != nil {
 		return err
