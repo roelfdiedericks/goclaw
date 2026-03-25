@@ -220,7 +220,7 @@ func ConfigFormDef() forms.FormDef {
 				Desc:      "Named Chrome/CDP endpoints running on other machines. These are separate from the local profile='chrome' relay path.",
 				Fields: []forms.Field{
 					{Name: "browser.remote.enabled", Title: "Enable Remote Browsers", Type: forms.Toggle, Default: true, Desc: "Enable support for named remote browser profiles. This does nothing by itself until you define remote profiles below."},
-					{Name: "browser.remote.profilesText", Title: "Named Remote Browser Profiles", Type: forms.TextArea, Desc: "One per line: name=endpoint. Example: workstation=ws://192.168.1.50:9222/devtools/browser/abc123 or staging=http://10.0.0.20:9222"},
+					{Name: "browser.remote.profilesText", Title: "Named Remote Browser Profiles", Type: forms.TextArea, Desc: "One per line: name=endpoint. Example: workstation=ws://192.168.1.100:9222/devtools/browser/abc123 or staging=http://192.168.1.1:9222"},
 					{Name: "browser.remote.allowedHosts", Title: "Allowed Remote Hosts", Type: forms.StringList, Desc: "Optional safety allowlist for remote browser hosts or CIDRs. If set, only these hosts may be used for remote browser connections."},
 					{Name: "browser.remote.allowDirectEndpoints", Title: "Allow Raw CDP URLs", Type: forms.Toggle, Desc: "Future-facing option. If enabled in later workflows, raw ws:// or http:// CDP endpoints could be used directly instead of only named remote profiles."},
 					{Name: "browser.remote.allowHTTPDiscovery", Title: "Allow Simple http://host:port Browser Addresses", Type: forms.Toggle, Default: true, Desc: "If enabled, a remote profile can use a simple address like http://host:9222 and GoClaw will automatically discover the real websocket CDP URL via /json/version."},

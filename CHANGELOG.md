@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- media: add an agent-facing `media` tool with live storage info, quotas, retention and category warnings
+- voicellm: bring the web config page to parity for audio effects presets and custom controls, including Battlestar Galactica
+- voice web UI: broaden embedded `/js/` static assets for related media/favicons
+- memory prompt: make real-time memory formation a required recall/store workflow instead of advisory guidance
 
 
 

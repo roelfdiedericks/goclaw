@@ -27,7 +27,8 @@ Parameters:
 - confidence (optional): 0.0-1.0. For pattern types only (routine, correlation, prediction). How confident you are this pattern is real. Use 0.7+ for clear patterns, 0.5 for uncertain, lower for speculative.
 - emotion (optional): User's emotional state: frustrated, excited, stressed, relieved, etc.
 - source (optional): "user stated", "inferred", "observed"
-- occurred_at (optional): When this memory was formed. Cannot be in the future. For past events ("yesterday I climbed a wall"), calculate the actual date using the conversation date as reference (e.g., if conversation is March 1st and user says "yesterday", occurred_at = Feb 28th). For todos/goals with target dates, include the date in the content (e.g., "Buy trunks by March 2nd") and leave occurred_at to default. Defaults to conversation timestamp - usually omit.
+- occurred_at (optional): When this memory was observed/recorded, or when a past event happened. Cannot be in the future. For past events ("yesterday I climbed a wall"), calculate the actual date using the conversation date as reference (e.g., if conversation is March 1st and user says "yesterday", occurred_at = Feb 28th). Defaults to conversation timestamp - usually omit.
+- happens_at (optional): When a scheduled event, appointment, plan, or deadline is set to happen. Use this for future-dated or explicitly scheduled items such as todos, events, and goals. It may be in the future or the past.
 - associations (optional): Array of {target_id, relation_type} to link to recalled memories
   - relation_type: "contradicts", "related_to", "part_of", "caused_by", "result_of"
 
@@ -40,6 +41,7 @@ Parameters:
 - id (required): UUID of the memory to update (from recall results)
 - content (optional): New content (merged/refined version)
 - importance (optional): Adjust importance if needed
+- happens_at (optional): Set or reschedule the structured scheduled time for an event/goal/todo. Use empty string to clear it.
 - reason (optional): Why this update is being made
 
 Example: memory_graph_update(id="01HQ1234", content="User works as a software engineer, specializing in Go and distributed systems", reason="Added specialization details from conversation")
@@ -87,8 +89,15 @@ IMPORTANT: Do not loop on recalls. If recall returns "No memories found", that m
 - User preferences, likes, dislikes
 - Decisions the user made
 - Goals and intentions
+- Future events, deadlines, and scheduled plans
 - Significant events
 - Emotional reactions to events
+
+## Time Field Guidance
+- Use occurred_at for when the memory was observed/recorded, or when a past event happened
+- Use happens_at for scheduled real-world events, deadlines, and plans
+- Do not use next_trigger_at for normal user scheduling; that field belongs to routine/prediction system behavior
+- Including the date in content is optional human-readable wording, not the only machine-readable source of timing
 
 ## What to Skip (use memory_graph_skip)
 - Greetings, small talk, filler → reason: "transient"

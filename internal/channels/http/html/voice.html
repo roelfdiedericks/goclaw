@@ -6,15 +6,48 @@
         background: #f8f9fa;
         border-radius: 0.375rem;
         display: flex;
+        position: relative;
+        overflow: hidden;
         align-items: center;
         justify-content: center;
         gap: 2px;
+        cursor: pointer;
     }
     .visualizer-bar {
         width: 3px;
         background: #28a745;
         border-radius: 2px;
         transition: height 0.05s;
+        position: relative;
+        z-index: 1;
+    }
+    .audio-visualizer.bsg-mode {
+        background: #000;
+    }
+    .audio-visualizer.bsg-mode .visualizer-bar {
+        opacity: 0;
+    }
+    .visualizer-overlay {
+        position: absolute;
+        inset: 0;
+        display: none;
+        align-items: flex-end;
+        gap: 2px;
+        padding: 5px 8px;
+        pointer-events: none;
+    }
+    .audio-visualizer.bsg-mode .visualizer-overlay {
+        display: flex;
+    }
+    .visualizer-scan-block {
+        flex: 1 1 0;
+        border-radius: 2px;
+        background: #ff2a2a;
+        opacity: 0;
+        min-height: 6px;
+        height: 8px;
+        box-shadow: 0 0 10px rgba(255, 48, 48, 0.9);
+        transition: opacity 0.08s linear;
     }
     .timer {
         font-family: monospace;
@@ -81,6 +114,7 @@
                     <div class="visualizer-bar" style="height: 20px;"></div>
                     <div class="visualizer-bar" style="height: 15px;"></div>
                     <div class="visualizer-bar" style="height: 10px;"></div>
+                    <div class="visualizer-overlay" id="visualizerOverlay"></div>
                 </div>
                 <div class="chat-container" id="chat-messages">
                     <!-- Messages will be inserted here -->
@@ -328,11 +362,34 @@ $(document).ready(function() {
     var timerInterval = null;
     var currentUserBubble = null;
     var currentAssistantBubble = null;
+    var connectClickWindowMs = 350;
+    var pendingConnectTimer = null;
+    var lastConnectClickAt = 0;
+    var easterEggAudio = new Audio('/js/command.mp3?v={{.Timestamp.UnixNano}}');
+    var visualizerEasterEggActive = false;
+    var visualizerEasterEggFrame = null;
+    var visualizerEasterEggStartedAt = 0;
+    var visualizerEasterEggBlockCount = 24;
+    var visualizerEasterEggTrailLength = 6;
+    var latestVisualizerLevel = 0;
     
     var $voiceBtn = $('#voiceBtn');
     var $timer = $('#timer');
     var $voiceIndicator = $('#voiceIndicator');
     var $visualizer = $('#visualizer');
+    var $visualizerOverlay = $('#visualizerOverlay');
+
+    easterEggAudio.preload = 'auto';
+    easterEggAudio.volume = 0.5;
+
+    function ensureVisualizerOverlayBlocks() {
+        if ($visualizerOverlay.children().length > 0) {
+            return;
+        }
+        for (var i = 0; i < visualizerEasterEggBlockCount; i++) {
+            $visualizerOverlay.append('<div class="visualizer-scan-block"></div>');
+        }
+    }
     
     if (!voiceAvailable) {
         $voiceBtn.removeClass('btn-success').addClass('btn-secondary');
@@ -358,12 +415,137 @@ $(document).ready(function() {
         }
     }
     
+    function clearPendingConnect() {
+        if (pendingConnectTimer) {
+            clearTimeout(pendingConnectTimer);
+            pendingConnectTimer = null;
+        }
+    }
+
+    function playCommandClip() {
+        try {
+            easterEggAudio.currentTime = 0;
+            var playPromise = easterEggAudio.play();
+            if (playPromise && typeof playPromise.catch === 'function') {
+                playPromise.catch(function(err) {
+                    console.debug('Failed to play command clip:', err);
+                });
+            }
+        } catch (err) {
+            console.debug('Failed to trigger command clip:', err);
+        }
+    }
+
+    function renderVisualizerEasterEggFrame(now) {
+        var $blocks = $visualizerOverlay.children('.visualizer-scan-block');
+        if ($blocks.length === 0) {
+            return;
+        }
+
+        var blocksPerSecond = 10;
+        var span = Math.max(1, visualizerEasterEggBlockCount - 1);
+        var travel = ((now - visualizerEasterEggStartedAt) / 1000) * blocksPerSecond;
+        var phase = travel % (span * 2);
+        var leadIndex = phase <= span ? phase : ((span * 2) - phase);
+
+        $blocks.each(function(i) {
+            var distance = Math.abs(leadIndex - i);
+            var opacity = 0;
+            if (distance <= visualizerEasterEggTrailLength) {
+                opacity = 1 - (distance / (visualizerEasterEggTrailLength + 1));
+                opacity = Math.max(0.12, opacity * opacity);
+            }
+            $(this).css('opacity', opacity.toFixed(3));
+        });
+    }
+
+    function updateVisualizerScannerHeights(level) {
+        var $blocks = $visualizerOverlay.children('.visualizer-scan-block');
+        if ($blocks.length === 0) {
+            return;
+        }
+
+        var now = performance.now();
+        $blocks.each(function(i) {
+            var wave = 0.35 + (0.65 * Math.abs(Math.sin((i / 2.5) + (now / 260))));
+            var height = 6 + (level * 28 * wave);
+            $(this).css('height', height.toFixed(1) + 'px');
+        });
+    }
+
+    function stepVisualizerEasterEgg(now) {
+        if (!visualizerEasterEggActive) {
+            visualizerEasterEggFrame = null;
+            return;
+        }
+        renderVisualizerEasterEggFrame(now);
+        visualizerEasterEggFrame = requestAnimationFrame(stepVisualizerEasterEgg);
+    }
+
+    function startVisualizerEasterEgg() {
+        ensureVisualizerOverlayBlocks();
+        visualizerEasterEggActive = true;
+        visualizerEasterEggStartedAt = performance.now();
+        $visualizer.addClass('bsg-mode');
+        updateVisualizerScannerHeights(latestVisualizerLevel);
+        if (visualizerEasterEggFrame) {
+            cancelAnimationFrame(visualizerEasterEggFrame);
+        }
+        visualizerEasterEggFrame = requestAnimationFrame(stepVisualizerEasterEgg);
+    }
+
+    function stopVisualizerEasterEgg() {
+        if (!visualizerEasterEggActive && !visualizerEasterEggFrame) {
+            return;
+        }
+        visualizerEasterEggActive = false;
+        if (visualizerEasterEggFrame) {
+            cancelAnimationFrame(visualizerEasterEggFrame);
+            visualizerEasterEggFrame = null;
+        }
+        $visualizer.removeClass('bsg-mode');
+        $visualizerOverlay.children('.visualizer-scan-block').css('opacity', 0);
+    }
+
+    function queueVoiceConnect() {
+        clearPendingConnect();
+        pendingConnectTimer = setTimeout(function() {
+            pendingConnectTimer = null;
+            connectVoice();
+        }, connectClickWindowMs);
+    }
+
     $voiceBtn.click(function() {
         if (voiceConnected) {
+            clearPendingConnect();
             disconnectVoice();
-        } else {
-            connectVoice();
+            return;
         }
+
+        if (!voiceAvailable) {
+            connectVoice();
+            return;
+        }
+
+        var now = Date.now();
+        if (pendingConnectTimer && (now - lastConnectClickAt) <= connectClickWindowMs) {
+            clearPendingConnect();
+            playCommandClip();
+            connectVoice();
+            return;
+        }
+
+        lastConnectClickAt = now;
+        queueVoiceConnect();
+    });
+
+    $visualizer.on('dblclick', function() {
+        if (visualizerEasterEggActive) {
+            stopVisualizerEasterEgg();
+            return;
+        }
+        playCommandClip();
+        startVisualizerEasterEgg();
     });
     
     function connectVoice() {
@@ -371,6 +553,8 @@ $(document).ready(function() {
             renderMessage('error', voiceStatusMessage || 'Voice chat is unavailable.', true);
             return;
         }
+
+        clearPendingConnect();
 
         setVoiceState('connecting');
         
@@ -558,6 +742,12 @@ $(document).ready(function() {
     function updateVisualizer(rms) {
         var bars = $visualizer.find('.visualizer-bar');
         var level = Math.min(1, rms * 10);
+        latestVisualizerLevel = level;
+
+        if (visualizerEasterEggActive) {
+            updateVisualizerScannerHeights(level);
+            return;
+        }
         
         bars.each(function(i) {
             var centerWeight = 1 - Math.abs(i - 3) / 4;

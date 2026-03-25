@@ -41,6 +41,7 @@ func mountSetup(mux *http.ServeMux, opts mountOptions) {
 
 	mux.HandleFunc("/setup/api/config", wrap(api.HandleGetConfig))
 	mux.HandleFunc("/setup/api/sections", wrap(api.HandleGetSections))
+	mux.HandleFunc("/setup/api/section-action/", wrap(api.HandleSectionAction))
 	mux.HandleFunc("/setup/api/section/", wrap(api.HandleSection))
 	mux.HandleFunc("/setup/api/apply", wrap(api.HandleApply))
 	mux.HandleFunc("/setup/api/providers", wrap(api.HandleGetProviders))

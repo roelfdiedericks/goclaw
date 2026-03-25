@@ -59,6 +59,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/tools/exec"
 	toolhass "github.com/roelfdiedericks/goclaw/internal/tools/hass"
 	"github.com/roelfdiedericks/goclaw/internal/tools/jq"
+	toolmedia "github.com/roelfdiedericks/goclaw/internal/tools/media"
 	toolmediadisplay "github.com/roelfdiedericks/goclaw/internal/tools/media_display"
 	"github.com/roelfdiedericks/goclaw/internal/tools/memoryget"
 	toolmemorygraph "github.com/roelfdiedericks/goclaw/internal/tools/memorygraph"
@@ -3092,6 +3093,7 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 	// Message tool (channels added dynamically via bus events)
 	messageTool := toolmessage.NewTool(nil)
 	if mediaStore := gw.MediaStore(); mediaStore != nil {
+		reg.Register(toolmedia.NewTool(mediaStore))
 		messageTool.SetMediaRoot(mediaStore.BaseDir())
 	}
 	reg.Register(messageTool)

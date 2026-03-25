@@ -20,6 +20,8 @@ type QueryOptions struct {
 	untilCreated     *time.Time
 	sinceOccurred    *time.Time
 	untilOccurred    *time.Time
+	sinceHappens     *time.Time
+	untilHappens     *time.Time
 	sinceAccessed    *time.Time
 	untilAccessed    *time.Time
 	includeForgotten bool
@@ -107,6 +109,18 @@ func (q *QueryOptions) UntilOccurred(t time.Time) *QueryOptions {
 	return q
 }
 
+// SinceHappens filters by happens_at >= time.
+func (q *QueryOptions) SinceHappens(t time.Time) *QueryOptions {
+	q.sinceHappens = &t
+	return q
+}
+
+// UntilHappens filters by happens_at <= time.
+func (q *QueryOptions) UntilHappens(t time.Time) *QueryOptions {
+	q.untilHappens = &t
+	return q
+}
+
 // SinceAccessed filters by last_accessed_at >= time
 func (q *QueryOptions) SinceAccessed(t time.Time) *QueryOptions {
 	q.sinceAccessed = &t
@@ -131,10 +145,11 @@ func (q *QueryOptions) HasTriggerBefore(t time.Time) *QueryOptions {
 	return q
 }
 
-// OrderBy sets the order field (occurred_at, created_at, updated_at, importance, access_count)
+// OrderBy sets the order field (occurred_at, happens_at, created_at, updated_at, importance, access_count)
 func (q *QueryOptions) OrderBy(field string) *QueryOptions {
 	validFields := map[string]bool{
 		"occurred_at":      true,
+		"happens_at":       true,
 		"created_at":       true,
 		"updated_at":       true,
 		"last_accessed_at": true,
@@ -164,6 +179,7 @@ func (q *QueryOptions) Descending() *QueryOptions {
 func (q *QueryOptions) ThenBy(field string, desc bool) *QueryOptions {
 	validFields := map[string]bool{
 		"occurred_at":      true,
+		"happens_at":       true,
 		"created_at":       true,
 		"updated_at":       true,
 		"last_accessed_at": true,
@@ -203,7 +219,7 @@ func (q *QueryOptions) Build() (string, []interface{}) {
 	query := `
 		SELECT id, uuid, content, memory_type, importance, confidence,
 			created_at, updated_at, last_accessed_at, access_count,
-			next_trigger_at, source, source_session, source_message,
+			happens_at, next_trigger_at, source, source_session, source_message,
 			username, channel, chat_id, emotion, occurred_at, forgotten, embedding, embedding_model
 		FROM memories
 	`
@@ -258,6 +274,14 @@ func (q *QueryOptions) Build() (string, []interface{}) {
 	if q.untilOccurred != nil {
 		conditions = append(conditions, "occurred_at <= ?")
 		args = append(args, q.untilOccurred.Unix())
+	}
+	if q.sinceHappens != nil {
+		conditions = append(conditions, "happens_at IS NOT NULL AND happens_at >= ?")
+		args = append(args, q.sinceHappens.Format(time.RFC3339))
+	}
+	if q.untilHappens != nil {
+		conditions = append(conditions, "happens_at IS NOT NULL AND happens_at <= ?")
+		args = append(args, q.untilHappens.Format(time.RFC3339))
 	}
 	if q.sinceCreated != nil {
 		conditions = append(conditions, "created_at >= ?")

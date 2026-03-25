@@ -1,6 +1,6 @@
 # Gitleaks configuration for GoClaw
 # Extends default secret detection with custom PII rules
-# Run: gitleaks detect --source . --verbose
+# Run: gitleaks detect --source . --no-git --verbose
 
 title = "GoClaw Gitleaks Config"
 
@@ -57,12 +57,15 @@ regexes = [
   '''\+1555\d{7}''',
   '''\+1415555\d{4}''',
   '''555-555-5555''',
+  '''\+27821234567''',
   # Home Assistant example domain
   '''homeassistant\.local''',
 ]
 
 # Paths to ignore
 paths = [
+  # Git metadata/history
+  '''\.git/.*''',
   # Skills directory (synced from upstream OpenClaw, not our code)
   '''skills/.*''',
   # Test files may contain intentional test data

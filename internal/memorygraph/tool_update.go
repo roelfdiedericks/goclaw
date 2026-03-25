@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/types"
@@ -24,7 +25,7 @@ func (t *UpdateTool) Name() string {
 }
 
 func (t *UpdateTool) Description() string {
-	return "Update an existing memory. Use to correct mistakes, adjust importance, or modify content. Requires the memory UUID."
+	return "Update an existing memory. Use to correct mistakes, adjust importance, modify content, or reschedule happens_at for a dated event, plan, or deadline. Requires the memory UUID."
 }
 
 func (t *UpdateTool) Schema() map[string]any {
@@ -56,6 +57,10 @@ func (t *UpdateTool) Schema() map[string]any {
 				"enum":        []string{"identity", "fact", "preference", "decision", "event", "observation", "goal", "todo", "routine", "feedback", "anomaly", "correlation", "prediction"},
 				"description": "New memory type (if changing)",
 			},
+			"happens_at": map[string]any{
+				"type":        "string",
+				"description": "New scheduled time for an event, deadline, or plan. Format: ISO date or RFC3339. Pass an empty string to clear an existing schedule.",
+			},
 			"reason": map[string]any{
 				"type":        "string",
 				"description": "Reason for the update (logged for audit)",
@@ -73,6 +78,7 @@ type UpdateParams struct {
 	Confidence *float32 `json:"confidence,omitempty"`
 	Emotion    *string  `json:"emotion,omitempty"`
 	MemoryType *string  `json:"memory_type,omitempty"`
+	HappensAt  *string  `json:"happens_at,omitempty"`
 	Reason     string   `json:"reason,omitempty"`
 }
 
@@ -135,6 +141,26 @@ func (t *UpdateTool) Execute(ctx context.Context, input json.RawMessage) (*types
 	if params.MemoryType != nil && Type(*params.MemoryType) != mem.Type {
 		changes = append(changes, fmt.Sprintf("type: %s → %s", mem.Type, *params.MemoryType))
 		mem.Type = Type(*params.MemoryType)
+	}
+	if params.HappensAt != nil {
+		switch {
+		case *params.HappensAt == "" && mem.HappensAt != nil:
+			changes = append(changes, fmt.Sprintf("happens_at: %s → cleared", mem.HappensAt.Format(time.RFC3339)))
+			mem.HappensAt = nil
+		case *params.HappensAt != "":
+			happensAt, parseErr := parseMemoryToolTime(*params.HappensAt)
+			if parseErr != nil {
+				return types.ErrorResult(fmt.Sprintf("invalid happens_at: %v", parseErr)), nil
+			}
+			if mem.HappensAt == nil || !mem.HappensAt.Equal(happensAt) {
+				before := "unset"
+				if mem.HappensAt != nil {
+					before = mem.HappensAt.Format(time.RFC3339)
+				}
+				changes = append(changes, fmt.Sprintf("happens_at: %s → %s", before, happensAt.Format(time.RFC3339)))
+				mem.HappensAt = &happensAt
+			}
+		}
 	}
 
 	if len(changes) == 0 {

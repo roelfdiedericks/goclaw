@@ -143,3 +143,63 @@ func TestRenderFormHTMLCollapsedSectionUsesBootstrapCollapse(t *testing.T) {
 		t.Fatalf("expected collapsed card body, got:\n%s", got)
 	}
 }
+
+func TestRenderFormHTMLSliderFieldRendersRangeInput(t *testing.T) {
+	def := forms.FormDef{
+		Sections: []forms.Section{
+			{
+				Fields: []forms.Field{
+					{Name: "quota", Title: "Quota", Type: forms.Slider, Min: 0.5, Max: 10, Step: 0.5, Scale: 1073741824, Unit: "GB"},
+				},
+			},
+		},
+	}
+
+	html, err := RenderFormHTML(def, "formData")
+	if err != nil {
+		t.Fatalf("RenderFormHTML returned error: %v", err)
+	}
+
+	got := string(html)
+	if !strings.Contains(got, `type="range"`) {
+		t.Fatalf("expected range input, got:\n%s", got)
+	}
+	if !strings.Contains(got, `class="form-range js-bound-field js-slider-field"`) {
+		t.Fatalf("expected slider classes, got:\n%s", got)
+	}
+	if !strings.Contains(got, `data-scale="1.073741824e+09"`) {
+		t.Fatalf("expected scale attribute, got:\n%s", got)
+	}
+	if !strings.Contains(got, `data-unit="GB"`) {
+		t.Fatalf("expected unit attribute, got:\n%s", got)
+	}
+}
+
+func TestRenderFormHTMLRendersFormActionsExceptApply(t *testing.T) {
+	def := forms.FormDef{
+		Actions: []forms.ActionDef{
+			{Name: "stats", Label: "Refresh Usage", Desc: "Show latest usage"},
+			{Name: "clean", Label: "Clean Now", Confirm: "Run cleanup?"},
+			{Name: "apply", Label: "Apply"},
+		},
+	}
+
+	html, err := RenderFormHTML(def, "formData")
+	if err != nil {
+		t.Fatalf("RenderFormHTML returned error: %v", err)
+	}
+
+	got := string(html)
+	if !strings.Contains(got, `class="btn btn-outline-secondary js-form-action"`) {
+		t.Fatalf("expected form action button markup, got:\n%s", got)
+	}
+	if !strings.Contains(got, `data-action-name="stats"`) || !strings.Contains(got, `Refresh Usage`) {
+		t.Fatalf("expected stats action button, got:\n%s", got)
+	}
+	if !strings.Contains(got, `data-action-name="clean"`) || !strings.Contains(got, `data-action-confirm="Run cleanup?"`) {
+		t.Fatalf("expected clean action button with confirm, got:\n%s", got)
+	}
+	if strings.Contains(got, `data-action-name="apply"`) {
+		t.Fatalf("did not expect apply action to be rendered in web form, got:\n%s", got)
+	}
+}

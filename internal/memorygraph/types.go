@@ -108,6 +108,7 @@ type Memory struct {
 	UpdatedAt      time.Time  `json:"updated_at"`                // When last updated
 	LastAccessedAt time.Time  `json:"last_accessed_at"`          // When last accessed
 	AccessCount    int64      `json:"access_count"`              // Number of times accessed
+	HappensAt      *time.Time `json:"happens_at,omitempty"`      // When a scheduled event or deadline is set to happen
 	NextTriggerAt  *time.Time `json:"next_trigger_at,omitempty"` // For routines/predictions
 	Source         string     `json:"source,omitempty"`          // Origin: "conversation", "extraction", "manual", "import"
 	SourceSession  string     `json:"source_session,omitempty"`  // Session key
@@ -116,7 +117,7 @@ type Memory struct {
 	Channel        string     `json:"channel,omitempty"`         // Channel name
 	ChatID         string     `json:"chat_id,omitempty"`         // Channel-specific chat ID
 	Emotion        string     `json:"emotion,omitempty"`         // frustrated, excited, stressed, relieved, etc.
-	OccurredAt     time.Time  `json:"occurred_at"`               // When this actually happened (required)
+	OccurredAt     time.Time  `json:"occurred_at"`               // When this memory was observed/recorded, or when a past event happened
 	Forgotten      bool       `json:"forgotten"`                 // Soft delete flag
 	Embedding      []float32  `json:"-"`                         // Vector embedding
 	EmbeddingModel string     `json:"-"`                         // Model that generated embedding

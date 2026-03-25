@@ -293,7 +293,7 @@ func (e *EditorTview) editMedia() {
 	L_info("editor: opening media config")
 
 	mediaCfg := e.cfg.Media
-	formDef := media.ConfigFormDef()
+	formDef := media.ConfigFormDefWithValues(mediaCfg)
 
 	content, err := forms.BuildFormContent(formDef, &mediaCfg, "media", func(result forms.TviewResult) {
 		if result == forms.ResultAccepted {

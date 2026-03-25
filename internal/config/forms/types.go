@@ -9,6 +9,7 @@ const (
 	Toggle       FieldType = iota // Boolean on/off
 	Text                          // Single-line text input
 	Number                        // Numeric input (int or float)
+	Slider                        // Slider input (web) / stepped numeric input (TUI)
 	Secret                        // Password/token input (masked)
 	Select                        // Dropdown selection
 	TextArea                      // Multi-line text input
@@ -48,9 +49,11 @@ type Field struct {
 	Required    bool      // Whether field is required
 
 	// Numeric constraints (for Number type)
-	Min  float64 // Minimum value
-	Max  float64 // Maximum value
-	Step float64 // Step increment (0 = any)
+	Min   float64 // Minimum value
+	Max   float64 // Maximum value
+	Step  float64 // Step increment (0 = any)
+	Scale float64 // Display scale for numeric fields (stored value = displayed value * scale)
+	Unit  string  // Human-facing unit label for numeric fields (e.g. GB, MB)
 
 	// Select options (for Select type)
 	Options []Option

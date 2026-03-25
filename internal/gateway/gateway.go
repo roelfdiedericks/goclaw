@@ -370,9 +370,12 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 		mediaDir = filepath.Join(cfg.Gateway.WorkingDir, mediaDir)
 	}
 	mediaStore, err := media.NewMediaStore(media.MediaConfig{
-		Dir:     mediaDir,
-		TTL:     cfg.Media.TTL,
-		MaxSize: cfg.Media.MaxSize,
+		Dir:        mediaDir,
+		MaxSize:    cfg.Media.MaxSize,
+		Cleanup:    cfg.Media.Cleanup,
+		Quotas:     cfg.Media.Quotas,
+		Categories: cfg.Media.Categories,
+		TTL:        cfg.Media.TTL,
 	})
 	if err != nil {
 		L_warn("failed to create media store", "error", err)
@@ -380,8 +383,9 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 		g.mediaStore = mediaStore
 		L_info("media: store initialized",
 			"dir", mediaDir,
-			"ttl", cfg.Media.TTL,
-			"maxSize", cfg.Media.MaxSize)
+			"maxSize", cfg.Media.MaxSize,
+			"cleanupEnabled", cfg.Media.Cleanup.Enabled,
+			"cleanupInterval", cfg.Media.Cleanup.Interval)
 	}
 
 	// Initialize STT provider

@@ -530,6 +530,8 @@ func applyRuntimeDefaults(cfg *Config, goclawDir, home string) {
 			},
 		}
 	}
+
+	cfg.Media.Normalize()
 }
 
 func migrateSandboxConfigJSON(data []byte) ([]byte, error) {

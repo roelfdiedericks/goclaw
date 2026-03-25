@@ -698,8 +698,8 @@ func addFieldToFormInternal(form *tview.Form, field Field, fv reflect.Value, aft
 			}
 		})
 
-	case Number:
-		val := fmt.Sprintf("%v", fv.Interface())
+	case Number, Slider:
+		val := formatNumericFieldValue(fv, field.Scale)
 		form.AddInputField(label, val, 20, func(text string, lastChar rune) bool {
 			// Allow digits, minus, and decimal point
 			if lastChar == '-' || lastChar == '.' || (lastChar >= '0' && lastChar <= '9') {
@@ -710,7 +710,7 @@ func addFieldToFormInternal(form *tview.Form, field Field, fv reflect.Value, aft
 			if !fv.CanSet() {
 				return
 			}
-			setNumericValue(fv, text)
+			setNumericValueScaled(fv, text, field.Scale)
 		})
 
 	case Select:
@@ -800,16 +800,33 @@ func addFieldToFormInternal(form *tview.Form, field Field, fv reflect.Value, aft
 }
 
 // setNumericValue sets a numeric value from string
-func setNumericValue(fv reflect.Value, text string) {
+func setNumericValueScaled(fv reflect.Value, text string, scale float64) {
+	if scale == 0 {
+		scale = 1
+	}
 	switch fv.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		if i, err := strconv.ParseInt(text, 10, 64); err == nil {
-			fv.SetInt(i)
+		if f, err := strconv.ParseFloat(text, 64); err == nil {
+			fv.SetInt(int64(f * scale))
 		}
 	case reflect.Float32, reflect.Float64:
 		if f, err := strconv.ParseFloat(text, 64); err == nil {
-			fv.SetFloat(f)
+			fv.SetFloat(f * scale)
 		}
+	}
+}
+
+func formatNumericFieldValue(fv reflect.Value, scale float64) string {
+	if scale == 0 {
+		scale = 1
+	}
+	switch fv.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.FormatFloat(float64(fv.Int())/scale, 'f', -1, 64)
+	case reflect.Float32, reflect.Float64:
+		return strconv.FormatFloat(fv.Float()/scale, 'f', -1, 64)
+	default:
+		return fmt.Sprintf("%v", fv.Interface())
 	}
 }
 

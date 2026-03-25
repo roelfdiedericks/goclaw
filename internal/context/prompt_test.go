@@ -14,9 +14,9 @@ type promptTestTool struct {
 	name, description string
 }
 
-func (t promptTestTool) Name() string               { return t.name }
-func (t promptTestTool) Description() string        { return t.description }
-func (t promptTestTool) Schema() map[string]any     { return map[string]any{} }
+func (t promptTestTool) Name() string           { return t.name }
+func (t promptTestTool) Description() string    { return t.description }
+func (t promptTestTool) Schema() map[string]any { return map[string]any{} }
 func (t promptTestTool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
 	return nil, nil
 }
@@ -134,7 +134,9 @@ func TestBuildAgentExtractionSectionUsesRecallFirstGuidance(t *testing.T) {
 	prompt := buildAgentExtractionSection()
 	required := []string{
 		"memory_graph_recall",
-		"decide whether to store something new, enrich/update something, or skip",
+		"decide whether to skip, enrich/update existing knowledge, or store something new",
+		"Recognition is not completion.",
+		"Do not continue to your response until the memory decision has been executed through the tool workflow.",
 		"Recall First, Then Decide",
 	}
 	for _, snippet := range required {

@@ -26,7 +26,7 @@ func (t *StoreTool) Name() string {
 }
 
 func (t *StoreTool) Description() string {
-	return "Save a memory to the graph. Use after recalling related memories. Supports linking to existing memories via associations. Note: Todos appear automatically in the Context Bulletin - no scheduling needed."
+	return "Save a memory to the graph. Use after recalling related memories. Supports linking to existing memories via associations, including structured happens_at scheduling for events, deadlines, and plans."
 }
 
 func (t *StoreTool) Schema() map[string]any {
@@ -35,7 +35,7 @@ func (t *StoreTool) Schema() map[string]any {
 		"properties": map[string]any{
 			"content": map[string]any{
 				"type":        "string",
-				"description": "The memory content - clear, standalone statement. Include a target date for todo/reminders/events/etc.",
+				"description": "The memory content - clear, standalone statement. You can mention timing in prose for readability, but use happens_at for structured event/deadline timing.",
 			},
 			"memory_type": map[string]any{
 				"type":        "string",
@@ -60,7 +60,11 @@ func (t *StoreTool) Schema() map[string]any {
 			},
 			"occurred_at": map[string]any{
 				"type":        "string",
-				"description": "When this memory was formed. Cannot be in the future. For past events ('yesterday', 'last week'), calculate using conversation date as reference. For todos with target dates, put the date in content instead. Format: ISO date or RFC3339. Usually omit - defaults to conversation timestamp.",
+				"description": "When this memory was observed/recorded, or when a past event happened. Cannot be in the future during normal use. Format: ISO date or RFC3339. Usually omit - defaults to the conversation timestamp.",
+			},
+			"happens_at": map[string]any{
+				"type":        "string",
+				"description": "When a scheduled event, plan, appointment, or deadline is set to happen. This may be in the future or the past. Use this for structured timing of todos/events/goals instead of relying only on prose in content. Format: ISO date or RFC3339.",
 			},
 			"reasoning": map[string]any{
 				"type":        "string",
@@ -100,6 +104,7 @@ type StoreParams struct {
 	Emotion      string             `json:"emotion,omitempty"`
 	Source       string             `json:"source,omitempty"`
 	OccurredAt   string             `json:"occurred_at,omitempty"`
+	HappensAt    string             `json:"happens_at,omitempty"`
 	Associations []AssociationInput `json:"associations,omitempty"`
 }
 
@@ -196,12 +201,12 @@ func (t *StoreTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 		mem.Confidence = ConfidenceNotApplicable
 	}
 
-	// Set occurred_at - parse from params or use context default
+	// Set occurred_at - parse from params or use context default.
 	if params.OccurredAt != "" {
-		// Try RFC3339 first, then date-only
-		if t, err := time.Parse(time.RFC3339, params.OccurredAt); err == nil {
-			mem.OccurredAt = t
-		} else if t, err := time.Parse("2006-01-02", params.OccurredAt); err == nil {
+		if t, err := parseMemoryToolTime(params.OccurredAt); err == nil {
+			if t.After(time.Now()) {
+				return types.ErrorResult("occurred_at cannot be in the future; use happens_at for scheduled events or deadlines"), nil
+			}
 			mem.OccurredAt = t
 		} else {
 			L_warn("memory_graph_store: invalid occurred_at format", "value", params.OccurredAt)
@@ -213,6 +218,14 @@ func (t *StoreTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 			mem.OccurredAt = ts
 		}
 		// CreateMemory will default to time.Now() if still zero
+	}
+
+	if params.HappensAt != "" {
+		if t, err := parseMemoryToolTime(params.HappensAt); err == nil {
+			mem.HappensAt = &t
+		} else {
+			L_warn("memory_graph_store: invalid happens_at format", "value", params.HappensAt)
+		}
 	}
 
 	// Default source
@@ -291,4 +304,11 @@ func (t *StoreTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 	}
 
 	return types.TextResult(result), nil
+}
+
+func parseMemoryToolTime(value string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return t, nil
+	}
+	return time.Parse("2006-01-02", value)
 }

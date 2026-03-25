@@ -32,6 +32,7 @@ type ProviderConfig struct {
 
 // EffectsConfig configures audio effects applied to voice output
 type EffectsConfig struct {
+	Preset   string         `json:"preset,omitempty"`    // UI helper for setup forms; runtime uses expanded values below.
 	Mode     string         `json:"mode" default:"none"` // "none", "ring", "bitcrush", "both"
 	Ring     RingModConfig  `json:"ring,omitempty"`
 	Bitcrush BitcrushConfig `json:"bitcrush,omitempty"`
@@ -64,6 +65,54 @@ type PromptConfigForm struct {
 	MaxSentences           int      `json:"maxSentences"`
 	PronunciationsList     []string `json:"pronunciationsList"`
 	AdditionalInstructions string   `json:"additionalInstructions"`
+}
+
+// ConfigFormData is a web-form-friendly wrapper for VoiceLLM config.
+// Effects are flattened through EffectsFormData so preset editing can round-trip.
+type ConfigFormData struct {
+	Providers   map[string]ProviderConfig `json:"providers"`
+	Default     string                    `json:"default"`
+	ServerVAD   bool                      `json:"serverVAD"`
+	IdleTimeout int                       `json:"idleTimeout"`
+	Enabled     bool                      `json:"enabled"`
+	Prompt      PromptConfig              `json:"prompt,omitempty"`
+	Effects     EffectsFormData           `json:"effects,omitempty"`
+}
+
+// ToConfigFormData converts Config to the form-friendly wrapper used by the web editor.
+func (c *Config) ToConfigFormData() *ConfigFormData {
+	if c == nil {
+		return &ConfigFormData{}
+	}
+	return &ConfigFormData{
+		Providers:   c.Providers,
+		Default:     c.Default,
+		ServerVAD:   c.ServerVAD,
+		IdleTimeout: c.IdleTimeout,
+		Enabled:     c.Enabled,
+		Prompt:      c.Prompt,
+		Effects:     *c.Effects.ToEffectsFormData(),
+	}
+}
+
+// ToConfig converts the form-friendly wrapper back to runtime VoiceLLM config.
+func (f *ConfigFormData) ToConfig() Config {
+	if f == nil {
+		return Config{}
+	}
+	effects := f.Effects
+	if effects.Preset != "" && effects.Preset != "custom" {
+		effects.ApplyPreset(effects.Preset)
+	}
+	return Config{
+		Providers:   f.Providers,
+		Default:     f.Default,
+		ServerVAD:   f.ServerVAD,
+		IdleTimeout: f.IdleTimeout,
+		Enabled:     f.Enabled,
+		Prompt:      f.Prompt,
+		Effects:     effects.ToEffectsConfig(),
+	}
 }
 
 // ToPromptConfigForm converts PromptConfig to form-friendly format.
@@ -666,13 +715,6 @@ func ConfigFormDef() forms.FormDef {
 		{Value: "xai", Label: "xAI"},
 	}
 
-	modeOptions := []forms.Option{
-		{Value: "none", Label: "None (natural voice)"},
-		{Value: "ring", Label: "Ring Modulation"},
-		{Value: "bitcrush", Label: "Bitcrush"},
-		{Value: "both", Label: "Both"},
-	}
-
 	return forms.FormDef{
 		Title:       "Voice LLM Configuration",
 		Description: "Configure real-time voice interaction",
@@ -709,8 +751,61 @@ func ConfigFormDef() forms.FormDef {
 				Title:     "Audio Effects",
 				FieldName: "effects",
 				Collapsed: true,
+				Nested:    ptrFormDef(EffectsConfigWebFormDef()),
+			},
+		},
+	}
+}
+
+func ptrFormDef(def forms.FormDef) *forms.FormDef {
+	return &def
+}
+
+// EffectsConfigWebFormDef returns the nested audio-effects form used by the web config page.
+func EffectsConfigWebFormDef() forms.FormDef {
+	presetOptions := make([]forms.Option, len(EffectsPresets))
+	for i, p := range EffectsPresets {
+		presetOptions[i] = forms.Option{Label: p.Label, Value: p.Name}
+	}
+
+	modeOptions := []forms.Option{
+		{Value: "none", Label: "None (natural voice)"},
+		{Value: "ring", Label: "Ring Modulation (metallic/robotic)"},
+		{Value: "bitcrush", Label: "Bitcrush (lo-fi/crunchy)"},
+		{Value: "both", Label: "Both (full robot)"},
+	}
+
+	return forms.FormDef{
+		Sections: []forms.Section{
+			{
+				Title: "Preset",
 				Fields: []forms.Field{
-					{Name: "mode", Title: "Mode", Type: forms.Select, Options: modeOptions, Default: "none"},
+					{Name: "preset", Title: "Preset", Desc: "Choose a ready-made effect or switch to Custom to tune each value yourself.", Type: forms.Select, Options: presetOptions, Default: "none"},
+				},
+			},
+			{
+				Title:    "Effect Mode",
+				ShowWhen: "effects.preset=custom",
+				Fields: []forms.Field{
+					{Name: "mode", Title: "Mode", Desc: "Which effects to apply when using a custom setup.", Type: forms.Select, Options: modeOptions, Default: "none"},
+				},
+			},
+			{
+				Title:     "Ring Modulation",
+				ShowWhen:  "effects.preset=custom,effects.mode=ring,effects.mode=both",
+				FieldName: "ring",
+				Fields: []forms.Field{
+					{Name: "carrierFreq", Title: "Carrier Frequency (Hz)", Desc: "30=Dalek, 150-200=metallic, 400+=bell-like", Type: forms.Number, Min: 20, Max: 500, Default: 200},
+					{Name: "mix", Title: "Mix", Desc: "0.0=dry/original, 1.0=full effect (0.5-0.7 recommended)", Type: forms.Number, Min: 0, Max: 1, Step: 0.1, Default: 0.7},
+				},
+			},
+			{
+				Title:     "Bitcrush",
+				ShowWhen:  "effects.preset=custom,effects.mode=bitcrush,effects.mode=both",
+				FieldName: "bitcrush",
+				Fields: []forms.Field{
+					{Name: "bitDepth", Title: "Bit Depth", Desc: "16=clean, 8=crunchy, 4=very lo-fi", Type: forms.Number, Min: 2, Max: 16, Default: 8},
+					{Name: "downsample", Title: "Downsample Factor", Desc: "1=none, 2=half rate, 4=quarter rate", Type: forms.Number, Min: 1, Max: 8, Default: 2},
 				},
 			},
 		},

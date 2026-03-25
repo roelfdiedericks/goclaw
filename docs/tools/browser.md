@@ -56,8 +56,8 @@ In `goclaw.json`:
       "allowAgentProfiles": false,
       "remote": {
         "enabled": true,
-        "profilesText": "workstation=ws://192.168.1.50:9222/devtools/browser/abc123\nstaging=http://10.0.0.20:9222",
-        "allowedHosts": ["192.168.1.50", "10.0.0.0/24"],
+        "profilesText": "workstation=ws://192.168.1.100:9222/devtools/browser/abc123\nstaging=http://192.168.1.1:9222",
+        "allowedHosts": ["192.168.1.100", "192.168.1.1"],
         "allowDirectEndpoints": false,
         "allowHTTPDiscovery": true,
         "connectionTimeout": "10s"
@@ -153,8 +153,8 @@ Configure them with one entry per line:
 ```json
 "remote": {
   "enabled": true,
-  "profilesText": "workstation=ws://192.168.1.50:9222/devtools/browser/abc123\nstaging=http://10.0.0.20:9222",
-  "allowedHosts": ["192.168.1.50", "10.0.0.0/24"],
+  "profilesText": "workstation=ws://192.168.1.100:9222/devtools/browser/abc123\nstaging=http://192.168.1.1:9222",
+  "allowedHosts": ["192.168.1.100", "192.168.1.1"],
   "allowHTTPDiscovery": true,
   "connectionTimeout": "10s"
 }
@@ -164,7 +164,7 @@ Examples:
 - `remote:workstation` → Connect directly to a websocket CDP endpoint
 - `remote:staging` → Resolve an HTTP discovery endpoint and then attach to the returned websocket URL
 
-Operator notes:
+Notes:
 - `profile="chrome"` is still reserved for the local Chrome relay path on this machine
 - Remote browsers are configured explicitly and are treated as external browsers
 - If you use `allowedHosts`, the remote host must match an entry in that list
@@ -339,9 +339,9 @@ These overrides are intended to be reversible and safe to combine with performan
 5. `performance_trace_stop`
 6. `emulation_reset`
 
-## MCP-Style Aliases
+## Alternate Action Names
 
-For compatibility with Chrome DevTools MCP-style naming, the browser tool also accepts these aliases:
+The browser tool also accepts these alternate action names:
 
 - `new_page` → `open`
 - `navigate_page` → `navigate`
@@ -360,7 +360,7 @@ For compatibility with Chrome DevTools MCP-style naming, the browser tool also a
 - `upload_file` → `upload`
 - `fill_form` → `fill`
 
-These aliases are intended to make the tool easier to use from MCP-oriented prompts without changing the native GoClaw action names.
+These aliases exist for compatibility with other browser-automation prompts and tooling.
 
 ## Element References
 
@@ -454,7 +454,7 @@ When `allowAgentProfiles: true`:
 GoClaw automatically cleans up stale lock files. If issues persist:
 
 ```bash
-rm ~/.openclaw/goclaw/browser/profiles/*/SingletonLock
+rm ~/.goclaw/browser/profiles/*/SingletonLock
 ```
 
 ### Authentication not working

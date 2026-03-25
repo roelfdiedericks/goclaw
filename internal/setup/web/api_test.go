@@ -1,10 +1,14 @@
 package web
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/configapply"
 )
@@ -86,7 +90,7 @@ func TestValidateSectionPayloadProviderListAndRolesAndModelChain(t *testing.T) {
 	providerPayload := map[string]interface{}{
 		"providers": map[string]interface{}{
 			"ollama_local": map[string]interface{}{
-				"driver": "ollama",
+				"driver":  "ollama",
 				"baseURL": "http://127.0.0.1:11434",
 			},
 			"anthropic": map[string]interface{}{
@@ -180,5 +184,70 @@ func TestAPIResolveSavePathFallsBackToLoadedDefaultPath(t *testing.T) {
 	path := api.resolveSavePath(&config.LoadResult{})
 	if filepath.Base(path) != "goclaw.json" {
 		t.Fatalf("expected fallback goclaw.json path, got %q", path)
+	}
+}
+
+func TestHandleSectionActionInvokesCommand(t *testing.T) {
+	api := NewAPI(filepath.Join(t.TempDir(), "missing-goclaw.json"), configapply.CallerWebStandalone)
+	bus.RegisterCommand("media", "stats", func(cmd bus.Command) bus.CommandResult {
+		return bus.CommandResult{
+			Success: true,
+			Message: "Current media usage: 0.1 GB of 2 GB total.",
+			Data:    map[string]any{"ok": true},
+		}
+	})
+	defer bus.UnregisterCommand("media", "stats")
+
+	req := httptest.NewRequest(http.MethodPost, "/setup/api/section-action/media/stats", nil)
+	rec := httptest.NewRecorder()
+	api.HandleSectionAction(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var resp APIResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("expected success response, got %+v", resp)
+	}
+	if resp.Message == "" {
+		t.Fatalf("expected success message")
+	}
+}
+
+func TestExpandVoiceLLMSectionPayloadAppliesEffectsPreset(t *testing.T) {
+	payload := map[string]interface{}{
+		"effects": map[string]interface{}{
+			"preset": "battlestar",
+		},
+	}
+
+	runtimePayload, err := expandVoiceLLMSectionPayload(payload)
+	if err != nil {
+		t.Fatalf("expandVoiceLLMSectionPayload: %v", err)
+	}
+
+	effects, ok := runtimePayload["effects"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected effects map in runtime payload, got %#v", runtimePayload["effects"])
+	}
+	if got := effects["mode"]; got != "both" {
+		t.Fatalf("expected battlestar mode both, got %#v", got)
+	}
+	ring, ok := effects["ring"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected ring map in runtime payload, got %#v", effects["ring"])
+	}
+	if got := ring["carrierFreq"]; got != float64(200) {
+		t.Fatalf("expected battlestar carrier freq 200, got %#v", got)
+	}
+	bitcrush, ok := effects["bitcrush"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected bitcrush map in runtime payload, got %#v", effects["bitcrush"])
+	}
+	if got := bitcrush["bitDepth"]; got != float64(8) {
+		t.Fatalf("expected battlestar bit depth 8, got %#v", got)
 	}
 }

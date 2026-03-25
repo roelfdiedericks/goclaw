@@ -25,9 +25,38 @@ func RenderFormHTML(def forms.FormDef, _ string) (template.HTML, error) {
 			return "", err
 		}
 	}
+	renderActions(&sb, def.Actions)
 
 	// #nosec G203 -- This markup is assembled from fixed HTML plus escaped FormDef text.
 	return template.HTML(sb.String()), nil
+}
+
+func renderActions(sb *strings.Builder, actions []forms.ActionDef) {
+	filtered := make([]forms.ActionDef, 0, len(actions))
+	for _, action := range actions {
+		if action.Name == "apply" {
+			continue
+		}
+		filtered = append(filtered, action)
+	}
+	if len(filtered) == 0 {
+		return
+	}
+	sb.WriteString(`<div class="d-flex flex-wrap gap-2 mb-3 js-form-actions">` + "\n")
+	for _, action := range filtered {
+		sb.WriteString(fmt.Sprintf(`<button type="button" class="btn btn-outline-secondary js-form-action" data-action-name="%s"`,
+			template.HTMLEscapeString(action.Name)))
+		if action.Confirm != "" {
+			sb.WriteString(fmt.Sprintf(` data-action-confirm="%s"`, template.HTMLEscapeString(action.Confirm)))
+		}
+		if action.Desc != "" {
+			sb.WriteString(fmt.Sprintf(` title="%s"`, template.HTMLEscapeString(action.Desc)))
+		}
+		sb.WriteString(`>`)
+		sb.WriteString(template.HTMLEscapeString(action.Label))
+		sb.WriteString(`</button>` + "\n")
+	}
+	sb.WriteString(`</div>` + "\n")
 }
 
 func renderSection(sb *strings.Builder, sec forms.Section, prefix string) error {
@@ -89,6 +118,9 @@ func renderField(sb *strings.Builder, field forms.Field, prefix string) error {
 	switch field.Type {
 	case forms.Toggle:
 		renderToggle(sb, field, inputID, fieldKey, fieldPath)
+		return nil
+	case forms.Slider:
+		renderSlider(sb, field, inputID, fieldKey, fieldPath)
 		return nil
 	case forms.ModelChain:
 		renderModelChain(sb, field, fieldPath, fieldKey)
@@ -170,6 +202,31 @@ func renderSecret(sb *strings.Builder, field forms.Field, inputID, fieldKey, fie
 func renderNumber(sb *strings.Builder, field forms.Field, inputID, fieldKey, fieldPath string) {
 	sb.WriteString(fmt.Sprintf(`      <input type="number" class="form-control js-bound-field" id="%s" data-bind="%s" data-bind-type="number"`,
 		inputID, template.HTMLEscapeString(fieldPath)))
+	appendNumericAttrs(sb, field)
+	sb.WriteString(">\n")
+	renderFieldError(sb, fieldKey)
+}
+
+func renderSlider(sb *strings.Builder, field forms.Field, inputID, fieldKey, fieldPath string) {
+	sb.WriteString(`      <div class="js-slider-wrapper">` + "\n")
+	sb.WriteString(fmt.Sprintf(`        <input type="range" class="form-range js-bound-field js-slider-field" id="%s" data-bind="%s" data-bind-type="number"`,
+		inputID, template.HTMLEscapeString(fieldPath)))
+	appendNumericAttrs(sb, field)
+	sb.WriteString(">\n")
+	sb.WriteString(`        <div class="d-flex justify-content-between align-items-center gap-2">` + "\n")
+	if field.Min != 0 || field.Max != 0 {
+		sb.WriteString(fmt.Sprintf(`          <small class="text-muted">%s</small>`+"\n", template.HTMLEscapeString(formatSliderEdge(field.Min, field.Unit))))
+	}
+	sb.WriteString(fmt.Sprintf(`          <small class="text-muted fw-semibold js-slider-value" data-slider-for="%s"></small>`+"\n", template.HTMLEscapeString(inputID)))
+	if field.Max != 0 {
+		sb.WriteString(fmt.Sprintf(`          <small class="text-muted">%s</small>`+"\n", template.HTMLEscapeString(formatSliderEdge(field.Max, field.Unit))))
+	}
+	sb.WriteString("        </div>\n")
+	sb.WriteString("      </div>\n")
+	renderFieldError(sb, fieldKey)
+}
+
+func appendNumericAttrs(sb *strings.Builder, field forms.Field) {
 	if field.Min != 0 {
 		sb.WriteString(fmt.Sprintf(` min="%v"`, field.Min))
 	}
@@ -182,8 +239,20 @@ func renderNumber(sb *strings.Builder, field forms.Field, inputID, fieldKey, fie
 	if field.Placeholder != "" {
 		sb.WriteString(fmt.Sprintf(` placeholder="%s"`, template.HTMLEscapeString(field.Placeholder)))
 	}
-	sb.WriteString(">\n")
-	renderFieldError(sb, fieldKey)
+	if field.Scale != 0 {
+		sb.WriteString(fmt.Sprintf(` data-scale="%v"`, field.Scale))
+	}
+	if field.Unit != "" {
+		sb.WriteString(fmt.Sprintf(` data-unit="%s"`, template.HTMLEscapeString(field.Unit)))
+	}
+}
+
+func formatSliderEdge(value float64, unit string) string {
+	text := strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.1f", value), "0"), ".")
+	if unit == "" {
+		return text
+	}
+	return text + " " + unit
 }
 
 func renderSelect(sb *strings.Builder, field forms.Field, inputID, fieldKey, fieldPath string) {

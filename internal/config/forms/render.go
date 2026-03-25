@@ -128,6 +128,7 @@ type fieldBinding struct {
 	FieldValue reflect.Value
 	FormValue  any // Pointer to form field's bound value
 	FieldType  FieldType
+	Scale      float64
 }
 
 func (b fieldBinding) Apply() error {
@@ -144,9 +145,9 @@ func (b fieldBinding) Apply() error {
 		if v, ok := b.FormValue.(*string); ok {
 			b.FieldValue.SetString(*v)
 		}
-	case Number:
+	case Number, Slider:
 		if v, ok := b.FormValue.(*string); ok {
-			return setNumericField(b.FieldValue, *v)
+			return setNumericFieldScaled(b.FieldValue, *v, b.Scale)
 		}
 	case Select:
 		if v, ok := b.FormValue.(*string); ok {
@@ -156,21 +157,24 @@ func (b fieldBinding) Apply() error {
 	return nil
 }
 
-// setNumericField parses a string and sets it on a numeric field
-func setNumericField(rv reflect.Value, s string) error {
+// setNumericFieldScaled parses a string and sets it on a numeric field.
+func setNumericFieldScaled(rv reflect.Value, s string, scale float64) error {
+	if scale == 0 {
+		scale = 1
+	}
 	switch rv.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		i, err := strconv.ParseInt(s, 10, 64)
+		f, err := strconv.ParseFloat(s, 64)
 		if err != nil {
 			return err
 		}
-		rv.SetInt(i)
+		rv.SetInt(int64(f * scale))
 	case reflect.Float32, reflect.Float64:
 		f, err := strconv.ParseFloat(s, 64)
 		if err != nil {
 			return err
 		}
-		rv.SetFloat(f)
+		rv.SetFloat(f * scale)
 	default:
 		return fmt.Errorf("unsupported numeric type: %v", rv.Kind())
 	}
@@ -192,6 +196,7 @@ func renderField(def Field, rv reflect.Value) (huh.Field, fieldBinding, error) {
 		Name:       def.Name,
 		FieldValue: fv,
 		FieldType:  def.Type,
+		Scale:      def.Scale,
 	}
 
 	var field huh.Field
@@ -217,8 +222,8 @@ func renderField(def Field, rv reflect.Value) (huh.Field, fieldBinding, error) {
 		}
 		field = input
 
-	case Number:
-		val := fmt.Sprintf("%v", fv.Interface())
+	case Number, Slider:
+		val := formatScaledNumericValue(fv, def.Scale)
 		binding.FormValue = &val
 		input := huh.NewInput().
 			Title(def.Title).
@@ -253,6 +258,20 @@ func renderField(def Field, rv reflect.Value) (huh.Field, fieldBinding, error) {
 	}
 
 	return field, binding, nil
+}
+
+func formatScaledNumericValue(fv reflect.Value, scale float64) string {
+	if scale == 0 {
+		scale = 1
+	}
+	switch fv.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.FormatFloat(float64(fv.Int())/scale, 'f', -1, 64)
+	case reflect.Float32, reflect.Float64:
+		return strconv.FormatFloat(fv.Float()/scale, 'f', -1, 64)
+	default:
+		return fmt.Sprintf("%v", fv.Interface())
+	}
 }
 
 // findField finds a struct field by name (case-insensitive)

@@ -344,6 +344,7 @@
             this.$formContent.on('click', '.js-role-add-cancel', (event) => this.cancelAddRole($(event.currentTarget).data('field-path')));
             this.$formContent.on('input change', '.js-role-input', (event) => this.handleRoleInput(event));
             this.$formContent.on('click', '.js-role-save-new', (event) => this.saveNewRole($(event.currentTarget).data('field-path')));
+            this.$formContent.on('click', '.js-form-action', (event) => this.runFormAction(event));
 
             $('#mcModalBack').on('click', () => this.showModelProviderStep());
             $('#mcModalAdd').on('click', () => this.addSelectedModelToChain());
@@ -500,13 +501,15 @@
                 const $field = $(el);
                 const bindPath = $field.data('bind');
                 const bindType = $field.data('bind-type') || 'string';
+                const scale = this.readNumericScale($field);
                 const value = getByPath(state, bindPath);
                 if ($field.is(':checkbox')) {
                     $field.prop('checked', !!value);
                 } else if (bindType === 'string-list') {
                     $field.val(formatStringList(value));
                 } else if (bindType === 'number') {
-                    $field.val(value == null ? '' : value);
+                    $field.val(value == null ? '' : value / scale);
+                    this.updateSliderDisplay($field);
                 } else {
                     $field.val(value == null ? '' : value);
                 }
@@ -538,13 +541,15 @@
             const $field = $(event.currentTarget);
             const bindPath = $field.data('bind');
             const bindType = $field.data('bind-type') || 'string';
+            const scale = this.readNumericScale($field);
 
             let value;
             if ($field.is(':checkbox')) {
                 value = $field.is(':checked');
             } else if (bindType === 'number') {
                 const raw = $field.val();
-                value = raw === '' ? 0 : Number(raw);
+                value = raw === '' ? 0 : Math.round(Number(raw) * scale);
+                this.updateSliderDisplay($field);
             } else if (bindType === 'string-list') {
                 value = parseStringList($field.val());
             } else {
@@ -558,6 +563,20 @@
             this.applyShowWhen(this.$formContent, this.formData);
             this.renderFieldErrors(this.$formContent, this.fieldErrors);
             this.syncTopBar();
+        }
+
+        readNumericScale($field) {
+            const raw = Number($field.data('scale'));
+            return Number.isFinite(raw) && raw > 0 ? raw : 1;
+        }
+
+        updateSliderDisplay($field) {
+            if (!$field.hasClass('js-slider-field')) return;
+            const fieldID = $field.attr('id');
+            const unit = $field.data('unit') || '';
+            const rawValue = String($field.val() ?? '');
+            const formatted = rawValue.replace(/\.0$/, '');
+            this.$formContent.find(`.js-slider-value[data-slider-for="${fieldID}"]`).text(unit ? `${formatted} ${unit}` : formatted);
         }
 
         async saveAll() {
@@ -611,6 +630,34 @@
             } finally {
                 this.saving = false;
                 this.syncTopBar();
+            }
+        }
+
+        async runFormAction(event) {
+            const $button = $(event.currentTarget);
+            const actionName = $button.data('action-name');
+            const confirmText = $button.data('action-confirm');
+            const label = $button.text().trim() || 'Action';
+            if (!this.currentSection || this.currentSectionType === 'custom' || !actionName) return;
+            if (confirmText && !window.confirm(confirmText)) return;
+
+            showAlert(this.$errorAlert, '');
+            showAlert(this.$successAlert, '');
+            $button.prop('disabled', true);
+            try {
+                const resp = await fetch(`/setup/api/section-action/${encodeURIComponent(this.currentSection)}/${encodeURIComponent(actionName)}`, {
+                    method: 'POST'
+                });
+                const data = await resp.json();
+                if (!data.success) {
+                    throw new Error(data.message || `Failed to run ${label}`);
+                }
+                await this.loadSection(this.currentSection);
+                showAlert(this.$successAlert, data.message || `${label} completed.`);
+            } catch (err) {
+                showAlert(this.$errorAlert, err.message || `Failed to run ${label}`);
+            } finally {
+                $button.prop('disabled', false);
             }
         }
 
@@ -2003,11 +2050,15 @@
                 const $field = $(el);
                 const bindPath = $field.data('bind');
                 const bindType = $field.data('bind-type') || 'string';
+                const scale = this.readNumericScale($field);
                 const value = getByPath(state, bindPath);
                 if ($field.is(':checkbox')) {
                     $field.prop('checked', !!value);
                 } else if (bindType === 'string-list') {
                     $field.val(formatStringList(value));
+                } else if (bindType === 'number') {
+                    $field.val(value == null ? '' : value / scale);
+                    this.updateWizardSliderDisplay($field);
                 } else {
                     $field.val(value == null ? '' : value);
                 }
@@ -2038,12 +2089,14 @@
             const $field = $(event.currentTarget);
             const bindPath = $field.data('bind');
             const bindType = $field.data('bind-type') || 'string';
+            const scale = this.readNumericScale($field);
             let value;
             if ($field.is(':checkbox')) {
                 value = $field.is(':checked');
             } else if (bindType === 'number') {
                 const raw = $field.val();
-                value = raw === '' ? 0 : Number(raw);
+                value = raw === '' ? 0 : Math.round(Number(raw) * scale);
+                this.updateWizardSliderDisplay($field);
             } else if (bindType === 'string-list') {
                 value = parseStringList($field.val());
             } else {
@@ -2068,6 +2121,20 @@
             if (this.currentStep.id === 'llm' && bindPath === 'LLMProviderID' && value && value !== 'custom') {
                 this.refreshModelOptions(value);
             }
+        }
+
+        updateWizardSliderDisplay($field) {
+            if (!$field.hasClass('js-slider-field')) return;
+            const fieldID = $field.attr('id');
+            const unit = $field.data('unit') || '';
+            const rawValue = String($field.val() ?? '');
+            const formatted = rawValue.replace(/\.0$/, '');
+            this.$stepContent.find(`.js-slider-value[data-slider-for="${fieldID}"]`).text(unit ? `${formatted} ${unit}` : formatted);
+        }
+
+        readNumericScale($field) {
+            const raw = Number($field.data('scale'));
+            return Number.isFinite(raw) && raw > 0 ? raw : 1;
         }
 
         enhanceAgentEmojiField() {

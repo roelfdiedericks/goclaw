@@ -339,10 +339,12 @@ status:
 # Code quality and security
 GOLANGCI_LINT := $(shell which golangci-lint 2>/dev/null)
 GOVULNCHECK := $(shell which govulncheck 2>/dev/null)
+GITLEAKS := $(shell which gitleaks 2>/dev/null)
 
 install-lint-tools:
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 	go install golang.org/x/vuln/cmd/govulncheck@latest
+	go install github.com/zricethezav/gitleaks/v8@latest
 
 lint:
 ifndef GOLANGCI_LINT
@@ -357,6 +359,11 @@ ifndef GOVULNCHECK
 	@go install golang.org/x/vuln/cmd/govulncheck@latest
 endif
 	govulncheck ./...
+ifndef GITLEAKS
+	@echo "Installing gitleaks..."
+	@go install github.com/zricethezav/gitleaks/v8@latest
+endif
+	gitleaks detect --source . --no-git --config .gitleaks.toml -v
 
 # Update embedded skills catalog from upstream OpenClaw repo
 skills-update:

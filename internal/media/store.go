@@ -1,5 +1,3 @@
-// Package media provides image processing and storage utilities for GoClaw.
-// store.go implements MediaStore for saving media files with TTL-based cleanup.
 package media
 
 import (
@@ -7,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -21,54 +20,27 @@ const (
 	// Note: The gateway resolves media.dir to <workspace>/media/ when not explicitly set.
 	// This constant is only used when MediaStore is created directly without gateway.
 	DefaultMediaDir = "~/.goclaw/media"
-
-	// DefaultTTL is the default time-to-live for media files (10 minutes)
-	DefaultTTL = 10 * time.Minute
-
-	// MaxMediaBytes is the maximum allowed file size (50MB)
-	// Increased to support video files from xai_video tool
-	MaxMediaBytes = 50 * 1024 * 1024
-
-	// CleanupInterval is how often to run cleanup (half of TTL)
-	CleanupIntervalDivisor = 2
 )
 
 // MediaStore manages temporary media file storage with automatic TTL-based cleanup.
 // It stores files in a configurable directory with subdirectories for different sources
 // (browser screenshots, inbound media, etc.).
 type MediaStore struct {
-	baseDir string        // Resolved absolute path to media directory
-	ttl     time.Duration // Time-to-live for files
-	maxSize int64         // Maximum file size in bytes
-	stopCh  chan struct{} // Channel to stop cleanup goroutine
+	baseDir string
+	cfg     MediaConfig
+	stopCh  chan struct{}
 	wg      sync.WaitGroup
-	mu      sync.Mutex // Protects concurrent saves
-}
-
-// MediaConfig configures the MediaStore
-type MediaConfig struct {
-	Dir     string `json:"dir"`                       // Base directory (gateway defaults to <workspace>/media/)
-	TTL     int    `json:"ttl" default:"600"`         // TTL in seconds (10 min)
-	MaxSize int    `json:"maxSize" default:"5242880"` // Max file size in bytes (5MB)
+	mu      sync.Mutex
 }
 
 // NewMediaStore creates a new MediaStore with the given configuration.
 // It expands ~ to the user's home directory and creates the base directory if needed.
 func NewMediaStore(cfg MediaConfig) (*MediaStore, error) {
-	// Apply defaults
+	cfg.Normalize()
+
 	dir := cfg.Dir
 	if dir == "" {
 		dir = DefaultMediaDir
-	}
-
-	ttl := time.Duration(cfg.TTL) * time.Second
-	if ttl == 0 {
-		ttl = DefaultTTL
-	}
-
-	maxSize := int64(cfg.MaxSize)
-	if maxSize == 0 {
-		maxSize = MaxMediaBytes
 	}
 
 	// Expand ~ to home directory
@@ -87,18 +59,25 @@ func NewMediaStore(cfg MediaConfig) (*MediaStore, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create media directory: %w", err)
 	}
+	if err := os.MkdirAll(filepath.Join(dir, "keeper"), 0700); err != nil {
+		return nil, fmt.Errorf("failed to create keeper directory: %w", err)
+	}
 
 	store := &MediaStore{
 		baseDir: dir,
-		ttl:     ttl,
-		maxSize: maxSize,
+		cfg:     cfg,
 		stopCh:  make(chan struct{}),
 	}
+	setActiveStore(store)
 
 	logging.L_info("media: store initialized",
 		"dir", dir,
-		"ttl", ttl.String(),
-		"maxSize", maxSize,
+		"maxSize", cfg.MaxSize,
+		"cleanupEnabled", cfg.Cleanup.Enabled,
+		"cleanupIntervalSeconds", cfg.Cleanup.Interval,
+		"globalQuota", cfg.Quotas.Global,
+		"uploadsQuota", cfg.Quotas.Uploads,
+		"keeperQuota", cfg.Quotas.Keeper,
 	)
 
 	return store, nil
@@ -107,10 +86,11 @@ func NewMediaStore(cfg MediaConfig) (*MediaStore, error) {
 // Start begins the background cleanup goroutine.
 // Call this after creating the MediaStore to enable automatic cleanup.
 func (s *MediaStore) Start() {
-	cleanupInterval := s.ttl / CleanupIntervalDivisor
-	if cleanupInterval < time.Minute {
-		cleanupInterval = time.Minute
+	if !s.cfg.Cleanup.Enabled {
+		logging.L_info("media: cleanup disabled", "dir", s.baseDir)
+		return
 	}
+	cleanupInterval := time.Duration(s.cfg.Cleanup.Interval) * time.Second
 
 	logging.L_debug("media: starting cleanup goroutine", "interval", cleanupInterval.String())
 
@@ -120,15 +100,14 @@ func (s *MediaStore) Start() {
 		ticker := time.NewTicker(cleanupInterval)
 		defer ticker.Stop()
 
-		// Run initial cleanup
-		if err := s.cleanOld(); err != nil {
+		if _, err := s.CleanNow(); err != nil {
 			logging.L_warn("media: initial cleanup error", "error", err)
 		}
 
 		for {
 			select {
 			case <-ticker.C:
-				if err := s.cleanOld(); err != nil {
+				if _, err := s.CleanNow(); err != nil {
 					logging.L_warn("media: cleanup error", "error", err)
 				}
 			case <-s.stopCh:
@@ -143,6 +122,9 @@ func (s *MediaStore) Start() {
 func (s *MediaStore) Close() {
 	close(s.stopCh)
 	s.wg.Wait()
+	if CurrentStore() == s {
+		setActiveStore(nil)
+	}
 	logging.L_debug("media: store closed")
 }
 
@@ -150,42 +132,12 @@ func (s *MediaStore) Close() {
 // Returns the absolute path and a relative path suitable for MEDIA: output.
 // The relative path format ./media/{subdir}/{filename} matches OpenClaw's security requirements.
 func (s *MediaStore) Save(data []byte, subdir, ext string) (absPath string, relPath string, err error) {
-	// Check size limit
-	if int64(len(data)) > s.maxSize {
-		return "", "", fmt.Errorf("file size %d exceeds limit %d", len(data), s.maxSize)
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Create subdirectory
-	dir := filepath.Join(s.baseDir, subdir)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", "", fmt.Errorf("failed to create subdirectory: %w", err)
-	}
-
-	// Generate unique filename
 	id := uuid.New().String()[:8]
 	filename := id + ext
-	absPath = filepath.Join(dir, filename)
-
-	// Write file with restricted permissions
-	if err := os.WriteFile(absPath, data, 0600); err != nil {
-		return "", "", fmt.Errorf("failed to write file: %w", err)
-	}
-
-	// Generate relative path for MEDIA: output
-	// Format: ./media/{subdir}/{filename}
-	relPath = fmt.Sprintf("./media/%s/%s", subdir, filename)
-
-	logging.L_debug("media: saved file",
-		"absPath", absPath,
-		"relPath", relPath,
-		"size", len(data),
-		"subdir", subdir,
-	)
-
-	return absPath, relPath, nil
+	return s.saveWithFilenameLocked(data, subdir, filename)
 }
 
 // UploadContext provides context for user-uploaded media.
@@ -264,13 +216,16 @@ func (s *MediaStore) SaveUpload(data []byte, ext string, ctx UploadContext) (abs
 }
 
 func (s *MediaStore) saveWithFilename(data []byte, subdir, filename string) (absPath, relPath string, err error) {
-	// Check size limit
-	if int64(len(data)) > s.maxSize {
-		return "", "", fmt.Errorf("file size %d exceeds limit %d", len(data), s.maxSize)
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	return s.saveWithFilenameLocked(data, subdir, filename)
+}
+
+func (s *MediaStore) saveWithFilenameLocked(data []byte, subdir, filename string) (absPath, relPath string, err error) {
+	if int64(len(data)) > int64(s.cfg.MaxSize) {
+		return "", "", fmt.Errorf("file size %d exceeds limit %d", len(data), s.cfg.MaxSize)
+	}
 
 	// Create subdirectory
 	dir := filepath.Join(s.baseDir, subdir)
@@ -288,9 +243,15 @@ func (s *MediaStore) saveWithFilename(data []byte, subdir, filename string) (abs
 		"absPath", absPath,
 		"relPath", relPath,
 		"size", len(data),
-		"subdir", subdir,
+		"category", topLevelCategory(subdir),
 		"filename", filename,
 	)
+
+	if warning, warnErr := s.buildPostSaveWarningLocked(topLevelCategory(subdir)); warnErr != nil {
+		logging.L_warn("media: post-save usage check failed", "error", warnErr)
+	} else if warning != "" {
+		logging.L_warn("media: storage pressure after save", "warning", warning, "category", topLevelCategory(subdir))
+	}
 	return absPath, relPath, nil
 }
 
@@ -332,46 +293,229 @@ func (s *MediaStore) BaseDir() string {
 	return s.baseDir
 }
 
-// cleanOld removes files older than TTL from the media directory.
-// It walks all subdirectories and removes expired files.
-// The uploads/ directory is excluded from cleanup (permanent storage).
-func (s *MediaStore) cleanOld() error {
-	now := time.Now()
-	cutoff := now.Add(-s.ttl)
-	removedCount := 0
-	uploadsDir := filepath.Join(s.baseDir, "uploads")
+// Config returns the normalized store configuration in use by the current store.
+func (s *MediaStore) Config() MediaConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg := s.cfg
+	cfg.Normalize()
+	return cfg
+}
+
+// UsageSnapshot returns current usage across the top-level media categories.
+func (s *MediaStore) UsageSnapshot() (MediaUsageSnapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.usageSnapshotLocked()
+}
+
+// CleanNow runs a full media maintenance pass immediately.
+func (s *MediaStore) CleanNow() (MediaMaintenanceResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cleanNowLocked()
+}
+
+func (s *MediaStore) cleanNowLocked() (MediaMaintenanceResult, error) {
+	files, _, err := s.scanMediaLocked()
+	if err != nil {
+		return MediaMaintenanceResult{}, err
+	}
+	removed := map[string]bool{}
+	result := MediaMaintenanceResult{
+		CategorySummaries: make(map[string]string),
+	}
+
+	for _, category := range ephemeralCategories {
+		policy := s.cfg.CategoryPolicy(category)
+		if policy.TTL <= 0 && policy.Quota <= 0 {
+			continue
+		}
+		categoryFiles := sortedRemainingFiles(files, removed, category)
+		cutoff := time.Now().Add(-time.Duration(policy.TTL) * time.Second)
+		var remainingBytes int64
+		for _, file := range categoryFiles {
+			remainingBytes += file.Size
+			if policy.TTL > 0 && file.ModTime.Before(cutoff) {
+				if s.removeFile(file.Path) {
+					removed[file.Path] = true
+					result.RemovedFiles++
+					result.ExpiredRemoved++
+					result.RemovedBytes += file.Size
+					remainingBytes -= file.Size
+				}
+			}
+		}
+		if policy.Quota > 0 {
+			for _, file := range sortedRemainingFiles(files, removed, category) {
+				if remainingBytes <= int64(policy.Quota) {
+					break
+				}
+				if s.removeFile(file.Path) {
+					removed[file.Path] = true
+					result.RemovedFiles++
+					result.QuotaRemoved++
+					result.RemovedBytes += file.Size
+					remainingBytes -= file.Size
+				}
+			}
+		}
+	}
+
+	snapshot, err := s.usageSnapshotLocked()
+	if err != nil {
+		return MediaMaintenanceResult{}, err
+	}
+	if snapshot.OverGlobalBytes > 0 {
+		ephemeralFiles := make([]mediaFileInfo, 0)
+		for _, file := range files {
+			if removed[file.Path] || isPermanentCategory(file.Category) {
+				continue
+			}
+			ephemeralFiles = append(ephemeralFiles, file)
+		}
+		sort.Slice(ephemeralFiles, func(i, j int) bool {
+			return ephemeralFiles[i].ModTime.Before(ephemeralFiles[j].ModTime)
+		})
+		for _, file := range ephemeralFiles {
+			if snapshot.OverGlobalBytes <= 0 {
+				break
+			}
+			if s.removeFile(file.Path) {
+				removed[file.Path] = true
+				result.RemovedFiles++
+				result.QuotaRemoved++
+				result.RemovedBytes += file.Size
+				snapshot.OverGlobalBytes -= file.Size
+			}
+		}
+	}
+
+	finalSnapshot, err := s.usageSnapshotLocked()
+	if err != nil {
+		return MediaMaintenanceResult{}, err
+	}
+	result.Snapshot = finalSnapshot
+	result.Warnings = usageWarningSummary(finalSnapshot)
+	if result.RemovedFiles == 0 {
+		result.Message = "Media maintenance finished. No files were removed."
+	} else {
+		result.Message = fmt.Sprintf("Media maintenance finished. Removed %d files and freed %s.", result.RemovedFiles, formatGB(result.RemovedBytes))
+	}
+	logging.L_info("media: maintenance completed",
+		"removedFiles", result.RemovedFiles,
+		"removedBytes", result.RemovedBytes,
+		"expiredRemoved", result.ExpiredRemoved,
+		"quotaRemoved", result.QuotaRemoved,
+		"warnings", len(result.Warnings),
+	)
+	return result, nil
+}
+
+func (s *MediaStore) usageSnapshotLocked() (MediaUsageSnapshot, error) {
+	_, snapshot, err := s.scanMediaLocked()
+	if err != nil {
+		return MediaUsageSnapshot{}, err
+	}
+	return snapshot, nil
+}
+
+func (s *MediaStore) scanMediaLocked() ([]mediaFileInfo, MediaUsageSnapshot, error) {
+	s.cfg.Normalize()
+	files := make([]mediaFileInfo, 0)
+	snapshot := MediaUsageSnapshot{
+		BaseDir:          s.baseDir,
+		GeneratedAt:      time.Now(),
+		GlobalQuotaBytes: int64(s.cfg.Quotas.Global),
+		Categories:       make(map[string]MediaCategoryUsage, len(allCategories)),
+	}
+	for _, category := range allCategories {
+		usage := MediaCategoryUsage{
+			Category:   category,
+			Permanent:  isPermanentCategory(category),
+			QuotaBytes: s.cfg.QuotaForCategory(category),
+		}
+		if !usage.Permanent {
+			usage.TTLSeconds = s.cfg.CategoryPolicy(category).TTL
+		}
+		snapshot.Categories[category] = usage
+	}
 
 	err := filepath.Walk(s.baseDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // Skip files with errors
+			return nil
 		}
-
-		// Skip the uploads directory entirely (permanent storage)
-		if info.IsDir() && path == uploadsDir {
-			return filepath.SkipDir
-		}
-
-		// Skip other directories
 		if info.IsDir() {
 			return nil
 		}
-
-		// Check if file is older than TTL
-		if info.ModTime().Before(cutoff) {
-			if err := os.Remove(path); err != nil {
-				logging.L_trace("media: failed to remove expired file", "path", path, "error", err)
-			} else {
-				removedCount++
-				logging.L_trace("media: removed expired file", "path", path, "age", now.Sub(info.ModTime()).String())
-			}
+		rel, err := filepath.Rel(s.baseDir, path)
+		if err != nil {
+			return nil
 		}
-
+		category := topLevelCategory(rel)
+		files = append(files, mediaFileInfo{
+			Path:     path,
+			Category: category,
+			Size:     info.Size(),
+			ModTime:  info.ModTime(),
+		})
+		usage := snapshot.Categories[category]
+		usage.FileCount++
+		usage.UsedBytes += info.Size()
+		if usage.QuotaBytes > 0 && usage.UsedBytes > usage.QuotaBytes {
+			usage.OverQuotaBytes = usage.UsedBytes - usage.QuotaBytes
+		}
+		snapshot.Categories[category] = usage
+		snapshot.TotalBytes += info.Size()
 		return nil
 	})
-
-	if removedCount > 0 {
-		logging.L_debug("media: cleanup completed", "removed", removedCount)
+	if err != nil {
+		return nil, MediaUsageSnapshot{}, err
 	}
+	if snapshot.GlobalQuotaBytes > 0 && snapshot.TotalBytes > snapshot.GlobalQuotaBytes {
+		snapshot.OverGlobalBytes = snapshot.TotalBytes - snapshot.GlobalQuotaBytes
+	}
+	snapshot.Warnings = usageWarningSummary(snapshot)
+	return files, snapshot, nil
+}
 
-	return err
+func sortedRemainingFiles(files []mediaFileInfo, removed map[string]bool, category string) []mediaFileInfo {
+	filtered := make([]mediaFileInfo, 0)
+	for _, file := range files {
+		if removed[file.Path] || file.Category != category {
+			continue
+		}
+		filtered = append(filtered, file)
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].ModTime.Before(filtered[j].ModTime)
+	})
+	return filtered
+}
+
+func (s *MediaStore) removeFile(path string) bool {
+	if err := os.Remove(path); err != nil {
+		logging.L_warn("media: failed to remove file", "path", path, "error", err)
+		return false
+	}
+	logging.L_trace("media: removed file", "path", path)
+	return true
+}
+
+func (s *MediaStore) buildPostSaveWarningLocked(category string) (string, error) {
+	snapshot, err := s.usageSnapshotLocked()
+	if err != nil {
+		return "", err
+	}
+	warnings := make([]string, 0, 2)
+	if usage, ok := snapshot.Categories[category]; ok && usage.OverQuotaBytes > 0 {
+		warnings = append(warnings, fmt.Sprintf("%s is over quota by %s", categoryLabel(category), formatGB(usage.OverQuotaBytes)))
+	}
+	if snapshot.OverGlobalBytes > 0 {
+		warnings = append(warnings, fmt.Sprintf("global media storage is over quota by %s", formatGB(snapshot.OverGlobalBytes)))
+	}
+	if len(warnings) == 0 {
+		return "", nil
+	}
+	return fmt.Sprintf("Saved successfully, but %s. Run Clean Now or increase the relevant quota.", strings.Join(warnings, " and ")), nil
 }

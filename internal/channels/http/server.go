@@ -24,7 +24,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
-//go:embed html/*.html html/js/*.js
+//go:embed html/*.html html/js/*
 var htmlFS embed.FS
 
 // Server represents the HTTP server

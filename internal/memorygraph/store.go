@@ -62,23 +62,28 @@ func (s *Store) CreateMemory(m *Memory) error {
 	}
 
 	var nextTrigger *string
+	var happensAt *string
 	if m.NextTriggerAt != nil {
 		t := m.NextTriggerAt.Format(time.RFC3339)
 		nextTrigger = &t
+	}
+	if m.HappensAt != nil {
+		t := m.HappensAt.Format(time.RFC3339)
+		happensAt = &t
 	}
 
 	result, err := s.db.Exec(`
 		INSERT INTO memories (
 			uuid, content, memory_type, importance, confidence,
 			created_at, updated_at, last_accessed_at, access_count,
-			next_trigger_at, source, source_session, source_message,
+			happens_at, next_trigger_at, source, source_session, source_message,
 			username, channel, chat_id, emotion, occurred_at, forgotten, embedding, embedding_model
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		m.UUID, m.Content, m.Type, m.Importance, m.Confidence,
 		m.CreatedAt.Format(time.RFC3339), m.UpdatedAt.Format(time.RFC3339),
 		m.LastAccessedAt.Format(time.RFC3339), m.AccessCount,
-		nextTrigger, m.Source, m.SourceSession, m.SourceMessage,
+		happensAt, nextTrigger, m.Source, m.SourceSession, m.SourceMessage,
 		m.Username, m.Channel, m.ChatID, m.Emotion, m.OccurredAt.Unix(),
 		boolToInt(m.Forgotten), embeddingBlob, m.EmbeddingModel,
 	)
@@ -101,7 +106,7 @@ func (s *Store) GetMemory(uuid string) (*Memory, error) {
 	row := s.db.QueryRow(`
 		SELECT id, uuid, content, memory_type, importance, confidence,
 			created_at, updated_at, last_accessed_at, access_count,
-			next_trigger_at, source, source_session, source_message,
+			happens_at, next_trigger_at, source, source_session, source_message,
 			username, channel, chat_id, emotion, occurred_at, forgotten, embedding, embedding_model
 		FROM memories WHERE uuid = ?
 	`, uuid)
@@ -114,7 +119,7 @@ func (s *Store) GetMemoryByID(id int64) (*Memory, error) {
 	row := s.db.QueryRow(`
 		SELECT id, uuid, content, memory_type, importance, confidence,
 			created_at, updated_at, last_accessed_at, access_count,
-			next_trigger_at, source, source_session, source_message,
+			happens_at, next_trigger_at, source, source_session, source_message,
 			username, channel, chat_id, emotion, occurred_at, forgotten, embedding, embedding_model
 		FROM memories WHERE id = ?
 	`, id)
@@ -132,23 +137,28 @@ func (s *Store) UpdateMemory(m *Memory) error {
 	}
 
 	var nextTrigger *string
+	var happensAt *string
 	if m.NextTriggerAt != nil {
 		t := m.NextTriggerAt.Format(time.RFC3339)
 		nextTrigger = &t
+	}
+	if m.HappensAt != nil {
+		t := m.HappensAt.Format(time.RFC3339)
+		happensAt = &t
 	}
 
 	_, err := s.db.Exec(`
 		UPDATE memories SET
 			content = ?, memory_type = ?, importance = ?, confidence = ?,
 			updated_at = ?, last_accessed_at = ?, access_count = ?,
-			next_trigger_at = ?, source = ?, source_session = ?, source_message = ?,
+			happens_at = ?, next_trigger_at = ?, source = ?, source_session = ?, source_message = ?,
 			username = ?, channel = ?, chat_id = ?, emotion = ?, occurred_at = ?, forgotten = ?,
 			embedding = ?, embedding_model = ?
 		WHERE uuid = ?
 	`,
 		m.Content, m.Type, m.Importance, m.Confidence,
 		m.UpdatedAt.Format(time.RFC3339), m.LastAccessedAt.Format(time.RFC3339),
-		m.AccessCount, nextTrigger, m.Source, m.SourceSession, m.SourceMessage,
+		m.AccessCount, happensAt, nextTrigger, m.Source, m.SourceSession, m.SourceMessage,
 		m.Username, m.Channel, m.ChatID, m.Emotion, m.OccurredAt.Unix(), boolToInt(m.Forgotten),
 		embeddingBlob, m.EmbeddingModel,
 		m.UUID,
@@ -556,7 +566,7 @@ type scannable interface {
 func scanMemory(row scannable) (*Memory, error) {
 	m := &Memory{}
 	var createdAt, updatedAt, lastAccessedAt string
-	var nextTriggerAt, source, sourceSession, sourceMessage, username, channel, chatID, emotion sql.NullString
+	var happensAt, nextTriggerAt, source, sourceSession, sourceMessage, username, channel, chatID, emotion sql.NullString
 	var occurredAt int64
 	var embeddingBlob []byte
 	var embeddingModel sql.NullString
@@ -565,7 +575,7 @@ func scanMemory(row scannable) (*Memory, error) {
 	err := row.Scan(
 		&m.ID, &m.UUID, &m.Content, &m.Type, &m.Importance, &m.Confidence,
 		&createdAt, &updatedAt, &lastAccessedAt, &m.AccessCount,
-		&nextTriggerAt, &source, &sourceSession, &sourceMessage,
+		&happensAt, &nextTriggerAt, &source, &sourceSession, &sourceMessage,
 		&username, &channel, &chatID, &emotion, &occurredAt, &forgotten, &embeddingBlob, &embeddingModel,
 	)
 	if err == sql.ErrNoRows {
@@ -580,6 +590,10 @@ func scanMemory(row scannable) (*Memory, error) {
 	m.LastAccessedAt, _ = time.Parse(time.RFC3339, lastAccessedAt)
 	m.OccurredAt = time.Unix(occurredAt, 0)
 
+	if happensAt.Valid {
+		t, _ := time.Parse(time.RFC3339, happensAt.String)
+		m.HappensAt = &t
+	}
 	if nextTriggerAt.Valid {
 		t, _ := time.Parse(time.RFC3339, nextTriggerAt.String)
 		m.NextTriggerAt = &t

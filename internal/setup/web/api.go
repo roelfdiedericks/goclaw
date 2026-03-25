@@ -11,12 +11,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	"github.com/roelfdiedericks/goclaw/internal/configapply"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
+	"github.com/roelfdiedericks/goclaw/internal/voicellm"
 )
 
 // API provides JSON API handlers for the setup wizard and editor
@@ -28,11 +31,86 @@ type API struct {
 
 // NewAPI creates a new API handler
 func NewAPI(configPath string, applyCaller configapply.Caller) *API {
+	registerWebActionCommands()
 	return &API{
 		configPath:  configPath,
 		applyCaller: applyCaller,
 		contractErr: ValidateAllSectionContractsStrict(),
 	}
+}
+
+// HandleSectionAction runs a form action for a section.
+func (a *API) HandleSectionAction(w http.ResponseWriter, r *http.Request) {
+	if !a.ensureStrictContracts(w) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{
+			Success: false,
+			Message: "Method not allowed",
+		})
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/setup/api/section-action/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		writeJSON(w, http.StatusBadRequest, APIResponse{
+			Success: false,
+			Message: "Section ID and action name required",
+		})
+		return
+	}
+	sectionID := parts[0]
+	actionName := parts[1]
+
+	section := FindSection(sectionID)
+	if section == nil {
+		writeJSON(w, http.StatusNotFound, APIResponse{
+			Success: false,
+			Message: "Section not found",
+		})
+		return
+	}
+	formDef := GetFormDef(section.ID)
+	if formDef == nil {
+		writeJSON(w, http.StatusNotFound, APIResponse{
+			Success: false,
+			Message: "Form definition not found",
+		})
+		return
+	}
+	actionDef, ok := findActionDef(*formDef, actionName)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, APIResponse{
+			Success: false,
+			Message: "Action not found",
+		})
+		return
+	}
+
+	result := bus.SendCommandWithSource(section.ID, actionDef.Name, nil, "web", "")
+	if result.Error != nil {
+		writeJSON(w, http.StatusBadRequest, APIResponse{
+			Success: false,
+			Message: result.Message,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Message: result.Message,
+		Data:    result.Data,
+	})
+}
+
+func findActionDef(def forms.FormDef, actionName string) (forms.ActionDef, bool) {
+	for _, action := range def.Actions {
+		if action.Name == actionName {
+			return action, true
+		}
+	}
+	return forms.ActionDef{}, false
 }
 
 func (a *API) ensureStrictContracts(w http.ResponseWriter) bool {
@@ -206,6 +284,13 @@ func (a *API) getSectionConfig(w http.ResponseWriter, section *SectionItem) {
 	var formHTML string
 	if section.Type == SectionTypeFormDef {
 		formDef := GetFormDef(section.ID)
+		if section.ID == "media" {
+			mediaDef := media.ConfigFormDefWithValues(result.Config.Media)
+			formDef = &mediaDef
+		}
+		if section.ID == "voicellm" {
+			sectionData = result.Config.VoiceLLM.ToConfigFormData()
+		}
 		if formDef != nil {
 			if err := validateSectionFormBinding(section, formDef); err != nil {
 				writeJSON(w, http.StatusInternalServerError, APIResponse{
@@ -246,6 +331,17 @@ func (a *API) saveSectionConfig(w http.ResponseWriter, r *http.Request, section 
 			Message: "Invalid JSON payload",
 		})
 		return
+	}
+	if section.ID == "voicellm" {
+		runtimePayload, err := expandVoiceLLMSectionPayload(payload)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, APIResponse{
+				Success: false,
+				Message: err.Error(),
+			})
+			return
+		}
+		payload = runtimePayload
 	}
 
 	// Enforce root payload allowlist for composite root-backed FormDef sections.
@@ -307,6 +403,27 @@ func (a *API) saveSectionConfig(w http.ResponseWriter, r *http.Request, section 
 		Success: true,
 		Message: "Configuration saved",
 	})
+}
+
+func expandVoiceLLMSectionPayload(payload map[string]interface{}) (map[string]interface{}, error) {
+	var formData voicellm.ConfigFormData
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal VoiceLLM payload: %w", err)
+	}
+	if err := json.Unmarshal(data, &formData); err != nil {
+		return nil, fmt.Errorf("invalid VoiceLLM payload: %w", err)
+	}
+	runtimeCfg := formData.ToConfig()
+	runtimeData, err := json.Marshal(runtimeCfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal VoiceLLM runtime config: %w", err)
+	}
+	var runtimePayload map[string]interface{}
+	if err := json.Unmarshal(runtimeData, &runtimePayload); err != nil {
+		return nil, fmt.Errorf("failed to decode VoiceLLM runtime payload: %w", err)
+	}
+	return runtimePayload, nil
 }
 
 // HandleApply determines how saved config should take effect.

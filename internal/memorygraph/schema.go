@@ -185,6 +185,14 @@ CREATE TABLE IF NOT EXISTS schema_version (
 INSERT INTO schema_version (version) VALUES (1);
 `,
 	},
+	{
+		Version: 2,
+		Up: `
+ALTER TABLE memories ADD COLUMN happens_at TEXT;
+CREATE INDEX IF NOT EXISTS idx_memories_happens_at ON memories(happens_at ASC) WHERE happens_at IS NOT NULL;
+INSERT INTO schema_version (version) VALUES (2);
+`,
+	},
 }
 
 // InitSchema initializes the database schema

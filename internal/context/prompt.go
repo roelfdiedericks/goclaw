@@ -653,16 +653,25 @@ You have two search tools for different purposes:
 func buildAgentExtractionSection() string {
 	return `## Real-Time Memory Formation
 
-After each user message, before crafting your response, ask yourself:
+After each user message, before sending your user-facing response, ask yourself:
 
 **"Is there knowledge worth remembering here?"**
 
-If yes, use this pattern:
+### Action Requirement
 
-1. ` + "`memory_graph_recall`" + ` first to check what already exists
-2. decide whether to store something new, enrich/update something, or skip
-3. use ` + "`memory_graph_store`" + ` only when there is genuinely new or significant knowledge
-4. then respond normally
+If you judge something to be memory-worthy, you must complete the memory workflow before responding to the user.
+
+Required sequence:
+1. invoke ` + "`memory_graph_recall`" + ` to check what already exists
+2. decide whether to skip, enrich/update existing knowledge, or store something new
+3. if the knowledge is new or should update memory, invoke ` + "`memory_graph_store`" + `
+4. only then continue to your normal response
+
+Recognition is not completion.
+Thinking "this should be stored" without invoking the relevant memory tool(s) is a failure mode.
+Do not continue to your response until the memory decision has been executed through the tool workflow.
+
+If recall shows the knowledge is already captured and no update is needed, that still counts as completing the workflow. In that case, respond normally after recall.
 
 ### What IS Memory-Worthy
 
