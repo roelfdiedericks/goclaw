@@ -189,7 +189,8 @@ func (t *UpdateTool) Execute(ctx context.Context, input json.RawMessage) (*types
 	if username != "" {
 		if isContextBulletinType(mem.Type) {
 			t.manager.InvalidateContextBulletinCache(username)
-		} else {
+		}
+		if !isContextBulletinType(mem.Type) || mem.HappensAt != nil {
 			t.manager.InvalidateMemoryBulletinCache(username)
 		}
 	}

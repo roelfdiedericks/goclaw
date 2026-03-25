@@ -27,7 +27,7 @@ func (t *QueryTool) Name() string {
 }
 
 func (t *QueryTool) Description() string {
-	return "Query the memory graph with full filtering options. Supports semantic search, time ranges, importance/confidence thresholds, emotional context, graph traversal, and more. Use for complex queries about stored memories."
+	return "Query the memory graph with full filtering options. Supports semantic search, occurred_at ranges, happens_at scheduling filters, importance/confidence thresholds, graph traversal, and more. Use for complex queries about stored memories."
 }
 
 func (t *QueryTool) Schema() map[string]any {
@@ -67,11 +67,23 @@ func (t *QueryTool) Schema() map[string]any {
 			},
 			"since": map[string]any{
 				"type":        "string",
-				"description": "Only memories after this time. ISO timestamp or relative: '24h', '7d', '30d'",
+				"description": "Only memories whose occurred_at is after this time. ISO timestamp or relative: '24h', '7d', '30d'",
 			},
 			"before": map[string]any{
 				"type":        "string",
-				"description": "Only memories before this time. ISO timestamp or relative.",
+				"description": "Only memories whose occurred_at is before this time. ISO timestamp or relative.",
+			},
+			"happens_after": map[string]any{
+				"type":        "string",
+				"description": "Only memories with happens_at after this time. Use for upcoming scheduled items. Format: ISO timestamp or date.",
+			},
+			"happens_before": map[string]any{
+				"type":        "string",
+				"description": "Only memories with happens_at before this time. Use for scheduled items within an explicit upper bound. Format: ISO timestamp or date.",
+			},
+			"happens_within": map[string]any{
+				"type":        "string",
+				"description": "Only memories with happens_at between now and this future window, for example '24h', '7d', or '30d'.",
 			},
 			"related_to": map[string]any{
 				"type":        "string",
@@ -83,8 +95,8 @@ func (t *QueryTool) Schema() map[string]any {
 			},
 			"sort_by": map[string]any{
 				"type":        "string",
-				"enum":        []string{"recent", "importance", "most_accessed"},
-				"description": "Sort order",
+				"enum":        []string{"recent", "importance", "most_accessed", "scheduled"},
+				"description": "Sort order. 'scheduled' orders by happens_at for dated events and deadlines.",
 			},
 			"include_associations": map[string]any{
 				"type":        "boolean",
@@ -111,6 +123,9 @@ type QueryParams struct {
 	Source              string   `json:"source,omitempty"`
 	Since               string   `json:"since,omitempty"`
 	Before              string   `json:"before,omitempty"`
+	HappensAfter        string   `json:"happens_after,omitempty"`
+	HappensBefore       string   `json:"happens_before,omitempty"`
+	HappensWithin       string   `json:"happens_within,omitempty"`
 	RelatedTo           string   `json:"related_to,omitempty"`
 	MaxResults          int      `json:"max_results,omitempty"`
 	SortBy              string   `json:"sort_by,omitempty"`
@@ -157,6 +172,7 @@ func (t *QueryTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 
 	// Parse time filters
 	var sinceTime, beforeTime *time.Time
+	var happensAfter, happensBefore *time.Time
 	if params.Since != "" {
 		if t, err := parseTimeFilter(params.Since); err == nil {
 			sinceTime = &t
@@ -167,12 +183,37 @@ func (t *QueryTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 			beforeTime = &t
 		}
 	}
+	if params.HappensAfter != "" {
+		if t, err := parseMemoryToolTime(params.HappensAfter); err == nil {
+			happensAfter = &t
+		}
+	}
+	if params.HappensBefore != "" {
+		if t, err := parseMemoryToolTime(params.HappensBefore); err == nil {
+			happensBefore = &t
+		}
+	}
+	if params.HappensWithin != "" {
+		if duration, err := parseFutureWindow(params.HappensWithin); err == nil {
+			now := time.Now()
+			if happensAfter == nil {
+				happensAfter = &now
+			}
+			end := now.Add(duration)
+			if happensBefore == nil || end.Before(*happensBefore) {
+				happensBefore = &end
+			}
+		}
+	}
 
 	L_debug("memory_graph_query: executing",
 		"mode", params.Mode,
 		"query", truncateStr(params.Query, 50),
 		"type", params.MemoryType,
 		"emotion", params.Emotion,
+		"happensAfter", params.HappensAfter,
+		"happensBefore", params.HappensBefore,
+		"happensWithin", params.HappensWithin,
 		"username", username,
 	)
 
@@ -190,7 +231,7 @@ func (t *QueryTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 		}
 		results, err = t.manager.Search(ctx, opts)
 		if err == nil {
-			results = filterResults(results, params, sinceTime, beforeTime)
+			results = filterResults(results, params, sinceTime, beforeTime, happensAfter, happensBefore)
 		}
 
 	case "related":
@@ -202,7 +243,7 @@ func (t *QueryTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 			for i, m := range memories {
 				results[i] = SearchResult{Memory: *m, Score: m.Importance}
 			}
-			results = filterResults(results, params, sinceTime, beforeTime)
+			results = filterResults(results, params, sinceTime, beforeTime, happensAfter, happensBefore)
 		}
 
 	default:
@@ -227,6 +268,12 @@ func (t *QueryTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 		if beforeTime != nil {
 			q.UntilOccurred(*beforeTime)
 		}
+		if happensAfter != nil {
+			q.SinceHappens(*happensAfter)
+		}
+		if happensBefore != nil {
+			q.UntilHappens(*happensBefore)
+		}
 
 		// Sort order
 		switch params.Mode {
@@ -243,6 +290,8 @@ func (t *QueryTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 					q.OrderBy("importance")
 				case "most_accessed":
 					q.OrderBy("access_count")
+				case "scheduled":
+					q.OrderBy("happens_at").Ascending().ThenBy("importance", true)
 				}
 			}
 		}
@@ -353,7 +402,7 @@ func parseInt(s string) (int, error) {
 	return n, err
 }
 
-func filterResults(results []SearchResult, params QueryParams, since, before *time.Time) []SearchResult {
+func filterResults(results []SearchResult, params QueryParams, since, before, happensAfter, happensBefore *time.Time) []SearchResult {
 	filtered := make([]SearchResult, 0, len(results))
 
 	for _, r := range results {
@@ -385,6 +434,17 @@ func filterResults(results []SearchResult, params QueryParams, since, before *ti
 		}
 		if before != nil && m.OccurredAt.After(*before) {
 			continue
+		}
+		if happensAfter != nil || happensBefore != nil {
+			if m.HappensAt == nil {
+				continue
+			}
+			if happensAfter != nil && m.HappensAt.Before(*happensAfter) {
+				continue
+			}
+			if happensBefore != nil && m.HappensAt.After(*happensBefore) {
+				continue
+			}
 		}
 
 		filtered = append(filtered, r)
@@ -441,6 +501,9 @@ func formatQueryResults(results []SearchResult, associations map[string][]*Assoc
 			if !m.OccurredAt.IsZero() {
 				temporal = append(temporal, fmt.Sprintf("occurred: %s", m.OccurredAt.Format("2006-01-02")))
 			}
+			if m.HappensAt != nil {
+				temporal = append(temporal, fmt.Sprintf("happens: %s", formatMemoryTime(*m.HappensAt)))
+			}
 			if !m.CreatedAt.IsZero() {
 				temporal = append(temporal, fmt.Sprintf("created: %s", m.CreatedAt.Format("2006-01-02")))
 			}
@@ -484,6 +547,9 @@ func formatQueryResults(results []SearchResult, associations map[string][]*Assoc
 		if detailLevel == "summary" && m.Emotion != "" {
 			sb.WriteString(fmt.Sprintf("   emotion: %s\n", m.Emotion))
 		}
+		if detailLevel == "summary" && m.HappensAt != nil {
+			sb.WriteString(fmt.Sprintf("   happens: %s\n", formatMemoryTime(*m.HappensAt)))
+		}
 
 		// Show associations if available (all levels)
 		if assocs, ok := associations[m.UUID]; ok && len(assocs) > 0 {
@@ -497,4 +563,33 @@ func formatQueryResults(results []SearchResult, associations map[string][]*Assoc
 	}
 
 	return sb.String()
+}
+
+func parseFutureWindow(s string) (time.Duration, error) {
+	if len(s) < 2 {
+		return 0, fmt.Errorf("invalid future window: %s", s)
+	}
+
+	var multiplier time.Duration
+	switch s[len(s)-1] {
+	case 'h':
+		multiplier = time.Hour
+	case 'd':
+		multiplier = 24 * time.Hour
+	default:
+		return 0, fmt.Errorf("invalid future window unit: %s", s)
+	}
+
+	value, err := parseInt(s[:len(s)-1])
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("invalid future window: %s", s)
+	}
+	return time.Duration(value) * multiplier, nil
+}
+
+func formatMemoryTime(t time.Time) string {
+	if t.Hour() == 0 && t.Minute() == 0 && t.Second() == 0 && t.Nanosecond() == 0 {
+		return t.Format("2006-01-02")
+	}
+	return t.Format(time.RFC3339)
 }

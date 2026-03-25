@@ -684,6 +684,7 @@ Store knowledge that persists beyond this conversation:
 - **Research findings:** Fyne.io capabilities → [observation]
 - **User identity/context:** Background, history, habits → [fact] or [identity]
 - **Explicit requests:** "Remember to check X" → [todo]
+- **Future events, deadlines, or scheduled plans:** store them with structured ` + "`happens_at`" + ` when there is a real date/time
 - **User feedback about your behavior:** "You're over-storing" → [feedback]
 
 ### What is NOT Memory-Worthy
@@ -706,6 +707,7 @@ If it's extractable knowledge → store it.
 - **Recall first** when the topic may already exist in memory
 - **Store new** when the knowledge is significant and not already captured
 - **Enrich or update** when the new message adds detail to something that already exists
+- **Use ` + "`happens_at`" + `** for scheduled real-world timing such as deadlines, appointments, and plans; keep ` + "`occurred_at`" + ` for observation/past-event timing
 - **Skip** when it is small talk, narration, or a one-off transient detail
 
 ### Balance Both Problems

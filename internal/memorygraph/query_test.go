@@ -181,6 +181,60 @@ func TestQueryBuilderTriggers(t *testing.T) {
 	}
 }
 
+func TestQueryBuilderHappensAtFiltersAndOrdering(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	store := NewStore(db)
+	now := time.Now().UTC().Truncate(time.Second)
+	soon := now.Add(2 * time.Hour)
+	later := now.Add(48 * time.Hour)
+
+	mem1 := &Memory{Content: "Soon appointment", Type: TypeEvent, Username: "alice", HappensAt: &soon}
+	mem2 := &Memory{Content: "Later deadline", Type: TypeTodo, Username: "alice", HappensAt: &later}
+	mem3 := &Memory{Content: "Undated preference", Type: TypePreference, Username: "alice"}
+
+	for _, mem := range []*Memory{mem1, mem2, mem3} {
+		if err := store.CreateMemory(mem); err != nil {
+			t.Fatalf("CreateMemory failed: %v", err)
+		}
+	}
+
+	results, err := Query().
+		Username("alice").
+		SinceHappens(now).
+		UntilHappens(now.Add(24 * time.Hour)).
+		OrderBy("happens_at").
+		Ascending().
+		Execute(db)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result in upcoming window, got %d", len(results))
+	}
+	if results[0].Content != "Soon appointment" {
+		t.Fatalf("expected soon appointment, got %q", results[0].Content)
+	}
+
+	ordered, err := Query().
+		Username("alice").
+		SinceHappens(now).
+		OrderBy("happens_at").
+		Ascending().
+		Execute(db)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if len(ordered) != 2 {
+		t.Fatalf("expected 2 scheduled memories, got %d", len(ordered))
+	}
+	if ordered[0].Content != "Soon appointment" || ordered[1].Content != "Later deadline" {
+		t.Fatalf("expected happens_at ascending order, got %q then %q", ordered[0].Content, ordered[1].Content)
+	}
+}
+
 func TestAssociationQuery(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()

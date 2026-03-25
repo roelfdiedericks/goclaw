@@ -40,7 +40,7 @@ func BuildMemoryBulletinWithConfig(ctx context.Context, mgr *Manager, username s
 		return filtered
 	}
 
-	// Section order: Identity -> High Priority -> Goals -> Preferences -> Recent Events -> Decisions
+	// Section order: Identity -> High Priority -> Goals -> Upcoming Events -> Preferences -> Recent Events -> Decisions
 
 	// 1. Identity (by importance)
 	if cfg.IdentityLimit > 0 {
@@ -101,6 +101,36 @@ func BuildMemoryBulletinWithConfig(ctx context.Context, mgr *Manager, username s
 					items = append(items, "- "+m.Content)
 				}
 				sections = append(sections, "## Active Goals\n"+strings.Join(items, "\n"))
+			}
+		}
+	}
+
+	// 4. Preferences (by importance)
+	if cfg.UpcomingEventsLimit > 0 {
+		now := time.Now()
+		cutoff := now.AddDate(0, 0, cfg.UpcomingEventsDays)
+		upcoming, err := Query().
+			Username(username).
+			SinceHappens(now).
+			UntilHappens(cutoff).
+			OrderBy("happens_at").
+			Ascending().
+			ThenBy("importance", true).
+			Limit(cfg.UpcomingEventsLimit).
+			Execute(mgr.DB())
+		if err == nil {
+			upcoming = filterSeen(upcoming)
+			if len(upcoming) > 0 {
+				var items []string
+				for _, m := range upcoming {
+					if m.HappensAt == nil {
+						continue
+					}
+					items = append(items, fmt.Sprintf("- [%s] %s (%s)", m.Type, m.Content, formatUpcomingBulletinTime(now, *m.HappensAt)))
+				}
+				if len(items) > 0 {
+					sections = append(sections, "## Upcoming Events\n"+strings.Join(items, "\n"))
+				}
 			}
 		}
 	}
@@ -496,4 +526,44 @@ func truncateForLog(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+func formatUpcomingBulletinTime(now, scheduled time.Time) string {
+	if scheduled.Year() == now.Year() && scheduled.YearDay() == now.YearDay() {
+		if hasExplicitClockTime(scheduled) {
+			return "today " + scheduled.Format("15:04")
+		}
+		return "today"
+	}
+
+	tomorrow := now.AddDate(0, 0, 1)
+	if scheduled.Year() == tomorrow.Year() && scheduled.YearDay() == tomorrow.YearDay() {
+		if hasExplicitClockTime(scheduled) {
+			return "tomorrow " + scheduled.Format("15:04")
+		}
+		return "tomorrow"
+	}
+
+	if scheduled.Before(now.AddDate(0, 0, 7)) {
+		if hasExplicitClockTime(scheduled) {
+			return scheduled.Format("Mon 15:04")
+		}
+		return scheduled.Format("Mon")
+	}
+
+	if scheduled.Year() == now.Year() {
+		if hasExplicitClockTime(scheduled) {
+			return scheduled.Format("Jan 2 15:04")
+		}
+		return scheduled.Format("Jan 2")
+	}
+
+	if hasExplicitClockTime(scheduled) {
+		return scheduled.Format("2006-01-02 15:04")
+	}
+	return scheduled.Format("2006-01-02")
+}
+
+func hasExplicitClockTime(t time.Time) bool {
+	return t.Hour() != 0 || t.Minute() != 0 || t.Second() != 0 || t.Nanosecond() != 0
 }

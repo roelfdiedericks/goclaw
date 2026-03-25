@@ -88,6 +88,39 @@ func TestStoreCreateAndGetMemory(t *testing.T) {
 	}
 }
 
+func TestStoreCreateAndGetMemoryWithHappensAt(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	store := NewStore(db)
+	happensAt := time.Date(2026, 3, 30, 14, 0, 0, 0, time.UTC)
+
+	mem := &Memory{
+		Content:   "Dentist appointment",
+		Type:      TypeEvent,
+		Username:  "testuser",
+		HappensAt: &happensAt,
+	}
+
+	if err := store.CreateMemory(mem); err != nil {
+		t.Fatalf("CreateMemory failed: %v", err)
+	}
+
+	retrieved, err := store.GetMemory(mem.UUID)
+	if err != nil {
+		t.Fatalf("GetMemory failed: %v", err)
+	}
+	if retrieved == nil {
+		t.Fatal("expected memory to be found")
+	}
+	if retrieved.HappensAt == nil {
+		t.Fatal("expected happens_at to be populated")
+	}
+	if !retrieved.HappensAt.Equal(happensAt) {
+		t.Fatalf("happens_at mismatch: got %s want %s", retrieved.HappensAt.Format(time.RFC3339), happensAt.Format(time.RFC3339))
+	}
+}
+
 func TestStoreUpdateMemory(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -124,6 +157,113 @@ func TestStoreUpdateMemory(t *testing.T) {
 	}
 	if retrieved.Importance != 0.9 {
 		t.Errorf("importance not updated: got %f", retrieved.Importance)
+	}
+}
+
+func TestStoreUpdateMemoryHappensAt(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	store := NewStore(db)
+	initial := time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC)
+	updated := initial.Add(48 * time.Hour)
+
+	mem := &Memory{
+		Content:   "Project deadline",
+		Type:      TypeTodo,
+		HappensAt: &initial,
+	}
+
+	if err := store.CreateMemory(mem); err != nil {
+		t.Fatalf("CreateMemory failed: %v", err)
+	}
+
+	mem.HappensAt = &updated
+	if err := store.UpdateMemory(mem); err != nil {
+		t.Fatalf("UpdateMemory failed: %v", err)
+	}
+
+	retrieved, err := store.GetMemory(mem.UUID)
+	if err != nil {
+		t.Fatalf("GetMemory failed: %v", err)
+	}
+	if retrieved == nil || retrieved.HappensAt == nil {
+		t.Fatal("expected happens_at to still be present")
+	}
+	if !retrieved.HappensAt.Equal(updated) {
+		t.Fatalf("updated happens_at mismatch: got %s want %s", retrieved.HappensAt.Format(time.RFC3339), updated.Format(time.RFC3339))
+	}
+}
+
+func TestSchemaMigrationAddsHappensAt(t *testing.T) {
+	f, err := os.CreateTemp("", "memorygraph_migration_test_*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	dbPath := f.Name()
+	_ = f.Close()
+	defer os.Remove(dbPath)
+
+	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=ON")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(migrations[0].Up); err != nil {
+		t.Fatalf("apply v1 schema failed: %v", err)
+	}
+
+	now := time.Now()
+	if _, err := db.Exec(`INSERT INTO memories (
+		uuid, content, memory_type, importance, confidence,
+		created_at, updated_at, last_accessed_at, access_count,
+		next_trigger_at, source, source_session, source_message,
+		username, channel, chat_id, emotion, occurred_at, forgotten, embedding, embedding_model
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"legacy-memory",
+		"Legacy scheduled item",
+		string(TypeTodo),
+		0.8,
+		ConfidenceNotApplicable,
+		now.Format(time.RFC3339),
+		now.Format(time.RFC3339),
+		now.Format(time.RFC3339),
+		0,
+		nil,
+		"manual",
+		"",
+		"",
+		"testuser",
+		"",
+		"",
+		"",
+		now.Unix(),
+		0,
+		nil,
+		"",
+	); err != nil {
+		t.Fatalf("insert legacy row failed: %v", err)
+	}
+
+	if err := InitSchema(db); err != nil {
+		t.Fatalf("InitSchema migration failed: %v", err)
+	}
+
+	var version int
+	if err := db.QueryRow(`SELECT version FROM schema_version ORDER BY version DESC LIMIT 1`).Scan(&version); err != nil {
+		t.Fatalf("read schema version failed: %v", err)
+	}
+	if version != 2 {
+		t.Fatalf("expected schema version 2, got %d", version)
+	}
+
+	var happensAt sql.NullString
+	if err := db.QueryRow(`SELECT happens_at FROM memories WHERE uuid = ?`, "legacy-memory").Scan(&happensAt); err != nil {
+		t.Fatalf("query happens_at failed: %v", err)
+	}
+	if happensAt.Valid {
+		t.Fatalf("expected migrated happens_at to be null, got %q", happensAt.String)
 	}
 }
 

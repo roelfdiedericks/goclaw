@@ -59,6 +59,8 @@ type BulletinConfig struct {
 	DecisionsDays         int     `json:"decisionsDays" default:"14"`          // Time bound for decisions
 	PreferencesLimit      int     `json:"preferencesLimit" default:"3"`        // Preference items
 	GoalsLimit            int     `json:"goalsLimit" default:"3"`              // Goal items
+	UpcomingEventsLimit   int     `json:"upcomingEventsLimit" default:"5"`     // Upcoming scheduled items
+	UpcomingEventsDays    int     `json:"upcomingEventsDays" default:"30"`     // Future time bound for scheduled items
 
 	// Context bulletin section limits (0 = disabled)
 	RoutinesLimit     int `json:"routinesLimit" default:"5"`     // Routine items
@@ -542,6 +544,24 @@ func BulletinFormDef(cfg BulletinConfig) forms.FormDef {
 						Desc:    "Number of preferences to include (0 = disabled)",
 					},
 					{
+						Name:    "upcomingEventsLimit",
+						Title:   "Upcoming Events",
+						Type:    forms.Number,
+						Default: 5,
+						Min:     0,
+						Max:     20,
+						Desc:    "Number of scheduled events, deadlines, or plans to include (0 = disabled)",
+					},
+					{
+						Name:    "upcomingEventsDays",
+						Title:   "Upcoming Events (days)",
+						Type:    forms.Number,
+						Default: 30,
+						Min:     1,
+						Max:     365,
+						Desc:    "How many days ahead to look for scheduled events and deadlines",
+					},
+					{
 						Name:    "recentEventsLimit",
 						Title:   "Recent Events",
 						Type:    forms.Number,
@@ -818,6 +838,9 @@ func NormalizeBulletinConfig(b *BulletinConfig) {
 	}
 	if b.DecisionsDays <= 0 {
 		b.DecisionsDays = 14
+	}
+	if b.UpcomingEventsDays <= 0 {
+		b.UpcomingEventsDays = 30
 	}
 }
 

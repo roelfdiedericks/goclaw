@@ -292,7 +292,8 @@ func (t *StoreTool) Execute(ctx context.Context, input json.RawMessage) (*types.
 	if username != "" {
 		if isContextBulletinType(Type(params.MemoryType)) {
 			t.manager.InvalidateContextBulletinCache(username)
-		} else {
+		}
+		if !isContextBulletinType(Type(params.MemoryType)) || mem.HappensAt != nil {
 			t.manager.InvalidateMemoryBulletinCache(username)
 		}
 	}

@@ -321,7 +321,11 @@ func (q *QueryOptions) Build() (string, []interface{}) {
 	if !q.orderDesc {
 		direction = "ASC"
 	}
-	query += fmt.Sprintf(" ORDER BY %s %s", q.orderBy, direction)
+	if q.orderBy == "happens_at" {
+		query += fmt.Sprintf(" ORDER BY happens_at IS NULL ASC, happens_at %s", direction)
+	} else {
+		query += fmt.Sprintf(" ORDER BY %s %s", q.orderBy, direction)
+	}
 
 	// Secondary order
 	if q.thenBy != "" {
@@ -329,7 +333,11 @@ func (q *QueryOptions) Build() (string, []interface{}) {
 		if !q.thenDesc {
 			thenDir = "ASC"
 		}
-		query += fmt.Sprintf(", %s %s", q.thenBy, thenDir)
+		if q.thenBy == "happens_at" {
+			query += fmt.Sprintf(", happens_at IS NULL ASC, happens_at %s", thenDir)
+		} else {
+			query += fmt.Sprintf(", %s %s", q.thenBy, thenDir)
+		}
 	}
 
 	// Pagination
