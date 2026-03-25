@@ -509,7 +509,7 @@ release-monitor:
 # Re-release: delete existing tag and recreate on HEAD
 # Use when a release failed and you need to retry with the same version
 # Use FORCE=1 to skip confirmation prompt
-re-release:
+re-release: audit
 	@version="$$( $(RELEASE_TOOL) current --field release-tag 2>/dev/null )"; \
 	echo "=== Re-release $$version ==="; \
 	if [ -z "$$version" ]; then \
