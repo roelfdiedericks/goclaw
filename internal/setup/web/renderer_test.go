@@ -148,8 +148,9 @@ func TestRenderFormHTMLSliderFieldRendersRangeInput(t *testing.T) {
 	def := forms.FormDef{
 		Sections: []forms.Section{
 			{
+				Title: "Storage",
 				Fields: []forms.Field{
-					{Name: "quota", Title: "Quota", Type: forms.Slider, Min: 0.5, Max: 10, Step: 0.5, Scale: 1073741824, Unit: "GB"},
+					{Name: "quota", Title: "Quota", Desc: "Total storage limit", Type: forms.Slider, Min: 0.5, Max: 10, Step: 0.5, Scale: 1073741824, Unit: "GB"},
 				},
 			},
 		},
@@ -172,6 +173,12 @@ func TestRenderFormHTMLSliderFieldRendersRangeInput(t *testing.T) {
 	}
 	if !strings.Contains(got, `data-unit="GB"`) {
 		t.Fatalf("expected unit attribute, got:\n%s", got)
+	}
+	if !strings.Contains(got, `label class="form-label"`) || !strings.Contains(got, `>Quota</label>`) {
+		t.Fatalf("expected slider label, got:\n%s", got)
+	}
+	if !strings.Contains(got, `Total storage limit`) {
+		t.Fatalf("expected slider description, got:\n%s", got)
 	}
 }
 

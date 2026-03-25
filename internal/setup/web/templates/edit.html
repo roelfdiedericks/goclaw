@@ -5,6 +5,12 @@
     <!-- Sidebar -->
     <nav class="sidebar bg-light border-end">
         <div class="py-2">
+            <div class="sidebar-category">Home</div>
+            <a href="#"
+               class="sidebar-item"
+               data-dashboard-home="true">
+                <span>Dashboard</span>
+            </a>
             {{range .Categories}}
             <div class="sidebar-category">{{.Title}}</div>
             {{range .Items}}
@@ -93,7 +99,15 @@
                     <div class="card h-100 cursor-pointer js-quick-task" role="button" tabindex="0" data-section-target="tools">
                         <div class="card-body d-flex flex-column">
                             <h6 class="card-title mb-2"><i class="bi bi-magic me-2"></i>Tools</h6>
-                            <p class="card-text text-muted small flex-grow-1">Configure xAI image and video generation tools.</p>
+                            <p class="card-text text-muted small flex-grow-1">Configure tool-specific defaults such as web, browser, and media generation settings.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-12 col-md-6 col-xl-4">
+                    <div class="card h-100 cursor-pointer js-quick-task" role="button" tabindex="0" data-section-target="media">
+                        <div class="card-body d-flex flex-column">
+                            <h6 class="card-title mb-2"><i class="bi bi-hdd-stack me-2"></i>Media</h6>
+                            <p class="card-text text-muted small flex-grow-1">Review media storage limits, cleanup policy, and per-directory quotas.</p>
                         </div>
                     </div>
                 </div>

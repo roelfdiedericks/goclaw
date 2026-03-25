@@ -293,6 +293,11 @@
         }
 
         bindStaticEvents() {
+            this.$root.on('click', '.sidebar-item[data-dashboard-home="true"]', (event) => {
+                event.preventDefault();
+                this.showDashboard();
+            });
+
             this.$root.on('click', '.sidebar-item', (event) => {
                 event.preventDefault();
                 const sectionId = $(event.currentTarget).data('section-id');
@@ -413,6 +418,8 @@
             $('.sidebar-item').removeClass('active');
             if (this.currentSection) {
                 $(`.sidebar-item[data-section-id="${this.currentSection}"]`).addClass('active');
+            } else {
+                $('.sidebar-item[data-dashboard-home="true"]').addClass('active');
             }
         }
 
@@ -429,6 +436,21 @@
             if (this.currentSection === sectionId) return;
             this.cacheCurrentSectionState();
             await this.loadSection(sectionId);
+        }
+
+        showDashboard() {
+            this.cacheCurrentSectionState();
+            this.currentSection = '';
+            this.currentTitle = 'Dashboard';
+            this.currentSectionType = '';
+            this.fieldErrors = {};
+            this.$loading.addClass('d-none');
+            this.$sectionPanel.addClass('d-none');
+            this.$dashboard.removeClass('d-none');
+            showAlert(this.$errorAlert, '');
+            showAlert(this.$successAlert, '');
+            this.markSidebarActive();
+            this.syncTopBar();
         }
 
         async loadSection(sectionId) {

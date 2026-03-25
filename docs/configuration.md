@@ -156,7 +156,7 @@ GoClaw is configured via `goclaw.json` in the working directory.
       "interval": 300
     },
     "quotas": {
-      "global": 2147483648,
+      "global": 53687091200,
       "uploads": 536870912,
       "keeper": 536870912
     },
@@ -421,7 +421,7 @@ See [Session Management](session-management.md) for compaction, checkpoints, and
 | `maxSize` | int | `104857600` | Max size for a single saved file (100 MB) |
 | `cleanup.enabled` | bool | `true` | Run background cleanup for temporary categories |
 | `cleanup.interval` | int | `300` | Cleanup interval in seconds |
-| `quotas.global` | int | `2147483648` | Total quota across all categories (2 GB) |
+| `quotas.global` | int | `53687091200` | Total quota across all categories (50 GB) |
 | `quotas.uploads` | int | `536870912` | Soft quota for `uploads` (preserved, warning only) |
 | `quotas.keeper` | int | `536870912` | Soft quota for `keeper` (preserved, warning only) |
 | `categories.browser.ttl` | int | `86400` | Browser artifact retention in seconds |

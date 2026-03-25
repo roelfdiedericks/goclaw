@@ -119,9 +119,6 @@ func renderField(sb *strings.Builder, field forms.Field, prefix string) error {
 	case forms.Toggle:
 		renderToggle(sb, field, inputID, fieldKey, fieldPath)
 		return nil
-	case forms.Slider:
-		renderSlider(sb, field, inputID, fieldKey, fieldPath)
-		return nil
 	case forms.ModelChain:
 		renderModelChain(sb, field, fieldPath, fieldKey)
 		return nil
@@ -147,6 +144,8 @@ func renderField(sb *strings.Builder, field forms.Field, prefix string) error {
 		renderSecret(sb, field, inputID, fieldKey, fieldPath)
 	case forms.Number:
 		renderNumber(sb, field, inputID, fieldKey, fieldPath)
+	case forms.Slider:
+		renderSlider(sb, field, inputID, fieldKey, fieldPath)
 	case forms.Select:
 		renderSelect(sb, field, inputID, fieldKey, fieldPath)
 	case forms.TextArea:

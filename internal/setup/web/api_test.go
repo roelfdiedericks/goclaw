@@ -192,7 +192,7 @@ func TestHandleSectionActionInvokesCommand(t *testing.T) {
 	bus.RegisterCommand("media", "stats", func(cmd bus.Command) bus.CommandResult {
 		return bus.CommandResult{
 			Success: true,
-			Message: "Current media usage: 0.1 GB of 2 GB total.",
+			Message: "Current media usage: 0.1 GB of 50 GB total.",
 			Data:    map[string]any{"ok": true},
 		}
 	})

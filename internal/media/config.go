@@ -31,7 +31,7 @@ func ConfigFormDefWithValues(cfg MediaConfig) forms.FormDef {
 				Desc:  "Choose where media files live, the overall storage ceiling, and the largest file size GoClaw should accept.",
 				Fields: []forms.Field{
 					{Name: "dir", Title: "Storage Directory", Type: forms.Text, Desc: "Base directory for media files. Leave empty to use <workspace>/media/."},
-					{Name: "quotas.global", Title: "Global Quota", Type: forms.Slider, Default: DefaultGlobalQuotaBytes, Desc: "Total media storage limit across all directories. Displayed in GB.", Scale: bytesPerGB, Unit: "GB", Min: 0.5, Max: 20, Step: 0.5},
+					{Name: "quotas.global", Title: "Global Quota", Type: forms.Slider, Default: DefaultGlobalQuotaBytes, Desc: "Total media storage limit across all directories. Displayed in GB.", Scale: bytesPerGB, Unit: "GB", Min: 0.5, Max: 100, Step: 0.5},
 					{Name: "maxSize", Title: "Max File Size", Type: forms.Number, Default: DefaultMaxSizeBytes, Desc: "Maximum size allowed for a single saved file. Displayed in MB. Default: 100MB.", Scale: bytesPerMB, Unit: "MB", Min: 25, Max: 1024, Step: 25},
 				},
 			},

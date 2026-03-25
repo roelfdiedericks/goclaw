@@ -15,7 +15,7 @@ const (
 
 	DefaultMaxSizeBytes        = 100 * 1024 * 1024
 	DefaultCleanupInterval     = 5 * time.Minute
-	DefaultGlobalQuotaBytes    = 2 * bytesPerGB
+	DefaultGlobalQuotaBytes    = 50 * bytesPerGB
 	DefaultUploadsQuotaBytes   = bytesPerGB / 2
 	DefaultKeeperQuotaBytes    = bytesPerGB / 2
 	DefaultBrowserTTL          = 24 * time.Hour
@@ -41,7 +41,7 @@ type MediaCleanupConfig struct {
 }
 
 type MediaQuotasConfig struct {
-	Global  int `json:"global" default:"2147483648"`
+	Global  int `json:"global" default:"53687091200"`
 	Uploads int `json:"uploads" default:"536870912"`
 	Keeper  int `json:"keeper" default:"536870912"`
 }

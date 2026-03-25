@@ -23,6 +23,9 @@ func TestConfigFormDefUsesGBSlidersAndMBFileSize(t *testing.T) {
 					if field.Type != forms.Slider || field.Unit != "GB" || field.Step != 0.5 {
 						t.Fatalf("expected global quota slider in GB with 0.5 steps, got %+v", field)
 					}
+					if field.Default != DefaultGlobalQuotaBytes || field.Max != 100 {
+						t.Fatalf("expected 50 GB default and 100 GB max, got default=%v max=%v", field.Default, field.Max)
+					}
 				}
 				if field.Name == "maxSize" {
 					foundMaxSize = true
