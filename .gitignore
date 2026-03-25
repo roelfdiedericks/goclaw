@@ -38,3 +38,9 @@ ref/
 
 # Generated metadata fetch cache
 internal/metadata/.cache/
+
+# Local research and scratch specs
+research/
+specs/
+logo-gopher.png
+logo-pawprints.png
