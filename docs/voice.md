@@ -100,6 +100,44 @@ Click the microphone button and start talking.
 | `voice` | `Eve` | Voice to use |
 | `sampleRate` | `48000` | Audio sample rate in Hz |
 
+### Audio Effects
+
+GoClaw can apply optional real-time effects to spoken output.
+
+```json
+{
+  "voicellm": {
+    "effects": {
+      "mode": "both",
+      "ring": {
+        "carrierFreq": 200,
+        "mix": 0.7
+      },
+      "bitcrush": {
+        "bitDepth": 8,
+        "downsample": 2
+      }
+    }
+  }
+}
+```
+
+The setup editor and web config page expose both preset-based and custom controls for audio effects. Built-in presets include:
+- `None`
+- `Battlestar Galactica`
+- `Dalek`
+- `Metallic`
+- `Lo-Fi Radio`
+- `Custom`
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `effects.mode` | `none` | `none`, `ring`, `bitcrush`, or `both` |
+| `effects.ring.carrierFreq` | `200` | Ring-modulation carrier frequency in Hz |
+| `effects.ring.mix` | `0.7` | Ring-modulation wet/dry mix |
+| `effects.bitcrush.bitDepth` | `8` | Target bit depth for crunchy output |
+| `effects.bitcrush.downsample` | `2` | Downsample factor for lo-fi output |
+
 ### Available Voices (xAI)
 
 | Voice | Description |
@@ -191,6 +229,15 @@ The agent can use tools during voice conversations. When a tool is called:
 3. Agent speaks the result
 
 Tool calls may cause brief pauses in the conversation.
+
+## Voice Page Notes
+
+The `/voice` page includes:
+- a live microphone visualizer
+- browser-side audio playback for assistant responses
+- a small hidden BSG-themed easter egg on the connect button and visualizer
+
+These browser-only extras do not change the VoiceLLM runtime configuration.
 
 ## Browser Requirements
 

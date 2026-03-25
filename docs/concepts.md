@@ -62,7 +62,7 @@ See [Channels](channels.md) for the full overview.
 | Orchestration | cron, subagent_spawn/status/cancel, subagent_fanout |
 | Integration | hass (Home Assistant), browser |
 | Communication | message (send to channels) |
-| Utility | media_display, skills, goclaw_update, user_auth |
+| Utility | media, media_display, skills, goclaw_update, user_auth |
 | Media generation | xai_imagine, xai_video |
 
 Tools are registered with the gateway and exposed to the LLM via function calling. Many tools are conditionally enabled by configuration and channel/runtime availability (for example browser/HASS/subagent features).

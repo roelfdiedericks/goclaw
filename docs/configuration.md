@@ -150,8 +150,26 @@ GoClaw is configured via `goclaw.json` in the working directory.
 
   "media": {
     "dir": "~/.goclaw/media",
-    "ttl": 600,
-    "maxSize": 5242880
+    "maxSize": 104857600,
+    "cleanup": {
+      "enabled": true,
+      "interval": 300
+    },
+    "quotas": {
+      "global": 2147483648,
+      "uploads": 536870912,
+      "keeper": 536870912
+    },
+    "categories": {
+      "browser": {
+        "ttl": 86400,
+        "quota": 536870912
+      },
+      "downloads": {
+        "ttl": 86400,
+        "quota": 536870912
+      }
+    }
   },
 
   "promptCache": {
@@ -361,17 +379,68 @@ See [Session Management](session-management.md) for compaction, checkpoints, and
 {
   "media": {
     "dir": "~/.goclaw/media",
-    "ttl": 600,
-    "maxSize": 5242880
+    "maxSize": 104857600,
+    "cleanup": {
+      "enabled": true,
+      "interval": 300
+    },
+    "quotas": {
+      "global": 2147483648,
+      "uploads": 536870912,
+      "keeper": 536870912
+    },
+    "categories": {
+      "browser": {
+        "ttl": 86400,
+        "quota": 536870912
+      },
+      "camera": {
+        "ttl": 3600,
+        "quota": 536870912
+      },
+      "generated": {
+        "ttl": 604800,
+        "quota": 1073741824
+      },
+      "downloads": {
+        "ttl": 86400,
+        "quota": 536870912
+      },
+      "voice": {
+        "ttl": 3600,
+        "quota": 536870912
+      }
+    }
   }
 }
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `dir` | string | `~/.goclaw/media` | Media directory |
-| `ttl` | int | `600` | File TTL in seconds |
-| `maxSize` | int | `5242880` | Max file size (5MB) |
+| `dir` | string | `~/.goclaw/media` | Base media directory |
+| `maxSize` | int | `104857600` | Max size for a single saved file (100 MB) |
+| `cleanup.enabled` | bool | `true` | Run background cleanup for temporary categories |
+| `cleanup.interval` | int | `300` | Cleanup interval in seconds |
+| `quotas.global` | int | `2147483648` | Total quota across all categories (2 GB) |
+| `quotas.uploads` | int | `536870912` | Soft quota for `uploads` (preserved, warning only) |
+| `quotas.keeper` | int | `536870912` | Soft quota for `keeper` (preserved, warning only) |
+| `categories.browser.ttl` | int | `86400` | Browser artifact retention in seconds |
+| `categories.browser.quota` | int | `536870912` | Browser quota in bytes |
+| `categories.camera.ttl` | int | `3600` | Camera retention in seconds |
+| `categories.camera.quota` | int | `536870912` | Camera quota in bytes |
+| `categories.generated.ttl` | int | `604800` | Generated media retention in seconds |
+| `categories.generated.quota` | int | `1073741824` | Generated media quota in bytes |
+| `categories.downloads.ttl` | int | `86400` | Download retention in seconds |
+| `categories.downloads.quota` | int | `536870912` | Downloads quota in bytes |
+| `categories.voice.ttl` | int | `3600` | Voice output retention in seconds |
+| `categories.voice.quota` | int | `536870912` | Voice quota in bytes |
+
+Top-level media policies are category-aware:
+- `uploads` and `keeper` are preserved and never auto-deleted
+- `browser`, `camera`, `generated`, `downloads`, and `voice` are temporary and may be cleaned based on TTL and quota
+- nested paths inherit the policy of their top-level category
+
+The setup UI exposes live usage, `Refresh Usage`, and `Clean Now` actions for media storage. Agents can also inspect the same live state through the `media` tool with `action: "info"`.
 
 ### Prompt Cache
 

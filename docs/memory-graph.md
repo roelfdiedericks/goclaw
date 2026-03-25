@@ -330,16 +330,18 @@ Search and filter memories with more control than recall.
 
 ```json
 {
-  "tool": "memory_graph_query", 
+  "tool": "memory_graph_query",
   "input": {
-    "filter": "type:preference",
-    "query": "food",
-    "limit": 10
+    "mode": "typed",
+    "memory_type": "todo",
+    "happens_within": "7d",
+    "sort_by": "scheduled",
+    "max_results": 10
   }
 }
 ```
 
-Supports filtering by entity type, date ranges, and other metadata.
+Supports filtering by memory type, `occurred_at` date ranges, `happens_at` windows for scheduled items, and other metadata.
 
 ### memory_graph_store
 
@@ -349,10 +351,10 @@ Add a new memory to the graph.
 {
   "tool": "memory_graph_store",
   "input": {
-    "content": "User prefers dark roast coffee",
-    "memory_type": "preference",
-    "entities": ["user", "coffee"],
-    "confidence": 0.9
+    "content": "Project deadline for v1 launch",
+    "memory_type": "todo",
+    "happens_at": "2026-04-01",
+    "reasoning": "User set a real deadline that should be queryable and appear in upcoming bulletins"
   }
 }
 ```
@@ -361,8 +363,12 @@ Add a new memory to the graph.
 |-------|------|-------------|
 | `content` | string | The memory content |
 | `memory_type` | string | Entity type (preference, fact, event, etc.) |
-| `entities` | array | Related entity names |
-| `confidence` | float | Confidence score (0-1) |
+| `reasoning` | string | Why the memory is worth storing |
+| `occurred_at` | string | When the memory was observed/recorded or when a past event happened |
+| `happens_at` | string | When a scheduled event, plan, appointment, or deadline is set to happen |
+| `confidence` | float | Confidence score (0-1) for pattern-style memories |
+
+Use `occurred_at` for observation or past-event timing, and `happens_at` for structured scheduling of future events and deadlines. `next_trigger_at` remains internal to routine and prediction behavior.
 
 ### memory_graph_update
 
@@ -418,6 +424,7 @@ When bulletin injection is enabled, the memory graph automatically generates a c
 - Recently accessed memories
 - Memories relevant to the current conversation
 - Important facts about the user
+- Upcoming scheduled events and deadlines driven by `happens_at`
 
 The bulletin is regenerated periodically and when context changes significantly.
 
@@ -437,6 +444,8 @@ Common entity types used in the memory graph:
 | `observation` | Observed behaviors | "tends to work late" |
 | `todo` | Pending tasks | "buy groceries" |
 | `anomaly` | Unusual occurrences | "power outage on March 1" |
+
+For dated `event`, `todo`, and `goal` memories, store machine-readable schedule timing in `happens_at` instead of relying only on prose in `content`.
 
 ## Automatic Extraction
 

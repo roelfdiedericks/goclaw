@@ -190,6 +190,17 @@ The Memory Graph is a semantic knowledge graph that provides structured, queryab
 | `memory_graph_update` | Modify existing memory |
 | `memory_graph_forget` | Remove memory |
 
+### Real-Time Memory Formation
+
+When agent-driven extraction guidance is enabled, the agent is expected to complete the memory workflow before sending its user-facing response for anything it judged memory-worthy:
+
+1. use `memory_graph_recall` first
+2. decide whether to skip, enrich/update, or store new knowledge
+3. use `memory_graph_store` only when something genuinely new or updated should be preserved
+4. then continue with the normal response
+
+Recognition alone is not enough. If the agent decides something is worth remembering, it should not simply note that internally and continue without invoking the memory tool workflow.
+
 ### When to Use
 
 Memory Graph is better than file-based memory for:

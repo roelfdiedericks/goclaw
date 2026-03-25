@@ -177,6 +177,7 @@ Available agent tools (registered conditionally by config/feature flags):
 | `exec` | Execute shell commands (sandboxed) |
 | `jq` | JSON query/transformation |
 | `message` | Send messages to channels |
+| `media` | Inspect media storage usage and retention |
 | `media_display` | Display images/media to user |
 | `cron` | Schedule tasks |
 | `subagent_spawn` | Spawn delegated subagent run |
