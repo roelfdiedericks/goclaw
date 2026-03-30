@@ -2172,33 +2172,7 @@ type SetupWizardCmd struct {
 }
 
 func (s *SetupWizardCmd) Run(ctx *Context) error {
-	if s.TUI {
-		return setup.RunWizard()
-	}
-
-	configPath := setupweb.DefaultConfigPath()
-
-	if s.Web {
-		// Force web mode - fail with helpful message if not available
-		err := setupweb.RunWebWizardWithOptions(configPath, s.Dev)
-		if err == setupweb.ErrNoUIAvailable {
-			fmt.Println("\nError: Cannot open web interface.")
-			fmt.Println("\nTo use the web wizard, install one of:")
-			fmt.Println("  - webkit2gtk: sudo apt install libwebkit2gtk-4.1-dev")
-			fmt.Println("  - Or any web browser")
-			fmt.Println("\nAlternatively, run: goclaw setup wizard --tui")
-			return err
-		}
-		return err
-	}
-
-	// Auto-detect mode: try web, silently fallback to TUI
-	err := setupweb.RunWebWizardWithOptions(configPath, s.Dev)
-	if err == setupweb.ErrNoUIAvailable {
-		L_debug("web wizard not available, falling back to TUI")
-		return setup.RunWizard()
-	}
-	return err
+	return runSetupWizardInterface(s.Web, s.TUI, s.Dev, "goclaw setup wizard --tui")
 }
 
 // SetupEditCmd edits existing config
@@ -2256,7 +2230,38 @@ func (s *SetupGenerateCmd) Run(ctx *Context) error {
 type OnboardCmd struct{}
 
 func (o *OnboardCmd) Run(ctx *Context) error {
-	return setup.RunOnboardWizard()
+	return runSetupWizardInterface(false, false, false, "goclaw onboard --tui")
+}
+
+func runSetupWizardInterface(forceWeb, forceTUI, dev bool, tuiHint string) error {
+	if forceWeb && forceTUI {
+		return fmt.Errorf("cannot use --web and --tui together")
+	}
+	if forceTUI {
+		return setup.RunWizard()
+	}
+
+	configPath := setupweb.DefaultConfigPath()
+
+	if forceWeb {
+		err := setupweb.RunWebWizardWithOptions(configPath, dev)
+		if err == setupweb.ErrNoUIAvailable {
+			fmt.Println("\nError: Cannot open web interface.")
+			fmt.Println("\nTo use the web wizard, install one of:")
+			fmt.Println("  - webkit2gtk: sudo apt install libwebkit2gtk-4.1-dev")
+			fmt.Println("  - Or any web browser")
+			fmt.Printf("\nAlternatively, run: %s\n", tuiHint)
+			return err
+		}
+		return err
+	}
+
+	err := setupweb.RunWebWizardWithOptions(configPath, dev)
+	if err == setupweb.ErrNoUIAvailable {
+		L_debug("web wizard not available, falling back to TUI")
+		return setup.RunWizard()
+	}
+	return err
 }
 
 // ConfigCmd shows configuration

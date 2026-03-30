@@ -275,6 +275,13 @@
             this.userDeleteUsername = '';
             this.userModal = null;
             this.userDeleteModal = null;
+            this.pendingOwnerPairings = {};
+            this.editorPairingStatus = {};
+            this.editorPairingPollers = {};
+            this.editorPairingSessions = {
+                telegram: `web-editor-telegram-${Date.now()}`,
+                whatsapp: `web-editor-whatsapp-${Date.now()}`
+            };
             this.restartModal = new bootstrap.Modal(document.getElementById('editorRestartModal'));
             this.$restartMessage = $('#editor-restart-message');
             this.$restartDetail = $('#editor-restart-detail');
@@ -350,6 +357,8 @@
             this.$formContent.on('input change', '.js-role-input', (event) => this.handleRoleInput(event));
             this.$formContent.on('click', '.js-role-save-new', (event) => this.saveNewRole($(event.currentTarget).data('field-path')));
             this.$formContent.on('click', '.js-form-action', (event) => this.runFormAction(event));
+            this.$formContent.on('click', '.js-editor-pairing-start', () => this.startEditorPairing());
+            this.$formContent.on('click', '.js-editor-pairing-refresh', () => this.refreshEditorPairing());
 
             $('#mcModalBack').on('click', () => this.showModelProviderStep());
             $('#mcModalAdd').on('click', () => this.addSelectedModelToChain());
@@ -375,11 +384,11 @@
         }
 
         hasAnyDirty() {
-            return Object.values(this.dirtyState).some(Boolean);
+            return Object.values(this.dirtyState).some(Boolean) || Object.keys(this.pendingOwnerPairings).length > 0;
         }
 
         dirtyCount() {
-            return Object.values(this.dirtyState).filter(Boolean).length;
+            return Object.values(this.dirtyState).filter(Boolean).length + (Object.keys(this.pendingOwnerPairings).length > 0 ? 1 : 0);
         }
 
         currentDirty() {
@@ -435,6 +444,8 @@
         async switchSection(sectionId) {
             if (this.currentSection === sectionId) return;
             this.cacheCurrentSectionState();
+            Object.values(this.editorPairingPollers).forEach((timer) => window.clearTimeout(timer));
+            this.editorPairingPollers = {};
             await this.loadSection(sectionId);
         }
 
@@ -516,6 +527,145 @@
             this.initModelWidgets();
             this.renderProviderLists();
             this.renderRolesLists();
+            this.renderEditorPairingPanel();
+        }
+
+        renderEditorPairingPanel() {
+            this.$formContent.find('.js-editor-pairing-panel').remove();
+            if (!['telegram', 'whatsapp'].includes(this.currentSection)) {
+                return;
+            }
+
+            const channel = this.currentSection;
+            const staged = this.pendingOwnerPairings[channel] || '';
+            this.$formContent.append(`
+                <div class="card mt-4 js-editor-pairing-panel">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span>Owner Pairing</span>
+                        <span class="badge text-bg-secondary js-editor-pairing-badge">Not started</span>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted js-editor-pairing-message mb-2">Pairing status will appear here.</p>
+                        <div class="alert alert-light border d-none js-editor-pairing-artifact"></div>
+                        <div class="small text-muted mb-3 js-editor-pairing-identity">${staged ? `Staged owner ID: ${escapeHtml(staged)}` : ''}</div>
+                        <div class="d-flex gap-2 flex-wrap">
+                            <button type="button" class="btn btn-sm btn-primary js-editor-pairing-start">Start Pairing</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary js-editor-pairing-refresh">Refresh</button>
+                        </div>
+                        <div class="form-text mt-2">Successful pairing is staged locally and written to <code>users.json</code> on Save Changes.</div>
+                    </div>
+                </div>
+            `);
+            this.refreshEditorPairing();
+        }
+
+        async startEditorPairing() {
+            if (!['telegram', 'whatsapp'].includes(this.currentSection)) return;
+            const channel = this.currentSection;
+            try {
+                const payload = {
+                    sessionId: this.editorPairingSessions[channel],
+                    surface: 'web-editor'
+                };
+                if (channel === 'telegram') {
+                    payload.botToken = this.formData.botToken || '';
+                    if (!payload.botToken) throw new Error('Telegram bot token is required before pairing');
+                }
+                this.pendingOwnerPairings[channel] = '';
+                const resp = await fetch(`/setup/api/pairing/${encodeURIComponent(channel)}/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || `Failed to start ${channel} pairing`);
+                this.applyEditorPairingStatus(channel, data.data || {});
+            } catch (err) {
+                showAlert(this.$errorAlert, err.message || `Failed to start ${channel} pairing`);
+            }
+        }
+
+        async refreshEditorPairing() {
+            if (!['telegram', 'whatsapp'].includes(this.currentSection)) return;
+            const channel = this.currentSection;
+            try {
+                const resp = await fetch(`/setup/api/pairing/${encodeURIComponent(channel)}/status`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sessionId: this.editorPairingSessions[channel],
+                        surface: 'web-editor'
+                    })
+                });
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || `Failed to load ${channel} pairing status`);
+                this.applyEditorPairingStatus(channel, data.data || {});
+            } catch (err) {
+                showAlert(this.$errorAlert, err.message || `Failed to load ${channel} pairing status`);
+            }
+        }
+
+        applyEditorPairingStatus(channel, status) {
+            this.editorPairingStatus[channel] = status || {};
+            if (status && status.identity && status.identity.id) {
+                this.pendingOwnerPairings[channel] = status.identity.id;
+            }
+            const $panel = this.$formContent.find('.js-editor-pairing-panel');
+            if (!$panel.length) return;
+            const badge = $panel.find('.js-editor-pairing-badge');
+            const message = $panel.find('.js-editor-pairing-message');
+            const artifact = $panel.find('.js-editor-pairing-artifact');
+            const identity = $panel.find('.js-editor-pairing-identity');
+            const state = String(status.state || 'not_started');
+            const badgeMap = {
+                not_started: ['text-bg-secondary', 'Not started'],
+                waiting: ['text-bg-warning', 'Waiting'],
+                paired: ['text-bg-success', 'Paired'],
+                expired: ['text-bg-danger', 'Expired'],
+                failed: ['text-bg-danger', 'Failed'],
+                cancelled: ['text-bg-secondary', 'Cancelled']
+            };
+            const badgeInfo = badgeMap[state] || badgeMap.not_started;
+            badge.attr('class', `badge ${badgeInfo[0]} js-editor-pairing-badge`).text(badgeInfo[1]);
+            message.text(status.message || `${channel} pairing has not started yet.`);
+
+            if (channel === 'telegram' && status.artifacts && status.artifacts.code) {
+                artifact.removeClass('d-none').html(`<div class="fw-semibold mb-1">One-time code</div><code class="fs-5">${escapeHtml(status.artifacts.code)}</code>`);
+            } else if (channel === 'whatsapp' && status.artifacts && status.artifacts.qrCode) {
+                artifact.removeClass('d-none').html(`
+                    <div class="fw-semibold mb-2">Scan this QR code</div>
+                    <div class="bg-white rounded p-3 d-inline-block js-editor-whatsapp-qr"></div>
+                    <div class="small text-muted mt-2">${escapeHtml(status.artifacts.qrLabel || '')}</div>
+                `);
+                const container = artifact.find('.js-editor-whatsapp-qr').get(0);
+                if (container && typeof window.QRCode !== 'undefined') {
+                    container.innerHTML = '';
+                    // eslint-disable-next-line no-new
+                    new window.QRCode(container, { text: status.artifacts.qrCode, width: 220, height: 220 });
+                }
+            } else {
+                artifact.addClass('d-none').empty();
+            }
+
+            const staged = this.pendingOwnerPairings[channel] || '';
+            if (status.identity) {
+                identity.text(`Staged owner ID: ${status.identity.id}`);
+            } else {
+                identity.text(staged ? `Staged owner ID: ${staged}` : '');
+            }
+            if (this.editorPairingPollers[channel]) {
+                window.clearTimeout(this.editorPairingPollers[channel]);
+                delete this.editorPairingPollers[channel];
+            }
+            if (state === 'waiting') {
+                const delay = Number(status.pollAfterMs) > 0 ? Number(status.pollAfterMs) : 1500;
+                this.editorPairingPollers[channel] = window.setTimeout(() => {
+                    if (this.currentSection === channel) {
+                        this.refreshEditorPairing();
+                    }
+                }, delay);
+            }
+            this.syncTopBar();
         }
 
         populateBoundFields($container, state) {
@@ -592,6 +742,633 @@
             return Number.isFinite(raw) && raw > 0 ? raw : 1;
         }
 
+        initializePairingStep() {
+            if (!this.currentStep || this.currentStep.id !== 'pairing') {
+                return;
+            }
+            this.refreshAllPairings();
+        }
+
+        stopAllPairingPollers() {
+            Object.values(this.pairingPollers).forEach((timer) => {
+                if (timer) window.clearTimeout(timer);
+            });
+            this.pairingPollers = {};
+        }
+
+        async refreshAllPairings() {
+            const channels = [];
+            if (this.wizardData.TelegramEnabled) channels.push('telegram');
+            if (this.wizardData.WhatsAppEnabled) channels.push('whatsapp');
+            await Promise.all(channels.map((channel) => this.fetchPairingStatus(channel)));
+            this.syncNav();
+        }
+
+        async refreshPairing(event) {
+            const channel = $(event.currentTarget).closest('[data-pairing-channel]').data('pairing-channel');
+            if (!channel) return;
+            await this.fetchPairingStatus(channel);
+            this.syncNav();
+        }
+
+        async startPairing(event) {
+            const channel = $(event.currentTarget).closest('[data-pairing-channel]').data('pairing-channel');
+            if (!channel) return;
+            try {
+                const resp = await fetch(`/setup/api/wizard/pairing/${encodeURIComponent(channel)}/start`, { method: 'POST' });
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || `Failed to start ${channel} pairing`);
+                this.applyPairingStatus(channel, data.data || {});
+                this.schedulePairingPoll(channel, data.data || {});
+                this.syncNav();
+            } catch (err) {
+                showAlert(this.$errorAlert, err.message || `Failed to start ${channel} pairing`);
+            }
+        }
+
+        async cancelPairing(event) {
+            const channel = $(event.currentTarget).closest('[data-pairing-channel]').data('pairing-channel');
+            if (!channel) return;
+            try {
+                const resp = await fetch(`/setup/api/wizard/pairing/${encodeURIComponent(channel)}/cancel`, { method: 'POST' });
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || `Failed to cancel ${channel} pairing`);
+                this.applyPairingStatus(channel, data.data || {});
+                this.schedulePairingPoll(channel, data.data || {});
+                this.syncNav();
+            } catch (err) {
+                showAlert(this.$errorAlert, err.message || `Failed to cancel ${channel} pairing`);
+            }
+        }
+
+        async fetchPairingStatus(channel) {
+            try {
+                const resp = await fetch(`/setup/api/wizard/pairing/${encodeURIComponent(channel)}/status`);
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || `Failed to load ${channel} pairing status`);
+                this.applyPairingStatus(channel, data.data || {});
+                this.schedulePairingPoll(channel, data.data || {});
+            } catch (err) {
+                this.renderPairingError(channel, err.message || `Failed to load ${channel} pairing status`);
+            }
+        }
+
+        schedulePairingPoll(channel, status) {
+            if (this.pairingPollers[channel]) {
+                window.clearTimeout(this.pairingPollers[channel]);
+                delete this.pairingPollers[channel];
+            }
+            const state = status && status.state ? status.state : '';
+            if (['paired', 'expired', 'failed', 'cancelled', 'not_started'].includes(state)) {
+                return;
+            }
+            const delay = Number(status && status.pollAfterMs) > 0 ? Number(status.pollAfterMs) : 1500;
+            this.pairingPollers[channel] = window.setTimeout(() => this.fetchPairingStatus(channel), delay);
+        }
+
+        applyPairingStatus(channel, status) {
+            this.pairingStatus[channel] = status || {};
+            if (channel === 'telegram' && status && status.identity && status.identity.id) {
+                this.wizardData.UserTelegramID = status.identity.id;
+            }
+            if (channel === 'whatsapp' && status && status.identity && status.identity.id) {
+                this.wizardData.UserWhatsAppID = status.identity.id;
+            }
+            this.renderPairingStatus(channel, status || {});
+        }
+
+        renderPairingError(channel, message) {
+            const $card = this.$stepContent.find(`[data-pairing-channel="${channel}"]`);
+            if (!$card.length) return;
+            $card.removeClass('border-success bg-success-subtle');
+            $card.find('.js-pairing-badge').attr('class', 'badge text-bg-danger js-pairing-badge').text('Error');
+            $card.find('.js-pairing-message').text(message || 'Pairing failed.');
+            $card.find('.js-pairing-success').addClass('d-none');
+        }
+
+        renderPairingStatus(channel, status) {
+            const $card = this.$stepContent.find(`[data-pairing-channel="${channel}"]`);
+            if (!$card.length) return;
+
+            const state = String(status.state || 'not_started');
+            const badge = $card.find('.js-pairing-badge');
+            const message = $card.find('.js-pairing-message');
+            const success = $card.find('.js-pairing-success');
+            const successText = $card.find('.js-pairing-success-text');
+            const artifact = $card.find('.js-pairing-artifact');
+            const identity = $card.find('.js-pairing-identity');
+            const startBtn = $card.find('.js-pairing-start');
+            const cancelBtn = $card.find('.js-pairing-cancel');
+
+            const badgeMap = {
+                not_started: ['text-bg-secondary', 'Not started'],
+                waiting: ['text-bg-warning', 'Waiting'],
+                paired: ['text-bg-success', 'Paired'],
+                expired: ['text-bg-danger', 'Expired'],
+                failed: ['text-bg-danger', 'Failed'],
+                cancelled: ['text-bg-secondary', 'Cancelled']
+            };
+            const badgeInfo = badgeMap[state] || badgeMap.not_started;
+            badge.attr('class', `badge ${badgeInfo[0]} js-pairing-badge`).text(badgeInfo[1]);
+            message.text(status.message || `${channel} pairing has not started yet.`);
+            $card.toggleClass('border-success', state === 'paired');
+            $card.toggleClass('bg-success-subtle', state === 'paired');
+
+            startBtn.text(state === 'paired' ? 'Restart Pairing' : 'Start Pairing');
+            cancelBtn.toggleClass('d-none', state !== 'waiting');
+
+            if (state === 'paired') {
+                const successParts = [];
+                if (channel === 'telegram' && status.identity) {
+                    successParts.push('Telegram owner confirmed');
+                    if (status.identity.displayName) successParts.push(status.identity.displayName);
+                    if (status.identity.id) successParts.push(status.identity.id);
+                } else if (channel === 'whatsapp' && status.identity) {
+                    successParts.push('WhatsApp owner confirmed');
+                    if (status.identity.phone) successParts.push(status.identity.phone);
+                    if (status.identity.jid) successParts.push(status.identity.jid);
+                } else {
+                    successParts.push('Pairing complete');
+                }
+                success.removeClass('d-none');
+                successText.text(`${successParts.join(' · ')}. You can continue to the next step.`);
+            } else {
+                success.addClass('d-none');
+            }
+
+            this.renderPairingArtifact(channel, artifact, status);
+            this.renderPairingIdentity(identity, channel, status);
+        }
+
+        renderPairingArtifact(channel, $artifact, status) {
+            const artifacts = status && status.artifacts ? status.artifacts : {};
+            const state = String(status && status.state ? status.state : '');
+            if (state === 'paired') {
+                $artifact.addClass('d-none').empty();
+                return;
+            }
+            if (channel === 'telegram' && artifacts.code) {
+                $artifact.removeClass('d-none').html(`
+                    <div class="fw-semibold mb-1">One-time code</div>
+                    <code class="fs-5">${escapeHtml(artifacts.code)}</code>
+                    <div class="small text-muted mt-1">Send this exact code to the Telegram bot from the owner account.</div>
+                `);
+                return;
+            }
+            if (channel === 'whatsapp' && artifacts.qrCode) {
+                $artifact.removeClass('d-none').html(`
+                    <div class="fw-semibold mb-2">Scan this QR code</div>
+                    <div class="bg-white rounded p-3 d-inline-block js-whatsapp-qr"></div>
+                    <div class="small text-muted mt-2">${escapeHtml(artifacts.qrLabel || '')}</div>
+                `);
+                const container = $artifact.find('.js-whatsapp-qr').get(0);
+                if (container && typeof window.QRCode !== 'undefined') {
+                    container.innerHTML = '';
+                    // eslint-disable-next-line no-new
+                    new window.QRCode(container, {
+                        text: artifacts.qrCode,
+                        width: 220,
+                        height: 220
+                    });
+                }
+                return;
+            }
+            $artifact.addClass('d-none').empty();
+        }
+
+        renderPairingIdentity($identity, channel, status) {
+            const identity = status && status.identity ? status.identity : null;
+            const staged = channel === 'telegram' ? this.wizardData.UserTelegramID : this.wizardData.UserWhatsAppID;
+            if (identity) {
+                if (channel === 'telegram') {
+                    const parts = [identity.displayName, identity.username ? `@${identity.username}` : '', identity.id].filter(Boolean);
+                    $identity.html(`<span class="text-success"><i class="bi bi-check2-square me-1"></i>Paired owner: ${escapeHtml(parts.join(' · '))}</span>`);
+                } else {
+                    const parts = [identity.phone, identity.jid || identity.id].filter(Boolean);
+                    $identity.html(`<span class="text-success"><i class="bi bi-check2-square me-1"></i>Paired owner: ${escapeHtml(parts.join(' · '))}</span>`);
+                }
+                return;
+            }
+            if (staged) {
+                $identity.text(`Currently staged owner ID: ${staged}`);
+                return;
+            }
+            $identity.text('');
+        }
+
+        initializePairingStep() {
+            if (!this.currentStep || this.currentStep.id !== 'pairing') {
+                return;
+            }
+            this.refreshAllPairings();
+        }
+
+        stopAllPairingPollers() {
+            Object.values(this.pairingPollers).forEach((timer) => {
+                if (timer) window.clearTimeout(timer);
+            });
+            this.pairingPollers = {};
+        }
+
+        async refreshAllPairings() {
+            const channels = [];
+            if (this.wizardData.TelegramEnabled) channels.push('telegram');
+            if (this.wizardData.WhatsAppEnabled) channels.push('whatsapp');
+            await Promise.all(channels.map((channel) => this.fetchPairingStatus(channel)));
+            this.syncNav();
+        }
+
+        async refreshPairing(event) {
+            const channel = $(event.currentTarget).closest('[data-pairing-channel]').data('pairing-channel');
+            if (!channel) return;
+            await this.fetchPairingStatus(channel);
+            this.syncNav();
+        }
+
+        async startPairing(event) {
+            const channel = $(event.currentTarget).closest('[data-pairing-channel]').data('pairing-channel');
+            if (!channel) return;
+            try {
+                const resp = await fetch(`/setup/api/wizard/pairing/${encodeURIComponent(channel)}/start`, { method: 'POST' });
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || `Failed to start ${channel} pairing`);
+                this.applyPairingStatus(channel, data.data || {});
+                this.schedulePairingPoll(channel, data.data || {});
+                this.syncNav();
+            } catch (err) {
+                showAlert(this.$errorAlert, err.message || `Failed to start ${channel} pairing`);
+            }
+        }
+
+        async cancelPairing(event) {
+            const channel = $(event.currentTarget).closest('[data-pairing-channel]').data('pairing-channel');
+            if (!channel) return;
+            try {
+                const resp = await fetch(`/setup/api/wizard/pairing/${encodeURIComponent(channel)}/cancel`, { method: 'POST' });
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || `Failed to cancel ${channel} pairing`);
+                this.applyPairingStatus(channel, data.data || {});
+                this.schedulePairingPoll(channel, data.data || {});
+                this.syncNav();
+            } catch (err) {
+                showAlert(this.$errorAlert, err.message || `Failed to cancel ${channel} pairing`);
+            }
+        }
+
+        async fetchPairingStatus(channel) {
+            try {
+                const resp = await fetch(`/setup/api/wizard/pairing/${encodeURIComponent(channel)}/status`);
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || `Failed to load ${channel} pairing status`);
+                this.applyPairingStatus(channel, data.data || {});
+                this.schedulePairingPoll(channel, data.data || {});
+            } catch (err) {
+                this.renderPairingError(channel, err.message || `Failed to load ${channel} pairing status`);
+            }
+        }
+
+        schedulePairingPoll(channel, status) {
+            if (this.pairingPollers[channel]) {
+                window.clearTimeout(this.pairingPollers[channel]);
+                delete this.pairingPollers[channel];
+            }
+            const state = status && status.state ? status.state : '';
+            if (['paired', 'expired', 'failed', 'cancelled', 'not_started'].includes(state)) {
+                return;
+            }
+            const delay = Number(status && status.pollAfterMs) > 0 ? Number(status.pollAfterMs) : 1500;
+            this.pairingPollers[channel] = window.setTimeout(() => this.fetchPairingStatus(channel), delay);
+        }
+
+        applyPairingStatus(channel, status) {
+            this.pairingStatus[channel] = status || {};
+            if (channel === 'telegram' && status && status.identity && status.identity.id) {
+                this.wizardData.UserTelegramID = status.identity.id;
+            }
+            if (channel === 'whatsapp' && status && status.identity && status.identity.id) {
+                this.wizardData.UserWhatsAppID = status.identity.id;
+            }
+            this.renderPairingStatus(channel, status || {});
+        }
+
+        renderPairingError(channel, message) {
+            const $card = this.$stepContent.find(`[data-pairing-channel="${channel}"]`);
+            if (!$card.length) return;
+            $card.removeClass('border-success bg-success-subtle');
+            $card.find('.js-pairing-badge').attr('class', 'badge text-bg-danger js-pairing-badge').text('Error');
+            $card.find('.js-pairing-message').text(message || 'Pairing failed.');
+            $card.find('.js-pairing-success').addClass('d-none');
+        }
+
+        renderPairingStatus(channel, status) {
+            const $card = this.$stepContent.find(`[data-pairing-channel="${channel}"]`);
+            if (!$card.length) return;
+
+            const state = String(status.state || 'not_started');
+            const staged = channel === 'telegram' ? this.wizardData.UserTelegramID : this.wizardData.UserWhatsAppID;
+            const effectivelyPaired = state === 'paired' || (state === 'not_started' && !!staged);
+            const badge = $card.find('.js-pairing-badge');
+            const message = $card.find('.js-pairing-message');
+            const success = $card.find('.js-pairing-success');
+            const successText = $card.find('.js-pairing-success-text');
+            const artifact = $card.find('.js-pairing-artifact');
+            const identity = $card.find('.js-pairing-identity');
+            const startBtn = $card.find('.js-pairing-start');
+            const cancelBtn = $card.find('.js-pairing-cancel');
+
+            const badgeMap = {
+                not_started: ['text-bg-secondary', 'Not started'],
+                waiting: ['text-bg-warning', 'Waiting'],
+                paired: ['text-bg-success', 'Paired'],
+                already_paired: ['text-bg-success', 'Already paired'],
+                expired: ['text-bg-danger', 'Expired'],
+                failed: ['text-bg-danger', 'Failed'],
+                cancelled: ['text-bg-secondary', 'Cancelled']
+            };
+            const visualState = effectivelyPaired && state !== 'paired' ? 'already_paired' : state;
+            const badgeInfo = badgeMap[visualState] || badgeMap.not_started;
+            badge.attr('class', `badge ${badgeInfo[0]} js-pairing-badge`).text(badgeInfo[1]);
+            if (effectivelyPaired && state !== 'paired') {
+                message.text(`${channel.charAt(0).toUpperCase() + channel.slice(1)} owner is already paired. Reinitiate pairing only if you want to replace this owner binding.`);
+            } else {
+                message.text(status.message || `${channel} pairing has not started yet.`);
+            }
+
+            $card.toggleClass('border-success', effectivelyPaired);
+            $card.toggleClass('bg-success-subtle', effectivelyPaired);
+            startBtn.text(effectivelyPaired ? 'Reinitiate Pairing' : 'Start Pairing');
+            cancelBtn.toggleClass('d-none', state !== 'waiting');
+
+            if (effectivelyPaired) {
+                const parts = [];
+                if (channel === 'telegram') {
+                    parts.push('Telegram owner confirmed');
+                    if (status.identity && status.identity.displayName) parts.push(status.identity.displayName);
+                    if (status.identity && status.identity.id) {
+                        parts.push(status.identity.id);
+                    } else if (staged) {
+                        parts.push(staged);
+                    }
+                } else {
+                    parts.push('WhatsApp owner confirmed');
+                    if (status.identity && status.identity.phone) parts.push(status.identity.phone);
+                    if (status.identity && status.identity.jid) {
+                        parts.push(status.identity.jid);
+                    } else if (staged) {
+                        parts.push(staged);
+                    }
+                }
+                success.removeClass('d-none');
+                successText.text(`${parts.join(' · ')}. You can continue to the next step, or reinitiate pairing if you need to replace it.`);
+            } else {
+                success.addClass('d-none');
+            }
+
+            this.renderPairingArtifact(channel, artifact, status);
+            this.renderPairingIdentity(identity, channel, status);
+        }
+
+        renderPairingArtifact(channel, $artifact, status) {
+            const artifacts = status && status.artifacts ? status.artifacts : {};
+            const state = String(status && status.state ? status.state : '');
+            const staged = channel === 'telegram' ? this.wizardData.UserTelegramID : this.wizardData.UserWhatsAppID;
+            if (state === 'paired' || (state === 'not_started' && !!staged)) {
+                $artifact.addClass('d-none').empty();
+                return;
+            }
+            if (channel === 'telegram' && artifacts.code) {
+                $artifact.removeClass('d-none').html(`
+                    <div class="fw-semibold mb-1">One-time code</div>
+                    <code class="fs-5">${escapeHtml(artifacts.code)}</code>
+                    <div class="small text-muted mt-1">Send this exact code to the Telegram bot from the owner account.</div>
+                `);
+                return;
+            }
+            if (channel === 'whatsapp' && artifacts.qrCode) {
+                $artifact.removeClass('d-none').html(`
+                    <div class="fw-semibold mb-2">Scan this QR code</div>
+                    <div class="bg-white rounded p-3 d-inline-block js-whatsapp-qr"></div>
+                    <div class="small text-muted mt-2">${escapeHtml(artifacts.qrLabel || '')}</div>
+                `);
+                const container = $artifact.find('.js-whatsapp-qr').get(0);
+                if (container && typeof window.QRCode !== 'undefined') {
+                    container.innerHTML = '';
+                    // eslint-disable-next-line no-new
+                    new window.QRCode(container, {
+                        text: artifacts.qrCode,
+                        width: 220,
+                        height: 220
+                    });
+                }
+                return;
+            }
+            $artifact.addClass('d-none').empty();
+        }
+
+        renderPairingIdentity($identity, channel, status) {
+            const identity = status && status.identity ? status.identity : null;
+            const staged = channel === 'telegram' ? this.wizardData.UserTelegramID : this.wizardData.UserWhatsAppID;
+            if (identity) {
+                if (channel === 'telegram') {
+                    const parts = [identity.displayName, identity.username ? `@${identity.username}` : '', identity.id].filter(Boolean);
+                    $identity.html(`<span class="text-success"><i class="bi bi-check2-square me-1"></i>Paired owner: ${escapeHtml(parts.join(' · '))}</span>`);
+                } else {
+                    const parts = [identity.phone, identity.jid || identity.id].filter(Boolean);
+                    $identity.html(`<span class="text-success"><i class="bi bi-check2-square me-1"></i>Paired owner: ${escapeHtml(parts.join(' · '))}</span>`);
+                }
+                return;
+            }
+            if (staged) {
+                $identity.html(`<span class="text-success"><i class="bi bi-check2-square me-1"></i>Current paired owner: ${escapeHtml(String(staged))}</span>`);
+                return;
+            }
+            $identity.text('');
+        }
+
+        initializePairingStep() {
+            if (!this.currentStep || this.currentStep.id !== 'pairing') {
+                return;
+            }
+            this.refreshAllPairings();
+        }
+
+        stopAllPairingPollers() {
+            Object.values(this.pairingPollers).forEach((timer) => {
+                if (timer) window.clearTimeout(timer);
+            });
+            this.pairingPollers = {};
+        }
+
+        async refreshAllPairings() {
+            const channels = [];
+            if (this.wizardData.TelegramEnabled) channels.push('telegram');
+            if (this.wizardData.WhatsAppEnabled) channels.push('whatsapp');
+            await Promise.all(channels.map((channel) => this.fetchPairingStatus(channel)));
+            this.syncNav();
+        }
+
+        async refreshPairing(event) {
+            const channel = $(event.currentTarget).closest('[data-pairing-channel]').data('pairing-channel');
+            if (!channel) return;
+            await this.fetchPairingStatus(channel);
+            this.syncNav();
+        }
+
+        async startPairing(event) {
+            const channel = $(event.currentTarget).closest('[data-pairing-channel]').data('pairing-channel');
+            if (!channel) return;
+            try {
+                const resp = await fetch(`/setup/api/wizard/pairing/${encodeURIComponent(channel)}/start`, { method: 'POST' });
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || `Failed to start ${channel} pairing`);
+                this.applyPairingStatus(channel, data.data || {});
+                this.schedulePairingPoll(channel, data.data || {});
+                this.syncNav();
+            } catch (err) {
+                showAlert(this.$errorAlert, err.message || `Failed to start ${channel} pairing`);
+            }
+        }
+
+        async cancelPairing(event) {
+            const channel = $(event.currentTarget).closest('[data-pairing-channel]').data('pairing-channel');
+            if (!channel) return;
+            try {
+                const resp = await fetch(`/setup/api/wizard/pairing/${encodeURIComponent(channel)}/cancel`, { method: 'POST' });
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || `Failed to cancel ${channel} pairing`);
+                this.applyPairingStatus(channel, data.data || {});
+                this.schedulePairingPoll(channel, data.data || {});
+                this.syncNav();
+            } catch (err) {
+                showAlert(this.$errorAlert, err.message || `Failed to cancel ${channel} pairing`);
+            }
+        }
+
+        async fetchPairingStatus(channel) {
+            try {
+                const resp = await fetch(`/setup/api/wizard/pairing/${encodeURIComponent(channel)}/status`);
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || `Failed to load ${channel} pairing status`);
+                this.applyPairingStatus(channel, data.data || {});
+                this.schedulePairingPoll(channel, data.data || {});
+            } catch (err) {
+                this.renderPairingError(channel, err.message || `Failed to load ${channel} pairing status`);
+            }
+        }
+
+        schedulePairingPoll(channel, status) {
+            if (this.pairingPollers[channel]) {
+                window.clearTimeout(this.pairingPollers[channel]);
+                delete this.pairingPollers[channel];
+            }
+            const state = status && status.state ? status.state : '';
+            if (['paired', 'expired', 'failed', 'cancelled', 'not_started'].includes(state)) {
+                return;
+            }
+            const delay = Number(status && status.pollAfterMs) > 0 ? Number(status.pollAfterMs) : 1500;
+            this.pairingPollers[channel] = window.setTimeout(() => this.fetchPairingStatus(channel), delay);
+        }
+
+        applyPairingStatus(channel, status) {
+            this.pairingStatus[channel] = status || {};
+            if (channel === 'telegram' && status && status.identity && status.identity.id) {
+                this.wizardData.UserTelegramID = status.identity.id;
+            }
+            if (channel === 'whatsapp' && status && status.identity && status.identity.id) {
+                this.wizardData.UserWhatsAppID = status.identity.id;
+            }
+            this.renderPairingStatus(channel, status || {});
+        }
+
+        renderPairingError(channel, message) {
+            const $card = this.$stepContent.find(`[data-pairing-channel="${channel}"]`);
+            if (!$card.length) return;
+            $card.find('.js-pairing-badge').attr('class', 'badge text-bg-danger js-pairing-badge').text('Error');
+            $card.find('.js-pairing-message').text(message || 'Pairing failed.');
+        }
+
+        renderPairingStatus(channel, status) {
+            const $card = this.$stepContent.find(`[data-pairing-channel="${channel}"]`);
+            if (!$card.length) return;
+
+            const state = String(status.state || 'not_started');
+            const badge = $card.find('.js-pairing-badge');
+            const message = $card.find('.js-pairing-message');
+            const artifact = $card.find('.js-pairing-artifact');
+            const identity = $card.find('.js-pairing-identity');
+            const startBtn = $card.find('.js-pairing-start');
+            const cancelBtn = $card.find('.js-pairing-cancel');
+
+            const badgeMap = {
+                not_started: ['text-bg-secondary', 'Not started'],
+                waiting: ['text-bg-warning', 'Waiting'],
+                paired: ['text-bg-success', 'Paired'],
+                expired: ['text-bg-danger', 'Expired'],
+                failed: ['text-bg-danger', 'Failed'],
+                cancelled: ['text-bg-secondary', 'Cancelled']
+            };
+            const badgeInfo = badgeMap[state] || badgeMap.not_started;
+            badge.attr('class', `badge ${badgeInfo[0]} js-pairing-badge`).text(badgeInfo[1]);
+            message.text(status.message || `${channel} pairing has not started yet.`);
+
+            startBtn.text(state === 'paired' ? 'Restart Pairing' : 'Start Pairing');
+            cancelBtn.toggleClass('d-none', state !== 'waiting');
+
+            this.renderPairingArtifact(channel, artifact, status);
+            this.renderPairingIdentity(identity, channel, status);
+        }
+
+        renderPairingArtifact(channel, $artifact, status) {
+            const artifacts = status && status.artifacts ? status.artifacts : {};
+            if (channel === 'telegram' && artifacts.code) {
+                $artifact.removeClass('d-none').html(`
+                    <div class="fw-semibold mb-1">One-time code</div>
+                    <code class="fs-5">${escapeHtml(artifacts.code)}</code>
+                    <div class="small text-muted mt-1">Send this exact code to the Telegram bot from the owner account.</div>
+                `);
+                return;
+            }
+            if (channel === 'whatsapp' && artifacts.qrCode) {
+                $artifact.removeClass('d-none').html(`
+                    <div class="fw-semibold mb-2">Scan this QR code</div>
+                    <div class="bg-white rounded p-3 d-inline-block js-whatsapp-qr"></div>
+                    <div class="small text-muted mt-2">${escapeHtml(artifacts.qrLabel || '')}</div>
+                `);
+                const container = $artifact.find('.js-whatsapp-qr').get(0);
+                if (container && typeof window.QRCode !== 'undefined') {
+                    container.innerHTML = '';
+                    // eslint-disable-next-line no-new
+                    new window.QRCode(container, {
+                        text: artifacts.qrCode,
+                        width: 220,
+                        height: 220
+                    });
+                }
+                return;
+            }
+            $artifact.addClass('d-none').empty();
+        }
+
+        renderPairingIdentity($identity, channel, status) {
+            const identity = status && status.identity ? status.identity : null;
+            const staged = channel === 'telegram' ? this.wizardData.UserTelegramID : this.wizardData.UserWhatsAppID;
+            if (identity) {
+                if (channel === 'telegram') {
+                    const parts = [identity.displayName, identity.username ? `@${identity.username}` : '', identity.id].filter(Boolean);
+                    $identity.text(`Paired owner: ${parts.join(' · ')}`);
+                } else {
+                    const parts = [identity.phone, identity.jid || identity.id].filter(Boolean);
+                    $identity.text(`Paired owner: ${parts.join(' · ')}`);
+                }
+                return;
+            }
+            if (staged) {
+                $identity.text(`Currently staged owner ID: ${staged}`);
+                return;
+            }
+            $identity.text('');
+        }
+
         updateSliderDisplay($field) {
             if (!$field.hasClass('js-slider-field')) return;
             const fieldID = $field.attr('id');
@@ -603,7 +1380,8 @@
 
         async saveAll() {
             const dirtySections = Object.keys(this.dirtyState).filter(sectionId => this.dirtyState[sectionId]);
-            if (!dirtySections.length) return;
+            const hasPendingOwnerPairings = Object.keys(this.pendingOwnerPairings).length > 0;
+            if (!dirtySections.length && !hasPendingOwnerPairings) return;
 
             this.cacheCurrentSectionState();
             this.saving = true;
@@ -643,8 +1421,24 @@
                     }
                 }
 
+                if (hasPendingOwnerPairings) {
+                    const resp = await fetch('/setup/api/users/owner-pairing', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            telegram_id: this.pendingOwnerPairings.telegram || '',
+                            whatsapp_id: this.pendingOwnerPairings.whatsapp || ''
+                        })
+                    });
+                    const data = await resp.json();
+                    if (!data.success) {
+                        throw new Error(data.message || 'Failed to save staged owner pairing identities');
+                    }
+                    this.pendingOwnerPairings = {};
+                }
+
                 this.applyPending = true;
-                showAlert(this.$successAlert, dirtySections.length === 1
+                showAlert(this.$successAlert, dirtySections.length <= 1
                     ? 'Configuration saved to disk.'
                     : `Configuration saved to disk (${dirtySections.length} sections).`);
             } catch (err) {
@@ -771,6 +1565,7 @@
             Object.keys(this.dirtyState).forEach(sectionId => {
                 this.dirtyState[sectionId] = false;
             });
+            this.pendingOwnerPairings = {};
             if (this.currentSection && this.currentSectionType !== 'custom') {
                 await this.loadSection(this.currentSection);
             } else {
@@ -1979,6 +2774,10 @@
             this.$nextLabel = $('#wizard-next-label');
             this.$nextIcon = $('#wizard-next-icon');
             this.$nextSpinner = $('#wizard-next-spinner');
+            this.$statusNote = $('#wizard-step-status-note');
+            this.$statusNoteBody = $('#wizard-step-status-note-body');
+            this.$statusNoteIcon = $('#wizard-step-status-note-icon');
+            this.$statusNoteText = $('#wizard-step-status-note-text');
             this.completeModal = new bootstrap.Modal(document.getElementById('completeModal'));
             this.restartModal = new bootstrap.Modal(document.getElementById('wizardRestartModal'));
             this.appliedModal = new bootstrap.Modal(document.getElementById('wizardAppliedModal'));
@@ -1995,9 +2794,12 @@
             this.saving = false;
             this.finishSaved = false;
             this.lastKnownInstanceID = null;
+            this.pairingStatus = {};
+            this.pairingPollers = {};
         }
 
         init() {
+            this.ensureWizardInteractionStyles();
             this.bindEvents();
             this.loadState();
         }
@@ -2005,8 +2807,20 @@
         bindEvents() {
             this.$errorAlert.find('.btn-close').on('click', () => hideAlert(this.$errorAlert));
             this.$prev.on('click', () => this.prevStep());
-            this.$next.on('click', () => this.nextStep());
+            this.$next.on('click', () => {
+                console.debug('[setup wizard] next clicked', {
+                    step: this.step,
+                    totalSteps: this.totalSteps,
+                    stepID: this.currentStep && this.currentStep.id ? this.currentStep.id : '',
+                    loading: this.loading,
+                    saving: this.saving
+                });
+                this.nextStep();
+            });
             this.$stepContent.on('input change', '.js-bound-field', (event) => this.handleFieldChange(event));
+            this.$stepContent.on('click', '.js-pairing-start', (event) => this.startPairing(event));
+            this.$stepContent.on('click', '.js-pairing-cancel', (event) => this.cancelPairing(event));
+            this.$stepContent.on('click', '.js-pairing-refresh', (event) => this.refreshPairing(event));
             $('#wizard-close-btn').on('click', () => this.closeWizard());
             $('#wizard-apply-btn').on('click', () => this.applyAfterFinish());
         }
@@ -2032,6 +2846,7 @@
             this.setLoading(true);
             this.fieldErrors = {};
             try {
+                this.stopAllPairingPollers();
                 const resp = await fetch('/setup/api/wizard/step');
                 const data = await resp.json();
                 if (!data.success) throw new Error(data.message || 'Failed to load step');
@@ -2063,6 +2878,7 @@
             this.applyShowWhen(this.$stepContent, this.wizardData);
             this.enhanceAgentEmojiField();
             this.renderFieldErrors(this.$stepContent, this.fieldErrors);
+            this.initializePairingStep();
             this.renderReview();
             this.syncNav();
         }
@@ -2157,6 +2973,190 @@
         readNumericScale($field) {
             const raw = Number($field.data('scale'));
             return Number.isFinite(raw) && raw > 0 ? raw : 1;
+        }
+
+        initializePairingStep() {
+            if (!this.currentStep || this.currentStep.id !== 'pairing') {
+                return;
+            }
+            this.refreshAllPairings();
+        }
+
+        stopAllPairingPollers() {
+            Object.values(this.pairingPollers).forEach((timer) => {
+                if (timer) window.clearTimeout(timer);
+            });
+            this.pairingPollers = {};
+        }
+
+        async refreshAllPairings() {
+            const channels = [];
+            if (this.wizardData.TelegramEnabled) channels.push('telegram');
+            if (this.wizardData.WhatsAppEnabled) channels.push('whatsapp');
+            await Promise.all(channels.map((channel) => this.fetchPairingStatus(channel)));
+            this.syncNav();
+        }
+
+        async refreshPairing(event) {
+            const channel = $(event.currentTarget).closest('[data-pairing-channel]').data('pairing-channel');
+            if (!channel) return;
+            await this.fetchPairingStatus(channel);
+            this.syncNav();
+        }
+
+        async startPairing(event) {
+            const channel = $(event.currentTarget).closest('[data-pairing-channel]').data('pairing-channel');
+            if (!channel) return;
+            try {
+                const resp = await fetch(`/setup/api/wizard/pairing/${encodeURIComponent(channel)}/start`, { method: 'POST' });
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || `Failed to start ${channel} pairing`);
+                this.applyPairingStatus(channel, data.data || {});
+                this.schedulePairingPoll(channel, data.data || {});
+                this.syncNav();
+            } catch (err) {
+                showAlert(this.$errorAlert, err.message || `Failed to start ${channel} pairing`);
+            }
+        }
+
+        async cancelPairing(event) {
+            const channel = $(event.currentTarget).closest('[data-pairing-channel]').data('pairing-channel');
+            if (!channel) return;
+            try {
+                const resp = await fetch(`/setup/api/wizard/pairing/${encodeURIComponent(channel)}/cancel`, { method: 'POST' });
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || `Failed to cancel ${channel} pairing`);
+                this.applyPairingStatus(channel, data.data || {});
+                this.schedulePairingPoll(channel, data.data || {});
+                this.syncNav();
+            } catch (err) {
+                showAlert(this.$errorAlert, err.message || `Failed to cancel ${channel} pairing`);
+            }
+        }
+
+        async fetchPairingStatus(channel) {
+            try {
+                const resp = await fetch(`/setup/api/wizard/pairing/${encodeURIComponent(channel)}/status`);
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || `Failed to load ${channel} pairing status`);
+                this.applyPairingStatus(channel, data.data || {});
+                this.schedulePairingPoll(channel, data.data || {});
+            } catch (err) {
+                this.renderPairingError(channel, err.message || `Failed to load ${channel} pairing status`);
+            }
+        }
+
+        schedulePairingPoll(channel, status) {
+            if (this.pairingPollers[channel]) {
+                window.clearTimeout(this.pairingPollers[channel]);
+                delete this.pairingPollers[channel];
+            }
+            const state = status && status.state ? status.state : '';
+            if (['paired', 'expired', 'failed', 'cancelled', 'not_started'].includes(state)) {
+                return;
+            }
+            const delay = Number(status && status.pollAfterMs) > 0 ? Number(status.pollAfterMs) : 1500;
+            this.pairingPollers[channel] = window.setTimeout(() => this.fetchPairingStatus(channel), delay);
+        }
+
+        applyPairingStatus(channel, status) {
+            this.pairingStatus[channel] = status || {};
+            if (channel === 'telegram' && status && status.identity && status.identity.id) {
+                this.wizardData.UserTelegramID = status.identity.id;
+            }
+            if (channel === 'whatsapp' && status && status.identity && status.identity.id) {
+                this.wizardData.UserWhatsAppID = status.identity.id;
+            }
+            this.renderPairingStatus(channel, status || {});
+        }
+
+        renderPairingError(channel, message) {
+            const $card = this.$stepContent.find(`[data-pairing-channel="${channel}"]`);
+            if (!$card.length) return;
+            $card.find('.js-pairing-badge').attr('class', 'badge text-bg-danger js-pairing-badge').text('Error');
+            $card.find('.js-pairing-message').text(message || 'Pairing failed.');
+        }
+
+        renderPairingStatus(channel, status) {
+            const $card = this.$stepContent.find(`[data-pairing-channel="${channel}"]`);
+            if (!$card.length) return;
+
+            const state = String(status.state || 'not_started');
+            const badge = $card.find('.js-pairing-badge');
+            const message = $card.find('.js-pairing-message');
+            const artifact = $card.find('.js-pairing-artifact');
+            const identity = $card.find('.js-pairing-identity');
+            const startBtn = $card.find('.js-pairing-start');
+            const cancelBtn = $card.find('.js-pairing-cancel');
+
+            const badgeMap = {
+                not_started: ['text-bg-secondary', 'Not started'],
+                waiting: ['text-bg-warning', 'Waiting'],
+                paired: ['text-bg-success', 'Paired'],
+                expired: ['text-bg-danger', 'Expired'],
+                failed: ['text-bg-danger', 'Failed'],
+                cancelled: ['text-bg-secondary', 'Cancelled']
+            };
+            const badgeInfo = badgeMap[state] || badgeMap.not_started;
+            badge.attr('class', `badge ${badgeInfo[0]} js-pairing-badge`).text(badgeInfo[1]);
+            message.text(status.message || `${channel} pairing has not started yet.`);
+
+            startBtn.text(state === 'paired' ? 'Restart Pairing' : 'Start Pairing');
+            cancelBtn.toggleClass('d-none', state !== 'waiting');
+
+            this.renderPairingArtifact(channel, artifact, status);
+            this.renderPairingIdentity(identity, channel, status);
+        }
+
+        renderPairingArtifact(channel, $artifact, status) {
+            const artifacts = status && status.artifacts ? status.artifacts : {};
+            if (channel === 'telegram' && artifacts.code) {
+                $artifact.removeClass('d-none').html(`
+                    <div class="fw-semibold mb-1">One-time code</div>
+                    <code class="fs-5">${escapeHtml(artifacts.code)}</code>
+                    <div class="small text-muted mt-1">Send this exact code to the Telegram bot from the owner account.</div>
+                `);
+                return;
+            }
+            if (channel === 'whatsapp' && artifacts.qrCode) {
+                $artifact.removeClass('d-none').html(`
+                    <div class="fw-semibold mb-2">Scan this QR code</div>
+                    <div class="bg-white rounded p-3 d-inline-block js-whatsapp-qr"></div>
+                    <div class="small text-muted mt-2">${escapeHtml(artifacts.qrLabel || '')}</div>
+                `);
+                const container = $artifact.find('.js-whatsapp-qr').get(0);
+                if (container && typeof window.QRCode !== 'undefined') {
+                    container.innerHTML = '';
+                    // eslint-disable-next-line no-new
+                    new window.QRCode(container, {
+                        text: artifacts.qrCode,
+                        width: 220,
+                        height: 220
+                    });
+                }
+                return;
+            }
+            $artifact.addClass('d-none').empty();
+        }
+
+        renderPairingIdentity($identity, channel, status) {
+            const identity = status && status.identity ? status.identity : null;
+            const staged = channel === 'telegram' ? this.wizardData.UserTelegramID : this.wizardData.UserWhatsAppID;
+            if (identity) {
+                if (channel === 'telegram') {
+                    const parts = [identity.displayName, identity.username ? `@${identity.username}` : '', identity.id].filter(Boolean);
+                    $identity.text(`Paired owner: ${parts.join(' · ')}`);
+                } else {
+                    const parts = [identity.phone, identity.jid || identity.id].filter(Boolean);
+                    $identity.text(`Paired owner: ${parts.join(' · ')}`);
+                }
+                return;
+            }
+            if (staged) {
+                $identity.text(`Currently staged owner ID: ${staged}`);
+                return;
+            }
+            $identity.text('');
         }
 
         enhanceAgentEmojiField() {
@@ -2317,38 +3317,230 @@
                         <tr><th>HTTP Server</th><td>${escapeHtml(this.wizardData.HTTPEnabled ? this.wizardData.HTTPListen : 'Disabled')}</td></tr>
                         <tr><th>Telegram</th><td>${escapeHtml(this.wizardData.TelegramEnabled ? 'Enabled' : 'Disabled')}</td></tr>
                         <tr><th>WhatsApp</th><td>${escapeHtml(this.wizardData.WhatsAppEnabled ? 'Enabled' : 'Disabled')}</td></tr>
-                        <tr><th>LLM Provider</th><td>${escapeHtml(this.wizardData.LLMProviderID || 'Not configured')}</td></tr>
-                        <tr><th>Voice LLM</th><td>${escapeHtml(this.wizardData.VoiceLLMEnabled ? `Enabled (${this.wizardData.VoiceLLMVoice || ''})` : 'Disabled')}</td></tr>
+                        <tr><th>Security</th><td>${escapeHtml(this.reviewSecuritySummary())}</td></tr>
+                        <tr><th>LLM</th><td>${escapeHtml(this.reviewLLMSummary())}</td></tr>
+                        <tr><th>Voice LLM</th><td>${escapeHtml(this.reviewVoiceSummary())}</td></tr>
+                        <tr><th>Speech-to-Text</th><td>${escapeHtml(this.reviewSTTSummary())}</td></tr>
                     </tbody>
                 </table>
             `);
         }
 
+        reviewSecuritySummary() {
+            const preset = String(this.wizardData.SandboxPreset || 'assistant').toLowerCase();
+            if (preset === 'permissive') {
+                return 'Permissive - least restricted, best flexibility';
+            }
+            if (preset === 'hardened') {
+                return 'Hardened - stronger protection with reduced capability';
+            }
+            if (preset === 'custom') {
+                return 'Custom - advanced manually selected security settings';
+            }
+            return 'Assistant - balanced protection for normal use';
+        }
+
+        reviewLLMSummary() {
+            if (!this.wizardData || this.wizardData.LLMSkipped || !this.wizardData.LLMProviderID) {
+                return 'Not configured';
+            }
+            const provider = this.wizardData.LLMProviderName || this.wizardData.LLMProviderID;
+            const model = this.wizardData.LLMModel || '';
+            return model ? `${provider} - ${model}` : provider;
+        }
+
+        reviewVoiceSummary() {
+            if (!this.wizardData || !this.wizardData.VoiceLLMEnabled) {
+                return 'Disabled';
+            }
+            return this.wizardData.VoiceLLMVoice ? `Enabled (${this.wizardData.VoiceLLMVoice})` : 'Enabled';
+        }
+
+        reviewSTTSummary() {
+            if (!this.wizardData || !this.wizardData.STTEnabled) {
+                return 'Disabled';
+            }
+            return this.wizardData.STTModel ? `Enabled (${this.wizardData.STTModel})` : 'Enabled';
+        }
+
         syncNav() {
             this.$prev.prop('disabled', this.step <= 1 || this.loading || this.saving);
-            const blockedByConsent = this.isCurrentStepBlockedByConsent();
-            this.$next.prop('disabled', this.loading || this.saving || blockedByConsent);
+            const blocker = this.getCurrentStepBlocker();
+            const hardDisabled = this.loading || this.saving;
+            this.$next.prop('disabled', hardDisabled);
+            this.$next.toggleClass('wizard-soft-disabled', !hardDisabled && !!blocker);
+            this.$next.attr('aria-disabled', !hardDisabled && blocker ? 'true' : 'false');
+            this.$next.attr('title', blocker && !hardDisabled ? blocker.reason : '');
             this.$nextLabel.text(this.step === this.totalSteps ? 'Finish' : 'Next');
             this.$nextIcon.attr('class', `bi ${this.step === this.totalSteps ? 'bi-check-lg' : 'bi-arrow-right'}`);
             this.$nextSpinner.toggleClass('d-none', !this.saving);
+            this.renderStepStatusNote(blocker);
         }
 
-        isCurrentStepBlockedByConsent() {
-            if (!this.currentStep || this.currentStep.id !== 'security') {
-                return false;
+        renderStepStatusNote(blocker) {
+            if (!this.currentStep) {
+                this.$statusNote.addClass('d-none');
+                this.$statusNoteBody.attr('class', 'text-success');
+                this.$statusNoteIcon.attr('class', 'bi bi-check2-circle me-1');
+                this.$statusNoteText.text('');
+                return;
             }
 
+            if (blocker) {
+                this.$statusNote.removeClass('d-none');
+                this.$statusNoteBody.attr('class', 'text-warning');
+                this.$statusNoteIcon.attr('class', 'bi bi-exclamation-triangle me-1');
+                this.$statusNoteText.text(blocker.reason || 'Complete the required step before continuing.');
+                return;
+            }
+
+            if (this.currentStep.id === 'pairing') {
+                this.$statusNote.removeClass('d-none');
+                this.$statusNoteBody.attr('class', 'text-success');
+                this.$statusNoteIcon.attr('class', 'bi bi-check2-circle me-1');
+                this.$statusNoteText.text('All required channels are paired. You can continue.');
+                return;
+            }
+
+            this.$statusNote.addClass('d-none');
+            this.$statusNoteBody.attr('class', 'text-success');
+            this.$statusNoteIcon.attr('class', 'bi bi-check2-circle me-1');
+            this.$statusNoteText.text('');
+        }
+
+        getCurrentStepBlocker() {
+            if (!this.currentStep) {
+                return null;
+            }
+            if (this.currentStep.id === 'security') {
+                return this.getConsentBlocker();
+            }
+            if (this.currentStep.id === 'pairing') {
+                return this.getPairingBlocker();
+            }
+            return null;
+        }
+
+        getConsentBlocker() {
             const preset = (this.wizardData.SandboxPreset || 'assistant').toLowerCase();
-            if (preset === 'permissive') {
-                return !this.wizardData.SandboxConsentPermissive;
-            }
-            if (preset === 'hardened') {
-                return !this.wizardData.SandboxConsentHardened;
-            }
             if (preset === 'custom') {
-                return false;
+                return null;
             }
-            return !this.wizardData.SandboxConsentAssistant;
+
+            if (preset === 'permissive' && !this.wizardData.SandboxConsentPermissive) {
+                return {
+                    reason: 'You must acknowledge the permissive security warning before continuing.',
+                    targetPath: 'SandboxConsentPermissive'
+                };
+            }
+            if (preset === 'hardened' && !this.wizardData.SandboxConsentHardened) {
+                return {
+                    reason: 'You must acknowledge the hardened security note before continuing.',
+                    targetPath: 'SandboxConsentHardened'
+                };
+            }
+            if (preset !== 'permissive' && preset !== 'hardened' && !this.wizardData.SandboxConsentAssistant) {
+                return {
+                    reason: 'You must acknowledge the assistant security guidance before continuing.',
+                    targetPath: 'SandboxConsentAssistant'
+                };
+            }
+            return null;
+        }
+
+        getPairingBlocker() {
+            if (this.wizardData.TelegramEnabled && !this.wizardData.UserTelegramID) {
+                return {
+                    reason: 'Complete Telegram pairing before continuing.',
+                    channel: 'telegram'
+                };
+            }
+            if (this.wizardData.WhatsAppEnabled && !this.wizardData.UserWhatsAppID) {
+                return {
+                    reason: 'Complete WhatsApp pairing before continuing.',
+                    channel: 'whatsapp'
+                };
+            }
+            return null;
+        }
+
+        focusBlockedStep(blocker) {
+            if (!blocker) {
+                return;
+            }
+            console.debug('[setup wizard] focusBlockedStep', blocker);
+            this.renderStepStatusNote(blocker);
+            this.ensureWizardInteractionStyles();
+            const $target = this.findBlockedTarget(blocker);
+            console.debug('[setup wizard] focusBlockedStep target', {
+                count: $target.length,
+                className: $target.length ? ($target.attr('class') || '') : '',
+                bind: blocker.targetPath || '',
+                channel: blocker.channel || ''
+            });
+            if (!$target.length) {
+                console.warn('[setup wizard] blocked step target not found', blocker);
+                return;
+            }
+            const node = $target.get(0);
+            if (node && typeof node.scrollIntoView === 'function') {
+                node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                console.debug('[setup wizard] scrolled blocked target into view');
+            }
+            $target.addClass('wizard-blocked-focus');
+            console.debug('[setup wizard] applied wizard-blocked-focus class');
+            window.setTimeout(() => $target.removeClass('wizard-blocked-focus'), 650);
+        }
+
+        findBlockedTarget(blocker) {
+            if (!blocker) {
+                return $();
+            }
+            if (blocker.targetPath) {
+                const $field = this.$stepContent.find(`.js-bound-field[data-bind="${blocker.targetPath}"]`).first();
+                if ($field.length) {
+                    return $field.closest('.js-field');
+                }
+            }
+            if (blocker.channel) {
+                return this.$stepContent.find(`[data-pairing-channel="${blocker.channel}"]`).first();
+            }
+            return $();
+        }
+
+        ensureWizardInteractionStyles() {
+            if (document.getElementById('wizard-interaction-style')) {
+                console.debug('[setup wizard] interaction styles already installed');
+                return;
+            }
+            const style = document.createElement('style');
+            style.id = 'wizard-interaction-style';
+            style.textContent = `
+                .wizard-soft-disabled {
+                    opacity: 0.65;
+                    filter: saturate(0.75);
+                }
+                .wizard-blocked-focus {
+                    animation: wizard-blocked-shake 420ms ease-in-out 1, wizard-blocked-flash 700ms ease-out 1;
+                    box-shadow: 0 0 0 3px rgba(255, 193, 7, 0.28);
+                    border-radius: 10px;
+                    background: rgba(255, 193, 7, 0.18);
+                }
+                @keyframes wizard-blocked-shake {
+                    0%, 100% { transform: translateX(0); }
+                    15% { transform: translateX(-10px); }
+                    30% { transform: translateX(10px); }
+                    45% { transform: translateX(-8px); }
+                    60% { transform: translateX(8px); }
+                    75% { transform: translateX(-4px); }
+                }
+                @keyframes wizard-blocked-flash {
+                    0% { background: rgba(255, 193, 7, 0.30); }
+                    100% { background: rgba(255, 193, 7, 0.12); }
+                }
+            `;
+            document.head.appendChild(style);
+            console.debug('[setup wizard] installed interaction styles');
         }
 
         setLoading(isLoading) {
@@ -2377,6 +3569,12 @@
         async nextStep() {
             showAlert(this.$errorAlert, '');
             this.fieldErrors = {};
+            const blocker = this.getCurrentStepBlocker();
+            console.debug('[setup wizard] nextStep blocker check', blocker);
+            if (blocker && !this.loading && !this.saving) {
+                this.focusBlockedStep(blocker);
+                return;
+            }
 
             if (this.step === this.totalSteps) {
                 await this.finish();

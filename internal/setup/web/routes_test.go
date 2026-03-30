@@ -69,4 +69,13 @@ func TestMountSetupServesStaticAssets(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected setup static asset 200, got %d", rec.Code)
 	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store, no-cache, must-revalidate" {
+		t.Fatalf("expected cache-control header to disable caching, got %q", got)
+	}
+	if got := rec.Header().Get("Pragma"); got != "no-cache" {
+		t.Fatalf("expected pragma no-cache header, got %q", got)
+	}
+	if got := rec.Header().Get("Expires"); got != "0" {
+		t.Fatalf("expected expires header 0, got %q", got)
+	}
 }

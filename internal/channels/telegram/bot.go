@@ -406,6 +406,10 @@ func (b *Bot) handleMessage(c tele.Context) error {
 		return nil
 	}
 
+	if tryHandlePairingMessage(b.config.BotToken, sender, c.Text()) {
+		return c.Send("Pairing successful. Return to GoClaw setup to continue.")
+	}
+
 	// Look up user by Telegram identity
 	logging.L_debug("telegram: looking up user", "provider", "telegram", "userID", userID)
 	u := b.users.FromIdentity("telegram", userID)
@@ -1109,6 +1113,7 @@ func (b *Bot) Start(ctx context.Context) error {
 	b.running = true
 	b.startedAt = time.Now()
 	b.lastError = nil
+	registerRuntimePairingBot(b)
 	return nil
 }
 
@@ -1145,6 +1150,7 @@ func (b *Bot) Stop() error {
 		bus.UnsubscribeEvent(sub)
 	}
 	b.delegatedSubs = nil
+	unregisterRuntimePairingBot(b)
 	b.cancel()
 	b.bot.Stop()
 

@@ -317,6 +317,8 @@ See [LLM Providers](llm-providers.md) for full configuration details.
 
 The setup wizard (`goclaw setup`) can detect `TELEGRAM_BOT_TOKEN` from your environment and offer to use it.
 
+When Telegram is enabled in `goclaw setup`, the browser and TUI setup flows now include an owner-pairing step. GoClaw shows a one-time code and waits for the owner to send that exact code to the bot. The resolved Telegram user ID is staged in setup state and written to `users.json` only when you finish the wizard or save changes from setup edit mode.
+
 ### WhatsApp Settings
 
 ```json
@@ -329,7 +331,7 @@ The setup wizard (`goclaw setup`) can detect `TELEGRAM_BOT_TOKEN` from your envi
 }
 ```
 
-WhatsApp uses the linked device protocol (no business API required). On first run, scan the QR code with your phone to link. Session persists in `~/.goclaw/whatsapp/`.
+WhatsApp uses the linked device protocol (no business API required). The setup wizard and setup editor can now drive this directly with a live QR pairing flow in both the browser and TUI. The linked owner JID/phone is staged in setup state and written to `users.json` only when you finish the wizard or save changes from setup edit mode.
 
 ### HTTP Settings
 

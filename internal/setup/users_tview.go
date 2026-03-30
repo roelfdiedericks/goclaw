@@ -72,6 +72,7 @@ func (e *UserEditorTview) showMainMenu() {
 			forms.MenuItem{Label: "Edit user", OnSelect: e.editUser},
 			forms.MenuItem{Label: "Delete user", OnSelect: e.deleteUser},
 			forms.MenuItem{Label: "Set Telegram ID", OnSelect: e.setTelegramID},
+			forms.MenuItem{Label: "Set WhatsApp ID", OnSelect: e.setWhatsAppID},
 			forms.MenuItem{Label: "Set HTTP password", OnSelect: e.setPassword},
 		)
 	}
@@ -117,7 +118,7 @@ func (e *UserEditorTview) addUser() {
 	e.app.SetBreadcrumbs([]string{"User Management", "Add User"})
 	e.app.SetStatusText("Fill in user details")
 
-	var username, displayName, telegramID string
+	var username, displayName, telegramID, whatsappID string
 	var roleIndex int
 
 	form := tview.NewForm()
@@ -132,6 +133,9 @@ func (e *UserEditorTview) addUser() {
 	})
 	form.AddInputField("Telegram ID (optional)", "", 20, nil, func(text string) {
 		telegramID = text
+	})
+	form.AddInputField("WhatsApp ID (optional)", "", 24, nil, func(text string) {
+		whatsappID = text
 	})
 
 	form.AddButton("Save", func() {
@@ -159,6 +163,7 @@ func (e *UserEditorTview) addUser() {
 			Name:       displayName,
 			Role:       role,
 			TelegramID: telegramID,
+			WhatsAppID: whatsappID,
 		}
 		e.modified = true
 		L_info("users: added user", "username", username, "role", role)
@@ -189,6 +194,7 @@ func (e *UserEditorTview) editUser() {
 
 		displayName := entry.Name
 		telegramID := entry.TelegramID
+		whatsappID := entry.WhatsAppID
 		roleIndex := 0
 		if entry.Role == "owner" {
 			roleIndex = 1
@@ -203,6 +209,9 @@ func (e *UserEditorTview) editUser() {
 		})
 		form.AddInputField("Telegram ID", telegramID, 20, nil, func(text string) {
 			telegramID = text
+		})
+		form.AddInputField("WhatsApp ID", whatsappID, 24, nil, func(text string) {
+			whatsappID = text
 		})
 
 		form.AddButton("Save", func() {
@@ -222,6 +231,10 @@ func (e *UserEditorTview) editUser() {
 			}
 			if telegramID != entry.TelegramID {
 				entry.TelegramID = telegramID
+				changed = true
+			}
+			if whatsappID != entry.WhatsAppID {
+				entry.WhatsAppID = whatsappID
 				changed = true
 			}
 
@@ -320,6 +333,48 @@ func (e *UserEditorTview) setTelegramID() {
 		})
 
 		form.SetBorder(true).SetTitle(fmt.Sprintf(" Telegram ID: %s ", username)).SetTitleAlign(tview.AlignLeft)
+		e.app.SetContent(form)
+		e.app.App().SetFocus(form)
+	})
+}
+
+// setWhatsAppID shows the set WhatsApp ID form
+func (e *UserEditorTview) setWhatsAppID() {
+	e.selectUser("Select user", func(username string) {
+		if username == "" {
+			e.showMainMenu()
+			return
+		}
+
+		entry := e.users[username]
+		e.app.SetBreadcrumbs([]string{"User Management", "WhatsApp ID", username})
+		e.app.SetStatusText("Set or clear WhatsApp ID")
+
+		whatsappID := entry.WhatsAppID
+
+		form := tview.NewForm()
+		form.AddInputField("WhatsApp ID", whatsappID, 24, nil, func(text string) {
+			whatsappID = text
+		})
+
+		form.AddButton("Save", func() {
+			if whatsappID != entry.WhatsAppID {
+				entry.WhatsAppID = whatsappID
+				e.modified = true
+				if whatsappID == "" {
+					e.app.SetStatusText(fmt.Sprintf("WhatsApp ID cleared for '%s'", username))
+				} else {
+					e.app.SetStatusText(fmt.Sprintf("WhatsApp ID set for '%s'", username))
+				}
+			}
+			e.showMainMenu()
+		})
+
+		form.AddButton("Cancel", func() {
+			e.showMainMenu()
+		})
+
+		form.SetBorder(true).SetTitle(fmt.Sprintf(" WhatsApp ID: %s ", username)).SetTitleAlign(tview.AlignLeft)
 		e.app.SetContent(form)
 		e.app.App().SetFocus(form)
 	})

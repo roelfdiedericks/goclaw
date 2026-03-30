@@ -26,46 +26,71 @@
             --chat-composer-reserve: 7.5rem;
         }
         body.chat-page {
-            overflow-x: hidden;
+            overflow: hidden;
+            height: 100vh;
         }
         main.chat-page-shell {
-            display: block;
-            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 56px);
+            min-height: calc(100vh - 56px);
+            overflow: hidden;
         }
         body.chat-page .chat-root {
-            padding-bottom: var(--chat-composer-reserve);
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 auto;
+            min-height: 0;
+            padding-bottom: 0;
             box-sizing: border-box;
+            overflow: hidden;
+        }
+        body.chat-page .chat-page-row,
+        body.chat-page .chat-page-row > div {
+            display: flex;
+            flex: 1 1 auto;
+            min-height: 0;
         }
         body.chat-page .chat-page-card {
             --bs-card-border-width: 0;
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 auto;
+            min-height: 0;
             border: 0;
             box-shadow: none;
             background: transparent;
-            overflow: visible;
+            overflow: hidden;
         }
         body.chat-page .chat-page-card > .card-header {
-            position: sticky;
-            top: 56px;
-            z-index: 1015;
+            position: static;
+            flex: 0 0 auto;
             background-color: var(--bs-body-bg, #fff);
             border: none;
             border-bottom: 1px solid var(--bs-border-color, #dee2e6);
             border-radius: 0;
         }
         body.chat-page .chat-page-card > .card-body.chat-container {
+            flex: 1 1 auto;
             height: auto !important;
-            overflow: visible !important;
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
             min-height: 0;
             padding-top: 1rem;
             padding-bottom: 0.5rem;
         }
+        body.chat-page .chat-page-card > .card-body.chat-container.initial-history-anchor {
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
+            scrollbar-gutter: stable;
+        }
         body.chat-page .chat-composer-bar {
             --bs-card-cap-bg: var(--bs-body-bg);
-            position: fixed;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            z-index: 1020;
+            position: static;
+            flex: 0 0 auto;
             background-color: var(--bs-body-bg, #fff);
             border: none;
             box-shadow: none;

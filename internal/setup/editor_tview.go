@@ -3,11 +3,17 @@ package setup
 
 import (
 	"fmt"
+	"strings"
 
+	"github.com/rivo/tview"
 	"github.com/roelfdiedericks/goclaw/internal/auth"
+	"github.com/roelfdiedericks/goclaw/internal/bus"
 	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
+	telegrampairing "github.com/roelfdiedericks/goclaw/internal/channels/telegram"
 	telegramconfig "github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
 	tuiconfig "github.com/roelfdiedericks/goclaw/internal/channels/tui/config"
+	whatsapppairing "github.com/roelfdiedericks/goclaw/internal/channels/whatsapp"
+	whatsappconfig "github.com/roelfdiedericks/goclaw/internal/channels/whatsapp/config"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
@@ -19,10 +25,12 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 	"github.com/roelfdiedericks/goclaw/internal/session"
+	setuppairing "github.com/roelfdiedericks/goclaw/internal/setup/pairing"
 	"github.com/roelfdiedericks/goclaw/internal/skills"
 	"github.com/roelfdiedericks/goclaw/internal/stt"
 	toolsconfig "github.com/roelfdiedericks/goclaw/internal/tools/config"
 	"github.com/roelfdiedericks/goclaw/internal/transcript"
+	"github.com/roelfdiedericks/goclaw/internal/user"
 	"github.com/roelfdiedericks/goclaw/internal/voicellm"
 )
 
@@ -33,12 +41,14 @@ type EditorTview struct {
 	cfg             *config.Config
 	dirty           bool // tracks if config has been modified
 	chainUserEditor bool // when true, Run() launches user editor then re-enters
+	pendingOwnerIDs map[string]string
 }
 
 // NewEditorTview creates a new tview editor
 func NewEditorTview(configPath string) *EditorTview {
 	return &EditorTview{
-		configPath: configPath,
+		configPath:      configPath,
+		pendingOwnerIDs: make(map[string]string),
 	}
 }
 
@@ -65,6 +75,8 @@ func (e *EditorTview) Run() error {
 	stt.RegisterCommands()
 	voicellm.RegisterCommands()
 	toolsconfig.RegisterCommands()
+	telegrampairing.RegisterPairingCommands()
+	whatsapppairing.RegisterPairingCommands()
 
 	for {
 		// Create UI
@@ -122,6 +134,9 @@ func (e *EditorTview) createMenu() *forms.MenuListResult {
 		{Label: "Session Management", OnSelect: e.editSession},
 		{IsSeparator: true, Label: "Channels"},
 		{Label: "Telegram Bot", OnSelect: e.editTelegram},
+		{Label: "Telegram Pair Owner", OnSelect: e.pairTelegramOwner},
+		{Label: "WhatsApp", OnSelect: e.editWhatsApp},
+		{Label: "WhatsApp Pair Owner", OnSelect: e.pairWhatsAppOwner},
 		{Label: "HTTP Server", OnSelect: e.editHTTP},
 		{IsSeparator: true, Label: "Services"},
 		{Label: "Transcript Indexing", OnSelect: e.editTranscript},
@@ -260,6 +275,149 @@ func (e *EditorTview) editTelegram() {
 
 	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Telegram"})
 	e.app.SetFormContent(content)
+}
+
+func (e *EditorTview) editWhatsApp() {
+	L_info("editor: opening whatsapp config")
+
+	whatsAppCfg := e.cfg.Channels.WhatsApp
+	formDef := whatsappconfig.ConfigFormDef()
+
+	content, err := forms.BuildFormContent(formDef, &whatsAppCfg, "channels.whatsapp", func(result forms.TviewResult) {
+		if result == forms.ResultAccepted {
+			e.cfg.Channels.WhatsApp = whatsAppCfg
+			e.dirty = true
+			L_info("editor: whatsapp config updated")
+		} else {
+			L_info("editor: whatsapp config cancelled")
+		}
+		e.showMainMenu()
+	}, e.app.App())
+	if err != nil {
+		L_error("editor: whatsapp form error", "error", err)
+		return
+	}
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "WhatsApp"})
+	e.app.SetFormContent(content)
+}
+
+func (e *EditorTview) pairTelegramOwner() {
+	e.showPairingScreen(
+		"Telegram Pairing",
+		func() bus.CommandResult {
+			return bus.SendCommandWithSource("telegram.pairing", "start", setuppairing.TelegramStartRequest{
+				StartRequest: setuppairing.StartRequest{
+					BaseRequest: setuppairing.BaseRequest{
+						SessionID: "tui-editor-telegram",
+						Surface:   "tui-editor",
+					},
+				},
+				BotToken: e.cfg.Channels.Telegram.BotToken,
+			}, "tui", "")
+		},
+		func() setuppairing.Status {
+			res := bus.SendCommandWithSource("telegram.pairing", "status", setuppairing.StatusRequest{
+				BaseRequest: setuppairing.BaseRequest{
+					SessionID: "tui-editor-telegram",
+					Surface:   "tui-editor",
+				},
+			}, "tui", "")
+			return extractPairingStatus(res.Data, "telegram", "tui-editor-telegram")
+		},
+		func(status setuppairing.Status) string {
+			lines := []string{fmt.Sprintf("State: %s", status.State), status.Message}
+			if status.Artifacts != nil && status.Artifacts.Code != "" {
+				lines = append(lines, "", fmt.Sprintf("One-time code: %s", status.Artifacts.Code))
+			}
+			if status.Identity != nil {
+				lines = append(lines, "", fmt.Sprintf("Paired owner: %s %s %s", status.Identity.DisplayName, status.Identity.Username, status.Identity.ID))
+			}
+			return strings.Join(lines, "\n")
+		},
+		func(status setuppairing.Status) {
+			if status.Identity != nil && status.Identity.ID != "" {
+				e.pendingOwnerIDs["telegram"] = status.Identity.ID
+				e.dirty = true
+				e.app.SetStatusText("Staged Telegram owner ID for save")
+			}
+		},
+	)
+}
+
+func (e *EditorTview) pairWhatsAppOwner() {
+	e.showPairingScreen(
+		"WhatsApp Pairing",
+		func() bus.CommandResult {
+			return bus.SendCommandWithSource("whatsapp.pairing", "start", setuppairing.WhatsAppStartRequest{
+				StartRequest: setuppairing.StartRequest{
+					BaseRequest: setuppairing.BaseRequest{
+						SessionID: "tui-editor-whatsapp",
+						Surface:   "tui-editor",
+					},
+				},
+			}, "tui", "")
+		},
+		func() setuppairing.Status {
+			res := bus.SendCommandWithSource("whatsapp.pairing", "status", setuppairing.StatusRequest{
+				BaseRequest: setuppairing.BaseRequest{
+					SessionID: "tui-editor-whatsapp",
+					Surface:   "tui-editor",
+				},
+			}, "tui", "")
+			return extractPairingStatus(res.Data, "whatsapp", "tui-editor-whatsapp")
+		},
+		func(status setuppairing.Status) string {
+			lines := []string{fmt.Sprintf("State: %s", status.State), status.Message}
+			if status.Artifacts != nil && status.Artifacts.QRCode != "" {
+				lines = append(lines, "", renderPairingQRCode(status.Artifacts.QRCode))
+			}
+			if status.Identity != nil {
+				lines = append(lines, "", fmt.Sprintf("Paired owner: %s %s", status.Identity.Phone, status.Identity.JID))
+			}
+			return strings.Join(lines, "\n")
+		},
+		func(status setuppairing.Status) {
+			if status.Identity != nil && status.Identity.ID != "" {
+				e.pendingOwnerIDs["whatsapp"] = status.Identity.ID
+				e.dirty = true
+				e.app.SetStatusText("Staged WhatsApp owner ID for save")
+			}
+		},
+	)
+}
+
+func (e *EditorTview) showPairingScreen(title string, start func() bus.CommandResult, statusFn func() setuppairing.Status, render func(setuppairing.Status) string, stage func(setuppairing.Status)) {
+	statusView := tview.NewTextView().SetDynamicColors(true).SetWrap(true)
+	statusView.SetBorder(true).SetTitle(" Pairing Status ").SetTitleAlign(tview.AlignLeft)
+
+	refresh := func() {
+		status := statusFn()
+		stage(status)
+		statusView.SetText(render(status))
+	}
+
+	buttons := tview.NewForm()
+	buttons.SetBorder(false)
+	buttons.AddButton("Start / Restart", func() {
+		res := start()
+		if res.Error != nil {
+			e.app.SetStatusText(res.Message)
+			return
+		}
+		refresh()
+	})
+	buttons.AddButton("Refresh", refresh)
+	buttons.AddButton("Back", e.showMainMenu)
+
+	refresh()
+
+	layout := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(buttons, 3, 0, true).
+		AddItem(statusView, 0, 1, false)
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", title})
+	e.app.SetContent(layout)
 }
 
 // editHTTP opens the HTTP server configuration form
@@ -606,10 +764,46 @@ func (e *EditorTview) saveConfig() {
 		return
 	}
 
+	if err := e.savePendingOwnerPairings(savePath); err != nil {
+		L_error("editor: failed to save owner pairings", "error", err)
+		e.app.SetStatusText("Error: failed to save owner pairing identities")
+		return
+	}
+
 	e.dirty = false
 	e.configPath = savePath
 	L_info("editor: config saved", "path", savePath)
 	e.app.SetStatusText("Saved to " + savePath)
+}
+
+func (e *EditorTview) savePendingOwnerPairings(configPath string) error {
+	if len(e.pendingOwnerIDs) == 0 {
+		return nil
+	}
+	usersPath := user.GetUsersFilePathForConfig(configPath)
+	usersCfg, err := user.LoadUsersFromPath(usersPath)
+	if err != nil {
+		return err
+	}
+	ownerUsername := usersCfg.GetOwner()
+	if ownerUsername == "" {
+		return fmt.Errorf("no owner user found in users.json")
+	}
+	owner := usersCfg[ownerUsername]
+	if owner == nil {
+		return fmt.Errorf("owner user entry missing")
+	}
+	if telegramID := strings.TrimSpace(e.pendingOwnerIDs["telegram"]); telegramID != "" {
+		owner.TelegramID = telegramID
+	}
+	if whatsappID := strings.TrimSpace(e.pendingOwnerIDs["whatsapp"]); whatsappID != "" {
+		owner.WhatsAppID = whatsappID
+	}
+	if err := config.BackupAndWriteJSON(usersPath, usersCfg, config.DefaultBackupCount); err != nil {
+		return err
+	}
+	e.pendingOwnerIDs = make(map[string]string)
+	return nil
 }
 
 // showBackups displays available config backups and allows restoration

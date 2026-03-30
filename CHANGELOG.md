@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- setup: add Telegram/WhatsApp owner pairing flows across the browser wizard, browser editor, TUI wizard, and TUI editor with staged owner identity saves
+- channels: add shared setup pairing contracts plus channel-owned Telegram OTP and WhatsApp QR pairing backends
 
 
 

@@ -140,6 +140,58 @@ func TestDetectSandboxPresetReturnsCustomForManualBlend(t *testing.T) {
 	}
 }
 
+func TestApplyOpenClawImportRestoresBaseStateWhenDisabled(t *testing.T) {
+	data := NewWizardData()
+	data.WorkspacePath = "/home/openclaw/.goclaw/workspace"
+	data.TelegramEnabled = false
+	data.TelegramToken = "goclaw-token"
+	data.UserTelegramID = "base-id"
+	data.captureBaseImportState()
+
+	data.openClawImportState = wizardImportState{
+		WorkspacePath:   "/home/openclaw/.openclaw/workspace",
+		TelegramEnabled: true,
+		TelegramToken:   "openclaw-token",
+		UserTelegramID:  "openclaw-id",
+	}
+
+	data.ApplyOpenClawImport(true)
+	if data.WorkspacePath != "/home/openclaw/.openclaw/workspace" || data.TelegramToken != "openclaw-token" || !data.TelegramEnabled || data.UserTelegramID != "openclaw-id" {
+		t.Fatalf("expected OpenClaw values to be applied, got %+v", data)
+	}
+
+	data.ApplyOpenClawImport(false)
+	if data.WorkspacePath != "/home/openclaw/.goclaw/workspace" {
+		t.Fatalf("expected base workspace restored, got %q", data.WorkspacePath)
+	}
+	if data.TelegramEnabled {
+		t.Fatalf("expected base telegram enabled to be restored")
+	}
+	if data.TelegramToken != "goclaw-token" {
+		t.Fatalf("expected base telegram token restored, got %q", data.TelegramToken)
+	}
+	if data.UserTelegramID != "base-id" {
+		t.Fatalf("expected base telegram user restored, got %q", data.UserTelegramID)
+	}
+}
+
+func TestResetPairingStageRestoresInitialOwnerIDs(t *testing.T) {
+	data := NewWizardData()
+	data.InitialUserTelegramID = "initial-telegram"
+	data.InitialUserWhatsAppID = "initial-whatsapp"
+	data.UserTelegramID = "new-telegram"
+	data.UserWhatsAppID = "new-whatsapp"
+
+	data.ResetPairingStage()
+
+	if data.UserTelegramID != "initial-telegram" {
+		t.Fatalf("expected telegram owner restored, got %q", data.UserTelegramID)
+	}
+	if data.UserWhatsAppID != "initial-whatsapp" {
+		t.Fatalf("expected whatsapp owner restored, got %q", data.UserWhatsAppID)
+	}
+}
+
 func getBool(cfg map[string]interface{}, path string) bool {
 	val, _ := getPath(cfg, path)
 	b, _ := val.(bool)

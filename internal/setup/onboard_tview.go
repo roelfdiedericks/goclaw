@@ -2,6 +2,7 @@
 package setup
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,7 +10,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/mdp/qrterminal/v3"
 	"github.com/rivo/tview"
+	"github.com/roelfdiedericks/goclaw/internal/bus"
+	telegrampairing "github.com/roelfdiedericks/goclaw/internal/channels/telegram"
+	whatsapppairing "github.com/roelfdiedericks/goclaw/internal/channels/whatsapp"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
@@ -17,6 +22,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
+	setuppairing "github.com/roelfdiedericks/goclaw/internal/setup/pairing"
 	"github.com/roelfdiedericks/goclaw/internal/stt"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -65,13 +71,16 @@ type WizardData struct {
 	AgentTyping string
 
 	// User setup
-	UserName            string
-	UserDisplayName     string
-	UserRole            string
-	UserTelegramID      string
-	UserPassword        string
-	UserPasswordConf    string
-	UserExistingPwdHash string // preserved from existing users.json
+	UserName              string
+	UserDisplayName       string
+	UserRole              string
+	UserTelegramID        string
+	UserWhatsAppID        string
+	InitialUserTelegramID string
+	InitialUserWhatsAppID string
+	UserPassword          string
+	UserPasswordConf      string
+	UserExistingPwdHash   string // preserved from existing users.json
 
 	// Telegram
 	TelegramEnabled bool
@@ -125,6 +134,16 @@ type WizardData struct {
 
 	// Dirty tracking - only save fields that were actually modified
 	dirty map[string]bool
+
+	baseImportState     wizardImportState
+	openClawImportState wizardImportState
+}
+
+type wizardImportState struct {
+	WorkspacePath   string
+	TelegramEnabled bool
+	TelegramToken   string
+	UserTelegramID  string
 }
 
 // MarkDirty marks the specified fields as modified
@@ -170,6 +189,7 @@ func NewWizardData() *WizardData {
 	}
 	ApplySandboxPreset(d, SandboxPresetAssistant)
 	d.SandboxAdvanced = false
+	d.captureBaseImportState()
 	return d
 }
 
@@ -179,6 +199,7 @@ func (d *WizardData) LoadFromExisting(cfg *config.Config, path string) {
 	d.ConfigPath = path
 	d.ExistingConfig = cfg
 	d.loadFromConfig(cfg)
+	d.captureBaseImportState()
 }
 
 // LoadFromDefaults seeds WizardData from a fully-defaulted config without
@@ -186,6 +207,7 @@ func (d *WizardData) LoadFromExisting(cfg *config.Config, path string) {
 func (d *WizardData) LoadFromDefaults(cfg *config.Config) {
 	d.ExistingConfig = cfg
 	d.loadFromConfig(cfg)
+	d.captureBaseImportState()
 	ApplySandboxPreset(d, SandboxPresetAssistant)
 	d.SandboxAdvanced = false
 	d.MarkDirty(
@@ -315,12 +337,53 @@ func (d *WizardData) loadUserFromUsersJSON() {
 	d.UserRole = user.Role
 	if user.TelegramID != "" {
 		d.UserTelegramID = user.TelegramID
+		d.InitialUserTelegramID = user.TelegramID
+	}
+	if user.WhatsAppID != "" {
+		d.UserWhatsAppID = user.WhatsAppID
+		d.InitialUserWhatsAppID = user.WhatsAppID
 	}
 	if user.HTTPPasswordHash != "" {
 		d.UserExistingPwdHash = user.HTTPPasswordHash
 	}
 
 	L_info("wizard: loaded user from users.json", "username", ownerUsername)
+}
+
+func (d *WizardData) ResetPairingStage() {
+	d.UserTelegramID = d.InitialUserTelegramID
+	d.UserWhatsAppID = d.InitialUserWhatsAppID
+}
+
+func (d *WizardData) captureBaseImportState() {
+	d.baseImportState = wizardImportState{
+		WorkspacePath:   d.WorkspacePath,
+		TelegramEnabled: d.TelegramEnabled,
+		TelegramToken:   d.TelegramToken,
+		UserTelegramID:  d.UserTelegramID,
+	}
+}
+
+func (d *WizardData) ApplyOpenClawImport(enable bool) {
+	d.OpenClawImport = enable
+	if enable {
+		if d.openClawImportState.WorkspacePath != "" {
+			d.WorkspacePath = d.openClawImportState.WorkspacePath
+		}
+		if d.openClawImportState.TelegramToken != "" {
+			d.TelegramToken = d.openClawImportState.TelegramToken
+			d.TelegramEnabled = d.openClawImportState.TelegramEnabled
+		}
+		if d.openClawImportState.UserTelegramID != "" {
+			d.UserTelegramID = d.openClawImportState.UserTelegramID
+		}
+		return
+	}
+
+	d.WorkspacePath = d.baseImportState.WorkspacePath
+	d.TelegramEnabled = d.baseImportState.TelegramEnabled
+	d.TelegramToken = d.baseImportState.TelegramToken
+	d.UserTelegramID = d.baseImportState.UserTelegramID
 }
 
 // LoadFromOpenClaw extracts settings from OpenClaw config
@@ -346,7 +409,7 @@ func (d *WizardData) LoadFromOpenClaw() {
 	if agents, ok := d.OpenClawConfig["agents"].(map[string]interface{}); ok {
 		if defaults, ok := agents["defaults"].(map[string]interface{}); ok {
 			if ws, ok := defaults["workspace"].(string); ok {
-				d.WorkspacePath = ws
+				d.openClawImportState.WorkspacePath = ws
 			}
 		}
 	}
@@ -355,12 +418,12 @@ func (d *WizardData) LoadFromOpenClaw() {
 	if channels, ok := d.OpenClawConfig["channels"].(map[string]interface{}); ok {
 		if telegram, ok := channels["telegram"].(map[string]interface{}); ok {
 			if token, ok := telegram["botToken"].(string); ok {
-				d.TelegramToken = token
-				d.TelegramEnabled = true
+				d.openClawImportState.TelegramToken = token
+				d.openClawImportState.TelegramEnabled = true
 			}
 			if allowFrom, ok := telegram["allowFrom"].([]interface{}); ok && len(allowFrom) > 0 {
 				if id, ok := allowFrom[0].(string); ok {
-					d.UserTelegramID = id
+					d.openClawImportState.UserTelegramID = id
 				}
 			}
 		}
@@ -381,6 +444,9 @@ func RunOnboardWizardTview() error {
 
 	// Check for OpenClaw
 	data.LoadFromOpenClaw()
+
+	telegrampairing.RegisterPairingCommands()
+	whatsapppairing.RegisterPairingCommands()
 
 	// Build wizard steps
 	steps := buildWizardSteps(data)
@@ -434,6 +500,7 @@ func buildWizardSteps(data *WizardData) []forms.WizardStep {
 		stepUserSetup(data),
 		stepTelegram(data),
 		stepWhatsApp(data),
+		stepChannelPairing(data),
 		stepHTTP(data),
 		stepSTT(data),
 		stepLLMProvider(data),
@@ -568,17 +635,17 @@ Detected settings:
   Telegram: %s
 
 Would you like to import these settings?
-`, valueOrDefault(data.WorkspacePath, "(not set)"),
-				boolToConfigured(data.TelegramToken != "")), 0, 8, false, false)
+`, valueOrDefault(data.openClawImportState.WorkspacePath, "(not set)"),
+				boolToConfigured(data.openClawImportState.TelegramToken != "")), 0, 8, false, false)
 
 			form.AddButton("Yes, Import Settings", func() {
-				data.OpenClawImport = true
+				data.ApplyOpenClawImport(true)
 				L_info("wizard: will import OpenClaw settings")
 				w.NextStep()
 			})
 
 			form.AddButton("No, Start Fresh", func() {
-				data.OpenClawImport = false
+				data.ApplyOpenClawImport(false)
 				L_info("wizard: skipping OpenClaw import")
 				w.NextStep()
 			})
@@ -640,6 +707,10 @@ func stepUserSetup(data *WizardData) forms.WizardStep {
 
 			form.AddInputField("Telegram User ID (optional)", data.UserTelegramID, 20, nil, func(text string) {
 				data.UserTelegramID = text
+			})
+
+			form.AddInputField("WhatsApp ID (optional)", data.UserWhatsAppID, 24, nil, func(text string) {
+				data.UserWhatsAppID = text
 			})
 
 			pwdLabel := "HTTP Password"
@@ -732,6 +803,205 @@ You also need to set your WhatsApp ID:
 			L_info("wizard: whatsapp", "enabled", data.WhatsAppEnabled)
 			return nil
 		},
+	}
+}
+
+func stepChannelPairing(data *WizardData) forms.WizardStep {
+	return forms.WizardStep{
+		Title: "Channel Pairing",
+		Content: func(w *forms.Wizard) tview.Primitive {
+			header := tview.NewTextView().
+				SetDynamicColors(true).
+				SetWrap(true).
+				SetText(`[cyan]Pair enabled owner channels[white]
+
+Use this step to bind the owner account to Telegram and/or WhatsApp.
+Successful pairing only stages the owner identity until you finish setup.`)
+			header.SetBorder(false)
+
+			status := tview.NewTextView().
+				SetDynamicColors(true).
+				SetWrap(true)
+			status.SetBorder(true).SetTitle(" Pairing Status ").SetTitleAlign(tview.AlignLeft)
+
+			form := tview.NewForm()
+			form.SetBorder(false)
+			enableFormMouseScroll(form, w)
+
+			refreshStatus := func() {
+				var lines []string
+				if data.TelegramEnabled {
+					lines = append(lines, formatTelegramPairingStatus())
+				} else {
+					lines = append(lines, "[gray]Telegram:[white] disabled")
+				}
+				if data.WhatsAppEnabled {
+					lines = append(lines, formatWhatsAppPairingStatus())
+				} else {
+					lines = append(lines, "[gray]WhatsApp:[white] disabled")
+				}
+				status.SetText(strings.Join(lines, "\n\n"))
+			}
+
+			refreshStatus()
+
+			form.AddButton("Start Telegram Pairing", func() {
+				if !data.TelegramEnabled {
+					w.App().ShowModal("Enable Telegram first in the Telegram step.", []string{"OK"}, nil)
+					return
+				}
+				if strings.TrimSpace(data.TelegramToken) == "" {
+					w.App().ShowModal("Telegram bot token is required before pairing.", []string{"OK"}, nil)
+					return
+				}
+				res := bus.SendCommandWithSource("telegram.pairing", "start", setuppairing.TelegramStartRequest{
+					StartRequest: setuppairing.StartRequest{
+						BaseRequest: setuppairing.BaseRequest{
+							SessionID: "tui-wizard-telegram",
+							Surface:   "tui-wizard",
+						},
+					},
+					BotToken: data.TelegramToken,
+				}, "tui", "")
+				if res.Error != nil {
+					w.App().ShowModal(res.Message, []string{"OK"}, nil)
+					return
+				}
+				data.UserTelegramID = ""
+				refreshStatus()
+			})
+			form.AddButton("Refresh Telegram", func() {
+				refreshTelegramPairing(data)
+				refreshStatus()
+			})
+			form.AddButton("Start WhatsApp Pairing", func() {
+				if !data.WhatsAppEnabled {
+					w.App().ShowModal("Enable WhatsApp first in the WhatsApp step.", []string{"OK"}, nil)
+					return
+				}
+				res := bus.SendCommandWithSource("whatsapp.pairing", "start", setuppairing.WhatsAppStartRequest{
+					StartRequest: setuppairing.StartRequest{
+						BaseRequest: setuppairing.BaseRequest{
+							SessionID: "tui-wizard-whatsapp",
+							Surface:   "tui-wizard",
+						},
+					},
+				}, "tui", "")
+				if res.Error != nil {
+					w.App().ShowModal(res.Message, []string{"OK"}, nil)
+					return
+				}
+				data.UserWhatsAppID = ""
+				refreshStatus()
+			})
+			form.AddButton("Refresh WhatsApp", func() {
+				refreshWhatsAppPairing(data)
+				refreshStatus()
+			})
+
+			layout := tview.NewFlex().
+				SetDirection(tview.FlexRow).
+				AddItem(header, 4, 0, false).
+				AddItem(form, 6, 0, true).
+				AddItem(status, 0, 1, false)
+			return layout
+		},
+		OnExit: func(_ *forms.Wizard) error {
+			refreshTelegramPairing(data)
+			refreshWhatsAppPairing(data)
+			if data.TelegramEnabled && strings.TrimSpace(data.UserTelegramID) == "" {
+				return fmt.Errorf("telegram is enabled but not paired yet")
+			}
+			if data.WhatsAppEnabled && strings.TrimSpace(data.UserWhatsAppID) == "" {
+				return fmt.Errorf("whatsapp is enabled but not paired yet")
+			}
+			return nil
+		},
+	}
+}
+
+func refreshTelegramPairing(data *WizardData) {
+	res := bus.SendCommandWithSource("telegram.pairing", "status", setuppairing.StatusRequest{
+		BaseRequest: setuppairing.BaseRequest{
+			SessionID: "tui-wizard-telegram",
+			Surface:   "tui-wizard",
+		},
+	}, "tui", "")
+	if status, ok := res.Data.(setuppairing.Status); ok && status.Identity != nil && status.Identity.ID != "" {
+		data.UserTelegramID = status.Identity.ID
+	} else if statusPtr, ok := res.Data.(*setuppairing.Status); ok && statusPtr != nil && statusPtr.Identity != nil && statusPtr.Identity.ID != "" {
+		data.UserTelegramID = statusPtr.Identity.ID
+	}
+}
+
+func refreshWhatsAppPairing(data *WizardData) {
+	res := bus.SendCommandWithSource("whatsapp.pairing", "status", setuppairing.StatusRequest{
+		BaseRequest: setuppairing.BaseRequest{
+			SessionID: "tui-wizard-whatsapp",
+			Surface:   "tui-wizard",
+		},
+	}, "tui", "")
+	if status, ok := res.Data.(setuppairing.Status); ok && status.Identity != nil && status.Identity.ID != "" {
+		data.UserWhatsAppID = status.Identity.ID
+	} else if statusPtr, ok := res.Data.(*setuppairing.Status); ok && statusPtr != nil && statusPtr.Identity != nil && statusPtr.Identity.ID != "" {
+		data.UserWhatsAppID = statusPtr.Identity.ID
+	}
+}
+
+func formatTelegramPairingStatus() string {
+	res := bus.SendCommandWithSource("telegram.pairing", "status", setuppairing.StatusRequest{
+		BaseRequest: setuppairing.BaseRequest{
+			SessionID: "tui-wizard-telegram",
+			Surface:   "tui-wizard",
+		},
+	}, "tui", "")
+	status := extractPairingStatus(res.Data, "telegram", "tui-wizard-telegram")
+	lines := []string{fmt.Sprintf("[yellow]Telegram[white] [%s]", status.State), status.Message}
+	if status.Artifacts != nil && status.Artifacts.Code != "" {
+		lines = append(lines, fmt.Sprintf("Code: [green]%s[white]", status.Artifacts.Code))
+	}
+	if status.Identity != nil {
+		lines = append(lines, fmt.Sprintf("Owner: %s %s %s", status.Identity.DisplayName, status.Identity.Username, status.Identity.ID))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatWhatsAppPairingStatus() string {
+	res := bus.SendCommandWithSource("whatsapp.pairing", "status", setuppairing.StatusRequest{
+		BaseRequest: setuppairing.BaseRequest{
+			SessionID: "tui-wizard-whatsapp",
+			Surface:   "tui-wizard",
+		},
+	}, "tui", "")
+	status := extractPairingStatus(res.Data, "whatsapp", "tui-wizard-whatsapp")
+	lines := []string{fmt.Sprintf("[yellow]WhatsApp[white] [%s]", status.State), status.Message}
+	if status.Artifacts != nil && status.Artifacts.QRCode != "" {
+		lines = append(lines, renderPairingQRCode(status.Artifacts.QRCode))
+	}
+	if status.Identity != nil {
+		lines = append(lines, fmt.Sprintf("Owner: %s %s", status.Identity.Phone, status.Identity.JID))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderPairingQRCode(code string) string {
+	var buf bytes.Buffer
+	qrterminal.GenerateHalfBlock(code, qrterminal.L, &buf)
+	return buf.String()
+}
+
+func extractPairingStatus(data any, channel, sessionID string) setuppairing.Status {
+	if status, ok := data.(setuppairing.Status); ok {
+		return status
+	}
+	if status, ok := data.(*setuppairing.Status); ok && status != nil {
+		return *status
+	}
+	return setuppairing.Status{
+		Channel:   channel,
+		SessionID: sessionID,
+		State:     setuppairing.StateNotStarted,
+		Message:   "Pairing has not started yet.",
 	}
 }
 
@@ -1546,16 +1816,6 @@ func stepReview(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
 		Title: "Review",
 		Content: func(w *forms.Wizard) tview.Primitive {
-			llmInfo := "(skipped)"
-			if !data.LLMSkipped && data.LLMProviderID != "" {
-				llmInfo = fmt.Sprintf("%s (%s)", data.LLMProviderName, data.LLMModel)
-			}
-
-			sttInfo := "disabled"
-			if data.STTEnabled {
-				sttInfo = fmt.Sprintf("whispercpp (%s)", data.STTModel)
-			}
-
 			summary := fmt.Sprintf(`[cyan]Configuration Summary[white]
 
 Workspace:    %s
@@ -1564,9 +1824,10 @@ User:         %s (%s)
 Telegram:     %s
 WhatsApp:     %s
 HTTP:         %s
-STT:          %s
-Sandboxing:   preset=%s, mode=%s, enabled=%v, exec=%v, browser=%v, fileTools=%v
+Security:     %s
 LLM:          %s
+Voice LLM:    %s
+STT:          %s
 
 Press [yellow]Finish[white] to complete setup.`,
 				data.WorkspacePath,
@@ -1582,14 +1843,10 @@ Press [yellow]Finish[white] to complete setup.`,
 				boolToEnabled(data.TelegramEnabled),
 				boolToEnabled(data.WhatsAppEnabled),
 				formatHTTP(data),
-				sttInfo,
-				data.SandboxPreset,
-				data.SandboxMode,
-				data.SandboxEnabled,
-				data.ExecSandboxEnabled,
-				data.BrowserSandboxEnabled,
-				data.FileToolsSandboxEnabled,
-				llmInfo,
+				wizardSecuritySummary(data),
+				wizardLLMSummary(data),
+				wizardVoiceSummary(data),
+				wizardSTTSummary(data),
 			)
 
 			tv := tview.NewTextView().
@@ -1622,6 +1879,56 @@ func boolToEnabled(b bool) string {
 		return "enabled"
 	}
 	return "disabled"
+}
+
+func wizardSecuritySummary(data *WizardData) string {
+	switch NormalizeSandboxPreset(data.SandboxPreset) {
+	case SandboxPresetPermissive:
+		return "Permissive - least restricted, best flexibility"
+	case SandboxPresetHardened:
+		return "Hardened - stronger protection with reduced capability"
+	case SandboxPresetCustom:
+		return "Custom - advanced manually selected security settings"
+	default:
+		return "Assistant - balanced protection for normal use"
+	}
+}
+
+func wizardLLMSummary(data *WizardData) string {
+	if data == nil || data.LLMSkipped || data.LLMProviderID == "" {
+		return "Not configured"
+	}
+	provider := data.LLMProviderName
+	if strings.TrimSpace(provider) == "" {
+		provider = data.LLMProviderID
+	}
+	model := strings.TrimSpace(data.LLMModel)
+	if model == "" {
+		return provider
+	}
+	return fmt.Sprintf("%s - %s", provider, model)
+}
+
+func wizardVoiceSummary(data *WizardData) string {
+	if data == nil || !data.VoiceLLMEnabled {
+		return "Disabled"
+	}
+	voice := strings.TrimSpace(data.VoiceLLMVoice)
+	if voice == "" {
+		return "Enabled"
+	}
+	return fmt.Sprintf("Enabled (%s)", voice)
+}
+
+func wizardSTTSummary(data *WizardData) string {
+	if data == nil || !data.STTEnabled {
+		return "Disabled"
+	}
+	model := strings.TrimSpace(data.STTModel)
+	if model == "" {
+		return "Enabled"
+	}
+	return fmt.Sprintf("Enabled (%s)", model)
 }
 
 func boolToSetup(b bool) string { //nolint:unused
@@ -1707,6 +2014,9 @@ func printWizardConfig(data *WizardData) {
 	}
 	if data.UserTelegramID != "" {
 		userEntry["telegram_id"] = data.UserTelegramID
+	}
+	if data.UserWhatsAppID != "" {
+		userEntry["whatsapp_id"] = data.UserWhatsAppID
 	}
 	if data.UserPassword != "" {
 		hash, err := user.HashPassword(data.UserPassword)

@@ -8,8 +8,12 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
+	"github.com/roelfdiedericks/goclaw/internal/bus"
+	telegrampairing "github.com/roelfdiedericks/goclaw/internal/channels/telegram"
+	whatsapppairing "github.com/roelfdiedericks/goclaw/internal/channels/whatsapp"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	"github.com/roelfdiedericks/goclaw/internal/configapply"
@@ -17,6 +21,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 	"github.com/roelfdiedericks/goclaw/internal/setup"
+	setuppairing "github.com/roelfdiedericks/goclaw/internal/setup/pairing"
 )
 
 // WizardStep defines a single step in the setup wizard
@@ -33,6 +38,7 @@ var WizardSteps = []WizardStep{
 	{ID: "workspace", Title: "Workspace", Description: "Choose where GoClaw will store files and configurations."},
 	{ID: "user", Title: "Owner Account", Description: "Create your owner account for authentication."},
 	{ID: "channels", Title: "Communication Channels", Description: "Configure how you'll interact with GoClaw."},
+	{ID: "pairing", Title: "Channel Pairing", Description: "Pair each enabled owner channel before you continue."},
 	{ID: "llm", Title: "LLM Provider", Description: "Set up your language model provider (Anthropic, OpenAI, etc.)."},
 	{ID: "voice", Title: "Voice Settings", Description: "Configure speech-to-text and voice LLM (optional)."},
 	{ID: "security", Title: "Security & Skills", Description: "Configure sandboxing and skill installation sources."},
@@ -41,9 +47,10 @@ var WizardSteps = []WizardStep{
 
 // WizardState holds the current wizard session state
 type WizardState struct {
-	Step int               `json:"step"`
-	Data *setup.WizardData `json:"data"`
-	mu   sync.Mutex
+	Step            int               `json:"step"`
+	Data            *setup.WizardData `json:"data"`
+	PairingSessions map[string]string `json:"-"`
+	mu              sync.Mutex
 }
 
 // WizardAPI provides API endpoints for the wizard
@@ -55,11 +62,14 @@ type WizardAPI struct {
 // NewWizardAPI creates a new wizard API handler
 func NewWizardAPI(configPath string, _ configapply.Caller) *WizardAPI {
 	data := buildWizardData(configPath)
+	telegrampairing.RegisterPairingCommands()
+	whatsapppairing.RegisterPairingCommands()
 
 	return &WizardAPI{
 		state: &WizardState{
-			Step: 1,
-			Data: data,
+			Step:            1,
+			Data:            data,
+			PairingSessions: newWizardPairingSessions(),
 		},
 		configPath: configPath,
 	}
@@ -71,6 +81,7 @@ func (w *WizardAPI) Reset() {
 	defer w.state.mu.Unlock()
 	w.state.Step = 1
 	w.state.Data = buildWizardData(w.configPath)
+	w.state.PairingSessions = newWizardPairingSessions()
 }
 
 func buildWizardData(configPath string) *setup.WizardData {
@@ -102,6 +113,51 @@ func buildWizardData(configPath string) *setup.WizardData {
 	return data
 }
 
+func newWizardPairingSessions() map[string]string {
+	seed := time.Now().UnixNano()
+	return map[string]string{
+		"telegram": fmt.Sprintf("wizard-telegram-%d", seed),
+		"whatsapp": fmt.Sprintf("wizard-whatsapp-%d", seed),
+	}
+}
+
+func resetWizardPairingState(data *setup.WizardData, sessions map[string]string) map[string]string {
+	if data == nil {
+		return newWizardPairingSessions()
+	}
+
+	for channel, sessionID := range sessions {
+		if strings.TrimSpace(sessionID) == "" {
+			continue
+		}
+		component := channel + ".pairing"
+		_ = bus.SendCommandWithSource(component, "cancel", setuppairing.CancelRequest{
+			BaseRequest: setuppairing.BaseRequest{
+				SessionID: sessionID,
+				Surface:   "web-wizard",
+			},
+		}, "http", "")
+	}
+
+	data.ResetPairingStage()
+	return newWizardPairingSessions()
+}
+
+func wizardStepsFor(data *setup.WizardData) []WizardStep {
+	steps := make([]WizardStep, 0, len(WizardSteps))
+	for _, step := range WizardSteps {
+		if step.ID == "pairing" && (data == nil || (!data.TelegramEnabled && !data.WhatsAppEnabled)) {
+			continue
+		}
+		steps = append(steps, step)
+	}
+	return steps
+}
+
+func currentWizardStep(state *WizardState) []WizardStep {
+	return wizardStepsFor(state.Data)
+}
+
 // HandleGetState returns the current wizard state
 func (w *WizardAPI) HandleGetState(rw http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -114,13 +170,17 @@ func (w *WizardAPI) HandleGetState(rw http.ResponseWriter, r *http.Request) {
 
 	w.state.mu.Lock()
 	defer w.state.mu.Unlock()
+	steps := currentWizardStep(w.state)
+	if w.state.Step > len(steps) {
+		w.state.Step = len(steps)
+	}
 
 	writeJSON(rw, http.StatusOK, APIResponse{
 		Success: true,
 		Data: map[string]interface{}{
 			"step":       w.state.Step,
-			"totalSteps": len(WizardSteps),
-			"steps":      WizardSteps,
+			"totalSteps": len(steps),
+			"steps":      steps,
 			"data":       w.state.Data,
 		},
 	})
@@ -139,9 +199,10 @@ func (w *WizardAPI) HandleGetStep(rw http.ResponseWriter, r *http.Request) {
 	w.state.mu.Lock()
 	step := w.state.Step
 	data := w.state.Data
+	steps := currentWizardStep(w.state)
 	w.state.mu.Unlock()
 
-	if step < 1 || step > len(WizardSteps) {
+	if step < 1 || step > len(steps) {
 		writeJSON(rw, http.StatusBadRequest, APIResponse{
 			Success: false,
 			Message: "Invalid step",
@@ -149,11 +210,13 @@ func (w *WizardAPI) HandleGetStep(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stepDef := WizardSteps[step-1]
+	stepDef := steps[step-1]
 	formDef := getStepFormDef(stepDef.ID, data)
 
 	var formHTML string
-	if formDef != nil {
+	if stepDef.ID == "pairing" {
+		formHTML = renderPairingStepHTML(data)
+	} else if formDef != nil {
 		applyWizardFormDefaults(w.state.Data, formDef)
 		html, err := RenderFormHTML(*formDef, "wizardData")
 		if err != nil {
@@ -195,6 +258,7 @@ func (w *WizardAPI) HandleSubmitStep(rw http.ResponseWriter, r *http.Request) {
 
 	w.state.mu.Lock()
 	defer w.state.mu.Unlock()
+	steps := currentWizardStep(w.state)
 
 	// Update wizard data from payload
 	if err := updateWizardData(w.state.Data, payload); err != nil {
@@ -206,7 +270,7 @@ func (w *WizardAPI) HandleSubmitStep(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate current step
-	if errors := validateStep(WizardSteps[w.state.Step-1].ID, w.state.Data); len(errors) > 0 {
+	if errors := validateStep(steps[w.state.Step-1].ID, w.state.Data); len(errors) > 0 {
 		writeJSON(rw, http.StatusBadRequest, APIResponse{
 			Success: false,
 			Errors:  errors,
@@ -215,7 +279,8 @@ func (w *WizardAPI) HandleSubmitStep(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	// Advance to next step
-	if w.state.Step < len(WizardSteps) {
+	steps = currentWizardStep(w.state)
+	if w.state.Step < len(steps) {
 		w.state.Step++
 	}
 
@@ -239,8 +304,12 @@ func (w *WizardAPI) HandlePrevStep(rw http.ResponseWriter, r *http.Request) {
 
 	w.state.mu.Lock()
 	defer w.state.mu.Unlock()
+	steps := currentWizardStep(w.state)
 
 	if w.state.Step > 1 {
+		if w.state.Step <= len(steps) && steps[w.state.Step-1].ID == "pairing" {
+			w.state.PairingSessions = resetWizardPairingState(w.state.Data, w.state.PairingSessions)
+		}
 		w.state.Step--
 	}
 
@@ -282,6 +351,166 @@ func (w *WizardAPI) HandleFinish(rw http.ResponseWriter, r *http.Request) {
 		Success: true,
 		Message: "Configuration saved successfully",
 	})
+}
+
+// HandlePairingAction handles wizard pairing start/status/cancel requests.
+func (w *WizardAPI) HandlePairingAction(rw http.ResponseWriter, r *http.Request) {
+	channel, action, ok := parseWizardPairingPath(r.URL.Path)
+	if !ok {
+		writeJSON(rw, http.StatusBadRequest, APIResponse{Success: false, Message: "Invalid pairing path"})
+		return
+	}
+
+	w.state.mu.Lock()
+	data := w.state.Data
+	sessionID := w.state.PairingSessions[channel]
+	w.state.mu.Unlock()
+
+	switch action {
+	case "start":
+		var res bus.CommandResult
+		switch channel {
+		case "telegram":
+			data.UserTelegramID = ""
+			res = bus.SendCommandWithSource("telegram.pairing", "start", setuppairing.TelegramStartRequest{
+				StartRequest: setuppairing.StartRequest{
+					BaseRequest: setuppairing.BaseRequest{SessionID: sessionID, Surface: "web-wizard"},
+				},
+				BotToken: data.TelegramToken,
+			}, "http", "")
+		case "whatsapp":
+			data.UserWhatsAppID = ""
+			res = bus.SendCommandWithSource("whatsapp.pairing", "start", setuppairing.WhatsAppStartRequest{
+				StartRequest: setuppairing.StartRequest{
+					BaseRequest: setuppairing.BaseRequest{SessionID: sessionID, Surface: "web-wizard"},
+				},
+			}, "http", "")
+		default:
+			writeJSON(rw, http.StatusBadRequest, APIResponse{Success: false, Message: "Unsupported pairing channel"})
+			return
+		}
+		writePairingResult(rw, res)
+	case "status":
+		component := channel + ".pairing"
+		res := bus.SendCommandWithSource(component, "status", setuppairing.StatusRequest{
+			BaseRequest: setuppairing.BaseRequest{SessionID: sessionID, Surface: "web-wizard"},
+		}, "http", "")
+		if status, ok := res.Data.(setuppairing.Status); ok {
+			w.stagePairingIdentity(channel, status)
+		} else if statusPtr, ok := res.Data.(*setuppairing.Status); ok && statusPtr != nil {
+			w.stagePairingIdentity(channel, *statusPtr)
+		}
+		writePairingResult(rw, res)
+	case "cancel":
+		component := channel + ".pairing"
+		res := bus.SendCommandWithSource(component, "cancel", setuppairing.CancelRequest{
+			BaseRequest: setuppairing.BaseRequest{SessionID: sessionID, Surface: "web-wizard"},
+		}, "http", "")
+		writePairingResult(rw, res)
+	default:
+		writeJSON(rw, http.StatusMethodNotAllowed, APIResponse{Success: false, Message: "Unsupported pairing action"})
+	}
+}
+
+func (w *WizardAPI) stagePairingIdentity(channel string, status setuppairing.Status) {
+	if status.State != setuppairing.StatePaired || status.Identity == nil {
+		return
+	}
+	w.state.mu.Lock()
+	defer w.state.mu.Unlock()
+	switch channel {
+	case "telegram":
+		w.state.Data.UserTelegramID = status.Identity.ID
+	case "whatsapp":
+		w.state.Data.UserWhatsAppID = status.Identity.ID
+	}
+}
+
+func writePairingResult(rw http.ResponseWriter, res bus.CommandResult) {
+	if res.Error != nil {
+		writeJSON(rw, http.StatusBadRequest, APIResponse{Success: false, Message: res.Message})
+		return
+	}
+	writeJSON(rw, http.StatusOK, APIResponse{Success: true, Message: res.Message, Data: res.Data})
+}
+
+func parseWizardPairingPath(path string) (channel string, action string, ok bool) {
+	trimmed := strings.TrimPrefix(path, "/setup/api/wizard/pairing/")
+	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func renderPairingStepHTML(data *setup.WizardData) string {
+	var sections []string
+	if data.TelegramEnabled {
+		sections = append(sections, `
+<div class="card mb-3" data-pairing-channel="telegram">
+  <div class="card-body">
+    <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+      <div>
+        <h6 class="mb-1">Telegram</h6>
+        <p class="text-muted mb-2">Send the one-time code to your bot from the owner account.</p>
+      </div>
+      <span class="badge text-bg-secondary js-pairing-badge">Not started</span>
+    </div>
+    <div class="small text-muted mb-2 js-pairing-message">Telegram owner pairing has not started yet.</div>
+    <div class="alert alert-success d-none js-pairing-success">
+      <div class="d-flex align-items-start gap-2">
+        <i class="bi bi-check-circle-fill fs-5"></i>
+        <div>
+          <div class="fw-semibold">Telegram pairing complete</div>
+          <div class="small js-pairing-success-text">You can continue to the next step.</div>
+        </div>
+      </div>
+    </div>
+    <div class="alert alert-light border d-none js-pairing-artifact"></div>
+    <div class="small text-muted mb-2 js-pairing-identity"></div>
+    <div class="d-flex gap-2 flex-wrap">
+      <button type="button" class="btn btn-sm btn-primary js-pairing-start">Start Pairing</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary js-pairing-cancel d-none">Cancel</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary js-pairing-refresh">Refresh</button>
+    </div>
+  </div>
+</div>`)
+	}
+	if data.WhatsAppEnabled {
+		sections = append(sections, `
+<div class="card mb-3" data-pairing-channel="whatsapp">
+  <div class="card-body">
+    <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+      <div>
+        <h6 class="mb-1">WhatsApp</h6>
+        <p class="text-muted mb-2">Scan the QR code from WhatsApp on your phone.</p>
+      </div>
+      <span class="badge text-bg-secondary js-pairing-badge">Not started</span>
+    </div>
+    <div class="small text-muted mb-2 js-pairing-message">WhatsApp owner pairing has not started yet.</div>
+    <div class="alert alert-success d-none js-pairing-success">
+      <div class="d-flex align-items-start gap-2">
+        <i class="bi bi-check-circle-fill fs-5"></i>
+        <div>
+          <div class="fw-semibold">WhatsApp pairing complete</div>
+          <div class="small js-pairing-success-text">You can continue to the next step.</div>
+        </div>
+      </div>
+    </div>
+    <div class="alert alert-light border d-none js-pairing-artifact"></div>
+    <div class="small text-muted mb-2 js-pairing-identity"></div>
+    <div class="d-flex gap-2 flex-wrap">
+      <button type="button" class="btn btn-sm btn-primary js-pairing-start">Start Pairing</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary js-pairing-cancel d-none">Cancel</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary js-pairing-refresh">Refresh</button>
+    </div>
+  </div>
+</div>`)
+	}
+	if len(sections) == 0 {
+		return `<div class="alert alert-info mb-0">No channel pairing is required for the current setup.</div>`
+	}
+	return `<div class="js-wizard-pairing-step"><div class="alert alert-info">Each enabled channel must be paired before you can continue. Successful pairing only stages the owner identity until you finish setup.</div>` + strings.Join(sections, "") + `</div>`
 }
 
 func loadWizardConfig(configPath string) (*config.LoadResult, error) {
@@ -434,6 +663,18 @@ func getStepFormDef(stepID string, data *setup.WizardData) *forms.FormDef {
 							Name:  "UserPasswordConf",
 							Title: "Confirm Password",
 							Type:  forms.Secret,
+						},
+						{
+							Name:  "UserTelegramID",
+							Title: "Telegram ID (optional)",
+							Type:  forms.Text,
+							Desc:  "Owner Telegram identity. This can also be filled by the pairing step.",
+						},
+						{
+							Name:  "UserWhatsAppID",
+							Title: "WhatsApp ID (optional)",
+							Type:  forms.Text,
+							Desc:  "Owner WhatsApp identity. This can also be filled by the pairing step.",
 						},
 					},
 				},
@@ -750,6 +991,8 @@ func updateWizardData(data *setup.WizardData, payload map[string]interface{}) er
 		WorkspacePath            string `json:"WorkspacePath"`
 		UserName                 string `json:"UserName"`
 		UserDisplayName          string `json:"UserDisplayName"`
+		UserTelegramID           string `json:"UserTelegramID"`
+		UserWhatsAppID           string `json:"UserWhatsAppID"`
 		UserPassword             string `json:"UserPassword"`
 		UserPasswordConf         string `json:"UserPasswordConf"`
 		HTTPEnabled              bool   `json:"HTTPEnabled"`
@@ -787,7 +1030,9 @@ func updateWizardData(data *setup.WizardData, payload map[string]interface{}) er
 	}
 
 	// Handle OpenClaw import toggle
-	data.OpenClawImport = fields.OpenClawImport
+	if _, ok := payload["OpenClawImport"]; ok {
+		data.ApplyOpenClawImport(fields.OpenClawImport)
+	}
 
 	if _, ok := payload["AgentName"]; ok {
 		data.AgentName = fields.AgentName
@@ -812,6 +1057,12 @@ func updateWizardData(data *setup.WizardData, payload map[string]interface{}) er
 	}
 	if fields.UserDisplayName != "" {
 		data.UserDisplayName = fields.UserDisplayName
+	}
+	if _, ok := payload["UserTelegramID"]; ok {
+		data.UserTelegramID = strings.TrimSpace(fields.UserTelegramID)
+	}
+	if _, ok := payload["UserWhatsAppID"]; ok {
+		data.UserWhatsAppID = strings.TrimSpace(fields.UserWhatsAppID)
 	}
 	if fields.UserPassword != "" {
 		data.UserPassword = fields.UserPassword
@@ -934,6 +1185,14 @@ func validateStep(stepID string, data *setup.WizardData) map[string]string {
 		}
 		if data.TelegramEnabled && data.TelegramToken == "" {
 			errors["TelegramToken"] = "Bot token is required when Telegram is enabled"
+		}
+
+	case "pairing":
+		if data.TelegramEnabled && strings.TrimSpace(data.UserTelegramID) == "" {
+			errors["_general"] = "Telegram is enabled but not paired yet."
+		}
+		if data.WhatsAppEnabled && strings.TrimSpace(data.UserWhatsAppID) == "" {
+			errors["_general"] = "WhatsApp is enabled but not paired yet."
 		}
 
 	case "llm":

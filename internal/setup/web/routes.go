@@ -24,12 +24,19 @@ func mountSetup(mux *http.ServeMux, opts mountOptions) {
 
 	staticSub, err := fs.Sub(staticFS, "static")
 	if err == nil {
-		mux.Handle("/setup/static/", http.StripPrefix("/setup/static/", http.FileServer(http.FS(staticSub))))
+		staticHandler := http.StripPrefix("/setup/static/", http.FileServer(http.FS(staticSub)))
+		mux.Handle("/setup/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+			w.Header().Set("Pragma", "no-cache")
+			w.Header().Set("Expires", "0")
+			staticHandler.ServeHTTP(w, r)
+		}))
 	}
 
 	api := NewAPI(opts.configPath, opts.applyCaller)
 	usersAPI := NewUsersAPI(opts.configPath)
 	wizardAPI := NewWizardAPI(opts.configPath, opts.applyCaller)
+	pairingAPI := NewPairingAPI()
 
 	if opts.handlers != nil {
 		mux.HandleFunc("/setup/wizard", wrap(func(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +66,7 @@ func mountSetup(mux *http.ServeMux, opts mountOptions) {
 			writeJSON(w, http.StatusMethodNotAllowed, APIResponse{Success: false, Message: "Method not allowed"})
 		}
 	}))
+	mux.HandleFunc("/setup/api/users/owner-pairing", wrap(usersAPI.HandleUpdateOwnerPairing))
 	mux.HandleFunc("/setup/api/users/", wrap(usersAPI.HandleUser))
 	mux.HandleFunc("/setup/api/roles", wrap(usersAPI.HandleRoles))
 
@@ -68,6 +76,8 @@ func mountSetup(mux *http.ServeMux, opts mountOptions) {
 	mux.HandleFunc("/setup/api/wizard/prev", wrap(wizardAPI.HandlePrevStep))
 	mux.HandleFunc("/setup/api/wizard/finish", wrap(wizardAPI.HandleFinish))
 	mux.HandleFunc("/setup/api/wizard/models/", wrap(wizardAPI.HandleGetModels))
+	mux.HandleFunc("/setup/api/wizard/pairing/", wrap(wizardAPI.HandlePairingAction))
+	mux.HandleFunc("/setup/api/pairing/", wrap(pairingAPI.HandleAction))
 
 	if opts.enableShutdown && opts.shutdown != nil {
 		mux.HandleFunc("/setup/api/shutdown", opts.shutdown)

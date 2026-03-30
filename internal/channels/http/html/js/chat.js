@@ -33,9 +33,23 @@
             return { ok: false, error: err };
         }
     }
-    function scrollChatToBottom() {
+    function scrollChatToBottom(reason, options) {
+        options = options || {};
+        if (!options.force && historyHydrationActive()) {
+            logDomCap('scroll-bottom-skipped', {
+                reason: reason || 'unspecified',
+                scrollTop: $messages.length ? $messages[0].scrollTop : 0,
+                scrollHeight: $messages.length ? $messages[0].scrollHeight : 0
+            });
+            return;
+        }
         requestAnimationFrame(function() {
-            window.scrollTo(0, document.documentElement.scrollHeight);
+            if ($messages.length) {
+                $messages[0].scrollTop = $messages[0].scrollHeight;
+            }
+            if (typeof options.afterScroll === 'function') {
+                options.afterScroll();
+            }
         });
     }
     function updateComposerReserve() {
@@ -84,12 +98,107 @@
     var CHAT_LOAD_EARLIER_BATCH = 40;
     var CHAT_LOAD_EARLIER_SCROLL_DEBOUNCE_MS = 350;
     var CHAT_LOAD_EARLIER_MIN_GAP_MS = 1800;
+    var CHAT_INITIAL_BACKFILL_BATCH = 20;
     var historyWindowStart = 0;
     var historyWindowEnd = -1;
     var deferHistoryRebuildAfterStream = false;
     var loadEarlierScrollTimer = null;
     var lastAutoPrependAt = 0;
     var loadEarlierInProgress = false;
+    var initialHistoryHydrationActive = false;
+    var historyBackfillInProgress = false;
+    var initialHistoryBackfillTimer = null;
+    var initialHistoryTargetStart = 0;
+    var historyHydrationPhase = 'idle';
+
+    function historyHydrationActive() {
+        return initialHistoryHydrationActive || historyBackfillInProgress || !!initialHistoryBackfillTimer;
+    }
+
+    function mountedWindowLabel() {
+        var $msgNodes = $messages.children('.message');
+        if (!$msgNodes.length) return '[]';
+        var firstIdx = $msgNodes.first().attr('data-canonical-index');
+        var lastIdx = $msgNodes.last().attr('data-canonical-index');
+        return '[' + String(firstIdx || '?') + '..' + String(lastIdx || '?') + ']';
+    }
+
+    function captureViewportMetrics() {
+        var el = $messages.length ? $messages[0] : null;
+        return {
+            scrollY: el ? el.scrollTop : 0,
+            scrollHeight: el ? el.scrollHeight : 0,
+            viewportHeight: el ? el.clientHeight : 0
+        };
+    }
+
+    function syncHistoryWindowFromDom(reason) {
+        var $msgNodes = $messages.children('.message');
+        if (!$msgNodes.length) {
+            historyWindowStart = Math.max(0, Math.min(historyWindowStart, canonicalHistory.length));
+            historyWindowEnd = historyWindowStart - 1;
+            logDomCap('sync-window-empty', { reason: reason || 'unspecified' });
+            return;
+        }
+        var firstIdx = parseInt($msgNodes.first().attr('data-canonical-index') || '', 10);
+        var lastIdx = parseInt($msgNodes.last().attr('data-canonical-index') || '', 10);
+        if (!isNaN(firstIdx)) {
+            historyWindowStart = firstIdx;
+        }
+        if (!isNaN(lastIdx)) {
+            historyWindowEnd = lastIdx;
+        }
+        logDomCap('sync-window', {
+            reason: reason || 'unspecified',
+            mountedWindow: mountedWindowLabel()
+        });
+    }
+
+    function clearInitialHistoryBackfillTimer() {
+        if (initialHistoryBackfillTimer) {
+            clearTimeout(initialHistoryBackfillTimer);
+            initialHistoryBackfillTimer = null;
+        }
+    }
+
+    function updateInitialHistoryBottomAnchorLayout() {
+        if (!$messages.length || !$messages.hasClass('initial-history-anchor')) {
+            return;
+        }
+        logDomCap('initial-anchor-layout', {
+            anchorHeight: $messages[0].clientHeight
+        });
+    }
+
+    function enableInitialHistoryBottomAnchor(reason) {
+        if (!$messages.length) return;
+        $messages.addClass('initial-history-anchor');
+        updateInitialHistoryBottomAnchorLayout();
+        logDomCap('initial-anchor-enabled', { reason: reason || 'unspecified' });
+    }
+
+    function disableInitialHistoryBottomAnchor(reason) {
+        if (!$messages.length) return;
+        $messages.removeClass('initial-history-anchor');
+        $messages.css('height', '');
+        $messages.css('min-height', '');
+        if ($messages.length) {
+            $messages[0].scrollTop = $messages[0].scrollHeight;
+        }
+        logDomCap('initial-anchor-disabled', { reason: reason || 'unspecified' });
+    }
+
+    function finishInitialHistoryHydration(reason) {
+        clearInitialHistoryBackfillTimer();
+        initialHistoryHydrationActive = false;
+        historyBackfillInProgress = false;
+        historyHydrationPhase = 'idle';
+        disableInitialHistoryBottomAnchor(reason);
+        logDomCap('initial-hydration-complete', {
+            reason: reason || 'unspecified',
+            mountedWindow: mountedWindowLabel()
+        });
+    }
 
     function announceToScreenReader(shortMessage) {
         var el = document.getElementById('chat-announcer');
@@ -112,9 +221,13 @@
             domMessageRows: $messages.children('.message').length,
             chatDomCap: chatDomCap,
             window: '[' + historyWindowStart + '..' + historyWindowEnd + ']',
+            mountedWindow: mountedWindowLabel(),
             canonicalLen: canonicalHistory.length,
             maxStored: MAX_MESSAGES,
-            streaming: streamingActive()
+            streaming: streamingActive(),
+            hydrationActive: historyHydrationActive(),
+            hydrationPhase: historyHydrationPhase,
+            hydrationTargetStart: initialHistoryTargetStart
         };
         if (extra && typeof extra === 'object') {
             for (var k in extra) {
@@ -143,17 +256,7 @@
         var $firstKeep = $msgNodes.eq(excess);
         if (!$firstKeep.length) return;
         $firstKeep.prevAll().not('#chat-history-tools').remove();
-        var ci = $firstKeep.attr('data-canonical-index');
-        if (ci !== undefined && ci !== '') {
-            var parsedIdx = parseInt(ci, 10);
-            if (!isNaN(parsedIdx)) {
-                historyWindowStart = parsedIdx;
-            } else {
-                historyWindowStart += excess;
-            }
-        } else {
-            historyWindowStart += excess;
-        }
+        syncHistoryWindowFromDom('trim-top');
         updateLoadEarlierVisibility();
         logDomCap('trim-top-done', { historyWindowStart: historyWindowStart });
     }
@@ -396,9 +499,11 @@
     }
 
     function shouldAutoscrollToolActivity() {
-        var viewportBottom = window.scrollY + window.innerHeight;
-        var docBottom = document.documentElement.scrollHeight;
-        return (docBottom - viewportBottom) < 220;
+        if (!$messages.length) return true;
+        var el = $messages[0];
+        var viewportBottom = el.scrollTop + el.clientHeight;
+        var scrollBottom = el.scrollHeight;
+        return (scrollBottom - viewportBottom) < 220;
     }
 
     function buildToolPreview(text, maxLen) {
@@ -901,6 +1006,161 @@
         return $msg;
     }
 
+    function buildCanonicalRangeFragment(startIdx, endIdx) {
+        var fragment = document.createDocumentFragment();
+        var mounted = 0;
+        var firstIndex = -1;
+        var lastIndex = -1;
+        for (var i = startIdx; i <= endIdx && i >= 0 && i < canonicalHistory.length; i++) {
+            var msg = canonicalHistory[i];
+            var $m = buildMessageElement(msg.role, msg.content, null, {
+                supervisor: msg.supervisor,
+                interventionType: msg.interventionType,
+                source: msg.source
+            });
+            $m.attr('data-canonical-index', String(i));
+            hydrateDebugForCanonicalIndex($m, i);
+            fragment.appendChild($m[0]);
+            mounted++;
+            if (firstIndex === -1) {
+                firstIndex = i;
+            }
+            lastIndex = i;
+        }
+        return {
+            fragment: fragment,
+            mounted: mounted,
+            firstIndex: firstIndex,
+            lastIndex: lastIndex
+        };
+    }
+
+    function prependCanonicalRange(startIdx, endIdx, options) {
+        options = options || {};
+        var before = options.preserveViewport ? captureViewportMetrics() : null;
+        var built = buildCanonicalRangeFragment(startIdx, endIdx);
+        if (built.mounted === 0) {
+            return {
+                mounted: 0,
+                scrollDelta: 0,
+                droppedFromBottom: 0
+            };
+        }
+
+        var $tools = $('#chat-history-tools');
+        if ($tools.length) {
+            $tools.after(built.fragment);
+        } else {
+            $messages.prepend(built.fragment);
+        }
+
+        syncHistoryWindowFromDom(options.reason || 'prepend-range');
+
+        var droppedFromBottom = 0;
+        if (options.enforceCap) {
+            var over = $messages.children('.message').length - chatDomCap;
+            if (over > 0) {
+                droppedFromBottom = over;
+                logDomCap('prepend-cap-overflow', {
+                    reason: options.reason || 'prepend-range',
+                    domRowsBeforeCap: $messages.children('.message').length,
+                    dropFromBottom: over
+                });
+                removeBottomMessageBlocks(over);
+            }
+        }
+
+        var scrollDelta = 0;
+        if (before) {
+            var after = captureViewportMetrics();
+            scrollDelta = after.scrollHeight - before.scrollHeight;
+            if ($messages.length) {
+                $messages[0].scrollTop = before.scrollY + scrollDelta;
+            }
+        }
+
+        updateLoadEarlierVisibility();
+        return {
+            mounted: built.mounted,
+            firstIndex: built.firstIndex,
+            lastIndex: built.lastIndex,
+            scrollDelta: scrollDelta,
+            droppedFromBottom: droppedFromBottom,
+            domMessageRows: $messages.children('.message').length
+        };
+    }
+
+    function scheduleInitialHistoryBackfill(delayMs) {
+        if (!initialHistoryHydrationActive || historyBackfillInProgress || initialHistoryBackfillTimer) {
+            return;
+        }
+        var delay = typeof delayMs === 'number' ? delayMs : 0;
+        initialHistoryBackfillTimer = setTimeout(function() {
+            initialHistoryBackfillTimer = null;
+            if (!initialHistoryHydrationActive) {
+                return;
+            }
+            if (streamingActive()) {
+                historyHydrationPhase = 'paused-streaming';
+                logDomCap('initial-backfill-paused-streaming');
+                return;
+            }
+
+            var remaining = historyWindowStart - initialHistoryTargetStart;
+            if (remaining <= 0) {
+                finishInitialHistoryHydration('target-window-mounted');
+                return;
+            }
+
+            var batch = Math.min(CHAT_INITIAL_BACKFILL_BATCH, remaining);
+            var batchStart = historyWindowStart - batch;
+            var batchEnd = historyWindowStart - 1;
+            historyBackfillInProgress = true;
+            historyHydrationPhase = 'initial-backfill';
+            var before = captureViewportMetrics();
+            logDomCap('initial-backfill-start', {
+                batch: batch,
+                batchStart: batchStart,
+                batchEnd: batchEnd,
+                scrollYBefore: before.scrollY,
+                documentHeightBefore: before.scrollHeight
+            });
+            var result = prependCanonicalRange(batchStart, batchEnd, {
+                preserveViewport: false,
+                enforceCap: true,
+                reason: 'initial-backfill'
+            });
+            updateInitialHistoryBottomAnchorLayout();
+            if ($messages.length) {
+                $messages[0].scrollTop = $messages[0].scrollHeight;
+            }
+            var after = captureViewportMetrics();
+            historyBackfillInProgress = false;
+            logDomCap('initial-backfill-done', {
+                batchMounted: result.mounted,
+                batchStart: result.firstIndex,
+                batchEnd: result.lastIndex,
+                droppedFromBottom: result.droppedFromBottom,
+                scrollDelta: result.scrollDelta,
+                scrollYAfter: after.scrollY,
+                documentHeightAfter: after.scrollHeight
+            });
+
+            if (historyWindowStart <= initialHistoryTargetStart) {
+                finishInitialHistoryHydration('target-window-mounted');
+                return;
+            }
+
+            historyHydrationPhase = 'reverse-backfill-pending';
+            scheduleInitialHistoryBackfill(delay);
+        }, delay);
+
+        logDomCap('initial-backfill-scheduled', {
+            delayMs: delay,
+            remainingRows: historyWindowStart - initialHistoryTargetStart
+        });
+    }
+
     function rebuildHistoryDomFromCanonicalWindow() {
         if (streamingActive()) return;
         var $typing = $('#typing-indicator').detach();
@@ -910,24 +1170,14 @@
         if ($tools.length) {
             $messages.append($tools);
         }
-        var mounted = 0;
-        for (var i = historyWindowStart; i <= historyWindowEnd && i >= 0 && i < canonicalHistory.length; i++) {
-            var msg = canonicalHistory[i];
-            var $m = buildMessageElement(msg.role, msg.content, null, {
-                supervisor: msg.supervisor,
-                interventionType: msg.interventionType,
-                source: msg.source
-            });
-            $m.attr('data-canonical-index', String(i));
-            hydrateDebugForCanonicalIndex($m, i);
-            $messages.append($m);
-            mounted++;
-        }
+        var built = buildCanonicalRangeFragment(historyWindowStart, historyWindowEnd);
+        $messages.append(built.fragment);
         if ($typing.length) {
             $messages.append($typing);
         }
+        syncHistoryWindowFromDom('rebuild-from-canonical');
         updateLoadEarlierVisibility();
-        logDomCap('rebuild-from-canonical', { mountedRows: mounted });
+        logDomCap('rebuild-from-canonical', { mountedRows: built.mounted });
     }
 
     function removeBottomMessageBlocks(n) {
@@ -945,10 +1195,7 @@
                 $last.prevAll().not('#chat-history-tools').addBack().remove();
             }
         }
-        historyWindowEnd -= n;
-        if (historyWindowEnd < historyWindowStart - 1) {
-            historyWindowEnd = historyWindowStart - 1;
-        }
+        syncHistoryWindowFromDom('drop-bottom');
         logDomCap('drop-bottom-done', { historyWindowEndAfter: historyWindowEnd });
     }
 
@@ -988,39 +1235,30 @@
             try {
                 var batch = Math.min(batchSize, historyWindowStart);
                 var winBefore = historyWindowStart + '..' + historyWindowEnd;
-                logDomCap('prepend-start', { batch: batch, windowBefore: winBefore });
-                var oldH = document.documentElement.scrollHeight;
-                var oldY = window.scrollY;
-
-                var $tools = $('#chat-history-tools');
-                var $after = $tools;
-                for (var idx = historyWindowStart - batch; idx < historyWindowStart; idx++) {
-                    var msg = canonicalHistory[idx];
-                    var $m = buildMessageElement(msg.role, msg.content, null, {
-                        supervisor: msg.supervisor,
-                        interventionType: msg.interventionType,
-                        source: msg.source
-                    });
-                    $m.attr('data-canonical-index', String(idx));
-                    hydrateDebugForCanonicalIndex($m, idx);
-                    $after.after($m);
-                    $after = $m;
-                }
-                historyWindowStart -= batch;
-
-                var $msgs = $messages.children('.message');
-                var over = $msgs.length - chatDomCap;
-                if (over > 0) {
-                    logDomCap('prepend-cap-overflow', { domRowsBeforeCap: $msgs.length, dropFromBottom: over });
-                    removeBottomMessageBlocks(over);
-                }
-
-                var newH = document.documentElement.scrollHeight;
-                window.scrollTo(0, oldY + (newH - oldH));
+                var before = captureViewportMetrics();
+                logDomCap('prepend-start', {
+                    batch: batch,
+                    windowBefore: winBefore,
+                    scrollYBefore: before.scrollY,
+                    documentHeightBefore: before.scrollHeight
+                });
+                var result = prependCanonicalRange(historyWindowStart - batch, historyWindowStart - 1, {
+                    preserveViewport: true,
+                    enforceCap: true,
+                    reason: 'user-prepend'
+                });
+                var after = captureViewportMetrics();
                 updateLoadEarlierVisibility();
                 logDomCap('prepend-done', {
                     windowAfter: historyWindowStart + '..' + historyWindowEnd,
-                    domMessageRows: $messages.children('.message').length
+                    domMessageRows: $messages.children('.message').length,
+                    batchMounted: result.mounted,
+                    batchStart: result.firstIndex,
+                    batchEnd: result.lastIndex,
+                    droppedFromBottom: result.droppedFromBottom,
+                    scrollDelta: result.scrollDelta,
+                    scrollYAfter: after.scrollY,
+                    documentHeightAfter: after.scrollHeight
                 });
             } finally {
                 loadEarlierInProgress = false;
@@ -1039,45 +1277,85 @@
         }
     }
 
-    // Load chat history — hydrate canonical; mount tail window [historyWindowStart..end] (P6)
+    // Load chat history — hydrate canonical from the actual last message first.
     function loadHistory() {
         try {
             var parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
             canonicalHistory = Array.isArray(parsed) ? parsed : [];
+            clearInitialHistoryBackfillTimer();
+            initialHistoryHydrationActive = false;
+            historyBackfillInProgress = false;
+            historyHydrationPhase = 'idle';
             resetTransientRunDebugMaps();
-            historyWindowEnd = canonicalHistory.length - 1;
-            historyWindowStart = Math.max(0, canonicalHistory.length - chatDomCap);
 
-            for (var hi = historyWindowStart; hi < canonicalHistory.length; hi++) {
-                var msg = canonicalHistory[hi];
-                var $m = buildMessageElement(msg.role, msg.content, null, {
-                    supervisor: msg.supervisor,
-                    interventionType: msg.interventionType,
-                    source: msg.source
-                });
-                $m.attr('data-canonical-index', String(hi));
-                hydrateDebugForCanonicalIndex($m, hi);
-                $messages.append($m);
+            var lastIndex = canonicalHistory.length - 1;
+            historyWindowEnd = lastIndex;
+            initialHistoryTargetStart = Math.max(0, canonicalHistory.length - chatDomCap);
+            if (canonicalHistory.length === 0) {
+                historyWindowStart = 0;
+                disableInitialHistoryBottomAnchor('load-history-empty');
+                updateLoadEarlierVisibility();
+                logDomCap('load-history-empty');
+                return;
             }
+
+            historyWindowStart = lastIndex;
+            initialHistoryHydrationActive = historyWindowStart > initialHistoryTargetStart;
+            historyHydrationPhase = initialHistoryHydrationActive ? 'last-message-mounted' : 'idle';
+
+            var $typing = $('#typing-indicator').detach();
+            var $tools = $('#chat-history-tools').detach();
+            enableInitialHistoryBottomAnchor('load-history');
+            $messages.empty();
+            if ($tools.length) {
+                $messages.append($tools);
+            }
+            var built = buildCanonicalRangeFragment(historyWindowStart, historyWindowEnd);
+            $messages.append(built.fragment);
+            if ($typing.length) {
+                $messages.append($typing);
+            }
+            updateInitialHistoryBottomAnchorLayout();
+            if ($messages.length) {
+                $messages[0].scrollTop = $messages[0].scrollHeight;
+            }
+            syncHistoryWindowFromDom('load-history-last-message-first');
             updateLoadEarlierVisibility();
-            scrollChatToBottom();
-            logDomCap('load-history', { mountedFromIndex: historyWindowStart });
+            logDomCap('load-history-last-mounted', {
+                mountedFromIndex: historyWindowStart,
+                mountedRows: built.mounted,
+                targetStart: initialHistoryTargetStart,
+                lastIndex: lastIndex
+            });
+            if (initialHistoryHydrationActive) {
+                scheduleInitialHistoryBackfill(120);
+            } else {
+                finishInitialHistoryHydration('last-message-covered-target');
+            }
         } catch (err) {
             console.error('Failed to load chat history:', err);
             canonicalHistory = [];
             historyWindowStart = 0;
             historyWindowEnd = -1;
+            initialHistoryTargetStart = 0;
+            finishInitialHistoryHydration('load-history-error');
         }
     }
 
     // Clear chat history
     function clearHistory() {
         localStorage.removeItem(STORAGE_KEY);
+        clearInitialHistoryBackfillTimer();
         canonicalHistory = [];
         debugByCanonicalIndex = {};
         resetTransientRunDebugMaps();
         historyWindowStart = 0;
         historyWindowEnd = -1;
+        initialHistoryTargetStart = 0;
+        initialHistoryHydrationActive = false;
+        historyBackfillInProgress = false;
+        historyHydrationPhase = 'idle';
+        disableInitialHistoryBottomAnchor('clear-history');
         var $typing = $('#typing-indicator').detach();
         var $tools = $('#chat-history-tools').detach();
         $messages.empty();
@@ -1333,6 +1611,10 @@
             } else {
                 trimChatDomIfNeeded();
             }
+            if (initialHistoryHydrationActive) {
+                historyHydrationPhase = 'reverse-backfill-pending';
+                scheduleInitialHistoryBackfill(120);
+            }
             updateLoadEarlierVisibility();
         });
         
@@ -1367,6 +1649,10 @@
             $currentBubble = null;
             resetThinkingStreamState(null);
             finalizeRunDebugAfterDone(erroredRunId, true);
+            if (initialHistoryHydrationActive) {
+                historyHydrationPhase = 'reverse-backfill-pending';
+                scheduleInitialHistoryBackfill(120);
+            }
         });
         
         eventSource.addEventListener('agent_message', function(e) {
@@ -2110,14 +2396,15 @@
     $('#chat-load-earlier').on('click', function() {
         prependHistoryBatch(CHAT_LOAD_EARLIER_BATCH);
     });
-    $(window).on('scroll', function() {
+    $messages.on('scroll', function() {
         if (historyWindowStart <= 0) return;
-        if (window.scrollY > 200) return;
+        if (!$messages.length) return;
+        if ($messages[0].scrollTop > 200) return;
         if (Date.now() - lastAutoPrependAt < CHAT_LOAD_EARLIER_MIN_GAP_MS) return;
         if (loadEarlierScrollTimer) return;
         loadEarlierScrollTimer = setTimeout(function() {
             loadEarlierScrollTimer = null;
-            if (historyWindowStart > 0 && window.scrollY <= 200) {
+            if (historyWindowStart > 0 && $messages.length && $messages[0].scrollTop <= 200) {
                 prependHistoryBatch(CHAT_LOAD_EARLIER_BATCH);
                 lastAutoPrependAt = Date.now();
             }
@@ -2128,8 +2415,12 @@
     updateStreamModeUI();
     loadHistory();
     connect();
+    function handleWindowResize() {
+        updateComposerReserve();
+        updateInitialHistoryBottomAnchorLayout();
+    }
     updateComposerReserve();
-    $(window).on('resize', updateComposerReserve);
+    $(window).on('resize', handleWindowResize);
     $input.focus();
     });
 })();

@@ -3,8 +3,10 @@ package web
 
 import (
 	"embed"
+	"fmt"
 	"html/template"
 	"net/http"
+	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/user"
@@ -52,6 +54,7 @@ type TemplateData struct {
 	Categories     []SectionCategory // sidebar categories
 	Content        template.HTML     // main content
 	CurrentNav     string            // active nav item
+	AssetVersion   string
 }
 
 // HandleWizard serves the wizard page
@@ -62,6 +65,7 @@ func (h *Handlers) HandleWizard(w http.ResponseWriter, r *http.Request) {
 		EditMode:       false,
 		Title:          "Setup Wizard",
 		CurrentNav:     "wizard",
+		AssetVersion:   setupAssetVersion(),
 	}
 
 	if err := h.wizardTmpl.ExecuteTemplate(w, "base", data); err != nil {
@@ -79,6 +83,7 @@ func (h *Handlers) HandleEdit(w http.ResponseWriter, r *http.Request) {
 		Title:          "Configuration Editor",
 		Categories:     EditorSections,
 		CurrentNav:     "edit",
+		AssetVersion:   setupAssetVersion(),
 	}
 
 	if err := h.editTmpl.ExecuteTemplate(w, "base", data); err != nil {
@@ -94,4 +99,8 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux, configPath string) {
 		configPath: configPath,
 		handlers:   h,
 	})
+}
+
+func setupAssetVersion() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano())
 }

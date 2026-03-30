@@ -54,6 +54,12 @@
                 <i id="wizard-next-icon" class="bi bi-arrow-right"></i>
             </button>
         </div>
+        <div id="wizard-step-status-note" class="card-footer bg-white border-top-0 pt-0 d-none">
+            <small id="wizard-step-status-note-body" class="text-success">
+                <i id="wizard-step-status-note-icon" class="bi bi-check2-circle me-1"></i>
+                <span id="wizard-step-status-note-text"></span>
+            </small>
+        </div>
     </div>
     
     <!-- Help text -->
@@ -145,5 +151,6 @@
 
 {{define "scripts"}}
 <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
-<script src="/setup/static/editor.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="/setup/static/editor.js?v={{.AssetVersion}}"></script>
 {{end}}

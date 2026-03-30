@@ -88,6 +88,7 @@ The **Transcript** button opens a read-only page from your browser-saved chat hi
 ## Chat History and Performance
 
 The chat keeps a working window in the DOM for smooth performance and lets you load earlier messages as needed.
+On first load, the chat renders the latest saved message first and then fills the capped working window upward from there.
 
 If your chat is very long:
 - use **Load earlier messages** near the top

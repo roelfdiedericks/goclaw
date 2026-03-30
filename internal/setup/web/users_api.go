@@ -79,6 +79,12 @@ type SetPasswordRequest struct {
 	Password string `json:"password"`
 }
 
+// UpdateOwnerPairingRequest stages resolved owner channel identities at save time.
+type UpdateOwnerPairingRequest struct {
+	TelegramID string `json:"telegram_id,omitempty"`
+	WhatsAppID string `json:"whatsapp_id,omitempty"`
+}
+
 // HandleListUsers returns all users (GET /setup/api/users)
 func (u *UsersAPI) HandleListUsers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -111,6 +117,56 @@ func (u *UsersAPI) HandleListUsers(w http.ResponseWriter, r *http.Request) {
 			"users": userList,
 			"roles": roles,
 		},
+	})
+}
+
+// HandleUpdateOwnerPairing applies staged owner channel identities.
+func (u *UsersAPI) HandleUpdateOwnerPairing(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, APIResponse{Success: false, Message: "Method not allowed"})
+		return
+	}
+
+	var req UpdateOwnerPairingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, APIResponse{Success: false, Message: "Invalid JSON"})
+		return
+	}
+
+	users, err := u.loadUsers()
+	if err != nil {
+		L_error("users-api: failed to load users", "error", err)
+		writeJSON(w, http.StatusInternalServerError, APIResponse{Success: false, Message: "Failed to load users"})
+		return
+	}
+
+	ownerUsername := users.GetOwner()
+	if ownerUsername == "" {
+		writeJSON(w, http.StatusBadRequest, APIResponse{Success: false, Message: "No owner user found in users.json"})
+		return
+	}
+	entry, ok := users[ownerUsername]
+	if !ok || entry == nil {
+		writeJSON(w, http.StatusBadRequest, APIResponse{Success: false, Message: "Owner user could not be loaded"})
+		return
+	}
+
+	if req.TelegramID != "" {
+		entry.TelegramID = strings.TrimSpace(req.TelegramID)
+	}
+	if req.WhatsAppID != "" {
+		entry.WhatsAppID = strings.TrimSpace(req.WhatsAppID)
+	}
+
+	if err := u.saveUsers(users); err != nil {
+		writeJSON(w, http.StatusInternalServerError, APIResponse{Success: false, Message: "Failed to save owner pairing identities"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data:    userEntryToResponse(ownerUsername, entry),
+		Message: "Owner pairing identities saved",
 	})
 }
 

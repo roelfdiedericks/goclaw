@@ -51,6 +51,9 @@ func SaveWizardConfigToPath(data *WizardData, configPath string) error {
 	if data.UserTelegramID != "" {
 		userEntry["telegram_id"] = data.UserTelegramID
 	}
+	if data.UserWhatsAppID != "" {
+		userEntry["whatsapp_id"] = data.UserWhatsAppID
+	}
 	if data.UserPassword != "" {
 		hash, err := user.HashPassword(data.UserPassword)
 		if err != nil {
