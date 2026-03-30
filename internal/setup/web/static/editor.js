@@ -3472,11 +3472,16 @@
             this.renderStepStatusNote(blocker);
             this.ensureWizardInteractionStyles();
             const $target = this.findBlockedTarget(blocker);
+            const $action = this.findBlockedAction(blocker, $target);
             console.debug('[setup wizard] focusBlockedStep target', {
                 count: $target.length,
                 className: $target.length ? ($target.attr('class') || '') : '',
                 bind: blocker.targetPath || '',
                 channel: blocker.channel || ''
+            });
+            console.debug('[setup wizard] focusBlockedStep action', {
+                count: $action.length,
+                className: $action.length ? ($action.attr('class') || '') : ''
             });
             if (!$target.length) {
                 console.warn('[setup wizard] blocked step target not found', blocker);
@@ -3490,6 +3495,11 @@
             $target.addClass('wizard-blocked-focus');
             console.debug('[setup wizard] applied wizard-blocked-focus class');
             window.setTimeout(() => $target.removeClass('wizard-blocked-focus'), 650);
+            if ($action.length) {
+                $action.addClass('wizard-blocked-action-focus');
+                console.debug('[setup wizard] applied wizard-blocked-action-focus class');
+                window.setTimeout(() => $action.removeClass('wizard-blocked-action-focus'), 900);
+            }
         }
 
         findBlockedTarget(blocker) {
@@ -3504,6 +3514,16 @@
             }
             if (blocker.channel) {
                 return this.$stepContent.find(`[data-pairing-channel="${blocker.channel}"]`).first();
+            }
+            return $();
+        }
+
+        findBlockedAction(blocker, $target) {
+            if (!blocker) {
+                return $();
+            }
+            if (blocker.channel && $target && $target.length) {
+                return $target.find('.js-pairing-start').first();
             }
             return $();
         }
@@ -3526,6 +3546,10 @@
                     border-radius: 10px;
                     background: rgba(255, 193, 7, 0.18);
                 }
+                .wizard-blocked-action-focus {
+                    animation: wizard-blocked-action-pulse 900ms ease-out 1;
+                    box-shadow: 0 0 0 4px rgba(255, 193, 7, 0.26), 0 0 18px rgba(255, 193, 7, 0.38);
+                }
                 @keyframes wizard-blocked-shake {
                     0%, 100% { transform: translateX(0); }
                     15% { transform: translateX(-10px); }
@@ -3537,6 +3561,11 @@
                 @keyframes wizard-blocked-flash {
                     0% { background: rgba(255, 193, 7, 0.30); }
                     100% { background: rgba(255, 193, 7, 0.12); }
+                }
+                @keyframes wizard-blocked-action-pulse {
+                    0% { transform: scale(1); }
+                    35% { transform: scale(1.04); }
+                    100% { transform: scale(1); }
                 }
             `;
             document.head.appendChild(style);
