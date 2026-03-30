@@ -487,24 +487,19 @@ func RunOnboardWizardTview() error {
 func buildWizardSteps(data *WizardData) []forms.WizardStep {
 	steps := []forms.WizardStep{
 		stepWelcome(data),
-	}
-
-	// Add OpenClaw detection if found
-	if data.OpenClawExists {
-		steps = append(steps, stepOpenClawDetect(data))
-	}
-
-	steps = append(steps,
 		stepAgentIdentity(data),
 		stepWorkspace(data),
 		stepUserSetup(data),
-		stepTelegram(data),
-		stepWhatsApp(data),
-		stepChannelPairing(data),
-		stepHTTP(data),
-		stepSTT(data),
+		stepChannels(data),
+	}
+
+	if data.TelegramEnabled || data.WhatsAppEnabled {
+		steps = append(steps, stepChannelPairing(data))
+	}
+
+	steps = append(steps,
 		stepLLMProvider(data),
-		stepVoiceLLM(data),
+		stepVoiceSettings(data),
 		stepSandbox(data),
 		stepReview(data),
 	)
@@ -560,39 +555,28 @@ func stepWelcome(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
 		Title: "Welcome",
 		Content: func(w *forms.Wizard) tview.Primitive {
-			if data.ConfigExists {
-				// Config exists - show Editor button option
-				text := fmt.Sprintf(`[white]Welcome back to [cyan]GoClaw[white]!
+			if data.OpenClawExists && !data.IsDirty("OpenClawImport") && !data.OpenClawImport {
+				data.OpenClawImport = true
+			}
 
-[yellow]Existing configuration detected:[white]
+			var sections []string
+			if data.ConfigExists {
+				sections = append(sections, fmt.Sprintf(`[yellow]Existing configuration detected:[white]
   %s
 
 You can open the [yellow]Editor[white] for quick access to specific settings,
-or click [yellow]Next[white] to walk through all settings step by step.`, data.ConfigPath)
+or click [yellow]Next[white] to walk through all settings step by step.`, data.ConfigPath))
+			}
+			if data.OpenClawExists {
+				sections = append(sections, fmt.Sprintf(`[yellow]OpenClaw installation detected:[white]
+  Workspace: %s
+  Telegram: %s
 
-				header := tview.NewTextView().
-					SetDynamicColors(true).
-					SetText(text)
-				header.SetBorder(false)
-
-				// Add Editor button in content
-				form := tview.NewForm()
-				form.SetBorder(false)
-				enableFormMouseScroll(form, w)
-				form.AddButton("Open Editor", func() {
-					w.SetData("goToEditor", true)
-					w.App().Stop()
-				})
-
-				layout := tview.NewFlex().
-					SetDirection(tview.FlexRow).
-					AddItem(header, 8, 0, false).
-					AddItem(form, 3, 0, true)
-
-				return layout
+Use the option below if you want to import those values into this setup run.`,
+					valueOrDefault(data.openClawImportState.WorkspacePath, "(not set)"),
+					boolToConfigured(data.openClawImportState.TelegramToken != "")))
 			}
 
-			// No config - show welcome message
 			text := `[white]Welcome to [cyan]GoClaw[white]!
 
 This wizard will help you set up your personal AI assistant.
@@ -600,26 +584,117 @@ This wizard will help you set up your personal AI assistant.
 We'll configure:
   • Agent identity
   • Workspace location
-  • User profile
-  • Telegram bot (optional)
-  • HTTP server
-  • Browser profiles
-  • Sandboxing
-
-[gray]Note: LLM providers are configured separately via 'goclaw setup edit'[white]
+  • Owner account
+  • Communication channels
+  • Channel pairing (if needed)
+  • LLM provider
+  • Voice settings
+  • Security & skills
 
 Press [yellow]Next[white] to begin.`
+			if len(sections) > 0 {
+				text += "\n\n" + strings.Join(sections, "\n\n")
+			}
 
-			tv := tview.NewTextView().
+			header := tview.NewTextView().
 				SetDynamicColors(true).
 				SetText(text)
-			tv.SetBorder(false)
-			return tv
+			header.SetBorder(false)
+
+			form := tview.NewForm()
+			form.SetBorder(false)
+			enableFormMouseScroll(form, w)
+
+			if data.OpenClawExists {
+				form.AddCheckbox("Import settings from OpenClaw", data.OpenClawImport, func(checked bool) {
+					data.OpenClawImport = checked
+					data.MarkDirty("OpenClawImport")
+				})
+			}
+
+			if data.ConfigExists {
+				form.AddButton("Open Editor", func() {
+					w.SetData("goToEditor", true)
+					w.App().Stop()
+				})
+			}
+
+			layout := tview.NewFlex().
+				SetDirection(tview.FlexRow).
+				AddItem(header, 0, 1, false).
+				AddItem(form, 0, 1, true)
+
+			return layout
+		},
+		OnExit: func(w *forms.Wizard) error {
+			if data.OpenClawExists {
+				data.ApplyOpenClawImport(data.OpenClawImport)
+			}
+			w.SetSteps(buildWizardSteps(data))
+			return nil
+		},
+	}
+}
+
+func stepChannels(data *WizardData) forms.WizardStep {
+	return forms.WizardStep{
+		Title: "Communication Channels",
+		Content: func(w *forms.Wizard) tview.Primitive {
+			form := tview.NewForm()
+			form.SetBorder(false)
+			enableFormMouseScroll(form, w)
+
+			form.AddCheckbox("Enable HTTP Server", data.HTTPEnabled, func(checked bool) {
+				data.HTTPEnabled = checked
+				data.MarkDirty("HTTPEnabled")
+			})
+			form.AddInputField("Listen Address", data.HTTPListen, 30, nil, func(text string) {
+				data.HTTPListen = text
+				data.MarkDirty("HTTPListen")
+			})
+
+			form.AddCheckbox("Enable Telegram Bot", data.TelegramEnabled, func(checked bool) {
+				data.TelegramEnabled = checked
+				data.MarkDirty("TelegramEnabled")
+			})
+			form.AddInputField("Telegram Bot Token", data.TelegramToken, 50, nil, func(text string) {
+				data.TelegramToken = text
+				data.MarkDirty("TelegramToken")
+			})
+
+			form.AddCheckbox("Enable WhatsApp", data.WhatsAppEnabled, func(checked bool) {
+				data.WhatsAppEnabled = checked
+				data.MarkDirty("WhatsAppEnabled")
+			})
+
+			return formWithHeader(`[cyan]Communication Channels[white]
+
+Configure the channels you want GoClaw to use.
+
+[yellow]HTTP Server[white] powers the local web UI.
+[yellow]Telegram Bot[white] lets you chat via Telegram and requires a bot token from [yellow]@BotFather[white].
+[yellow]WhatsApp[white] requires device linking in the next pairing step when enabled.`, 7, form)
+		},
+		OnExit: func(w *forms.Wizard) error {
+			if !data.HTTPEnabled && !data.TelegramEnabled && !data.WhatsAppEnabled {
+				return fmt.Errorf("at least one channel must be enabled")
+			}
+			if data.HTTPEnabled && strings.TrimSpace(data.HTTPListen) == "" {
+				return fmt.Errorf("listen address is required when HTTP is enabled")
+			}
+			if data.TelegramEnabled && strings.TrimSpace(data.TelegramToken) == "" {
+				return fmt.Errorf("telegram bot token is required when Telegram is enabled")
+			}
+			w.SetSteps(buildWizardSteps(data))
+			L_info("wizard: channels", "http", data.HTTPEnabled, "telegram", data.TelegramEnabled, "whatsapp", data.WhatsAppEnabled)
+			return nil
 		},
 	}
 }
 
 // Step: OpenClaw Detection
+//
+//nolint:unused // kept as a fallback reference while the welcome flow owns migration UX.
 func stepOpenClawDetect(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
 		Title: "OpenClaw Migration",
@@ -691,7 +766,7 @@ including memory, transcripts, and project data.`, 3, form)
 // Step: User Setup
 func stepUserSetup(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
-		Title: "User Profile",
+		Title: "Owner Account",
 		Content: func(w *forms.Wizard) tview.Primitive {
 			form := tview.NewForm()
 			form.SetBorder(false)
@@ -745,6 +820,8 @@ Password is used for HTTP web interface authentication.`, 3, form)
 }
 
 // Step: Telegram
+//
+//nolint:unused // superseded by the combined Communication Channels step.
 func stepTelegram(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
 		Title: "Telegram",
@@ -777,6 +854,8 @@ Get a bot token from [yellow]@BotFather[white] on Telegram.`, 3, form)
 }
 
 // Step: WhatsApp
+//
+//nolint:unused // superseded by the combined Communication Channels step.
 func stepWhatsApp(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
 		Title: "WhatsApp",
@@ -847,7 +926,7 @@ Successful pairing only stages the owner identity until you finish setup.`)
 
 			form.AddButton("Start Telegram Pairing", func() {
 				if !data.TelegramEnabled {
-					w.App().ShowModal("Enable Telegram first in the Telegram step.", []string{"OK"}, nil)
+					w.App().ShowModal("Enable Telegram first in the Communication Channels step.", []string{"OK"}, nil)
 					return
 				}
 				if strings.TrimSpace(data.TelegramToken) == "" {
@@ -876,7 +955,7 @@ Successful pairing only stages the owner identity until you finish setup.`)
 			})
 			form.AddButton("Start WhatsApp Pairing", func() {
 				if !data.WhatsAppEnabled {
-					w.App().ShowModal("Enable WhatsApp first in the WhatsApp step.", []string{"OK"}, nil)
+					w.App().ShowModal("Enable WhatsApp first in the Communication Channels step.", []string{"OK"}, nil)
 					return
 				}
 				res := bus.SendCommandWithSource("whatsapp.pairing", "start", setuppairing.WhatsAppStartRequest{
@@ -1006,6 +1085,8 @@ func extractPairingStatus(data any, channel, sessionID string) setuppairing.Stat
 }
 
 // Step: HTTP
+//
+//nolint:unused // superseded by the combined Communication Channels step.
 func stepHTTP(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
 		Title: "HTTP Server",
@@ -1098,6 +1179,8 @@ func stepHTTP(data *WizardData) forms.WizardStep {
 }
 
 // Step: Speech-to-Text
+//
+//nolint:unused // superseded by the combined Voice Settings step.
 func stepSTT(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
 		Title: "Speech-to-Text",
@@ -1192,6 +1275,8 @@ This requires a model file (~39 MB for the tiny English model).
 }
 
 // Step: VoiceLLM (Real-time Voice)
+//
+//nolint:unused // superseded by the combined Voice Settings step.
 func stepVoiceLLM(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
 		Title: "Real-time Voice",
@@ -1338,7 +1423,7 @@ You can set this up later with [yellow]goclaw browser setup[white].`, 3, form)
 // Step: Sandboxing
 func stepSandbox(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
-		Title: "Sandboxing",
+		Title: "Security & Skills",
 		Content: func(w *forms.Wizard) tview.Primitive {
 			if sandbox.CurrentSandboxBackend() == sandbox.BackendNone {
 				tv := tview.NewTextView().
@@ -1362,14 +1447,20 @@ On other platforms, the exec and browser tools run without OS sandbox enforcemen
 					break
 				}
 			}
+			initializing := true
 
 			form.AddDropDown("Security preset", presetLabels, presetIndex, func(option string, optionIndex int) {
+				if initializing {
+					return
+				}
 				if optionIndex < 0 || optionIndex >= len(presetValues) {
 					return
 				}
 				selectedPreset := presetValues[optionIndex]
+				if selectedPreset == NormalizeSandboxPreset(data.SandboxPreset) {
+					return
+				}
 				warning := SandboxPresetWarningText(selectedPreset)
-				previousPreset := NormalizeSandboxPreset(data.SandboxPreset)
 				if selectedPreset == SandboxPresetCustom {
 					data.SandboxPreset = selectedPreset
 					data.SandboxAdvanced = true
@@ -1377,92 +1468,116 @@ On other platforms, the exec and browser tools run without OS sandbox enforcemen
 					w.App().ShowModal(
 						warning.Title+"\n\n"+warning.Body,
 						[]string{"OK"},
-						nil,
+						func(_ int, _ string) {
+							w.RefreshCurrentStep()
+						},
 					)
 					return
 				}
-				sandboxPresetConsentModal(w, warning, func() {
-					data.SandboxPreset = selectedPreset
-					data.MarkDirty("SandboxPreset")
-					data.MarkDirty("SandboxConsentPermissive")
-					data.MarkDirty("SandboxConsentAssistant")
-					data.MarkDirty("SandboxConsentHardened")
-					data.SandboxConsentPermissive = selectedPreset == SandboxPresetPermissive
-					data.SandboxConsentAssistant = selectedPreset == SandboxPresetAssistant
-					data.SandboxConsentHardened = selectedPreset == SandboxPresetHardened
-					refreshSandboxConsentCheckbox(form, data)
-					if !data.SandboxAdvanced {
-						ApplySandboxPreset(data, selectedPreset)
-						refreshSandboxAdvancedControls(form, data)
-					}
-				}, func() {
-					if dd, ok := form.GetFormItemByLabel("Security preset").(*tview.DropDown); ok {
-						dd.SetCurrentOption(presetDropDownIndex(previousPreset))
-					}
-				})
-			})
-
-			form.AddCheckbox("I acknowledge the selected preset warning", false, func(checked bool) {
-				data.SandboxConsentPermissive = false
-				data.SandboxConsentAssistant = false
-				data.SandboxConsentHardened = false
-				if checked {
-					switch NormalizeSandboxPreset(data.SandboxPreset) {
-					case SandboxPresetPermissive:
-						data.SandboxConsentPermissive = true
-					case SandboxPresetHardened:
-						data.SandboxConsentHardened = true
-					default:
-						data.SandboxConsentAssistant = true
-					}
-				}
+				data.SandboxPreset = selectedPreset
+				data.MarkDirty("SandboxPreset")
 				data.MarkDirty("SandboxConsentPermissive")
 				data.MarkDirty("SandboxConsentAssistant")
 				data.MarkDirty("SandboxConsentHardened")
+				data.SandboxConsentPermissive = false
+				data.SandboxConsentAssistant = false
+				data.SandboxConsentHardened = false
+				if !data.SandboxAdvanced {
+					ApplySandboxPreset(data, selectedPreset)
+				}
+				w.RefreshCurrentStep()
 			})
-			refreshSandboxConsentCheckbox(form, data)
+
+			if NormalizeSandboxPreset(data.SandboxPreset) != SandboxPresetCustom {
+				form.AddCheckbox("I acknowledge the selected preset warning", false, func(checked bool) {
+					if initializing {
+						return
+					}
+					data.SandboxConsentPermissive = false
+					data.SandboxConsentAssistant = false
+					data.SandboxConsentHardened = false
+					if !checked {
+						data.MarkDirty("SandboxConsentPermissive")
+						data.MarkDirty("SandboxConsentAssistant")
+						data.MarkDirty("SandboxConsentHardened")
+						return
+					}
+
+					preset := NormalizeSandboxPreset(data.SandboxPreset)
+					warning := SandboxPresetWarningText(preset)
+					sandboxPresetConsentModal(w, warning, func() {
+						switch preset {
+						case SandboxPresetPermissive:
+							data.SandboxConsentPermissive = true
+						case SandboxPresetHardened:
+							data.SandboxConsentHardened = true
+						default:
+							data.SandboxConsentAssistant = true
+						}
+						data.MarkDirty("SandboxConsentPermissive")
+						data.MarkDirty("SandboxConsentAssistant")
+						data.MarkDirty("SandboxConsentHardened")
+						w.RefreshCurrentStep()
+					}, func() {
+						data.MarkDirty("SandboxConsentPermissive")
+						data.MarkDirty("SandboxConsentAssistant")
+						data.MarkDirty("SandboxConsentHardened")
+						w.RefreshCurrentStep()
+					})
+				})
+				refreshSandboxConsentCheckbox(form, data)
+			} else {
+				data.SandboxConsentPermissive = false
+				data.SandboxConsentAssistant = false
+				data.SandboxConsentHardened = false
+			}
 
 			form.AddCheckbox("Show advanced sandbox settings", data.SandboxAdvanced, func(checked bool) {
+				if initializing {
+					return
+				}
 				data.SandboxAdvanced = checked
 				data.MarkDirty("SandboxAdvanced")
 				if !checked {
 					ApplySandboxPreset(data, data.SandboxPreset)
-					refreshSandboxAdvancedControls(form, data)
 				}
+				w.RefreshCurrentStep()
 			})
 
-			modeOptions := sandbox.SupportedModeOptions()
-			modeLabels := make([]string, 0, len(modeOptions))
-			for _, mode := range modeOptions {
-				modeLabels = append(modeLabels, mode.Label)
+			if data.SandboxAdvanced {
+				modeOptions := sandbox.SupportedModeOptions()
+				modeLabels := make([]string, 0, len(modeOptions))
+				for _, mode := range modeOptions {
+					modeLabels = append(modeLabels, mode.Label)
+				}
+				form.AddDropDown("Sandbox mode", modeLabels, modeDropDownIndex(data.SandboxMode, modeOptions), func(_ string, optionIndex int) {
+					if optionIndex < 0 || optionIndex >= len(modeOptions) {
+						return
+					}
+					data.SandboxMode = modeOptions[optionIndex].Value
+					data.MarkDirty("SandboxMode")
+				})
+
+				form.AddCheckbox("Enable sandboxing", data.SandboxEnabled, func(checked bool) {
+					data.SandboxEnabled = checked
+					data.MarkDirty("SandboxEnabled")
+				})
+
+				form.AddCheckbox("Enable exec sandboxing", data.ExecSandboxEnabled, func(checked bool) {
+					data.ExecSandboxEnabled = checked
+					data.MarkDirty("ExecSandboxEnabled")
+				})
+
+				form.AddCheckbox("Enable browser sandboxing", data.BrowserSandboxEnabled, func(checked bool) {
+					data.BrowserSandboxEnabled = checked
+					data.MarkDirty("BrowserSandboxEnabled")
+				})
+
+				form.AddCheckbox("Enable file tool sandboxing", data.FileToolsSandboxEnabled, func(checked bool) {
+					data.FileToolsSandboxEnabled = checked
+					data.MarkDirty("FileToolsSandboxEnabled")
+				})
 			}
-			form.AddDropDown("Sandbox mode", modeLabels, modeDropDownIndex(data.SandboxMode, modeOptions), func(_ string, optionIndex int) {
-				if optionIndex < 0 || optionIndex >= len(modeOptions) {
-					return
-				}
-				data.SandboxMode = modeOptions[optionIndex].Value
-				data.MarkDirty("SandboxMode")
-			})
-
-			form.AddCheckbox("Enable sandboxing", data.SandboxEnabled, func(checked bool) {
-				data.SandboxEnabled = checked
-				data.MarkDirty("SandboxEnabled")
-			})
-
-			form.AddCheckbox("Enable exec sandboxing", data.ExecSandboxEnabled, func(checked bool) {
-				data.ExecSandboxEnabled = checked
-				data.MarkDirty("ExecSandboxEnabled")
-			})
-
-			form.AddCheckbox("Enable browser sandboxing", data.BrowserSandboxEnabled, func(checked bool) {
-				data.BrowserSandboxEnabled = checked
-				data.MarkDirty("BrowserSandboxEnabled")
-			})
-
-			form.AddCheckbox("Enable file tool sandboxing", data.FileToolsSandboxEnabled, func(checked bool) {
-				data.FileToolsSandboxEnabled = checked
-				data.MarkDirty("FileToolsSandboxEnabled")
-			})
 
 			// Skills installation sources
 			form.AddTextView("", "\n─── Skill Installation Sources ───", 50, 2, false, false)
@@ -1489,6 +1604,7 @@ On other platforms, the exec and browser tools run without OS sandbox enforcemen
 				data.SkillsAllowLocal = checked
 				data.MarkDirty("SkillsAllowLocal")
 			})
+			initializing = false
 
 			return formWithHeader(`[cyan]Sandboxing presets[white] provide a safer starting point.
 Pick a preset, review the warning, and confirm.
@@ -1536,19 +1652,6 @@ func sandboxPresetConsentModal(w *forms.Wizard, warning SandboxPresetWarning, on
 	)
 }
 
-func presetDropDownIndex(preset string) int {
-	switch NormalizeSandboxPreset(preset) {
-	case SandboxPresetPermissive:
-		return 1
-	case SandboxPresetHardened:
-		return 2
-	case SandboxPresetCustom:
-		return 3
-	default:
-		return 0
-	}
-}
-
 func modeDropDownIndex(mode string, options []forms.Option) int {
 	for i, option := range options {
 		if option.Value == mode {
@@ -1561,24 +1664,6 @@ func modeDropDownIndex(mode string, options []forms.Option) int {
 		}
 	}
 	return 0
-}
-
-func refreshSandboxAdvancedControls(form *tview.Form, data *WizardData) {
-	if modeDropdown, ok := form.GetFormItemByLabel("Sandbox mode").(*tview.DropDown); ok {
-		modeDropdown.SetCurrentOption(modeDropDownIndex(data.SandboxMode, sandbox.SupportedModeOptions()))
-	}
-	if sandboxEnabled, ok := form.GetFormItemByLabel("Enable sandboxing").(*tview.Checkbox); ok {
-		sandboxEnabled.SetChecked(data.SandboxEnabled)
-	}
-	if execEnabled, ok := form.GetFormItemByLabel("Enable exec sandboxing").(*tview.Checkbox); ok {
-		execEnabled.SetChecked(data.ExecSandboxEnabled)
-	}
-	if browserEnabled, ok := form.GetFormItemByLabel("Enable browser sandboxing").(*tview.Checkbox); ok {
-		browserEnabled.SetChecked(data.BrowserSandboxEnabled)
-	}
-	if fileToolsEnabled, ok := form.GetFormItemByLabel("Enable file tool sandboxing").(*tview.Checkbox); ok {
-		fileToolsEnabled.SetChecked(data.FileToolsSandboxEnabled)
-	}
 }
 
 func refreshSandboxConsentCheckbox(form *tview.Form, data *WizardData) {
@@ -1628,6 +1713,15 @@ func stepLLMProvider(data *WizardData) forms.WizardStep {
 			}
 			return buildLLMProviderList(data, w)
 		},
+		OnExit: func(_ *forms.Wizard) error {
+			if strings.TrimSpace(data.LLMProviderID) == "" {
+				return fmt.Errorf("please select an LLM provider")
+			}
+			if data.LLMProviderID != "custom" && strings.TrimSpace(data.LLMAPIKey) == "" {
+				return fmt.Errorf("api key is required for the selected LLM provider")
+			}
+			return nil
+		},
 	}
 }
 
@@ -1662,13 +1756,6 @@ func buildLLMProviderList(data *WizardData, w *forms.Wizard) tview.Primitive {
 			w.RefreshCurrentStep()
 		})
 	}
-
-	list.AddItem("", "", 0, nil) // separator
-	list.AddItem("Skip (configure later)", "", 0, func() {
-		data.LLMSkipped = true
-		data.LLMProviderID = ""
-		w.NextStep()
-	})
 
 	header := tview.NewTextView().
 		SetDynamicColors(true).
@@ -1811,10 +1898,156 @@ func buildLLMConfigForm(data *WizardData, w *forms.Wizard) tview.Primitive {
 	return layout
 }
 
+func stepVoiceSettings(data *WizardData) forms.WizardStep {
+	return forms.WizardStep{
+		Title: "Voice Settings",
+		Content: func(w *forms.Wizard) tview.Primitive {
+			if data.VoiceLLMAPIKey == "" && data.LLMProviderID == "xai" && data.LLMAPIKey != "" {
+				data.VoiceLLMAPIKey = data.LLMAPIKey
+			}
+			if data.VoiceLLMAPIKey != "" && !data.VoiceLLMEnabled {
+				data.VoiceLLMEnabled = true
+			}
+			if data.VoiceLLMVoice == "" {
+				data.VoiceLLMVoice = "Eve"
+			}
+
+			defaultModel := "ggml-tiny.en.bin"
+			modelsDir := "~/.goclaw/stt/whisper"
+			expandedDir, _ := paths.ExpandTilde(modelsDir)
+			modelAvailable := stt.IsModelDownloaded(expandedDir, defaultModel)
+			if !modelAvailable {
+				modelAvailable = stt.IsModelDownloaded("/usr/share/goclaw/stt", defaultModel)
+			}
+			data.STTModelAvailable = modelAvailable
+			data.STTModel = defaultModel
+			if modelAvailable && !data.STTEnabled {
+				data.STTEnabled = true
+			}
+
+			header := tview.NewTextView().
+				SetDynamicColors(true).
+				SetWrap(true).
+				SetText(`[cyan]Voice Settings[white]
+
+Configure speech-to-text and optional real-time voice.
+Speech-to-text uses [yellow]Whisper.cpp[white] locally. Real-time voice uses [yellow]xAI[white] and works best with the HTTP channel enabled.`)
+			header.SetBorder(false)
+
+			sttForm := tview.NewForm()
+			sttForm.SetBorder(true).SetTitle(" Speech-to-Text ").SetTitleAlign(tview.AlignLeft)
+			enableFormMouseScroll(sttForm, w)
+			sttForm.AddCheckbox("Enable Speech-to-Text", data.STTEnabled, func(checked bool) {
+				data.STTEnabled = checked
+				data.MarkDirty("STTEnabled", "STTModel")
+			})
+			statusText := "[red]Not available[-] - download required"
+			if modelAvailable {
+				statusText = "[green]Ready[-] - ggml-tiny.en.bin available"
+			}
+			sttForm.AddTextView("Model Status", statusText, 50, 1, true, false)
+			if !modelAvailable {
+				sttForm.AddButton("Download Model (~39 MB)", func() {
+					w.App().ShowModal("Downloading whisper model (ggml-tiny.en.bin)...\n\nThis may take a minute.", []string{}, nil)
+					go func() {
+						model := stt.GetModel(defaultModel)
+						if model == nil {
+							w.App().App().QueueUpdateDraw(func() {
+								w.App().ShowModal("Error: Model not found in catalog", []string{"OK"}, nil)
+							})
+							return
+						}
+
+						err := stt.DownloadModel(model, modelsDir)
+						w.App().App().QueueUpdateDraw(func() {
+							if err != nil {
+								w.App().ShowModal(fmt.Sprintf("Download failed: %v", err), []string{"OK"}, nil)
+							} else {
+								data.STTModelAvailable = true
+								w.App().ShowModal("Model downloaded successfully!", []string{"OK"}, func(idx int, label string) {
+									w.RefreshCurrentStep()
+								})
+							}
+						})
+					}()
+				})
+			}
+
+			voiceForm := tview.NewForm()
+			voiceForm.SetBorder(true).SetTitle(" Voice LLM (xAI) ").SetTitleAlign(tview.AlignLeft)
+			enableFormMouseScroll(voiceForm, w)
+			voiceForm.AddCheckbox("Enable real-time voice", data.VoiceLLMEnabled, func(checked bool) {
+				data.VoiceLLMEnabled = checked
+				data.MarkDirty("VoiceLLMEnabled")
+			})
+			voiceForm.AddPasswordField("xAI API Key", data.VoiceLLMAPIKey, 50, '*', func(text string) {
+				data.VoiceLLMAPIKey = text
+				data.MarkDirty("VoiceLLMAPIKey")
+				if text != "" && !data.VoiceLLMEnabled {
+					data.VoiceLLMEnabled = true
+					data.MarkDirty("VoiceLLMEnabled")
+					w.RefreshCurrentStep()
+				}
+			})
+
+			voiceOptions := []string{"Eve", "Ara", "Rex", "Sal", "Leo"}
+			voiceIndex := 0
+			for i, v := range voiceOptions {
+				if v == data.VoiceLLMVoice {
+					voiceIndex = i
+					break
+				}
+			}
+			voiceForm.AddDropDown("Voice", voiceOptions, voiceIndex, func(option string, _ int) {
+				data.VoiceLLMVoice = option
+				data.MarkDirty("VoiceLLMVoice")
+			})
+			voiceForm.AddTextView("", "[gray]HTTP should be enabled for the /voice web experience.[white]", 50, 1, true, false)
+			voiceForm.AddButton("Test API Key", func() {
+				if data.VoiceLLMAPIKey == "" {
+					w.App().ShowModal("Please enter an API key first.", []string{"OK"}, nil)
+					return
+				}
+				validVoices := map[string]bool{"Eve": true, "Ara": true, "Rex": true, "Sal": true, "Leo": true}
+				voice := data.VoiceLLMVoice
+				if voice == "" {
+					voice = "Eve"
+				}
+				if !validVoices[voice] {
+					w.App().ShowModal(fmt.Sprintf("Unknown voice '%s'. Valid: Eve, Ara, Rex, Sal, Leo", voice), []string{"OK"}, nil)
+					return
+				}
+				if !strings.HasPrefix(data.VoiceLLMAPIKey, "xai-") {
+					w.App().ShowModal("xAI API keys typically start with 'xai-'. Please verify your key.", []string{"OK"}, nil)
+					return
+				}
+				w.App().ShowModal(fmt.Sprintf("Configuration valid!\n\nDriver: xAI\nVoice: %s", voice), []string{"OK"}, nil)
+			})
+
+			layout := tview.NewFlex().
+				SetDirection(tview.FlexRow).
+				AddItem(header, 5, 0, false).
+				AddItem(sttForm, 0, 1, true).
+				AddItem(voiceForm, 0, 1, false)
+			return layout
+		},
+		OnExit: func(_ *forms.Wizard) error {
+			if data.STTEnabled && !data.STTModelAvailable {
+				return fmt.Errorf("please download a Whisper model or disable speech-to-text")
+			}
+			if data.VoiceLLMEnabled && strings.TrimSpace(data.VoiceLLMAPIKey) == "" {
+				return fmt.Errorf("xAI API key is required when real-time voice is enabled")
+			}
+			L_info("wizard: voice settings", "stt_enabled", data.STTEnabled, "voice_enabled", data.VoiceLLMEnabled)
+			return nil
+		},
+	}
+}
+
 // Step: Review
 func stepReview(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
-		Title: "Review",
+		Title: "Review & Finish",
 		Content: func(w *forms.Wizard) tview.Primitive {
 			summary := fmt.Sprintf(`[cyan]Configuration Summary[white]
 

@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - setup: add Telegram/WhatsApp owner pairing flows across the browser wizard, browser editor, TUI wizard, and TUI editor with staged owner identity saves
 - channels: add shared setup pairing contracts plus channel-owned Telegram OTP and WhatsApp QR pairing backends
 - setup web UI: improve blocked-next guidance for consent and pairing steps, and add cache-busting for setup static assets during iteration
+- setup TUI: align onboarding step flow with the browser wizard and require explicit preset warning acknowledgement before advancing
 - installer: guide fresh installs toward `goclaw onboard` and point existing installs at both guided setup and `goclaw setup edit`
 - deps: bump `golang.org/x/image` to v0.38.0 to address the reachable TIFF decoding vulnerability flagged by `make audit`
 

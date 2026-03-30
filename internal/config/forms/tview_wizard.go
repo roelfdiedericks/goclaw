@@ -238,6 +238,42 @@ func (w *Wizard) RefreshCurrentStep() {
 	w.showStep(w.stepIndex)
 }
 
+// SetSteps replaces the wizard step list while attempting to preserve the
+// current step by title. This is useful for conditional flows that need to
+// insert or remove later steps based on earlier choices.
+func (w *Wizard) SetSteps(steps []WizardStep) {
+	if len(steps) == 0 {
+		return
+	}
+
+	currentTitle := ""
+	if w.stepIndex >= 0 && w.stepIndex < len(w.steps) {
+		currentTitle = w.steps[w.stepIndex].Title
+	}
+
+	w.steps = steps
+
+	if currentTitle != "" {
+		for i, step := range steps {
+			if step.Title == currentTitle {
+				w.stepIndex = i
+				w.stepLabel.SetText(fmt.Sprintf("[gray]Step %d of %d", i+1, len(w.steps)))
+				w.updateButtons()
+				return
+			}
+		}
+	}
+
+	if w.stepIndex >= len(w.steps) {
+		w.stepIndex = len(w.steps) - 1
+	}
+	if w.stepIndex < 0 {
+		w.stepIndex = 0
+	}
+	w.stepLabel.SetText(fmt.Sprintf("[gray]Step %d of %d", w.stepIndex+1, len(w.steps)))
+	w.updateButtons()
+}
+
 // prevStep goes back to the previous step
 func (w *Wizard) prevStep() {
 	if w.stepIndex > 0 {

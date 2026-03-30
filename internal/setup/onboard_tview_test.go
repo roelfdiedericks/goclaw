@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/roelfdiedericks/goclaw/internal/config"
+	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 )
@@ -190,6 +191,94 @@ func TestResetPairingStageRestoresInitialOwnerIDs(t *testing.T) {
 	if data.UserWhatsAppID != "initial-whatsapp" {
 		t.Fatalf("expected whatsapp owner restored, got %q", data.UserWhatsAppID)
 	}
+}
+
+func TestBuildWizardStepsMatchesBrowserLikeOrderWithoutPairing(t *testing.T) {
+	data := NewWizardData()
+	data.TelegramEnabled = false
+	data.WhatsAppEnabled = false
+	data.OpenClawExists = true
+
+	steps := buildWizardSteps(data)
+	got := wizardStepTitles(steps)
+	want := []string{
+		"Welcome",
+		"Agent Identity",
+		"Workspace",
+		"Owner Account",
+		"Communication Channels",
+		"LLM Provider",
+		"Voice Settings",
+		"Security & Skills",
+		"Review & Finish",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("unexpected step order:\n got: %v\nwant: %v", got, want)
+	}
+}
+
+func TestBuildWizardStepsIncludesConditionalPairingOnlyWhenChannelsNeedIt(t *testing.T) {
+	data := NewWizardData()
+
+	if containsWizardStep(buildWizardSteps(data), "Channel Pairing") {
+		t.Fatalf("expected pairing step to be omitted when Telegram and WhatsApp are disabled")
+	}
+
+	data.TelegramEnabled = true
+	if !containsWizardStep(buildWizardSteps(data), "Channel Pairing") {
+		t.Fatalf("expected pairing step when Telegram is enabled")
+	}
+
+	data.TelegramEnabled = false
+	data.WhatsAppEnabled = true
+	if !containsWizardStep(buildWizardSteps(data), "Channel Pairing") {
+		t.Fatalf("expected pairing step when WhatsApp is enabled")
+	}
+}
+
+func TestStepLLMProviderRequiresProviderAndAPIKey(t *testing.T) {
+	data := NewWizardData()
+	step := stepLLMProvider(data)
+
+	if step.OnExit == nil {
+		t.Fatalf("expected llm step to validate on exit")
+	}
+	if err := step.OnExit(nil); err == nil {
+		t.Fatalf("expected missing provider to fail validation")
+	}
+
+	data.LLMProviderID = "anthropic"
+	if err := step.OnExit(nil); err == nil {
+		t.Fatalf("expected missing API key to fail validation for remote provider")
+	}
+
+	data.LLMAPIKey = "sk-ant-test"
+	if err := step.OnExit(nil); err != nil {
+		t.Fatalf("expected remote provider with API key to pass, got %v", err)
+	}
+
+	data.LLMProviderID = "custom"
+	data.LLMAPIKey = ""
+	if err := step.OnExit(nil); err != nil {
+		t.Fatalf("expected custom provider without API key to pass, got %v", err)
+	}
+}
+
+func wizardStepTitles(steps []forms.WizardStep) []string {
+	titles := make([]string, 0, len(steps))
+	for _, step := range steps {
+		titles = append(titles, step.Title)
+	}
+	return titles
+}
+
+func containsWizardStep(steps []forms.WizardStep, title string) bool {
+	for _, step := range steps {
+		if step.Title == title {
+			return true
+		}
+	}
+	return false
 }
 
 func getBool(cfg map[string]interface{}, path string) bool {
