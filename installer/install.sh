@@ -22,6 +22,9 @@ USER_BIN_DIR=""
 RC_FILE=""
 RC_EXPORT_LINE=""
 PATH_ACTION="none"
+HAD_EXISTING_BINARY=false
+HAD_EXISTING_CONFIG=false
+EXISTING_BINARY_PATH=""
 
 # Defaults
 VERSION=""
@@ -317,6 +320,36 @@ choose_path_strategy() {
     PATH_ACTION="manual"
 }
 
+detect_existing_install_state() {
+    if [ -x "$INSTALL_DIR/$BINARY_NAME" ]; then
+        HAD_EXISTING_BINARY=true
+        EXISTING_BINARY_PATH="$INSTALL_DIR/$BINARY_NAME"
+    else
+        existing_path=$(command -v "$BINARY_NAME" 2>/dev/null || true)
+        if [ -n "$existing_path" ] && [ -x "$existing_path" ]; then
+            HAD_EXISTING_BINARY=true
+            EXISTING_BINARY_PATH="$existing_path"
+        fi
+    fi
+
+    if [ -s "$HOME/.goclaw/goclaw.json" ]; then
+        HAD_EXISTING_CONFIG=true
+    fi
+}
+
+print_post_install_guidance() {
+    command_prefix="$1"
+    if [ "$HAD_EXISTING_CONFIG" = true ]; then
+        success "Existing GoClaw configuration detected."
+        echo "Guided setup: ${command_prefix} onboard"
+        echo "Edit current config: ${command_prefix} setup edit"
+        return
+    fi
+
+    success "GoClaw is ready! Run: ${command_prefix} onboard"
+    echo "This walks you through first-time setup."
+}
+
 # Configure PATH
 configure_path() {
     if [ "$SKIP_PATH" = true ]; then
@@ -418,6 +451,13 @@ main() {
     
     info "Detected: $OS/$ARCH"
     confirm_root_install
+    detect_existing_install_state
+    if [ "$HAD_EXISTING_BINARY" = true ]; then
+        info "Existing GoClaw binary detected at $EXISTING_BINARY_PATH"
+    fi
+    if [ "$HAD_EXISTING_CONFIG" = true ]; then
+        info "Existing GoClaw configuration detected at $HOME/.goclaw/goclaw.json"
+    fi
     
     # Determine version to install
     if [ -z "$VERSION" ]; then
@@ -484,20 +524,31 @@ main() {
     case "$PATH_ACTION" in
         skip)
             warn "PATH configuration skipped (--no-path)."
-            printf "Run it directly: ${GREEN}%s${NC}\n" "$INSTALL_DIR/$BINARY_NAME"
+            if [ "$HAD_EXISTING_CONFIG" = true ]; then
+                printf "Guided setup: ${GREEN}%s onboard${NC}\n" "$INSTALL_DIR/$BINARY_NAME"
+                printf "Edit current config: ${GREEN}%s setup edit${NC}\n" "$INSTALL_DIR/$BINARY_NAME"
+            else
+                printf "Run it directly: ${GREEN}%s onboard${NC}\n" "$INSTALL_DIR/$BINARY_NAME"
+            fi
             ;;
         ready)
-            success "GoClaw is ready! Run: goclaw setup"
+            print_post_install_guidance "goclaw"
             ;;
         symlink)
-            success "GoClaw is ready! Run: goclaw setup"
+            print_post_install_guidance "goclaw"
             ;;
         rc)
             warn "To use goclaw in this terminal, run:"
             echo ""
             printf "    ${GREEN}source %s${NC}\n" "$RC_FILE"
             echo ""
-            echo "Then run: goclaw setup"
+            echo "Then run:"
+            if [ "$HAD_EXISTING_CONFIG" = true ]; then
+                echo "  - goclaw onboard"
+                echo "  - goclaw setup edit"
+            else
+                echo "  - goclaw onboard"
+            fi
             ;;
         manual)
             warn "Could not determine a safe shell startup file to update."
@@ -505,7 +556,13 @@ main() {
             echo ""
             printf "    ${GREEN}export PATH=\"\$PATH:%s\"${NC}\n" "$INSTALL_DIR"
             echo ""
-            echo "Then run: goclaw setup"
+            echo "Then run:"
+            if [ "$HAD_EXISTING_CONFIG" = true ]; then
+                echo "  - goclaw onboard"
+                echo "  - goclaw setup edit"
+            else
+                echo "  - goclaw onboard"
+            fi
             ;;
     esac
 }
