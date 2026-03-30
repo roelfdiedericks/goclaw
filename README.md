@@ -37,7 +37,7 @@ curl -fsSL https://goclaw.org/install.sh | sh
 ### Interactive Setup (Recommended)
 
 ```bash
-goclaw setup
+goclaw onboard
 ```
 
 The setup wizard is fully mouse-enabled. Click through the steps to configure:
@@ -68,6 +68,7 @@ For manual tweaks, use `goclaw setup edit` to access the menu-based editor. For 
 ### Re-configure
 
 ```bash
+goclaw onboard            # Friendly first-run / guided setup path
 goclaw setup              # Auto-detect: edit if config exists, wizard if new
 goclaw setup wizard       # Force full wizard (re-walk all steps)
 goclaw setup edit         # Edit existing config (menu-based)

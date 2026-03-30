@@ -32,7 +32,7 @@ goclaw version
 Run the interactive setup wizard:
 
 ```bash
-goclaw setup
+goclaw onboard
 ```
 
 The wizard walks you through:
@@ -132,7 +132,7 @@ http://localhost:1337/chat
 
 ### "no providers configured"
 
-Run `goclaw setup` to configure at least one LLM provider.
+Run `goclaw onboard` to configure at least one LLM provider.
 
 ### "failed to authenticate" (Telegram)
 
@@ -151,6 +151,7 @@ Double-check your API key in `goclaw.json`. Keys are stored in `llm.providers.<n
 You can re-run the wizard anytime:
 
 ```bash
+goclaw onboard            # Friendly first-run / guided setup path
 goclaw setup              # Auto-detect: edit if config exists, wizard if new
 goclaw setup wizard       # Force full wizard (re-walk all steps)
 goclaw setup edit         # Edit existing config (menu-based)

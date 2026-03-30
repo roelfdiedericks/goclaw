@@ -63,7 +63,7 @@ sudo dpkg -i goclaw_${VERSION}_linux_amd64.deb
 - Dependencies: `bubblewrap` (sandboxing), `ffmpeg` (audio processing)
 - Bundled Whisper model at `/usr/share/goclaw/stt/ggml-tiny.en.bin`
 
-After installation, run `goclaw setup` to configure.
+After installation, run `goclaw onboard` for guided first-time setup.
 
 ### Docker
 
@@ -81,7 +81,7 @@ docker run -d --name goclaw \
   ghcr.io/roelfdiedericks/goclaw:latest
 
 # Run the setup wizard
-docker exec -it goclaw goclaw setup
+docker exec -it goclaw goclaw onboard
 
 # Restart to apply config
 docker restart goclaw
@@ -129,7 +129,7 @@ This will:
 2. Open Debian and run the Linux installer:
    ```bash
    curl -fsSL https://goclaw.org/install.sh | sh
-   goclaw setup
+   goclaw onboard
    ```
 
 ### Run Setup Wizard
@@ -137,8 +137,10 @@ This will:
 After installing the binary, run the interactive setup wizard:
 
 ```bash
-goclaw setup
+goclaw onboard
 ```
+
+If you already have a GoClaw configuration, use `goclaw setup edit` to adjust it or `goclaw setup` to let GoClaw choose between edit and wizard automatically.
 
 The wizard will:
 
@@ -295,7 +297,7 @@ If running alongside OpenClaw, GoClaw can inherit sessions from `~/.openclaw/age
 If you have an existing OpenClaw installation, GoClaw can import your settings:
 
 ```bash
-goclaw setup
+goclaw onboard
 # Select "Import from OpenClaw" when prompted
 ```
 
