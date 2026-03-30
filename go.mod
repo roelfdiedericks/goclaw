@@ -7,6 +7,7 @@ toolchain go1.25.7
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
+	github.com/abemedia/go-webview v0.0.0-20250327021345-7b06ad397f16
 	github.com/alecthomas/kong v1.13.0
 	github.com/anthropics/anthropic-sdk-go v1.20.0
 	github.com/charmbracelet/bubbles v0.21.1-0.20250623103423-23b8fd6302d7
@@ -27,6 +28,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/itchyny/gojq v0.12.18
 	github.com/jmcarbo/stopwords v1.1.9
+	github.com/knights-analytics/hugot v0.6.4
 	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/oklog/ulid/v2 v2.1.1
@@ -41,9 +43,9 @@ require (
 	github.com/zeozeozeo/gomplerate v0.0.0-20250404113140-0fbb236df825
 	go.mau.fi/whatsmeow v0.0.0-20260219150138-7ae702b1eed4
 	golang.org/x/crypto v0.48.0
-	golang.org/x/image v0.36.0
+	golang.org/x/image v0.38.0
 	golang.org/x/term v0.40.0
-	golang.org/x/text v0.34.0
+	golang.org/x/text v0.35.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/telebot.v4 v4.0.0-beta.7
 	gopkg.in/yaml.v3 v3.0.1
@@ -52,7 +54,6 @@ require (
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/JohannesKaufmann/dom v0.2.0 // indirect
-	github.com/abemedia/go-webview v0.0.0-20250327021345-7b06ad397f16 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
@@ -88,7 +89,6 @@ require (
 	github.com/gomlx/onnx-gomlx v0.3.4 // indirect
 	github.com/itchyny/timefmt-go v0.1.7 // indirect
 	github.com/kardianos/osext v0.0.0-20190222173326-2bc1f35cddc0 // indirect
-	github.com/knights-analytics/hugot v0.6.4 // indirect
 	github.com/knights-analytics/ortgenai v0.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
