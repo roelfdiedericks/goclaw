@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.10] stable - 2026-03-31
+
 - runtime: add `goclaw status --field` for shell-safe machine-readable checks and structured `configured=false` status when no config exists yet
 - installer: improve post-install update guidance for already-configured and already-running GoClaw installs, and trim a few brittle shell parsing paths
 - cli: add `goclaw restart` as a simple daemon restart helper
