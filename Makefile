@@ -487,25 +487,7 @@ release: release-check
 # Monitor GitHub Actions release workflow
 release-monitor:
 	@if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then \
-		run_id="$(RUN)"; \
-		if [ -z "$$run_id" ]; then \
-			run_id=$$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null); \
-		fi; \
-		if [ -z "$$run_id" ]; then \
-			echo "No release workflow runs found."; \
-			exit 1; \
-		fi; \
-		echo "Using release workflow run: $$run_id"; \
-		status=$$(gh run view "$$run_id" --json status --jq '.status' 2>/dev/null || echo ""); \
-		if [ "$$status" = "completed" ]; then \
-			echo "Run already completed. Showing results..."; \
-		else \
-			echo "Watching GitHub Actions (Ctrl+C to stop)..."; \
-			gh run watch "$$run_id"; \
-		fi; \
-		echo ""; \
-		echo "Final run details:"; \
-		gh run view "$$run_id"; \
+		$(RELEASE_TOOL) monitor $(if $(RUN),--run "$(RUN)",); \
 	else \
 		echo "Opening GitHub Actions in browser..."; \
 		url="https://github.com/roelfdiedericks/goclaw/actions"; \

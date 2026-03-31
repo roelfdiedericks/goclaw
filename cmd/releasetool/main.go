@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/roelfdiedericks/goclaw/internal/release"
 )
@@ -23,6 +25,8 @@ func main() {
 		runCurrent(os.Args[2:])
 	case "validate":
 		runValidate(os.Args[2:])
+	case "monitor":
+		runMonitor(os.Args[2:])
 	case "next-version":
 		runNextVersion()
 	case "next-tag":
@@ -205,6 +209,27 @@ func runReleaseNotes(args []string) {
 		return
 	}
 	fmt.Println(notes)
+}
+
+func runMonitor(args []string) {
+	fs := flag.NewFlagSet("monitor", flag.ExitOnError)
+	runID := fs.String("run", "", "workflow run ID to monitor")
+	workflow := fs.String("workflow", "release.yml", "workflow filename used when resolving the latest run")
+	interval := fs.Duration("interval", 3*time.Second, "poll interval")
+	if err := fs.Parse(args); err != nil {
+		fatalf("parse flags: %v", err)
+	}
+
+	state := mustState()
+	releaseTag := currentReleaseTag(state.CurrentVersion, state.CurrentChannel, gitTags())
+	if err := release.RunMonitor(context.Background(), release.MonitorOptions{
+		RunID:        strings.TrimSpace(*runID),
+		Workflow:     strings.TrimSpace(*workflow),
+		PollInterval: *interval,
+		ReleaseTag:   releaseTag,
+	}); err != nil {
+		fatalf("monitor: %v", err)
+	}
 }
 
 func mustChangelog() *release.Changelog {
