@@ -1,0 +1,14 @@
+title = "GoClaw dependency age policy"
+
+trusted_prefixes = [
+  "github.com/roelfdiedericks/",
+]
+
+trusted_modules = []
+
+# Explicit recent-version exceptions can be listed as:
+#
+# [[allow]]
+# module = "github.com/example/module"
+# version = "v1.2.3"
+# reason = "temporary exception while upstream issue settles"

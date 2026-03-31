@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-
+- runtime: add `goclaw status --field` for shell-safe machine-readable checks and structured `configured=false` status when no config exists yet
+- installer: improve post-install update guidance for already-configured and already-running GoClaw installs, and trim a few brittle shell parsing paths
+- cli: add `goclaw restart` as a simple daemon restart helper
+- audit: add a Go proxy-backed dependency age check with TOML policy support to everyday `make audit`
+- release tooling: make `make changelog` promote `Unreleased` notes into the new release entry and recreate a blank `Unreleased` section
 
 ## [0.1.9] stable - 2026-03-30
 - setup: add Telegram/WhatsApp owner pairing flows across the browser wizard, browser editor, TUI wizard, and TUI editor with staged owner identity saves

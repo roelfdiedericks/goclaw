@@ -195,7 +195,7 @@ To start GoClaw:
 
 First time setup:
   - Open WSL: wsl -d Debian
-  - Run: goclaw setup
+  - Run: goclaw onboard
 
 Documentation: https://goclaw.org/docs
 

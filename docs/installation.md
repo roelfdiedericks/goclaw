@@ -343,6 +343,12 @@ goclaw update --channel beta  # Update to latest beta release
 goclaw update --no-restart  # Update but don't restart (for manual control)
 ```
 
+If you update with `--no-restart` while the daemon is already running, restart it manually so the new binary is actually used:
+
+```bash
+goclaw restart
+```
+
 **Note:** If GoClaw was installed via a system package manager (e.g., dpkg, apt), `goclaw update` will warn you to use your package manager instead. This prevents conflicts with system-managed installations.
 
 ### Updating via Package Manager
@@ -361,9 +367,8 @@ sudo dpkg -i goclaw_${VERSION}_linux_amd64.deb
 cd goclaw
 git pull
 make build
-goclaw stop
 cp goclaw ~/.goclaw/bin/
-goclaw start
+goclaw restart
 ```
 
 ### Docker Updates

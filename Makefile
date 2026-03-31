@@ -1,4 +1,4 @@
-.PHONY: build embtest embtest-xla embtest-ort embtest-xla-deps-check embtest-ort-deps-check run debug trace clean install test sandbox-test sandbox-test-short sandbox-test-ci lint audit install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release deps deps-check metadata
+.PHONY: build embtest embtest-xla embtest-ort embtest-xla-deps-check embtest-ort-deps-check run debug trace clean install test sandbox-test sandbox-test-short sandbox-test-ci lint audit supply-chain-check install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release deps deps-check metadata
 
 SHELL := /bin/bash
 UNAME_S := $(shell uname -s)
@@ -340,6 +340,9 @@ status:
 GOLANGCI_LINT := $(shell which golangci-lint 2>/dev/null)
 GOVULNCHECK := $(shell which govulncheck 2>/dev/null)
 GITLEAKS := $(shell which gitleaks 2>/dev/null)
+MIN_DEP_AGE_DAYS ?= 7
+SUPPLY_CHAIN_FAIL_OPEN ?= 0
+SUPPLY_CHAIN_FAIL_OPEN_FLAG := $(if $(filter 1 true yes TRUE YES,$(SUPPLY_CHAIN_FAIL_OPEN)),--allow-unresolved-metadata,)
 
 install-lint-tools:
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
@@ -353,7 +356,12 @@ ifndef GOLANGCI_LINT
 endif
 	golangci-lint run ./...
 
+supply-chain-check:
+	@echo "Checking dependency ages (min $(MIN_DEP_AGE_DAYS) days)..."
+	@go run ./cmd/depscan --min-age-days=$(MIN_DEP_AGE_DAYS) $(SUPPLY_CHAIN_FAIL_OPEN_FLAG)
+
 audit: lint
+	@$(MAKE) supply-chain-check
 ifndef GOVULNCHECK
 	@echo "Installing govulncheck..."
 	@go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -411,7 +419,7 @@ changelog:
 	echo ""; \
 	$(RELEASE_TOOL) changelog new-entry; \
 	echo "Opening editor..."; \
-	$${EDITOR:-vim} +11 CHANGELOG.md; \
+	$${EDITOR:-vim} +12 CHANGELOG.md; \
 	echo ""; \
 	new_ver="$$( $(RELEASE_TOOL) current --field version )"; \
 	read -p "Commit and push release $$new_ver? [y/N] " confirm; \

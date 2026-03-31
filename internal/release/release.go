@@ -171,14 +171,15 @@ func (c *Changelog) RenderWithNewEntry(version, channel, date string) ([]byte, [
 		warnings = append(warnings, "recreated missing Unreleased section")
 	}
 	out = append(out, unreleasedHeader, "")
-	for _, line := range c.UnreleasedBody {
-		out = append(out, line)
+	out = append(out, fmt.Sprintf("## [%s] %s - %s", version, channel, date))
+	newReleaseBody := c.UnreleasedBody
+	if !hasMeaningfulBody(newReleaseBody) {
+		newReleaseBody = []string{"", "-", ""}
 	}
-	if len(c.UnreleasedBody) > 0 && c.UnreleasedBody[len(c.UnreleasedBody)-1] != "" {
+	out = append(out, newReleaseBody...)
+	if len(newReleaseBody) == 0 || newReleaseBody[len(newReleaseBody)-1] != "" {
 		out = append(out, "")
 	}
-
-	out = append(out, fmt.Sprintf("## [%s] %s - %s", version, channel, date), "", "-", "")
 	for _, entry := range c.Releases {
 		out = append(out, entry.RawHeader)
 		out = append(out, entry.Body...)
@@ -188,6 +189,15 @@ func (c *Changelog) RenderWithNewEntry(version, channel, date string) ([]byte, [
 	}
 
 	return []byte(strings.Join(out, "\n") + "\n"), warnings, nil
+}
+
+func hasMeaningfulBody(lines []string) bool {
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Changelog) ReleaseNotesForTag(tag string) (string, []string, error) {

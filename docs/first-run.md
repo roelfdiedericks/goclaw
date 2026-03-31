@@ -72,6 +72,7 @@ Runs GoClaw as a background daemon with automatic restart on crash. Use this for
 
 ```bash
 goclaw status   # Check if running
+goclaw restart  # Restart after updates or config changes
 goclaw stop     # Stop the daemon
 ```
 

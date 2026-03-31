@@ -99,6 +99,65 @@ func TestRenderWithRecreatedUnreleased(t *testing.T) {
 	}
 }
 
+func TestRenderWithNewEntryMovesUnreleasedBodyIntoRelease(t *testing.T) {
+	ch, err := Parse([]byte(`# Changelog
+
+## [Unreleased]
+
+- first note
+- second note
+
+## [0.1.2] stable - 2026-03-14
+- stable note
+`))
+	if err != nil {
+		t.Fatalf("parse changelog: %v", err)
+	}
+
+	out, warnings, err := ch.RenderWithNewEntry("0.1.3", "stable", "2026-03-15")
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+
+	text := string(out)
+	expected := `## [Unreleased]
+
+## [0.1.3] stable - 2026-03-15
+
+- first note
+- second note
+`
+	if !strings.Contains(text, expected) {
+		t.Fatalf("expected unreleased notes to move into new release, got:\n%s", text)
+	}
+}
+
+func TestRenderWithNewEntrySeedsPlaceholderWhenUnreleasedEmpty(t *testing.T) {
+	ch, err := Parse([]byte(sampleChangelog))
+	if err != nil {
+		t.Fatalf("parse changelog: %v", err)
+	}
+
+	out, _, err := ch.RenderWithNewEntry("0.1.4", "beta", "2026-03-15")
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	text := string(out)
+	expected := `## [Unreleased]
+
+## [0.1.4] beta - 2026-03-15
+
+-
+`
+	if !strings.Contains(text, expected) {
+		t.Fatalf("expected placeholder bullet for empty unreleased section, got:\n%s", text)
+	}
+}
+
 func TestReleaseNotesForPrereleaseTag(t *testing.T) {
 	ch, err := Parse([]byte(sampleChangelog))
 	if err != nil {

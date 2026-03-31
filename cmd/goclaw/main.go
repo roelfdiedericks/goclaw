@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -95,6 +96,31 @@ type RuntimePaths struct {
 	LogFile string
 }
 
+type RuntimeStatus struct {
+	Configured               bool       `json:"configured"`
+	Running                  bool       `json:"running"`
+	ConfigPath               string     `json:"configPath,omitempty"`
+	DataDir                  string     `json:"dataDir,omitempty"`
+	PidFile                  string     `json:"pidFile,omitempty"`
+	LogFile                  string     `json:"logFile,omitempty"`
+	Version                  string     `json:"version"`
+	SupervisorPID            int        `json:"supervisorPid,omitempty"`
+	GatewayPID               int        `json:"gatewayPid,omitempty"`
+	StartedAt                *time.Time `json:"startedAt,omitempty"`
+	Uptime                   string     `json:"uptime,omitempty"`
+	UptimeSeconds            int64      `json:"uptimeSeconds,omitempty"`
+	CrashCount               int        `json:"crashCount,omitempty"`
+	LastCrashAt              *time.Time `json:"lastCrashAt,omitempty"`
+	SupervisorStateAvailable bool       `json:"supervisorStateAvailable"`
+}
+
+var (
+	runtimePathsLoader = loadRuntimePaths
+	runtimeStarter     = startDaemon
+	runtimeStopper     = stopDaemon
+	processExitWaiter  = waitForPIDExit
+)
+
 // loadRuntimePaths loads config and derives all runtime paths from session.storePath
 func loadRuntimePaths() (*RuntimePaths, error) {
 	loadResult, err := config.LoadRuntime()
@@ -114,6 +140,15 @@ func loadRuntimePaths() (*RuntimePaths, error) {
 	}, nil
 }
 
+func runtimePathsFromStorePath(storePath string) *RuntimePaths {
+	dataDir := filepath.Dir(storePath)
+	return &RuntimePaths{
+		DataDir: dataDir,
+		PidFile: filepath.Join(dataDir, "goclaw.pid"),
+		LogFile: filepath.Join(dataDir, "goclaw.log"),
+	}
+}
+
 // CLI defines the command-line interface.
 // Kong derives command names from field names via kebab-case. CamelCase word
 // boundaries produce hyphens (e.g. WhatsApp → whats-app). To get a single
@@ -125,6 +160,7 @@ type CLI struct {
 	Gateway    GatewayCmd    `cmd:"" help:"Run the gateway (foreground by default)"`
 	Start      StartCmd      `cmd:"" help:"Start gateway as background daemon"`
 	Stop       StopCmd       `cmd:"" help:"Stop the background daemon"`
+	Restart    RestartCmd    `cmd:"" help:"Restart the background daemon"`
 	Status     StatusCmd     `cmd:"" help:"Show gateway status"`
 	Version    VersionCmd    `cmd:"" help:"Show version"`
 	Update     UpdateCmd     `cmd:"" help:"Check for and install updates"`
@@ -171,51 +207,14 @@ type StartCmd struct{}
 
 func (s *StartCmd) Run(ctx *Context) error {
 	// Load config to get runtime paths
-	paths, err := loadRuntimePaths()
+	paths, err := runtimePathsLoader()
 	if err != nil {
 		// Print user-friendly message (config.Load already includes setup hint)
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
 	}
 
-	// Ensure data directory exists
-	if err := os.MkdirAll(paths.DataDir, 0750); err != nil {
-		L_error("failed to create data directory", "error", err)
-		return err
-	}
-
-	// Check if already running
-	if isRunningAt(paths.PidFile) {
-		L_error("gateway already running")
-		return fmt.Errorf("already running")
-	}
-
-	cntxt := &daemon.Context{
-		PidFileName: paths.PidFile,
-		PidFilePerm: 0644,
-		LogFileName: paths.LogFile,
-		LogFilePerm: 0640,
-		WorkDir:     "./",
-		Umask:       027,
-	}
-
-	d, err := cntxt.Reborn()
-	if err != nil {
-		L_fatal("daemonize failed", "error", err)
-	}
-	if d != nil {
-		// Parent process
-		L_info("gateway started", "pid", d.Pid, "dataDir", paths.DataDir)
-		return nil
-	}
-	// Child process continues as supervisor
-	defer cntxt.Release() //nolint:errcheck // daemon cleanup
-
-	L_info("supervisor: started", "pid", os.Getpid(), "dataDir", paths.DataDir)
-
-	// Run supervisor loop (spawns gateway subprocesses)
-	sup := supervisor.New(paths.DataDir)
-	return sup.Run()
+	return runtimeStarter(paths)
 }
 
 // StopCmd stops the daemon
@@ -223,39 +222,49 @@ type StopCmd struct{}
 
 func (s *StopCmd) Run(ctx *Context) error {
 	// Load config to get runtime paths
-	paths, err := loadRuntimePaths()
+	paths, err := runtimePathsLoader()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
 	}
 
-	pid, running := getPidFromFile(paths.PidFile)
-	if !running {
-		L_info("gateway not running")
-		return nil
-	}
-
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return fmt.Errorf("process not found: %w", err)
-	}
-
-	err = process.Signal(syscall.SIGTERM)
-	if err != nil {
-		return fmt.Errorf("failed to stop: %w", err)
-	}
-
-	L_info("gateway stopped", "pid", pid)
-	os.Remove(paths.PidFile)
-	return nil
+	_, _, err = runtimeStopper(paths, true)
+	return err
 }
 
 // StatusCmd shows gateway status
-type StatusCmd struct{}
+type StatusCmd struct {
+	JSON  bool   `help:"Print machine-readable JSON status"`
+	Field string `help:"Print a single machine-readable status field"`
+}
 
 func (s *StatusCmd) Run(ctx *Context) error {
+	if s.JSON && strings.TrimSpace(s.Field) != "" {
+		err := fmt.Errorf("choose either --json or --field")
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return err
+	}
+
+	if s.JSON || strings.TrimSpace(s.Field) != "" {
+		snapshot, err := collectRuntimeStatus()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return err
+		}
+		if s.JSON {
+			return writeRuntimeStatusJSON(os.Stdout, snapshot)
+		}
+		value, err := runtimeStatusFieldValue(snapshot, s.Field)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return err
+		}
+		fmt.Fprintln(os.Stdout, value)
+		return nil
+	}
+
 	// Load config to get runtime paths
-	paths, err := loadRuntimePaths()
+	paths, err := runtimePathsLoader()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return err
@@ -300,6 +309,222 @@ func (s *StatusCmd) Run(ctx *Context) error {
 	}
 
 	return nil
+}
+
+// RestartCmd restarts the daemonized gateway supervisor.
+type RestartCmd struct{}
+
+func (r *RestartCmd) Run(ctx *Context) error {
+	paths, err := runtimePathsLoader()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return err
+	}
+
+	pid, running, err := runtimeStopper(paths, false)
+	if err != nil {
+		return err
+	}
+	if running {
+		if err := processExitWaiter(pid, 10*time.Second); err != nil {
+			return err
+		}
+		_ = os.Remove(paths.PidFile)
+	}
+
+	return runtimeStarter(paths)
+}
+
+func startDaemon(paths *RuntimePaths) error {
+	// Ensure data directory exists
+	if err := os.MkdirAll(paths.DataDir, 0750); err != nil {
+		L_error("failed to create data directory", "error", err)
+		return err
+	}
+
+	// Check if already running
+	if isRunningAt(paths.PidFile) {
+		L_error("gateway already running")
+		return fmt.Errorf("already running")
+	}
+
+	cntxt := &daemon.Context{
+		PidFileName: paths.PidFile,
+		PidFilePerm: 0644,
+		LogFileName: paths.LogFile,
+		LogFilePerm: 0640,
+		WorkDir:     "./",
+		Umask:       027,
+	}
+
+	d, err := cntxt.Reborn()
+	if err != nil {
+		L_fatal("daemonize failed", "error", err)
+	}
+	if d != nil {
+		// Parent process
+		L_info("gateway started", "pid", d.Pid, "dataDir", paths.DataDir)
+		return nil
+	}
+	// Child process continues as supervisor
+	defer cntxt.Release() //nolint:errcheck // daemon cleanup
+
+	L_info("supervisor: started", "pid", os.Getpid(), "dataDir", paths.DataDir)
+
+	// Run supervisor loop (spawns gateway subprocesses)
+	sup := supervisor.New(paths.DataDir)
+	return sup.Run()
+}
+
+func stopDaemon(paths *RuntimePaths, removePIDFile bool) (int, bool, error) {
+	pid, running := getPidFromFile(paths.PidFile)
+	if !running {
+		L_info("gateway not running")
+		return 0, false, nil
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return pid, true, fmt.Errorf("process not found: %w", err)
+	}
+
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		return pid, true, fmt.Errorf("failed to stop: %w", err)
+	}
+
+	L_info("gateway stopped", "pid", pid)
+	if removePIDFile {
+		_ = os.Remove(paths.PidFile)
+	}
+	return pid, true, nil
+}
+
+func waitForPIDExit(pid int, timeout time.Duration) error {
+	if pid <= 0 {
+		return nil
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return nil
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		if err := process.Signal(syscall.Signal(0)); err != nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for process %d to exit", pid)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func collectRuntimeStatus() (*RuntimeStatus, error) {
+	defaultConfigPath, err := paths.DefaultConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	status := &RuntimeStatus{
+		ConfigPath: defaultConfigPath,
+		Version:    version,
+	}
+
+	loadResult, err := config.LoadRuntime()
+	if err != nil {
+		if config.IsMissingOrIncompleteConfigError(err) {
+			return status, nil
+		}
+		return nil, err
+	}
+
+	runtimePaths := runtimePathsFromStorePath(loadResult.Config.Session.GetStorePath())
+	status.Configured = true
+	status.ConfigPath = loadResult.SourcePath
+	status.DataDir = runtimePaths.DataDir
+	status.PidFile = runtimePaths.PidFile
+	status.LogFile = runtimePaths.LogFile
+
+	pid, running := getPidFromFile(runtimePaths.PidFile)
+	status.Running = running
+	if !running {
+		return status, nil
+	}
+
+	status.SupervisorPID = pid
+
+	state, err := supervisor.LoadState(runtimePaths.DataDir)
+	if err != nil {
+		return status, nil
+	}
+
+	status.SupervisorStateAvailable = true
+	if state.PID > 0 {
+		status.SupervisorPID = state.PID
+	}
+	status.GatewayPID = state.GatewayPID
+	status.StartedAt = &state.StartedAt
+	status.UptimeSeconds = int64(time.Since(state.StartedAt).Seconds())
+	status.Uptime = formatDuration(time.Since(state.StartedAt).Round(time.Second))
+	status.CrashCount = state.CrashCount
+	status.LastCrashAt = state.LastCrashAt
+
+	return status, nil
+}
+
+func writeRuntimeStatusJSON(w io.Writer, status *RuntimeStatus) error {
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(status)
+}
+
+func runtimeStatusFieldValue(status *RuntimeStatus, field string) (string, error) {
+	switch normalizeRuntimeStatusField(field) {
+	case "configured":
+		return strconv.FormatBool(status.Configured), nil
+	case "running":
+		return strconv.FormatBool(status.Running), nil
+	case "configpath":
+		return status.ConfigPath, nil
+	case "datadir":
+		return status.DataDir, nil
+	case "pidfile":
+		return status.PidFile, nil
+	case "logfile":
+		return status.LogFile, nil
+	case "version":
+		return status.Version, nil
+	case "supervisorpid":
+		if status.SupervisorPID == 0 {
+			return "", nil
+		}
+		return strconv.Itoa(status.SupervisorPID), nil
+	case "gatewaypid":
+		if status.GatewayPID == 0 {
+			return "", nil
+		}
+		return strconv.Itoa(status.GatewayPID), nil
+	case "uptime":
+		return status.Uptime, nil
+	case "uptimeseconds":
+		if status.UptimeSeconds == 0 {
+			return "", nil
+		}
+		return strconv.FormatInt(status.UptimeSeconds, 10), nil
+	case "crashcount":
+		return strconv.Itoa(status.CrashCount), nil
+	case "supervisorstateavailable":
+		return strconv.FormatBool(status.SupervisorStateAvailable), nil
+	default:
+		return "", fmt.Errorf("unknown status field %q", field)
+	}
+}
+
+func normalizeRuntimeStatusField(field string) string {
+	field = strings.TrimSpace(strings.ToLower(field))
+	field = strings.ReplaceAll(field, "-", "")
+	field = strings.ReplaceAll(field, "_", "")
+	return field
 }
 
 // formatDuration formats a duration in human-readable form
