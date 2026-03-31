@@ -15,7 +15,7 @@ RELEASE_TOOL := go run ./cmd/releasetool
 VERSION := $(shell $(RELEASE_TOOL) current --field version 2>/dev/null)
 CHANNEL := $(shell $(RELEASE_TOOL) current --field channel 2>/dev/null)
 CHANGELOG_DATE := $(shell $(RELEASE_TOOL) current --field date 2>/dev/null)
-TAG := $(shell $(RELEASE_TOOL) next-tag 2>/dev/null)
+RELEASE_TAG := $(shell $(RELEASE_TOOL) current --field release-tag 2>/dev/null)
 
 # Skills sync from upstream OpenClaw
 OPENCLAW_REPO := https://github.com/openclaw/openclaw.git
@@ -467,19 +467,19 @@ release-check: lint audit
 	@echo ""
 	@echo "Version: $(VERSION)"
 	@echo "Channel: $(CHANNEL)"
-	@echo "Tag:     $(TAG)"
+	@echo "Tag:     $(RELEASE_TAG)"
 	@echo ""
 
 # Create and push release tag
 release: release-check
-	@read -p "Create and push $(TAG)? [y/N] " confirm; \
+	@read -p "Create and push $(RELEASE_TAG)? [y/N] " confirm; \
 	if [ "$$confirm" != "y" ] && [ "$$confirm" != "Y" ]; then \
 		echo "Aborted."; exit 1; \
 	fi
-	@git tag -a $(TAG) -m "Release $(VERSION) ($(CHANNEL))"
-	@git push origin $(TAG)
+	@git tag -a $(RELEASE_TAG) -m "Release $(VERSION) ($(CHANNEL))"
+	@git push origin $(RELEASE_TAG)
 	@echo ""
-	@echo "✓ Tagged $(TAG)"
+	@echo "✓ Tagged $(RELEASE_TAG)"
 	@echo "GitHub Actions will build and publish."
 	@echo ""
 	@echo "Run 'make release-monitor' to watch progress."
