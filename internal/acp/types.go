@@ -69,6 +69,7 @@ const (
 	EventThought     ACPEventType = "thought_delta"
 	EventToolStart   ACPEventType = "tool_start"
 	EventToolUpdate  ACPEventType = "tool_update"
+	EventDriverExt   ACPEventType = "driver_extension"
 	EventTodoUpdate  ACPEventType = "todo_update"
 	EventPlanRequest ACPEventType = "plan_request"
 	EventQuestion    ACPEventType = "question"
@@ -133,14 +134,6 @@ type TodoUpdatePayload struct {
 	Merge      bool       `json:"merge,omitempty"`
 }
 
-type PlanRequestPayload struct {
-	ToolCallID string     `json:"toolCallId,omitempty"`
-	Name       string     `json:"name,omitempty"`
-	Overview   string     `json:"overview,omitempty"`
-	Plan       string     `json:"plan,omitempty"`
-	Todos      []TodoItem `json:"todos,omitempty"`
-}
-
 type QuestionOption struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
@@ -159,8 +152,70 @@ type QuestionPayload struct {
 	Questions  []QuestionItem `json:"questions,omitempty"`
 }
 
+type PlanPhase struct {
+	Name  string     `json:"name,omitempty"`
+	Todos []TodoItem `json:"todos,omitempty"`
+}
+
+type PlanRequestPayload struct {
+	ToolCallID string      `json:"toolCallId,omitempty"`
+	Name       string      `json:"name,omitempty"`
+	Overview   string      `json:"overview,omitempty"`
+	Plan       string      `json:"plan,omitempty"`
+	Todos      []TodoItem  `json:"todos,omitempty"`
+	IsProject  bool        `json:"isProject,omitempty"`
+	Phases     []PlanPhase `json:"phases,omitempty"`
+}
+
+type TaskPayload struct {
+	ToolCallID   string          `json:"toolCallId,omitempty"`
+	Description  string          `json:"description,omitempty"`
+	Prompt       string          `json:"prompt,omitempty"`
+	SubagentType json.RawMessage `json:"subagentType,omitempty"`
+	Model        string          `json:"model,omitempty"`
+	AgentID      string          `json:"agentId,omitempty"`
+	DurationMs   int64           `json:"durationMs,omitempty"`
+}
+
 type StatusPayload struct {
 	Message string
+}
+
+type ACPDriverExtensionPayload struct {
+	Driver       string          `json:"driver"`
+	Method       string          `json:"method"`
+	Interactive  bool            `json:"interactive"`
+	SemanticKind string          `json:"semanticKind,omitempty"`
+	ToolCallID   string          `json:"toolCallId,omitempty"`
+	Summary      string          `json:"summary,omitempty"`
+	Payload      json.RawMessage `json:"payload"`
+}
+
+type ACPDriverExtensionResponse struct {
+	Driver          string          `json:"driver"`
+	Method          string          `json:"method"`
+	ToolCallID      string          `json:"toolCallId,omitempty"`
+	ResponsePayload json.RawMessage `json:"responsePayload"`
+}
+
+type AttachmentExtensionInfo struct {
+	Driver       string    `json:"driver"`
+	Method       string    `json:"method"`
+	Interactive  bool      `json:"interactive"`
+	SemanticKind string    `json:"semanticKind,omitempty"`
+	ToolCallID   string    `json:"toolCallId,omitempty"`
+	Summary      string    `json:"summary,omitempty"`
+	ObservedAt   time.Time `json:"observedAt"`
+}
+
+type AttachmentPendingRequestInfo struct {
+	Driver       string    `json:"driver"`
+	Method       string    `json:"method"`
+	Interactive  bool      `json:"interactive"`
+	SemanticKind string    `json:"semanticKind,omitempty"`
+	ToolCallID   string    `json:"toolCallId,omitempty"`
+	Summary      string    `json:"summary,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
 }
 
 type PermissionOption struct {
@@ -187,6 +242,7 @@ type PromptRequest struct {
 	Text         string
 	OnEvent      func(ACPEvent)
 	OnPermission func(PermissionRequest) (PermissionDecision, error)
+	OnInteractive func(context.Context, ACPDriverExtensionPayload) (json.RawMessage, error)
 }
 
 type PromptResult struct {
@@ -217,10 +273,13 @@ type AttachmentInfo struct {
 	BufferedEvents   int
 	LastAssistant    string
 	CurrentState     string
+	PromptRunning    bool
 	Todos            []TodoItem
 	LastPlanName     string
 	LastPlanOverview string
 	LastQuestion     string
+	RecentExtensions []AttachmentExtensionInfo
+	PendingRequests  []AttachmentPendingRequestInfo
 }
 
 type PromptOptions struct {

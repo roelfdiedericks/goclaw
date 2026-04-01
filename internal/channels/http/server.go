@@ -165,6 +165,7 @@ func (s *Server) setupRoutes() http.Handler {
 	// API routes
 	s.mux.HandleFunc("/api/send", wrap(s.handleSend))
 	s.mux.HandleFunc("/api/send/multipart", wrap(s.handleSendMultipart))
+	s.mux.HandleFunc("/api/acp/respond", wrap(s.handleACPRespond))
 	s.mux.HandleFunc("/api/events", wrap(s.handleEvents))
 	s.mux.HandleFunc("/api/commands", wrap(s.handleCommands))
 	s.mux.HandleFunc("/api/status", wrap(s.handleStatus))

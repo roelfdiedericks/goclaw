@@ -74,6 +74,9 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	if info.LastPlanName != "" {
 		b.WriteString(fmt.Sprintf("  Last plan: %s\n", info.LastPlanName))
 	}
+	if info.LastPlanOverview != "" {
+		b.WriteString(fmt.Sprintf("  Last plan overview: %s\n", info.LastPlanOverview))
+	}
 	if info.LastQuestion != "" {
 		b.WriteString(fmt.Sprintf("  Last question: %s\n", info.LastQuestion))
 	}
@@ -81,6 +84,29 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		b.WriteString("  Todos:\n")
 		for _, todo := range info.Todos {
 			b.WriteString(fmt.Sprintf("    - [%s] %s\n", todo.Status, todo.Content))
+		}
+	}
+	if len(info.PendingRequests) > 0 {
+		b.WriteString("  Pending interactive requests:\n")
+		for _, pending := range info.PendingRequests {
+			b.WriteString(fmt.Sprintf("    - [%s] %s (%s", pending.Driver, pending.Method, pending.SemanticKind))
+			if pending.ToolCallID != "" {
+				b.WriteString(", tool=" + pending.ToolCallID)
+			}
+			b.WriteString(")\n")
+		}
+	}
+	if len(info.RecentExtensions) > 0 {
+		b.WriteString("  Recent driver extensions:\n")
+		for _, ext := range info.RecentExtensions {
+			b.WriteString(fmt.Sprintf("    - [%s] %s (%s", ext.Driver, ext.Method, ext.SemanticKind))
+			if ext.ToolCallID != "" {
+				b.WriteString(", tool=" + ext.ToolCallID)
+			}
+			if ext.Summary != "" {
+				b.WriteString(": " + ext.Summary)
+			}
+			b.WriteString(")\n")
 		}
 	}
 	return types.TextResult(b.String()), nil

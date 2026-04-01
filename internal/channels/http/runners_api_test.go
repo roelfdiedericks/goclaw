@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/delegatedrun"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
@@ -36,6 +37,12 @@ func (s *runnersGatewayStub) AgentIdentity() *gwtypes.AgentIdentityConfig      {
 func (s *runnersGatewayStub) SupervisionConfig() *gwtypes.SupervisionConfig    { return nil }
 func (s *runnersGatewayStub) StopAllUserSessions(userID string) (int, error)   { return 0, nil }
 func (s *runnersGatewayStub) RequestShutdown(userID string) error               { return nil }
+func (s *runnersGatewayStub) ACPRespond(sessionKey string, resp acp.ACPDriverExtensionResponse) error {
+	return nil
+}
+func (s *runnersGatewayStub) ACPHandoffPending(ctx context.Context, sessionKey string) ([]acp.AttachmentPendingRequestInfo, error) {
+	return nil, nil
+}
 func (s *runnersGatewayStub) GetDelegatedRun(runID string) (delegatedrun.RunRecord, bool) {
 	return delegatedrun.RunRecord{}, false
 }

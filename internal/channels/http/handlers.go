@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/delegatedrun"
@@ -535,6 +536,76 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		logging.L_warn("http: failed to encode response", "error", err)
 	}
+}
+
+func httpGatewaySessionKey(sess *SSESession) string {
+	if sess == nil {
+		return ""
+	}
+	if sess.User != nil {
+		if sess.User.IsOwner() {
+			return session.PrimarySession
+		}
+		return fmt.Sprintf("user:%s", sess.User.ID)
+	}
+	return sess.SessionID
+}
+
+func (s *Server) handleACPRespond(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	u := getUserFromContext(r)
+	if u == nil {
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+	sessionID := getSessionFromContext(r)
+	if sessionID == "" {
+		http.Error(w, "No session", http.StatusInternalServerError)
+		return
+	}
+	sess := s.channel.GetSession(sessionID)
+	if sess == nil {
+		http.Error(w, "No session", http.StatusNotFound)
+		return
+	}
+	sessionKey := httpGatewaySessionKey(sess)
+	if sessionKey == "" {
+		http.Error(w, "No session key", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Driver          string          `json:"driver"`
+		Method          string          `json:"method"`
+		ToolCallID      string          `json:"toolCallId"`
+		ResponsePayload json.RawMessage `json:"responsePayload"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Driver) == "" || strings.TrimSpace(req.Method) == "" {
+		http.Error(w, "driver and method are required", http.StatusBadRequest)
+		return
+	}
+	if s.channel.gateway == nil {
+		http.Error(w, "Gateway not configured", http.StatusInternalServerError)
+		return
+	}
+	if err := s.channel.gateway.ACPRespond(sessionKey, acp.ACPDriverExtensionResponse{
+		Driver:          strings.TrimSpace(req.Driver),
+		Method:          strings.TrimSpace(req.Method),
+		ToolCallID:      strings.TrimSpace(req.ToolCallID),
+		ResponsePayload: req.ResponsePayload,
+	}); err != nil {
+		logging.L_warn("http: ACP interactive response failed", "user", u.ID, "session", sessionKey, "driver", req.Driver, "method", req.Method, "toolCallID", req.ToolCallID, "error", err)
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 }
 
 // handleSendMultipart handles POST /api/send/multipart — message text + file parts (saved via MediaStore).

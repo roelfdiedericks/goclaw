@@ -49,3 +49,50 @@ func TestToolUpdatePayloadPreservesToolState(t *testing.T) {
 		t.Fatalf("expected completed update to be successful")
 	}
 }
+
+func TestBuildDriverExtensionPayloadPreservesPlanPhases(t *testing.T) {
+	raw := json.RawMessage(`{
+		"toolCallId":"tool-plan",
+		"name":"Plan title",
+		"overview":"Overview",
+		"plan":"# Plan",
+		"phases":[{"name":"phase-1","todos":[{"id":"todo-1","content":"Inspect","status":"pending"}]}]
+	}`)
+	payload := buildDriverExtensionPayload("cursor/create_plan", raw)
+	if payload.Driver != "cursor" {
+		t.Fatalf("expected cursor driver, got %q", payload.Driver)
+	}
+	if payload.SemanticKind != "interactive_approval" {
+		t.Fatalf("expected interactive approval semantic kind, got %q", payload.SemanticKind)
+	}
+	var decoded PlanRequestPayload
+	if err := json.Unmarshal(payload.Payload, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if len(decoded.Phases) != 1 || len(decoded.Phases[0].Todos) != 1 {
+		t.Fatalf("expected phase todos to be preserved, got %#v", decoded.Phases)
+	}
+	if decoded.Phases[0].Todos[0].Content != "Inspect" {
+		t.Fatalf("expected nested todo content to survive, got %#v", decoded.Phases[0].Todos[0])
+	}
+}
+
+func TestBuildCanonicalInteractiveResponses(t *testing.T) {
+	ask := BuildCursorAskQuestionAnsweredResponse([]QuestionAnswer{{
+		QuestionID:        "q1",
+		SelectedOptionIDs: []string{"a", "b"},
+	}})
+	if got := string(ask); got != `{"outcome":{"answers":[{"questionId":"q1","selectedOptionIds":["a","b"]}],"outcome":"answered"}}` {
+		t.Fatalf("unexpected ask response: %s", got)
+	}
+
+	approve := BuildCursorCreatePlanAcceptedResponse("")
+	if got := string(approve); got != `{"outcome":{"outcome":"accepted","planUri":""}}` {
+		t.Fatalf("unexpected approve response: %s", got)
+	}
+
+	reject := BuildCursorCreatePlanRejectedResponse("Needs revision.")
+	if got := string(reject); got != `{"outcome":{"outcome":"rejected","reason":"Needs revision."}}` {
+		t.Fatalf("unexpected reject response: %s", got)
+	}
+}

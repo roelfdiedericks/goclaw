@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -11,9 +12,11 @@ import (
 
 	"github.com/roelfdiedericks/goclaw/internal/delegatedrun"
 	"github.com/roelfdiedericks/goclaw/internal/delivery"
+	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/session"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -33,6 +36,8 @@ type GatewayRunner interface {
 	RunAgent(ctx context.Context, req gateway.AgentRequest, events chan<- gateway.AgentEvent) error
 	AgentIdentity() *gwtypes.AgentIdentityConfig
 	SupervisionConfig() *gwtypes.SupervisionConfig
+	ACPRespond(sessionKey string, resp acp.ACPDriverExtensionResponse) error
+	ACPHandoffPending(ctx context.Context, sessionKey string) ([]acp.AttachmentPendingRequestInfo, error)
 	StopAllUserSessions(userID string) (int, error)
 	RequestShutdown(userID string) error
 	ListDelegatedRuns() []delegatedrun.RunRecord
@@ -507,6 +512,27 @@ func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *
 	if sess == nil {
 		return fmt.Errorf("no session for %s", sessionID)
 	}
+	sessionKey := c.gatewaySessionKey(sess)
+	if sessionKey != "" {
+		handoffCtx, cancelHandoff := context.WithTimeout(context.Background(), 5*time.Second)
+		cancelled, err := c.gateway.ACPHandoffPending(handoffCtx, sessionKey)
+		cancelHandoff()
+		if err != nil {
+			logging.L_warn("http: failed to hand off pending ACP interaction; proceeding", "sessionKey", sessionKey, "error", err)
+		} else {
+			for _, pending := range cancelled {
+				sess.SendEvent(SSEEvent{
+					Event: "acp_interaction_cancelled",
+					Data: map[string]any{
+						"driver":     pending.Driver,
+						"method":     pending.Method,
+						"toolCallId": pending.ToolCallID,
+						"reason":     "Cancelled because you continued in chat.",
+					},
+				})
+			}
+		}
+	}
 
 	// Create agent request - use session preferences for thinking
 	req := gateway.AgentRequest{
@@ -546,6 +572,16 @@ func (c *HTTPChannel) RunAgentRequest(ctx context.Context, sessionID string, u *
 	}()
 
 	return nil
+}
+
+func (c *HTTPChannel) gatewaySessionKey(sess *SSESession) string {
+	if sess == nil || sess.User == nil {
+		return ""
+	}
+	if sess.User.IsOwner() {
+		return session.PrimarySession
+	}
+	return "user:" + sess.User.ID
 }
 
 // convertEvent converts a gateway event to an SSE event
@@ -634,6 +670,18 @@ func (c *HTTPChannel) convertEvent(event gateway.AgentEvent) *SSEEvent {
 			"rawOutput":     e.RawOutput,
 			"kind":          e.Kind,
 			"locations":     e.Locations,
+		}}
+
+	case gateway.EventACPDriverExtension:
+		return &SSEEvent{Event: "acp_driver_extension", Data: map[string]interface{}{
+			"runId":        e.RunID,
+			"driver":       e.Driver,
+			"method":       e.Method,
+			"interactive":  e.Interactive,
+			"semanticKind": e.SemanticKind,
+			"toolCallId":   e.ToolCallID,
+			"summary":      e.Summary,
+			"payload":      json.RawMessage(e.Payload),
 		}}
 
 	case gateway.EventAgentEnd:

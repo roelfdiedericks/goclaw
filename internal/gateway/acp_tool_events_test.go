@@ -88,3 +88,32 @@ func TestMapACPEventToGatewayEventsFailed(t *testing.T) {
 		t.Fatalf("expected failed event to keep display result empty, got %q", end.DisplayResult)
 	}
 }
+
+func TestMapACPEventToGatewayEventsDriverExtension(t *testing.T) {
+	events := mapACPEventToGatewayEvents("run-1", acp.ACPEvent{
+		Type: acp.EventDriverExt,
+		Payload: acp.ACPDriverExtensionPayload{
+			Driver:       "cursor",
+			Method:       "cursor/ask_question",
+			Interactive:  true,
+			SemanticKind: "interactive_question",
+			ToolCallID:   "tool-q",
+			Summary:      "Cursor asked a question",
+			Payload:      json.RawMessage(`{"toolCallId":"tool-q"}`),
+		},
+	})
+
+	if len(events) != 1 {
+		t.Fatalf("expected 1 mapped event, got %d", len(events))
+	}
+	ext, ok := events[0].(EventACPDriverExtension)
+	if !ok {
+		t.Fatalf("expected EventACPDriverExtension, got %T", events[0])
+	}
+	if ext.Driver != "cursor" || ext.Method != "cursor/ask_question" {
+		t.Fatalf("unexpected mapped extension: %#v", ext)
+	}
+	if !ext.Interactive || ext.SemanticKind != "interactive_question" {
+		t.Fatalf("expected interactive question metadata, got %#v", ext)
+	}
+}

@@ -3,6 +3,7 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"html"
 	"io"
@@ -13,6 +14,7 @@ import (
 
 	tele "gopkg.in/telebot.v4"
 
+	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
 	chtypes "github.com/roelfdiedericks/goclaw/internal/channels/types"
@@ -56,6 +58,28 @@ type Bot struct {
 	delegatedSubs []bus.SubscriptionID
 	delegatedMu   sync.Mutex
 	delegatedLast map[string]time.Time
+
+	interactiveMu     sync.Mutex
+	interactiveSeq    int64
+	interactiveStates map[string]*telegramInteractiveState
+	interactivePolls  map[string]string
+}
+
+type telegramInteractiveState struct {
+	ID         string
+	SessionKey string
+	Driver     string
+	Method     string
+	ToolCallID string
+	ChatID     int64
+	MessageID  int
+	Question   acp.QuestionPayload
+	Plan       acp.PlanRequestPayload
+	Selected   map[string]map[string]bool
+	OtherRequested bool
+	PollID     string
+	PollMessageID int
+	PollOptionIDs []string
 }
 
 // getChatPrefs returns preferences for a chat, creating if needed.
@@ -115,6 +139,8 @@ func New(cfg *config.Config, gw *gateway.Gateway, users *user.Registry) (*Bot, e
 		ctx:           ctx,
 		cancel:        cancel,
 		delegatedLast: make(map[string]time.Time),
+		interactiveStates: make(map[string]*telegramInteractiveState),
+		interactivePolls:  make(map[string]string),
 	}
 
 	// Register handlers
@@ -222,6 +248,284 @@ func parseInt64OrZero(s string) int64 {
 	return n
 }
 
+func (b *Bot) nextInteractiveID() string {
+	b.interactiveMu.Lock()
+	defer b.interactiveMu.Unlock()
+	b.interactiveSeq++
+	return strconv.FormatInt(b.interactiveSeq, 36)
+}
+
+func (b *Bot) putInteractiveState(state *telegramInteractiveState) {
+	if state == nil || state.ID == "" {
+		return
+	}
+	b.interactiveMu.Lock()
+	defer b.interactiveMu.Unlock()
+	b.interactiveStates[state.ID] = state
+	if strings.TrimSpace(state.PollID) != "" {
+		b.interactivePolls[state.PollID] = state.ID
+	}
+}
+
+func (b *Bot) getInteractiveState(id string) *telegramInteractiveState {
+	b.interactiveMu.Lock()
+	defer b.interactiveMu.Unlock()
+	return b.interactiveStates[id]
+}
+
+func (b *Bot) popInteractiveState(id string) *telegramInteractiveState {
+	b.interactiveMu.Lock()
+	defer b.interactiveMu.Unlock()
+	state := b.interactiveStates[id]
+	delete(b.interactiveStates, id)
+	if state != nil && strings.TrimSpace(state.PollID) != "" {
+		delete(b.interactivePolls, state.PollID)
+	}
+	return state
+}
+
+func (b *Bot) popInteractiveStateByPollID(pollID string) *telegramInteractiveState {
+	pollID = strings.TrimSpace(pollID)
+	if pollID == "" {
+		return nil
+	}
+	b.interactiveMu.Lock()
+	defer b.interactiveMu.Unlock()
+	stateID := b.interactivePolls[pollID]
+	if stateID == "" {
+		return nil
+	}
+	state := b.interactiveStates[stateID]
+	delete(b.interactivePolls, pollID)
+	delete(b.interactiveStates, stateID)
+	return state
+}
+
+func (b *Bot) popInteractiveStatesForPending(sessionKey string, pending []acp.AttachmentPendingRequestInfo) []*telegramInteractiveState {
+	if strings.TrimSpace(sessionKey) == "" || len(pending) == 0 {
+		return nil
+	}
+	byKey := make(map[string]struct{}, len(pending))
+	for _, item := range pending {
+		key := strings.TrimSpace(item.Method) + "::" + strings.TrimSpace(item.ToolCallID)
+		byKey[key] = struct{}{}
+	}
+
+	b.interactiveMu.Lock()
+	defer b.interactiveMu.Unlock()
+
+	var states []*telegramInteractiveState
+	for id, state := range b.interactiveStates {
+		if state == nil || state.SessionKey != sessionKey {
+			continue
+		}
+		key := strings.TrimSpace(state.Method) + "::" + strings.TrimSpace(state.ToolCallID)
+		if _, ok := byKey[key]; !ok {
+			continue
+		}
+		states = append(states, state)
+		if strings.TrimSpace(state.PollID) != "" {
+			delete(b.interactivePolls, state.PollID)
+		}
+		delete(b.interactiveStates, id)
+	}
+	return states
+}
+
+func (b *Bot) telegramQuestionText(state *telegramInteractiveState, resolved string) string {
+	var sb strings.Builder
+	title := strings.TrimSpace(state.Question.Title)
+	if title == "" {
+		title = "Question"
+	}
+	sb.WriteString("❓ <b>" + escapeHTML(title) + "</b>\n")
+	for _, question := range state.Question.Questions {
+		sb.WriteString("\n<b>" + escapeHTML(question.Prompt) + "</b>\n")
+		for _, option := range b.telegramQuestionOptions(question) {
+			selected := false
+			if state.Selected != nil {
+				if byQuestion, ok := state.Selected[question.ID]; ok && byQuestion != nil {
+					selected = byQuestion[option.ID]
+				}
+			}
+			prefix := "▫️"
+			if selected {
+				prefix = "✅"
+			}
+			sb.WriteString(prefix + " " + escapeHTML(option.Label) + "\n")
+		}
+		if question.AllowMultiple {
+			sb.WriteString("<i>Select one or more options, then tap Submit.</i>\n")
+		}
+	}
+	if state.OtherRequested {
+		sb.WriteString("\n<i>Continue in chat with your custom answer.</i>\n")
+	}
+	if resolved != "" {
+		sb.WriteString("\n<b>" + escapeHTML(resolved) + "</b>")
+	}
+	return sb.String()
+}
+
+func (b *Bot) telegramQuestionMarkup(state *telegramInteractiveState) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	rows := make([]tele.Row, 0, len(state.Question.Questions)+1)
+	hasMulti := false
+	for qi, question := range state.Question.Questions {
+		btns := make([]tele.Btn, 0, len(question.Options))
+		for oi, option := range b.telegramQuestionOptions(question) {
+			label := option.Label
+			if question.AllowMultiple && state.Selected != nil {
+				if byQuestion, ok := state.Selected[question.ID]; ok && byQuestion != nil && byQuestion[option.ID] {
+					label = "✅ " + label
+				}
+			}
+			action := "single"
+			if b.telegramQuestionOptionIsOther(option) {
+				action = "other"
+			} else if question.AllowMultiple {
+				action = "toggle"
+				hasMulti = true
+			}
+			btns = append(btns, menu.Data(label, "acp", state.ID, action, strconv.Itoa(qi), strconv.Itoa(oi)))
+		}
+		if len(btns) > 0 {
+			rows = append(rows, menu.Split(2, btns)...)
+		}
+	}
+	if hasMulti {
+		rows = append(rows, menu.Row(menu.Data("Submit", "acp", state.ID, "submit")))
+	}
+	menu.Inline(rows...)
+	return menu
+}
+
+func (b *Bot) telegramQuestionOptions(question acp.QuestionItem) []acp.QuestionOption {
+	options := append([]acp.QuestionOption(nil), question.Options...)
+	hasOther := false
+	for _, option := range options {
+		if b.telegramQuestionOptionIsOther(option) {
+			hasOther = true
+			break
+		}
+	}
+	if !hasOther {
+		options = append(options, acp.QuestionOption{ID: "__other__", Label: "Other..."})
+	}
+	return options
+}
+
+func (b *Bot) telegramQuestionOptionIsOther(option acp.QuestionOption) bool {
+	id := strings.ToLower(strings.TrimSpace(option.ID))
+	label := strings.ToLower(strings.TrimSpace(option.Label))
+	return id == "other" || id == "__other__" || label == "other" || strings.HasPrefix(label, "other...")
+}
+
+func (b *Bot) shouldUseTelegramPollForQuestion(payload acp.QuestionPayload) bool {
+	if len(payload.Questions) != 1 {
+		return false
+	}
+	question := payload.Questions[0]
+	if !question.AllowMultiple {
+		return false
+	}
+	options := b.telegramQuestionOptions(question)
+	return len(options) >= 2 && len(options) <= 12
+}
+
+func (b *Bot) telegramPlanText(payload acp.PlanRequestPayload, resolved string) string {
+	var sb strings.Builder
+	title := strings.TrimSpace(payload.Name)
+	if title == "" {
+		title = "Plan approval"
+	}
+	sb.WriteString("🗂 <b>" + escapeHTML(title) + "</b>\n")
+	if strings.TrimSpace(payload.Overview) != "" {
+		sb.WriteString("\n" + escapeHTML(payload.Overview) + "\n")
+	}
+	if len(payload.Todos) > 0 {
+		sb.WriteString("\n<b>Todos</b>\n")
+		limit := len(payload.Todos)
+		if limit > 5 {
+			limit = 5
+		}
+		for i := 0; i < limit; i++ {
+			sb.WriteString("• " + escapeHTML(payload.Todos[i].Content) + "\n")
+		}
+	}
+	if strings.TrimSpace(payload.Plan) != "" {
+		sb.WriteString("\n<pre>" + escapeHTML(truncate(payload.Plan, 1200)) + "</pre>")
+	}
+	if resolved != "" {
+		sb.WriteString("\n<b>" + escapeHTML(resolved) + "</b>")
+	}
+	return sb.String()
+}
+
+func (b *Bot) telegramPlanMarkup(state *telegramInteractiveState) *tele.ReplyMarkup {
+	menu := &tele.ReplyMarkup{}
+	menu.Inline(
+		menu.Row(
+			menu.Data("Approve", "acp", state.ID, "approve"),
+			menu.Data("Reject", "acp", state.ID, "reject"),
+		),
+	)
+	return menu
+}
+
+func (b *Bot) markTelegramInteractiveStateCancelled(state *telegramInteractiveState, reason string) {
+	if state == nil || state.ChatID == 0 || state.MessageID == 0 {
+		return
+	}
+	reason = blankDefault(reason, "Cancelled because you continued in chat.")
+	ref := b.telegramMessageRef(state)
+	var text string
+	switch state.Method {
+	case "cursor/create_plan":
+		text = b.telegramPlanText(state.Plan, reason)
+	default:
+		text = b.telegramQuestionText(state, reason)
+	}
+	if _, err := b.bot.Edit(ref, text, &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: &tele.ReplyMarkup{},
+	}); err != nil {
+		logging.L_debug("telegram: failed to mark interaction cancelled", "method", state.Method, "toolCallID", state.ToolCallID, "error", err)
+	}
+}
+
+func (b *Bot) telegramMessageRef(state *telegramInteractiveState) *tele.Message {
+	if state == nil {
+		return nil
+	}
+	return &tele.Message{
+		ID:   state.MessageID,
+		Chat: &tele.Chat{ID: state.ChatID},
+	}
+}
+
+func (b *Bot) telegramQuestionAnswers(state *telegramInteractiveState) ([]acp.QuestionAnswer, error) {
+	answers := make([]acp.QuestionAnswer, 0, len(state.Question.Questions))
+	for _, question := range state.Question.Questions {
+		var selected []string
+		if byQuestion, ok := state.Selected[question.ID]; ok && byQuestion != nil {
+			for _, option := range question.Options {
+				if byQuestion[option.ID] {
+					selected = append(selected, option.ID)
+				}
+			}
+		}
+		if len(selected) == 0 {
+			return nil, fmt.Errorf("answer all questions before submitting")
+		}
+		answers = append(answers, acp.QuestionAnswer{
+			QuestionID:        question.ID,
+			SelectedOptionIDs: selected,
+		})
+	}
+	return answers, nil
+}
+
 // setupHandlers registers message handlers
 func (b *Bot) setupHandlers() {
 	// Handle all text messages
@@ -232,6 +536,10 @@ func (b *Bot) setupHandlers() {
 
 	// Handle voice messages
 	b.bot.Handle(tele.OnVoice, b.handleVoice)
+
+	// Handle ACP interactive callback buttons.
+	b.bot.Handle(&tele.Btn{Unique: "acp"}, b.handleACPCallback)
+	b.bot.Handle(tele.OnPollAnswer, b.handleACPPollAnswer)
 
 	// Handle /start command (Telegram-specific, not in global registry)
 	b.bot.Handle("/start", func(c tele.Context) error {
@@ -305,6 +613,235 @@ func (b *Bot) setupHandlers() {
 
 		return c.Send(resultMsg)
 	})
+}
+
+func (b *Bot) handleACPCallback(c tele.Context) error {
+	cb := c.Callback()
+	if cb == nil {
+		return nil
+	}
+	parts := strings.Split(cb.Data, "|")
+	if len(parts) < 2 {
+		return c.Respond(&tele.CallbackResponse{Text: "Invalid interaction payload.", ShowAlert: true})
+	}
+	stateID := strings.TrimSpace(parts[0])
+	action := strings.TrimSpace(parts[1])
+	state := b.getInteractiveState(stateID)
+	if state == nil {
+		return c.Respond(&tele.CallbackResponse{Text: "This interaction is no longer active.", ShowAlert: true})
+	}
+	switch state.Method {
+	case "cursor/ask_question":
+		return b.handleACPQuestionCallback(c, state, action, parts[2:])
+	case "cursor/create_plan":
+		return b.handleACPPlanCallback(c, state, action)
+	default:
+		return c.Respond(&tele.CallbackResponse{Text: "Unsupported interaction.", ShowAlert: true})
+	}
+}
+
+func (b *Bot) handleACPQuestionCallback(c tele.Context, state *telegramInteractiveState, action string, args []string) error {
+	if state.Selected == nil {
+		state.Selected = make(map[string]map[string]bool)
+	}
+	parseIndexes := func() (int, int, error) {
+		if len(args) < 2 {
+			return 0, 0, fmt.Errorf("missing callback indexes")
+		}
+		qi, err := strconv.Atoi(args[0])
+		if err != nil {
+			return 0, 0, err
+		}
+		oi, err := strconv.Atoi(args[1])
+		if err != nil {
+			return 0, 0, err
+		}
+		return qi, oi, nil
+	}
+	switch action {
+	case "toggle", "single":
+		qi, oi, err := parseIndexes()
+		if err != nil {
+			return c.Respond(&tele.CallbackResponse{Text: "Invalid selection.", ShowAlert: true})
+		}
+		if qi < 0 || qi >= len(state.Question.Questions) {
+			return c.Respond(&tele.CallbackResponse{Text: "Question no longer available.", ShowAlert: true})
+		}
+		question := state.Question.Questions[qi]
+		options := b.telegramQuestionOptions(question)
+		if oi < 0 || oi >= len(options) {
+			return c.Respond(&tele.CallbackResponse{Text: "Option no longer available.", ShowAlert: true})
+		}
+		option := options[oi]
+		if b.telegramQuestionOptionIsOther(option) {
+			state.Selected = make(map[string]map[string]bool)
+			state.OtherRequested = true
+			_, _ = b.bot.Edit(b.telegramMessageRef(state), b.telegramQuestionText(state, "Continue in chat with your custom answer."), &tele.SendOptions{
+				ParseMode:   tele.ModeHTML,
+				ReplyMarkup: &tele.ReplyMarkup{},
+			})
+			return c.Respond(&tele.CallbackResponse{Text: "Continue in chat with your custom answer.", ShowAlert: false})
+		}
+		state.OtherRequested = false
+		if state.Selected[question.ID] == nil {
+			state.Selected[question.ID] = make(map[string]bool)
+		}
+		optionID := option.ID
+		if action == "single" || !question.AllowMultiple {
+			state.Selected[question.ID] = map[string]bool{optionID: true}
+			answers, err := b.telegramQuestionAnswers(state)
+			if err != nil {
+				return c.Respond(&tele.CallbackResponse{Text: err.Error(), ShowAlert: true})
+			}
+			if err := b.gateway.ACPRespond(state.SessionKey, acp.ACPDriverExtensionResponse{
+				Driver:          state.Driver,
+				Method:          state.Method,
+				ToolCallID:      state.ToolCallID,
+				ResponsePayload: acp.BuildCursorAskQuestionAnsweredResponse(answers),
+			}); err != nil {
+				return c.Respond(&tele.CallbackResponse{Text: "Failed to submit answer.", ShowAlert: true})
+			}
+			b.popInteractiveState(state.ID)
+			_, _ = b.bot.Edit(b.telegramMessageRef(state), b.telegramQuestionText(state, "Answered."), &tele.SendOptions{
+				ParseMode:   tele.ModeHTML,
+				ReplyMarkup: &tele.ReplyMarkup{},
+			})
+			return c.Respond(&tele.CallbackResponse{Text: "Answer submitted."})
+		}
+		state.Selected[question.ID][optionID] = !state.Selected[question.ID][optionID]
+		_, _ = b.bot.Edit(b.telegramMessageRef(state), b.telegramQuestionText(state, ""), &tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: b.telegramQuestionMarkup(state),
+		})
+		return c.Respond(&tele.CallbackResponse{Text: "Selection updated."})
+	case "other":
+		state.Selected = make(map[string]map[string]bool)
+		state.OtherRequested = true
+		_, _ = b.bot.Edit(b.telegramMessageRef(state), b.telegramQuestionText(state, "Continue in chat with your custom answer."), &tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: &tele.ReplyMarkup{},
+		})
+		return c.Respond(&tele.CallbackResponse{Text: "Continue in chat with your custom answer.", ShowAlert: false})
+	case "submit":
+		if state.OtherRequested {
+			_, _ = b.bot.Edit(b.telegramMessageRef(state), b.telegramQuestionText(state, "Continue in chat with your custom answer."), &tele.SendOptions{
+				ParseMode:   tele.ModeHTML,
+				ReplyMarkup: &tele.ReplyMarkup{},
+			})
+			return c.Respond(&tele.CallbackResponse{Text: "Continue in chat with your custom answer.", ShowAlert: false})
+		}
+		answers, err := b.telegramQuestionAnswers(state)
+		if err != nil {
+			return c.Respond(&tele.CallbackResponse{Text: err.Error(), ShowAlert: true})
+		}
+		if err := b.gateway.ACPRespond(state.SessionKey, acp.ACPDriverExtensionResponse{
+			Driver:          state.Driver,
+			Method:          state.Method,
+			ToolCallID:      state.ToolCallID,
+			ResponsePayload: acp.BuildCursorAskQuestionAnsweredResponse(answers),
+		}); err != nil {
+			return c.Respond(&tele.CallbackResponse{Text: "Failed to submit answer.", ShowAlert: true})
+		}
+		b.popInteractiveState(state.ID)
+		_, _ = b.bot.Edit(b.telegramMessageRef(state), b.telegramQuestionText(state, "Answered."), &tele.SendOptions{
+			ParseMode:   tele.ModeHTML,
+			ReplyMarkup: &tele.ReplyMarkup{},
+		})
+		return c.Respond(&tele.CallbackResponse{Text: "Answer submitted."})
+	default:
+		return c.Respond(&tele.CallbackResponse{Text: "Unknown question action.", ShowAlert: true})
+	}
+}
+
+func (b *Bot) handleACPPlanCallback(c tele.Context, state *telegramInteractiveState, action string) error {
+	var payload json.RawMessage
+	var resolved string
+	switch action {
+	case "approve":
+		payload = acp.BuildCursorCreatePlanAcceptedResponse("")
+		resolved = "Plan approved."
+	case "reject":
+		payload = acp.BuildCursorCreatePlanRejectedResponse("Rejected from Telegram.")
+		resolved = "Plan rejected."
+	default:
+		return c.Respond(&tele.CallbackResponse{Text: "Unknown plan action.", ShowAlert: true})
+	}
+	if err := b.gateway.ACPRespond(state.SessionKey, acp.ACPDriverExtensionResponse{
+		Driver:          state.Driver,
+		Method:          state.Method,
+		ToolCallID:      state.ToolCallID,
+		ResponsePayload: payload,
+	}); err != nil {
+		return c.Respond(&tele.CallbackResponse{Text: "Failed to submit decision.", ShowAlert: true})
+	}
+	b.popInteractiveState(state.ID)
+	_, _ = b.bot.Edit(b.telegramMessageRef(state), b.telegramPlanText(state.Plan, resolved), &tele.SendOptions{
+		ParseMode:   tele.ModeHTML,
+		ReplyMarkup: &tele.ReplyMarkup{},
+	})
+	return c.Respond(&tele.CallbackResponse{Text: resolved})
+}
+
+func (b *Bot) handleACPPollAnswer(c tele.Context) error {
+	answer := c.PollAnswer()
+	if answer == nil {
+		return nil
+	}
+	state := b.popInteractiveStateByPollID(answer.PollID)
+	if state == nil {
+		return nil
+	}
+	if len(state.Question.Questions) == 0 {
+		return nil
+	}
+	question := state.Question.Questions[0]
+	selected := make([]string, 0, len(answer.Options))
+	selectedOther := false
+	for _, idx := range answer.Options {
+		if idx < 0 || idx >= len(state.PollOptionIDs) {
+			continue
+		}
+		optionID := state.PollOptionIDs[idx]
+		if b.telegramQuestionOptionIsOther(acp.QuestionOption{ID: optionID, Label: optionID}) {
+			selectedOther = true
+			continue
+		}
+		selected = append(selected, optionID)
+	}
+
+	pollRef := &tele.Message{ID: state.PollMessageID, Chat: &tele.Chat{ID: state.ChatID}}
+	if state.PollMessageID != 0 && state.ChatID != 0 && (selectedOther || len(selected) > 0) {
+		if err := b.bot.Delete(pollRef); err != nil {
+			_, _ = b.bot.StopPoll(pollRef)
+		}
+	}
+
+	if selectedOther {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, _ = b.gateway.ACPHandoffPending(ctx, state.SessionKey)
+		cancel()
+		_, _ = b.bot.Send(&tele.Chat{ID: state.ChatID}, "Continue in chat with your custom answer.")
+		return nil
+	}
+
+	if len(selected) == 0 {
+		_, _ = b.bot.Send(&tele.Chat{ID: state.ChatID}, "Pick at least one option, then vote again.")
+		return nil
+	}
+	if err := b.gateway.ACPRespond(state.SessionKey, acp.ACPDriverExtensionResponse{
+		Driver:     state.Driver,
+		Method:     state.Method,
+		ToolCallID: state.ToolCallID,
+		ResponsePayload: acp.BuildCursorAskQuestionAnsweredResponse([]acp.QuestionAnswer{{
+			QuestionID:        question.ID,
+			SelectedOptionIDs: selected,
+		}}),
+	}); err != nil {
+		logging.L_warn("telegram: failed to submit poll answer", "toolCallID", state.ToolCallID, "error", err)
+		_, _ = b.bot.Send(&tele.Chat{ID: state.ChatID}, "Failed to submit answer. Please try again.")
+		return nil
+	}
+	return nil
 }
 
 // getSessionKey returns the session key for the current user
@@ -446,6 +983,20 @@ func (b *Bot) handleMessage(c tele.Context) error {
 
 	// Get chat preferences for thinking level
 	prefs := b.getChatPrefs(chatID, u)
+	sessionKey, err := b.getSessionKey(c)
+	if err != nil {
+		return c.Send(err.Error())
+	}
+	handoffCtx, cancelHandoff := context.WithTimeout(context.Background(), 5*time.Second)
+	cancelled, err := b.gateway.ACPHandoffPending(handoffCtx, sessionKey)
+	cancelHandoff()
+	if err != nil {
+		logging.L_warn("telegram: failed to hand off pending ACP interaction; proceeding", "sessionKey", sessionKey, "error", err)
+	} else {
+		for _, state := range b.popInteractiveStatesForPending(sessionKey, cancelled) {
+			b.markTelegramInteractiveStateCancelled(state, "Cancelled because you continued in chat.")
+		}
+	}
 
 	// Create agent request with media callback
 	req := gateway.AgentRequest{
@@ -761,11 +1312,13 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 	var toolOrder []string
 	var lastToolsUpdate time.Time
 	var runningTools int
+	var todoMsgs = map[string]*tele.Message{}
 
 	// Get thinking mode preference upfront
 	userID := fmt.Sprintf("%d", c.Sender().ID)
 	u := b.users.FromIdentity("telegram", userID)
 	prefs := b.getChatPrefs(c.Chat().ID, u)
+	sessionKey, _ := b.getSessionKey(c)
 	// When thinking is ON, buffer text until tools are done to preserve timeline order.
 	// Once text deltas start flowing (tools are finished), switch to streaming.
 	bufferMode := prefs.ShowThinking
@@ -1104,6 +1657,144 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 						thinkingMsg = msg
 					}
 				}
+			}
+
+		case gateway.EventACPDriverExtension:
+			switch e.Method {
+			case "cursor/update_todos":
+				var payload acp.TodoUpdatePayload
+				if err := json.Unmarshal(e.Payload, &payload); err != nil {
+					logging.L_warn("telegram: failed to decode todo extension payload", "error", err)
+					continue
+				}
+				var sb strings.Builder
+				sb.WriteString("📝 <b>Checklist</b>\n")
+				for _, todo := range payload.Todos {
+					prefix := "☐"
+					switch todo.Status {
+					case "completed":
+						prefix = "☑"
+					case "in_progress":
+						prefix = "◐"
+					}
+					sb.WriteString(prefix + " " + escapeHTML(todo.Content) + "\n")
+				}
+				key := strings.TrimSpace(payload.ToolCallID)
+				text := strings.TrimSpace(sb.String())
+				if key != "" && todoMsgs[key] != nil {
+					_, _ = b.bot.Edit(todoMsgs[key], text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+				} else {
+					msg, err := b.bot.Send(c.Chat(), text, &tele.SendOptions{ParseMode: tele.ModeHTML})
+					if err == nil && key != "" {
+						todoMsgs[key] = msg
+					}
+				}
+			case "cursor/task":
+				var payload acp.TaskPayload
+				if err := json.Unmarshal(e.Payload, &payload); err != nil {
+					logging.L_warn("telegram: failed to decode task extension payload", "error", err)
+					continue
+				}
+				taskText := fmt.Sprintf("🧩 <b>Task</b>: %s", escapeHTML(blankDefault(payload.Description, "completed")))
+				var bits []string
+				if payload.Model != "" {
+					bits = append(bits, "model="+escapeHTML(payload.Model))
+				}
+				if payload.DurationMs > 0 {
+					bits = append(bits, fmt.Sprintf("duration=%dms", payload.DurationMs))
+				}
+				if len(bits) > 0 {
+					taskText += "\n" + strings.Join(bits, " | ")
+				}
+				_, _ = b.bot.Send(c.Chat(), taskText, &tele.SendOptions{ParseMode: tele.ModeHTML})
+			case "cursor/generate_image":
+				msgText := "🖼 <b>Generated image event</b>"
+				if strings.TrimSpace(e.Summary) != "" {
+					msgText += "\n" + escapeHTML(e.Summary)
+				}
+				_, _ = b.bot.Send(c.Chat(), msgText, &tele.SendOptions{ParseMode: tele.ModeHTML})
+			case "cursor/ask_question":
+				var payload acp.QuestionPayload
+				if err := json.Unmarshal(e.Payload, &payload); err != nil {
+					logging.L_warn("telegram: failed to decode question extension payload", "error", err)
+					continue
+				}
+				state := &telegramInteractiveState{
+					ID:         b.nextInteractiveID(),
+					SessionKey: sessionKey,
+					Driver:     e.Driver,
+					Method:     e.Method,
+					ToolCallID: e.ToolCallID,
+					ChatID:     c.Chat().ID,
+					Question:   payload,
+					Selected:   make(map[string]map[string]bool),
+				}
+				if b.shouldUseTelegramPollForQuestion(payload) {
+					question := payload.Questions[0]
+					options := b.telegramQuestionOptions(question)
+					poll := &tele.Poll{
+						Type:            tele.PollRegular,
+						Question:        truncate(question.Prompt, 300),
+						Anonymous:       false,
+						MultipleAnswers: true,
+					}
+					optionIDs := make([]string, 0, len(options))
+					for _, option := range options {
+						poll.AddOptions(truncate(option.Label, 100))
+						optionIDs = append(optionIDs, option.ID)
+					}
+					pollMsg, err := b.bot.Send(c.Chat(), poll)
+					if err != nil {
+						logging.L_warn("telegram: failed to send poll interaction", "error", err)
+						continue
+					}
+					state.PollMessageID = pollMsg.ID
+					if pollMsg.Poll != nil {
+						state.PollID = strings.TrimSpace(pollMsg.Poll.ID)
+					}
+					state.PollOptionIDs = optionIDs
+					state.MessageID = 0
+					b.putInteractiveState(state)
+					continue
+				}
+				msg, err := b.bot.Send(c.Chat(), b.telegramQuestionText(state, ""), &tele.SendOptions{
+					ParseMode:   tele.ModeHTML,
+					ReplyMarkup: b.telegramQuestionMarkup(state),
+				})
+				if err != nil {
+					logging.L_warn("telegram: failed to send question interaction", "error", err)
+					continue
+				}
+				state.MessageID = msg.ID
+				b.putInteractiveState(state)
+			case "cursor/create_plan":
+				var payload acp.PlanRequestPayload
+				if err := json.Unmarshal(e.Payload, &payload); err != nil {
+					logging.L_warn("telegram: failed to decode plan extension payload", "error", err)
+					continue
+				}
+				state := &telegramInteractiveState{
+					ID:         b.nextInteractiveID(),
+					SessionKey: sessionKey,
+					Driver:     e.Driver,
+					Method:     e.Method,
+					ToolCallID: e.ToolCallID,
+					ChatID:     c.Chat().ID,
+					Plan:       payload,
+				}
+				msg, err := b.bot.Send(c.Chat(), b.telegramPlanText(payload, ""), &tele.SendOptions{
+					ParseMode:   tele.ModeHTML,
+					ReplyMarkup: b.telegramPlanMarkup(state),
+				})
+				if err != nil {
+					logging.L_warn("telegram: failed to send plan interaction", "error", err)
+					continue
+				}
+				state.MessageID = msg.ID
+				b.putInteractiveState(state)
+			default:
+				fallback := blankDefault(strings.TrimSpace(e.Summary), "ACP extension: "+e.Method)
+				_, _ = b.bot.Send(c.Chat(), escapeHTML(fallback), &tele.SendOptions{ParseMode: tele.ModeHTML})
 			}
 
 		case gateway.EventAgentEnd:

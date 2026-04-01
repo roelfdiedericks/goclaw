@@ -3,6 +3,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/channels/tui/config"
 	"github.com/roelfdiedericks/goclaw/internal/channels/types"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
@@ -521,6 +523,42 @@ func handleAgentEvent(m *Model, event gateway.AgentEvent) {
 		}
 		m.chatLines = append(m.chatLines, "")
 		m.currentLine = assistantStyle.Render(m.gateway.AgentIdentity().DisplayName() + ": ")
+	case gateway.EventACPDriverExtension:
+		m.finishCurrentLine()
+		line := e.Summary
+		switch e.Method {
+		case "cursor/ask_question":
+			var payload acp.QuestionPayload
+			if err := json.Unmarshal(e.Payload, &payload); err == nil && len(payload.Questions) > 0 {
+				line = "Question: " + payload.Questions[0].Prompt
+			}
+			m.chatLines = append(m.chatLines, helpStyle.Render("[ACP question requires response elsewhere]"))
+		case "cursor/create_plan":
+			var payload acp.PlanRequestPayload
+			if err := json.Unmarshal(e.Payload, &payload); err == nil && strings.TrimSpace(payload.Name) != "" {
+				line = "Plan approval: " + payload.Name
+			}
+			m.chatLines = append(m.chatLines, helpStyle.Render("[ACP plan approval requires response elsewhere]"))
+		case "cursor/update_todos":
+			var payload acp.TodoUpdatePayload
+			if err := json.Unmarshal(e.Payload, &payload); err == nil {
+				line = fmt.Sprintf("Checklist updated (%d items)", len(payload.Todos))
+			}
+		case "cursor/task":
+			var payload acp.TaskPayload
+			if err := json.Unmarshal(e.Payload, &payload); err == nil && strings.TrimSpace(payload.Description) != "" {
+				line = "Delegated task: " + payload.Description
+			}
+		case "cursor/generate_image":
+			if strings.TrimSpace(line) == "" {
+				line = "Generated image event received"
+			}
+		default:
+			if strings.TrimSpace(line) == "" {
+				line = "ACP extension: " + e.Method
+			}
+		}
+		m.chatLines = append(m.chatLines, toolStyle.Render("[ACP] "+line), "")
 	case gateway.EventAgentEnd:
 		m.finishCurrentLine()
 		m.chatLines = append(m.chatLines, "")

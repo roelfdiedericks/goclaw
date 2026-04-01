@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -180,6 +181,38 @@ func mapACPEventToGatewayEvents(runID string, ev acp.ACPEvent) []AgentEvent {
 			}
 			L_debug("gateway: mapped ACP tool progress", "runID", runID, "toolCallID", payload.ToolCallID, "title", payload.Title, "status", payload.Status)
 			L_trace("gateway: ACP tool progress detail", "runID", runID, "toolCallID", payload.ToolCallID, "displayLen", len(displayResult), "inputBytes", len(payload.Input), "contentBytes", len(payload.Content), "rawOutputBytes", len(payload.RawOutput), "locations", len(payload.Locations), "kind", payload.Kind)
+			return []AgentEvent{event}
+		}
+	case acp.EventDriverExt:
+		if payload, ok := ev.Payload.(acp.ACPDriverExtensionPayload); ok {
+			event := EventACPDriverExtension{
+				RunID:        runID,
+				Driver:       payload.Driver,
+				Method:       payload.Method,
+				Interactive:  payload.Interactive,
+				SemanticKind: payload.SemanticKind,
+				ToolCallID:   payload.ToolCallID,
+				Summary:      payload.Summary,
+				Payload:      payload.Payload,
+			}
+			L_debug("gateway: mapped ACP driver extension",
+				"runID", runID,
+				"driver", payload.Driver,
+				"method", payload.Method,
+				"toolCallID", payload.ToolCallID,
+				"interactive", payload.Interactive,
+				"semanticKind", payload.SemanticKind,
+			)
+			L_trace("gateway: ACP driver extension detail",
+				"runID", runID,
+				"driver", payload.Driver,
+				"method", payload.Method,
+				"toolCallID", payload.ToolCallID,
+				"interactive", payload.Interactive,
+				"semanticKind", payload.SemanticKind,
+				"payloadBytes", len(payload.Payload),
+				"summary", payload.Summary,
+			)
 			return []AgentEvent{event}
 		}
 	}
@@ -2733,6 +2766,11 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			},
 		})
 		if err != nil {
+			if errors.Is(err, acp.ErrPendingInteractiveHandoff) {
+				L_debug("gateway: ACP run superseded by handoff", "runID", runID, "session", sessionKey)
+				sendEvent(EventAgentEnd{RunID: runID, FinalText: ""})
+				return nil
+			}
 			sendEvent(EventAgentError{RunID: runID, Error: err.Error()})
 			return err
 		}
@@ -3859,6 +3897,22 @@ func (g *Gateway) ACPCancel(ctx context.Context, sessionKey string) error {
 		return fmt.Errorf("ACP manager not initialized")
 	}
 	return mgr.Cancel(ctx, sessionKey)
+}
+
+func (g *Gateway) ACPRespond(sessionKey string, resp acp.ACPDriverExtensionResponse) error {
+	mgr := acp.GetManager()
+	if mgr == nil {
+		return fmt.Errorf("ACP manager not initialized")
+	}
+	return mgr.Respond(sessionKey, resp)
+}
+
+func (g *Gateway) ACPHandoffPending(ctx context.Context, sessionKey string) ([]acp.AttachmentPendingRequestInfo, error) {
+	mgr := acp.GetManager()
+	if mgr == nil {
+		return nil, fmt.Errorf("ACP manager not initialized")
+	}
+	return mgr.CancelPendingHandoff(ctx, sessionKey)
 }
 
 // TriggerHeartbeat manually triggers a heartbeat check

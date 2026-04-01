@@ -38,6 +38,7 @@ type clientAdapter struct {
 	mu           sync.RWMutex
 	onEvent      func(ACPEvent)
 	onPermission func(PermissionRequest) (PermissionDecision, error)
+	onInteractive func(context.Context, ACPDriverExtensionPayload) (json.RawMessage, error)
 	stateMu      sync.Mutex
 	tools        map[string]toolState
 	seqMu        sync.Mutex
@@ -70,11 +71,12 @@ type stdioLineLogger struct {
 	seq       int64
 }
 
-func (c *clientAdapter) setCallbacks(onEvent func(ACPEvent), onPermission func(PermissionRequest) (PermissionDecision, error)) {
+func (c *clientAdapter) setCallbacks(onEvent func(ACPEvent), onPermission func(PermissionRequest) (PermissionDecision, error), onInteractive func(context.Context, ACPDriverExtensionPayload) (json.RawMessage, error)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onEvent = onEvent
 	c.onPermission = onPermission
+	c.onInteractive = onInteractive
 	if c.tools == nil {
 		c.tools = map[string]toolState{}
 	}
@@ -266,6 +268,14 @@ func summarizeTraceRaw(raw json.RawMessage) string {
 	return string(raw[:acpTracePayloadLimit]) + "...(truncated)"
 }
 
+func debugRaw(raw json.RawMessage) string {
+	raw = json.RawMessage(strings.TrimSpace(string(raw)))
+	if len(raw) == 0 {
+		return ""
+	}
+	return string(raw)
+}
+
 func summarizeTraceLine(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -412,6 +422,125 @@ func cloneRawMessage(raw json.RawMessage) json.RawMessage {
 	return out
 }
 
+func extensionDriver(method string) string {
+	method = strings.TrimSpace(method)
+	if idx := strings.Index(method, "/"); idx > 0 {
+		return method[:idx]
+	}
+	return ""
+}
+
+func extensionSemanticKind(method string) string {
+	switch strings.TrimSpace(method) {
+	case "cursor/ask_question":
+		return "interactive_question"
+	case "cursor/create_plan":
+		return "interactive_approval"
+	case "cursor/update_todos":
+		return "progress_checklist"
+	case "cursor/task":
+		return "delegated_task"
+	case "cursor/generate_image":
+		return "generated_asset"
+	default:
+		return "unknown"
+	}
+}
+
+func extensionInteractive(method string) bool {
+	switch strings.TrimSpace(method) {
+	case "cursor/ask_question", "cursor/create_plan":
+		return true
+	default:
+		return false
+	}
+}
+
+func extensionToolCallID(method string, params json.RawMessage) string {
+	switch strings.TrimSpace(method) {
+	case "cursor/update_todos":
+		var payload TodoUpdatePayload
+		if err := json.Unmarshal(params, &payload); err == nil {
+			return strings.TrimSpace(payload.ToolCallID)
+		}
+	case "cursor/create_plan":
+		var payload PlanRequestPayload
+		if err := json.Unmarshal(params, &payload); err == nil {
+			return strings.TrimSpace(payload.ToolCallID)
+		}
+	case "cursor/ask_question":
+		var payload QuestionPayload
+		if err := json.Unmarshal(params, &payload); err == nil {
+			return strings.TrimSpace(payload.ToolCallID)
+		}
+	case "cursor/task":
+		var payload TaskPayload
+		if err := json.Unmarshal(params, &payload); err == nil {
+			return strings.TrimSpace(payload.ToolCallID)
+		}
+	case "cursor/generate_image":
+		var payload struct {
+			ToolCallID string `json:"toolCallId"`
+		}
+		if err := json.Unmarshal(params, &payload); err == nil {
+			return strings.TrimSpace(payload.ToolCallID)
+		}
+	}
+	return ""
+}
+
+func extensionSummary(method string, params json.RawMessage) string {
+	switch strings.TrimSpace(method) {
+	case "cursor/update_todos":
+		var payload TodoUpdatePayload
+		if err := json.Unmarshal(params, &payload); err == nil {
+			return fmt.Sprintf("Cursor updated %d todo(s)", len(payload.Todos))
+		}
+	case "cursor/create_plan":
+		var payload PlanRequestPayload
+		if err := json.Unmarshal(params, &payload); err == nil {
+			if strings.TrimSpace(payload.Name) != "" {
+				return fmt.Sprintf("Cursor requested plan approval: %s", payload.Name)
+			}
+			return "Cursor requested plan approval"
+		}
+	case "cursor/ask_question":
+		var payload QuestionPayload
+		if err := json.Unmarshal(params, &payload); err == nil {
+			if len(payload.Questions) > 0 && strings.TrimSpace(payload.Questions[0].Prompt) != "" {
+				return "Cursor asked a question: " + strings.TrimSpace(payload.Questions[0].Prompt)
+			}
+			if strings.TrimSpace(payload.Title) != "" {
+				return "Cursor asked a question: " + strings.TrimSpace(payload.Title)
+			}
+			return "Cursor asked a question"
+		}
+	case "cursor/task":
+		var payload TaskPayload
+		if err := json.Unmarshal(params, &payload); err == nil {
+			if strings.TrimSpace(payload.Description) != "" {
+				return "Cursor task completed: " + strings.TrimSpace(payload.Description)
+			}
+			return "Cursor task completed"
+		}
+	case "cursor/generate_image":
+		return "Cursor reported generated image output"
+	}
+	return "ACP driver extension: " + strings.TrimSpace(method)
+}
+
+func buildDriverExtensionPayload(method string, params json.RawMessage) ACPDriverExtensionPayload {
+	return ACPDriverExtensionPayload{
+		Driver:       extensionDriver(method),
+		Method:       strings.TrimSpace(method),
+		Interactive:  extensionInteractive(method),
+		SemanticKind: extensionSemanticKind(method),
+		ToolCallID:   extensionToolCallID(method, params),
+		Summary:      extensionSummary(method, params),
+		Payload:      cloneRawMessage(params),
+	}
+}
+
 func (c *clientAdapter) SessionUpdate(ctx context.Context, params *goacp.SessionNotification) error {
 	ts := time.Now()
 	callbackSeq := c.nextCallbackSeq()
@@ -539,26 +668,71 @@ func (c *clientAdapter) KillTerminalCommand(ctx context.Context, params *goacp.K
 
 func (c *clientAdapter) ExtMethod(ctx context.Context, method string, params json.RawMessage) (any, error) {
 	now := time.Now()
-	switch method {
-	case "cursor/update_todos":
-		var payload TodoUpdatePayload
-		if err := json.Unmarshal(params, &payload); err == nil {
-			c.emit(ACPEvent{Type: EventTodoUpdate, Payload: payload, Timestamp: now})
-		}
-	case "cursor/create_plan":
-		var payload PlanRequestPayload
-		if err := json.Unmarshal(params, &payload); err == nil {
-			c.emit(ACPEvent{Type: EventPlanRequest, Payload: payload, Timestamp: now})
-		}
-	case "cursor/ask_question":
-		var payload QuestionPayload
-		if err := json.Unmarshal(params, &payload); err == nil {
-			c.emit(ACPEvent{Type: EventQuestion, Payload: payload, Timestamp: now})
-		}
-	default:
-		c.emit(ACPEvent{Type: EventStatus, Payload: StatusPayload{Message: fmt.Sprintf("ext:%s", method)}, Timestamp: now})
+	payload := buildDriverExtensionPayload(method, params)
+	L_debug("acp: driver extension",
+		"driver", payload.Driver,
+		"method", payload.Method,
+		"toolCallID", payload.ToolCallID,
+		"interactive", payload.Interactive,
+		"semanticKind", payload.SemanticKind,
+		"summary", payload.Summary,
+		"payload", debugRaw(payload.Payload),
+	)
+	L_trace("acp: driver extension payload",
+		"driver", payload.Driver,
+		"method", payload.Method,
+		"toolCallID", payload.ToolCallID,
+		"interactive", payload.Interactive,
+		"semanticKind", payload.SemanticKind,
+		"payloadBytes", len(payload.Payload),
+		"payload", summarizeTraceRaw(payload.Payload),
+	)
+	c.emit(ACPEvent{Type: EventDriverExt, Payload: payload, Timestamp: now})
+	if !payload.Interactive {
+		return map[string]any{}, nil
 	}
-	return map[string]any{}, nil
+	c.mu.RLock()
+	waitFn := c.onInteractive
+	c.mu.RUnlock()
+	if waitFn == nil {
+		return nil, fmt.Errorf("no ACP interactive handler configured for %s", payload.Method)
+	}
+	L_debug("acp: waiting for interactive extension response",
+		"driver", payload.Driver,
+		"method", payload.Method,
+		"toolCallID", payload.ToolCallID,
+	)
+	result, err := waitFn(ctx, payload)
+	if err != nil {
+		L_debug("acp: interactive extension wait failed",
+			"driver", payload.Driver,
+			"method", payload.Method,
+			"toolCallID", payload.ToolCallID,
+			"error", err,
+		)
+		return nil, err
+	}
+	L_debug("acp: interactive extension response resolved",
+		"driver", payload.Driver,
+		"method", payload.Method,
+		"toolCallID", payload.ToolCallID,
+		"responseBytes", len(result),
+		"response", debugRaw(result),
+	)
+	L_trace("acp: interactive extension response payload",
+		"driver", payload.Driver,
+		"method", payload.Method,
+		"toolCallID", payload.ToolCallID,
+		"response", summarizeTraceRaw(result),
+	)
+	if len(result) == 0 {
+		return map[string]any{}, nil
+	}
+	var decoded any
+	if err := json.Unmarshal(result, &decoded); err != nil {
+		return nil, fmt.Errorf("invalid interactive response payload for %s: %w", payload.Method, err)
+	}
+	return decoded, nil
 }
 
 func (t *localStdioTransport) NewSession(ctx context.Context, req NewSessionRequest) (*SessionHandle, error) {
@@ -672,8 +846,8 @@ func (t *localStdioTransport) Prompt(ctx context.Context, handle *SessionHandle,
 			req.OnEvent(ev)
 		}
 	}
-	runtime.impl.setCallbacks(wrappedEvents, req.OnPermission)
-	defer runtime.impl.setCallbacks(nil, nil)
+	runtime.impl.setCallbacks(wrappedEvents, req.OnPermission, req.OnInteractive)
+	defer runtime.impl.setCallbacks(nil, nil, nil)
 
 	resp, err := runtime.conn.Prompt(ctx, &goacp.PromptRequest{
 		SessionID: goacp.SessionID(handle.SessionID),

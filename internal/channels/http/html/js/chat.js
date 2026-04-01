@@ -380,6 +380,8 @@
     var toolPanelsByRun = {};
     var toolPanelOrder = [];
     var toolAutoSeqByRun = {};
+    var acpTodoCardsByKey = {};
+    var acpInteractiveCardsByKey = {};
     var TOOL_PANEL_FILTERS = ['all', 'running', 'errors'];
     var TOOL_DEBUG_LOG = true;
 
@@ -1538,6 +1540,461 @@
         return $msg;
     }
 
+    function insertMessageElement($msg) {
+        var $typing = $('#typing-indicator');
+        if ($typing.length) {
+            $typing.before($msg);
+        } else {
+            $messages.append($msg);
+        }
+        trimChatDomIfNeeded();
+        updateLoadEarlierVisibility();
+        scrollChatToBottom();
+        return $msg;
+    }
+
+    function ensureACPCard(key, titleText, badgeText, interactive) {
+        var existing = acpInteractiveCardsByKey[key];
+        if (existing && existing.$message && existing.$message.length) {
+            return existing;
+        }
+        var $msg = $('<div class="message assistant acp-extension-message"><div class="bubble"></div></div>');
+        var $bubble = $msg.find('.bubble');
+        var $card = $('<div class="card border-0 bg-body-tertiary"></div>');
+        var $body = $('<div class="card-body py-2"></div>');
+        var $header = $('<div class="d-flex justify-content-between align-items-start gap-2 mb-2"></div>');
+        var $title = $('<div class="fw-semibold small"></div>').text(titleText || 'ACP event');
+        var $badge = $('<span class="badge text-bg-secondary"></span>').text(badgeText || 'event');
+        if (interactive) {
+            $badge.removeClass('text-bg-secondary').addClass('text-bg-primary').text('interactive');
+        }
+        $header.append($title, $badge);
+        $body.append($header);
+        $card.append($body);
+        $bubble.append($card);
+        insertMessageElement($msg);
+        acpInteractiveCardsByKey[key] = {
+            key: key,
+            $message: $msg,
+            $body: $body,
+            $badge: $badge,
+            resolved: false
+        };
+        return acpInteractiveCardsByKey[key];
+    }
+
+    function setACPCardResolved(card, text, isError) {
+        if (!card) return;
+        card.resolved = true;
+        card.$body.find('input, button, textarea').prop('disabled', true);
+        card.$body.find('.acp-response-status').remove();
+        var $status = $('<div class="acp-response-status mt-2 small fw-semibold"></div>').text(text || 'Resolved');
+        if (isError) {
+            $status.addClass('text-danger');
+        } else {
+            $status.addClass('text-success');
+        }
+        card.$body.append($status);
+        if (card.$badge) {
+            card.$badge.removeClass('text-bg-primary text-bg-secondary').addClass(isError ? 'text-bg-danger' : 'text-bg-success').text(isError ? 'error' : 'resolved');
+        }
+    }
+
+    function setACPCardStale(card, text) {
+        if (!card) return;
+        card.resolved = true;
+        card.$body.find('input, button, textarea').prop('disabled', true);
+        card.$body.find('.acp-response-status').remove();
+        var $status = $('<div class="acp-response-status mt-2 small fw-semibold text-muted"></div>')
+            .text(text || 'Cancelled because you continued in chat.');
+        card.$body.append($status);
+        if (card.$badge) {
+            card.$badge.removeClass('text-bg-primary text-bg-success text-bg-danger').addClass('text-bg-secondary').text('stale');
+        }
+    }
+
+    function markACPInteractionCancelled(data) {
+        if (!data || !data.method) return;
+        var targetMethod = String(data.method || '');
+        var targetToolCallId = String(data.toolCallId || '');
+        Object.keys(acpInteractiveCardsByKey).forEach(function(key) {
+            var card = acpInteractiveCardsByKey[key];
+            if (!card) return;
+            var cardMethod = String(card.method || '');
+            var cardToolCallId = String(card.toolCallId || '');
+            if (cardMethod !== targetMethod) return;
+            if (targetToolCallId && cardToolCallId && cardToolCallId !== targetToolCallId) return;
+            setACPCardStale(card, data.reason || 'Cancelled because you continued in chat.');
+        });
+    }
+
+    function buildAskQuestionResponse(answers) {
+        return {
+            outcome: {
+                outcome: 'answered',
+                answers: answers
+            }
+        };
+    }
+
+    function buildCreatePlanResponse(accepted, reason) {
+        if (accepted) {
+            return {
+                outcome: {
+                    outcome: 'accepted',
+                    planUri: ''
+                }
+            };
+        }
+        return {
+            outcome: {
+                outcome: 'rejected',
+                reason: reason || 'Rejected from HTTP UI.'
+            }
+        };
+    }
+
+    function submitACPResponse(data, responsePayload, onSuccess, onFailure) {
+        $.ajax({
+            url: '/api/acp/respond',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({
+                driver: data.driver,
+                method: data.method,
+                toolCallId: data.toolCallId || '',
+                responsePayload: responsePayload
+            }),
+            success: function() {
+                if (typeof onSuccess === 'function') onSuccess();
+            },
+            error: function(xhr) {
+                var msg = (xhr && xhr.responseText) ? xhr.responseText : 'Failed to submit ACP response.';
+                if (typeof onFailure === 'function') {
+                    onFailure(msg);
+                    return;
+                }
+                appendMessage('error', msg);
+            }
+        });
+    }
+
+    function renderACPDetailsObject(obj, open) {
+        var text = '';
+        try {
+            text = JSON.stringify(obj || {}, null, 2);
+        } catch (err) {
+            text = String(obj || '');
+        }
+        var $details = $('<details class="mt-2"></details>');
+        if (open) $details.prop('open', true);
+        $details.append($('<summary class="small text-muted"></summary>').text('Details'));
+        $details.append($('<pre class="small mb-0 mt-2"></pre>').text(text));
+        return $details;
+    }
+
+    function renderACPTodoCard(data) {
+        var payload = data.payload || {};
+        var key = String(payload.toolCallId || data.toolCallId || ('todos::' + resolveEventRunId(data) + '::' + Date.now()));
+        var state = acpTodoCardsByKey[key];
+        if (!state || payload.merge !== true) {
+            var card = ensureACPCard('todo::' + key, 'Checklist update', 'todos', false);
+            state = {
+                key: key,
+                itemsById: {},
+                order: [],
+                card: card
+            };
+            acpTodoCardsByKey[key] = state;
+        }
+        if (payload.merge !== true) {
+            state.itemsById = {};
+            state.order = [];
+        }
+        (payload.todos || []).forEach(function(todo) {
+            if (!todo || !todo.id) return;
+            if (!state.itemsById[todo.id]) {
+                state.order.push(todo.id);
+            }
+            state.itemsById[todo.id] = todo;
+        });
+
+        state.card.$body.find('.acp-card-content').remove();
+        var $content = $('<div class="acp-card-content"></div>');
+        var $list = $('<ul class="list-unstyled mb-0"></ul>');
+        state.order.forEach(function(id) {
+            var todo = state.itemsById[id];
+            if (!todo) return;
+            var status = String(todo.status || 'pending');
+            var icon = status === 'completed' ? '☑' : (status === 'in_progress' ? '◐' : '☐');
+            $list.append($('<li class="small mb-1"></li>').text(icon + ' ' + String(todo.content || id)));
+        });
+        $content.append($list);
+        state.card.$body.append($content);
+    }
+
+    function renderACPTaskCard(data) {
+        var payload = data.payload || {};
+        var key = 'task::' + String(data.toolCallId || payload.toolCallId || resolveEventRunId(data) || Date.now());
+        var card = ensureACPCard(key, 'Delegated task', 'task', false);
+        card.$body.find('.acp-card-content').remove();
+        var $content = $('<div class="acp-card-content small"></div>');
+        if (payload.description) {
+            $content.append($('<div class="fw-semibold"></div>').text(String(payload.description)));
+        }
+        var parts = [];
+        if (payload.model) parts.push('model: ' + String(payload.model));
+        if (payload.durationMs) parts.push('duration: ' + String(payload.durationMs) + 'ms');
+        if (payload.agentId) parts.push('agent: ' + String(payload.agentId));
+        if (parts.length) {
+            $content.append($('<div class="text-muted"></div>').text(parts.join(' | ')));
+        }
+        $content.append(renderACPDetailsObject({
+            prompt: payload.prompt || '',
+            subagentType: payload.subagentType || null
+        }, false));
+        card.$body.append($content);
+    }
+
+    function renderACPGeneratedImageCard(data) {
+        var key = 'image::' + String(data.toolCallId || Date.now());
+        var card = ensureACPCard(key, 'Generated image event', 'image', false);
+        card.$body.find('.acp-card-content').remove();
+        var $content = $('<div class="acp-card-content small"></div>');
+        $content.append($('<div></div>').text(data.summary || 'Driver reported generated image output.'));
+        $content.append(renderACPDetailsObject(data.payload || {}, false));
+        card.$body.append($content);
+    }
+
+    function questionAllowsMultiple(question) {
+        if (!question || typeof question !== 'object') return false;
+        if (question.allowMultiple === true) return true;
+        if (question.allow_multiple === true) return true;
+        return false;
+    }
+
+    function isOtherQuestionOption(option) {
+        if (!option || typeof option !== 'object') return false;
+        var id = String(option.id || '').trim().toLowerCase();
+        var label = String(option.label || '').trim().toLowerCase();
+        return id === 'other' || label === 'other' || label.indexOf('other...') === 0 || label.indexOf('other ') === 0;
+    }
+
+    function questionOptionsWithOther(question) {
+        var options = Array.isArray(question && question.options) ? question.options.slice() : [];
+        var hasOther = options.some(function(option) { return isOtherQuestionOption(option); });
+        if (!hasOther) {
+            options.push({
+                id: '__other__',
+                label: 'Other...'
+            });
+        }
+        return options;
+    }
+
+    function isOtherQuestionOptionId(optionId) {
+        var id = String(optionId || '').trim().toLowerCase();
+        return id === '__other__' || id === 'other';
+    }
+
+    function handoffAskQuestionCardToChat(card) {
+        setACPCardStale(card, 'Continue in chat with your custom answer.');
+        if ($input && $input.length) {
+            ensureComposerVisible('ask-question-other-selected', { focusInput: true });
+        }
+    }
+
+    function renderACPAskQuestionCard(data) {
+        var payload = data.payload || {};
+        var key = 'ask::' + String(data.toolCallId || resolveEventRunId(data) || Date.now());
+        var card = ensureACPCard(key, payload.title || 'Question', 'interactive', true);
+        card.driver = data.driver || '';
+        card.method = data.method || '';
+        card.toolCallId = data.toolCallId || '';
+        card.$body.find('.acp-card-content').remove();
+        var $content = $('<form class="acp-card-content"></form>');
+        if (payload.title) {
+            $content.append($('<div class="small text-muted mb-2"></div>').text(String(payload.title)));
+        }
+        (payload.questions || []).forEach(function(question, qIndex) {
+            var questionId = String(question.id || ('question_' + qIndex));
+            var isMultiSelect = questionAllowsMultiple(question);
+            var options = questionOptionsWithOther(question);
+            var $group = $('<fieldset class="mb-3"></fieldset>');
+            $group.append($('<legend class="small fw-semibold mb-1"></legend>').text(String(question.prompt || questionId)));
+            options.forEach(function(option, optIndex) {
+                var inputType = isMultiSelect ? 'checkbox' : 'radio';
+                var inputName = 'q_' + questionId;
+                var inputId = 'acp_' + key.replace(/[^a-zA-Z0-9_]/g, '_') + '_' + qIndex + '_' + optIndex;
+                var $wrap = $('<div class="form-check"></div>');
+                var $inputEl = $('<input class="form-check-input">')
+                    .attr('type', inputType)
+                    .attr('id', inputId)
+                    .attr('name', inputName)
+                    .attr('value', String(option.id || ''));
+                var $label = $('<label class="form-check-label small"></label>')
+                    .attr('for', inputId)
+                    .text(String(option.label || option.id || 'option'));
+                $wrap.append($inputEl, $label);
+                $group.append($wrap);
+            });
+            if (isMultiSelect) {
+                $group.append($('<div class="form-text small"></div>').text('Choose one or more options, then submit.'));
+            }
+            $content.append($group);
+        });
+        var $error = $('<div class="small text-danger mb-2" style="display:none;"></div>');
+        var $otherHint = $('<div class="small text-muted mb-2" style="display:none;"></div>').text('Choosing Other immediately hands off to the normal chat box for your custom answer.');
+        var $actions = $('<div class="d-flex gap-2"></div>');
+        var $submit = $('<button type="submit" class="btn btn-sm btn-primary">Submit</button>');
+        $actions.append($submit);
+        $content.append($error, $otherHint, $actions);
+        $content.on('change', '.form-check-input', function() {
+            var selectedValue = String($(this).val() || '');
+            if (!$(this).is(':checked') || !isOtherQuestionOptionId(selectedValue)) {
+                return;
+            }
+            $error.hide();
+            $otherHint.show();
+            handoffAskQuestionCardToChat(card);
+        });
+        $content.on('submit', function(ev) {
+            ev.preventDefault();
+            var answers = [];
+            var valid = true;
+            var selectedOther = false;
+            (payload.questions || []).forEach(function(question, qIndex) {
+                var questionId = String(question.id || ('question_' + qIndex));
+                var options = questionOptionsWithOther(question);
+                var selected = [];
+                $content.find('[name="q_' + questionId + '"]:checked').each(function() {
+                    selected.push(String($(this).val()));
+                });
+                var actualSelected = [];
+                options.forEach(function(option) {
+                    if (selected.indexOf(String(option.id || '')) < 0) return;
+                    if (isOtherQuestionOption(option)) {
+                        selectedOther = true;
+                        return;
+                    }
+                    actualSelected.push(String(option.id || ''));
+                });
+                if (actualSelected.length === 0 && !selectedOther) {
+                    valid = false;
+                    return;
+                }
+                if (actualSelected.length > 0) {
+                    answers.push({
+                        questionId: questionId,
+                        selectedOptionIds: actualSelected
+                    });
+                }
+            });
+            if (!valid) {
+                $error.text('Select an option for each question.').show();
+                return;
+            }
+            $error.hide();
+            $otherHint.toggle(selectedOther);
+            if (selectedOther) {
+                handoffAskQuestionCardToChat(card);
+                return;
+            }
+            submitACPResponse(data, buildAskQuestionResponse(answers), function() {
+                var labels = [];
+                answers.forEach(function(answer) {
+                    labels.push(answer.questionId + ': ' + answer.selectedOptionIds.join(', '));
+                });
+                var resolvedText = 'Submitted: ' + labels.join(' | ');
+                setACPCardResolved(card, resolvedText, false);
+            }, function(msg) {
+                setACPCardResolved(card, msg, true);
+            });
+        });
+        card.$body.append($content);
+    }
+
+    function renderACPCreatePlanCard(data) {
+        var payload = data.payload || {};
+        var key = 'plan::' + String(data.toolCallId || resolveEventRunId(data) || Date.now());
+        var card = ensureACPCard(key, payload.name || 'Plan approval', 'interactive', true);
+        card.driver = data.driver || '';
+        card.method = data.method || '';
+        card.toolCallId = data.toolCallId || '';
+        card.$body.find('.acp-card-content').remove();
+        var $content = $('<div class="acp-card-content small"></div>');
+        if (payload.overview) {
+            $content.append($('<div class="mb-2"></div>').text(String(payload.overview)));
+        }
+        if (Array.isArray(payload.todos) && payload.todos.length) {
+            var $todoPreview = $('<ul class="list-unstyled small mb-2"></ul>');
+            payload.todos.slice(0, 5).forEach(function(todo) {
+                $todoPreview.append($('<li></li>').text('• ' + String(todo.content || todo.id || 'todo')));
+            });
+            $content.append($todoPreview);
+        }
+        if (payload.plan) {
+            var $details = $('<details class="mb-2"></details>');
+            $details.append($('<summary class="small text-muted"></summary>').text('Plan body'));
+            $details.append($('<pre class="small mb-0 mt-2"></pre>').text(String(payload.plan)));
+            $content.append($details);
+        }
+        var $actions = $('<div class="d-flex gap-2"></div>');
+        var $approve = $('<button type="button" class="btn btn-sm btn-success">Approve</button>');
+        var $reject = $('<button type="button" class="btn btn-sm btn-outline-danger">Reject</button>');
+        $approve.on('click', function() {
+            submitACPResponse(data, buildCreatePlanResponse(true), function() {
+                setACPCardResolved(card, 'Plan approved.', false);
+            }, function(msg) {
+                setACPCardResolved(card, msg, true);
+            });
+        });
+        $reject.on('click', function() {
+            var reason = window.prompt('Reason for rejecting this plan:', 'Needs revision.');
+            if (reason === null) return;
+            submitACPResponse(data, buildCreatePlanResponse(false, reason), function() {
+                setACPCardResolved(card, 'Plan rejected: ' + reason, false);
+            }, function(msg) {
+                setACPCardResolved(card, msg, true);
+            });
+        });
+        $actions.append($approve, $reject);
+        $content.append($actions);
+        card.$body.append($content);
+    }
+
+    function renderACPDriverExtension(data) {
+        if (!data || !data.method) return;
+        switch (String(data.method)) {
+        case 'cursor/update_todos':
+            renderACPTodoCard(data);
+            break;
+        case 'cursor/task':
+            renderACPTaskCard(data);
+            break;
+        case 'cursor/generate_image':
+            renderACPGeneratedImageCard(data);
+            break;
+        case 'cursor/ask_question':
+            renderACPAskQuestionCard(data);
+            break;
+        case 'cursor/create_plan':
+            renderACPCreatePlanCard(data);
+            break;
+        default:
+            var key = 'ext::' + String(data.method) + '::' + String(data.toolCallId || resolveEventRunId(data) || Date.now());
+            var card = ensureACPCard(key, data.method, data.semanticKind || 'extension', !!data.interactive);
+            card.$body.find('.acp-card-content').remove();
+            var $content = $('<div class="acp-card-content small"></div>');
+            if (data.summary) {
+                $content.append($('<div class="mb-2"></div>').text(String(data.summary)));
+            }
+            $content.append(renderACPDetailsObject(data.payload || {}, false));
+            card.$body.append($content);
+            break;
+        }
+    }
+
     // Connect to SSE
     function connect() {
         // Close existing connection if any
@@ -2031,6 +2488,28 @@
             if (shouldAutoscrollToolActivity()) {
                 scrollChatToBottom();
             }
+        });
+
+        eventSource.addEventListener('acp_driver_extension', function(e) {
+            var parsed = safeParseJSON(e.type, e.data);
+            if (!parsed.ok) {
+                appendProtocolErrorBubble(e.type);
+                return;
+            }
+            var data = parsed.value;
+            if (!data) return;
+            renderACPDriverExtension(data);
+        });
+
+        eventSource.addEventListener('acp_interaction_cancelled', function(e) {
+            var parsed = safeParseJSON(e.type, e.data);
+            if (!parsed.ok) {
+                appendProtocolErrorBubble(e.type);
+                return;
+            }
+            var data = parsed.value;
+            if (!data) return;
+            markACPInteractionCancelled(data);
         });
         
         // Handle thinking content (supervision: always render with debug-content class; normal: only if showThinking)

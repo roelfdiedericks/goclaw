@@ -84,6 +84,20 @@ type EventToolEnd struct {
 
 func (EventToolEnd) agentEvent() {}
 
+// EventACPDriverExtension is emitted for ACP driver-specific extension events.
+type EventACPDriverExtension struct {
+	RunID        string          `json:"runId"`
+	Driver       string          `json:"driver"`
+	Method       string          `json:"method"`
+	Interactive  bool            `json:"interactive"`
+	SemanticKind string          `json:"semanticKind,omitempty"`
+	ToolCallID   string          `json:"toolCallId,omitempty"`
+	Summary      string          `json:"summary,omitempty"`
+	Payload      json.RawMessage `json:"payload"`
+}
+
+func (EventACPDriverExtension) agentEvent() {}
+
 // EventAgentEnd is emitted when an agent run completes successfully
 type EventAgentEnd struct {
 	RunID     string `json:"runId"`

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/delegatedrun"
 	"github.com/roelfdiedericks/goclaw/internal/delivery"
@@ -73,6 +74,12 @@ func (s *delegatedAgentRunnerStub) AgentIdentity() *gwtypes.AgentIdentityConfig 
 func (s *delegatedAgentRunnerStub) SupervisionConfig() *gwtypes.SupervisionConfig { return nil }
 func (s *delegatedAgentRunnerStub) StopAllUserSessions(userID string) (int, error) { return 0, nil }
 func (s *delegatedAgentRunnerStub) RequestShutdown(userID string) error { return nil }
+func (s *delegatedAgentRunnerStub) ACPRespond(sessionKey string, resp acp.ACPDriverExtensionResponse) error {
+	return nil
+}
+func (s *delegatedAgentRunnerStub) ACPHandoffPending(ctx context.Context, sessionKey string) ([]acp.AttachmentPendingRequestInfo, error) {
+	return nil, nil
+}
 func (s *delegatedAgentRunnerStub) ListDelegatedRuns() []delegatedrun.RunRecord { return nil }
 func (s *delegatedAgentRunnerStub) GetDelegatedRun(runID string) (delegatedrun.RunRecord, bool) {
 	return delegatedrun.RunRecord{}, false

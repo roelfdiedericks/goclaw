@@ -2,6 +2,8 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -12,12 +14,25 @@ import (
 )
 
 type attachment struct {
-	info         AttachmentInfo
-	handle       *SessionHandle
-	eventBuffer  []ACPEvent
-	bufferLimit  int
-	activeCancel context.CancelFunc
-	mu           sync.Mutex
+	info             AttachmentInfo
+	handle           *SessionHandle
+	eventBuffer      []ACPEvent
+	bufferLimit      int
+	activeCancel     context.CancelFunc
+	promptDone       chan struct{}
+	pendingRequests  map[string]*pendingInteractiveRequest
+	recentExtensions []AttachmentExtensionInfo
+	mu               sync.Mutex
+}
+
+type pendingInteractiveRequest struct {
+	info       AttachmentPendingRequestInfo
+	responseCh chan pendingInteractiveResult
+}
+
+type pendingInteractiveResult struct {
+	payload json.RawMessage
+	err     error
 }
 
 type Manager struct {
@@ -31,6 +46,7 @@ type Manager struct {
 var (
 	globalManager *Manager
 	managerMu     sync.Mutex
+	ErrPendingInteractiveHandoff = errors.New("acp interactive request cancelled for handoff")
 )
 
 func InitManager(defaultCWD string) *Manager {
@@ -162,8 +178,9 @@ func (m *Manager) Attach(ctx context.Context, req AttachRequest) (*AttachmentInf
 			LastActivity: now,
 			CurrentState: "idle",
 		},
-		handle:      handle,
-		bufferLimit: 200,
+		handle:          handle,
+		bufferLimit:     200,
+		pendingRequests: map[string]*pendingInteractiveRequest{},
 	}
 
 	m.mu.Lock()
@@ -188,12 +205,24 @@ func (m *Manager) Detach(sessionKey string) (*AttachmentInfo, error) {
 	if att == nil {
 		return nil, fmt.Errorf("no ACP session attached")
 	}
+	var cancel context.CancelFunc
+	var pending []pendingInteractiveRequest
 	att.mu.Lock()
-	defer att.mu.Unlock()
 	att.info.Attached = false
 	att.info.CurrentState = "detached"
 	att.info.LastActivity = time.Now()
+	att.info.PromptRunning = false
+	cancel = att.activeCancel
+	att.activeCancel = nil
+	pending = att.collectAndClearPendingLocked()
 	info := att.info
+	info.PendingRequests = nil
+	info.RecentExtensions = cloneAttachmentExtensionInfo(att.recentExtensions)
+	att.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	failPendingRequests(pending, fmt.Errorf("ACP session detached"))
 	return &info, nil
 }
 
@@ -207,9 +236,18 @@ func (m *Manager) Close(ctx context.Context, sessionKey string) error {
 	if att == nil {
 		return nil
 	}
-	if att.activeCancel != nil {
-		att.activeCancel()
+	var cancel context.CancelFunc
+	var pending []pendingInteractiveRequest
+	att.mu.Lock()
+	cancel = att.activeCancel
+	att.activeCancel = nil
+	att.info.PromptRunning = false
+	pending = att.collectAndClearPendingLocked()
+	att.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
+	failPendingRequests(pending, fmt.Errorf("ACP session closed"))
 	if transport, err := m.resolveTransport(att.info.Transport); err == nil {
 		if err := transport.Close(ctx, att.handle); err != nil {
 			return err
@@ -229,6 +267,8 @@ func (m *Manager) Inspect(sessionKey string) (*AttachmentInfo, error) {
 	defer att.mu.Unlock()
 	info := att.info
 	info.BufferedEvents = len(att.eventBuffer)
+	info.PendingRequests = att.pendingInfosLocked()
+	info.RecentExtensions = cloneAttachmentExtensionInfo(att.recentExtensions)
 	return &info, nil
 }
 
@@ -240,29 +280,47 @@ func (m *Manager) Prompt(ctx context.Context, sessionKey string, text string, op
 		return nil, fmt.Errorf("no ACP session attached")
 	}
 
-	att.mu.Lock()
-	defer att.mu.Unlock()
 	promptCtx, cancel := context.WithCancel(ctx)
+	promptDone := make(chan struct{})
+	att.mu.Lock()
+	if att.info.PromptRunning {
+		att.mu.Unlock()
+		cancel()
+		return nil, fmt.Errorf("ACP prompt already running for %s", sessionKey)
+	}
 	att.activeCancel = cancel
+	att.promptDone = promptDone
+	att.info.PromptRunning = true
 	att.info.CurrentState = "running"
 	att.info.LastActivity = time.Now()
+	transportID := att.info.Transport
+	handle := att.handle
+	att.mu.Unlock()
+
 	defer func() {
+		cancel()
+		att.mu.Lock()
+		if att.promptDone == promptDone {
+			att.promptDone = nil
+		}
 		att.activeCancel = nil
+		att.info.PromptRunning = false
 		if att.info.Attached {
 			att.info.CurrentState = "idle"
 		} else {
 			att.info.CurrentState = "detached"
 		}
 		att.info.LastActivity = time.Now()
-		cancel()
+		att.mu.Unlock()
+		close(promptDone)
 	}()
 
-	result, err := m.resolveTransport(att.info.Transport)
+	result, err := m.resolveTransport(transportID)
 	if err != nil {
 		return nil, err
 	}
 
-	res, err := result.Prompt(promptCtx, att.handle, PromptRequest{
+	res, err := result.Prompt(promptCtx, handle, PromptRequest{
 		Text: text,
 		OnEvent: func(ev ACPEvent) {
 			m.recordEvent(att, ev)
@@ -273,12 +331,21 @@ func (m *Manager) Prompt(ctx context.Context, sessionKey string, text string, op
 		OnPermission: func(req PermissionRequest) (PermissionDecision, error) {
 			return m.defaultPermissionDecision(req), nil
 		},
+		OnInteractive: func(waitCtx context.Context, payload ACPDriverExtensionPayload) (json.RawMessage, error) {
+			return m.waitForInteractiveResponse(waitCtx, att, payload)
+		},
 	})
 	if err != nil {
+		att.mu.Lock()
 		att.info.CurrentState = "error"
+		att.info.LastActivity = time.Now()
+		att.mu.Unlock()
 		return nil, err
 	}
+	att.mu.Lock()
 	att.info.LastAssistant = res.FinalText
+	att.info.LastActivity = time.Now()
+	att.mu.Unlock()
 	return res, nil
 }
 
@@ -300,25 +367,38 @@ func (m *Manager) defaultPermissionDecision(req PermissionRequest) PermissionDec
 }
 
 func (m *Manager) recordEvent(att *attachment, ev ACPEvent) {
+	att.mu.Lock()
+	defer att.mu.Unlock()
 	att.info.LastActivity = time.Now()
 	switch ev.Type {
-	case EventTodoUpdate:
-		if payload, ok := ev.Payload.(TodoUpdatePayload); ok {
-			if payload.Merge {
-				existing := map[string]int{}
-				for i, item := range att.info.Todos {
-					existing[item.ID] = i
+	case EventDriverExt:
+		if payload, ok := ev.Payload.(ACPDriverExtensionPayload); ok {
+			att.recordExtensionLocked(payload)
+			switch payload.Method {
+			case "cursor/update_todos":
+				var todoPayload TodoUpdatePayload
+				if err := json.Unmarshal(payload.Payload, &todoPayload); err == nil {
+					m.applyTodoUpdateLocked(att, todoPayload)
 				}
-				for _, item := range payload.Todos {
-					if idx, ok := existing[item.ID]; ok {
-						att.info.Todos[idx] = item
-					} else {
-						att.info.Todos = append(att.info.Todos, item)
+			case "cursor/create_plan":
+				var planPayload PlanRequestPayload
+				if err := json.Unmarshal(payload.Payload, &planPayload); err == nil {
+					att.info.LastPlanName = planPayload.Name
+					att.info.LastPlanOverview = planPayload.Overview
+				}
+			case "cursor/ask_question":
+				var questionPayload QuestionPayload
+				if err := json.Unmarshal(payload.Payload, &questionPayload); err == nil {
+					att.info.LastQuestion = questionPayload.Title
+					if len(questionPayload.Questions) > 0 && questionPayload.Questions[0].Prompt != "" {
+						att.info.LastQuestion = questionPayload.Questions[0].Prompt
 					}
 				}
-			} else {
-				att.info.Todos = append([]TodoItem(nil), payload.Todos...)
 			}
+		}
+	case EventTodoUpdate:
+		if payload, ok := ev.Payload.(TodoUpdatePayload); ok {
+			m.applyTodoUpdateLocked(att, payload)
 		}
 	case EventPlanRequest:
 		if payload, ok := ev.Payload.(PlanRequestPayload); ok {
@@ -355,17 +435,23 @@ func (m *Manager) SetMode(ctx context.Context, sessionKey, mode string) (*Attach
 		return nil, fmt.Errorf("no ACP session attached")
 	}
 	att.mu.Lock()
-	defer att.mu.Unlock()
-	transport, err := m.resolveTransport(att.info.Transport)
+	transportID := att.info.Transport
+	handle := att.handle
+	att.mu.Unlock()
+	transport, err := m.resolveTransport(transportID)
 	if err != nil {
 		return nil, err
 	}
-	if err := transport.SetMode(ctx, att.handle, mode); err != nil {
+	if err := transport.SetMode(ctx, handle, mode); err != nil {
 		return nil, err
 	}
+	att.mu.Lock()
 	att.info.Mode = mode
 	att.info.LastActivity = time.Now()
 	info := att.info
+	info.PendingRequests = att.pendingInfosLocked()
+	info.RecentExtensions = cloneAttachmentExtensionInfo(att.recentExtensions)
+	att.mu.Unlock()
 	return &info, nil
 }
 
@@ -377,18 +463,241 @@ func (m *Manager) Cancel(ctx context.Context, sessionKey string) error {
 		return fmt.Errorf("no ACP session attached")
 	}
 	att.mu.Lock()
-	defer att.mu.Unlock()
-	transport, err := m.resolveTransport(att.info.Transport)
+	transportID := att.info.Transport
+	handle := att.handle
+	cancel := att.activeCancel
+	promptDone := att.promptDone
+	att.info.LastActivity = time.Now()
+	pending := att.collectAndClearPendingLocked()
+	att.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	failPendingRequests(pending, context.Canceled)
+	transport, err := m.resolveTransport(transportID)
 	if err != nil {
 		return err
 	}
-	if err := transport.Cancel(ctx, att.handle); err != nil {
+	if err := transport.Cancel(ctx, handle); err != nil {
 		return err
 	}
-	att.info.LastActivity = time.Now()
+	if promptDone != nil {
+		select {
+		case <-promptDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	return nil
+}
+
+func (m *Manager) PendingInteractiveRequests(sessionKey string) ([]AttachmentPendingRequestInfo, error) {
+	m.mu.RLock()
+	att := m.attachments[sessionKey]
+	m.mu.RUnlock()
+	if att == nil {
+		return nil, fmt.Errorf("no ACP session attached")
+	}
+	att.mu.Lock()
+	defer att.mu.Unlock()
+	return att.pendingInfosLocked(), nil
+}
+
+func (m *Manager) CancelPendingHandoff(ctx context.Context, sessionKey string) ([]AttachmentPendingRequestInfo, error) {
+	m.mu.RLock()
+	att := m.attachments[sessionKey]
+	m.mu.RUnlock()
+	if att == nil {
+		return nil, nil
+	}
+
+	att.mu.Lock()
+	if len(att.pendingRequests) == 0 {
+		att.mu.Unlock()
+		return nil, nil
+	}
+	transportID := att.info.Transport
+	handle := att.handle
+	promptDone := att.promptDone
+	pendingReqs := att.collectAndClearPendingLocked()
+	cancelled := make([]AttachmentPendingRequestInfo, 0, len(pendingReqs))
+	for _, req := range pendingReqs {
+		cancelled = append(cancelled, req.info)
+	}
+	att.info.LastActivity = time.Now()
+	att.mu.Unlock()
+
+	failPendingRequests(pendingReqs, ErrPendingInteractiveHandoff)
+
+	transport, err := m.resolveTransport(transportID)
+	if err != nil {
+		return cancelled, err
+	}
+	if err := transport.Cancel(ctx, handle); err != nil {
+		return cancelled, err
+	}
+	if promptDone != nil {
+		select {
+		case <-promptDone:
+		case <-ctx.Done():
+			return cancelled, ctx.Err()
+		}
+	}
+	return cancelled, nil
 }
 
 func (m *Manager) Steer(ctx context.Context, sessionKey string, text string, opts PromptOptions) (*PromptResult, error) {
 	return m.Prompt(ctx, sessionKey, text, opts)
+}
+
+func (m *Manager) Respond(sessionKey string, resp ACPDriverExtensionResponse) error {
+	m.mu.RLock()
+	att := m.attachments[sessionKey]
+	m.mu.RUnlock()
+	if att == nil {
+		return fmt.Errorf("no ACP session attached")
+	}
+	key := interactiveRequestKey(resp.Driver, resp.Method, resp.ToolCallID)
+	att.mu.Lock()
+	pending, ok := att.pendingRequests[key]
+	if !ok {
+		att.mu.Unlock()
+		return fmt.Errorf("no pending ACP interactive request for %s", key)
+	}
+	delete(att.pendingRequests, key)
+	att.info.LastActivity = time.Now()
+	att.mu.Unlock()
+	select {
+	case pending.responseCh <- pendingInteractiveResult{payload: cloneRawMessage(resp.ResponsePayload)}:
+	default:
+	}
+	return nil
+}
+
+func (m *Manager) waitForInteractiveResponse(ctx context.Context, att *attachment, payload ACPDriverExtensionPayload) (json.RawMessage, error) {
+	info := AttachmentPendingRequestInfo{
+		Driver:       payload.Driver,
+		Method:       payload.Method,
+		Interactive:  payload.Interactive,
+		SemanticKind: payload.SemanticKind,
+		ToolCallID:   payload.ToolCallID,
+		Summary:      payload.Summary,
+		CreatedAt:    time.Now(),
+	}
+	key := interactiveRequestKey(payload.Driver, payload.Method, payload.ToolCallID)
+	req := &pendingInteractiveRequest{
+		info:       info,
+		responseCh: make(chan pendingInteractiveResult, 1),
+	}
+	att.mu.Lock()
+	if att.pendingRequests == nil {
+		att.pendingRequests = map[string]*pendingInteractiveRequest{}
+	}
+	if _, exists := att.pendingRequests[key]; exists {
+		att.mu.Unlock()
+		return nil, fmt.Errorf("ACP interactive request already pending for %s", key)
+	}
+	att.pendingRequests[key] = req
+	att.info.LastActivity = time.Now()
+	att.mu.Unlock()
+
+	defer func() {
+		att.mu.Lock()
+		if current, ok := att.pendingRequests[key]; ok && current == req {
+			delete(att.pendingRequests, key)
+		}
+		att.info.LastActivity = time.Now()
+		att.mu.Unlock()
+	}()
+
+	select {
+	case result := <-req.responseCh:
+		return cloneRawMessage(result.payload), result.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (m *Manager) applyTodoUpdateLocked(att *attachment, payload TodoUpdatePayload) {
+	if payload.Merge {
+		existing := map[string]int{}
+		for i, item := range att.info.Todos {
+			existing[item.ID] = i
+		}
+		for _, item := range payload.Todos {
+			if idx, ok := existing[item.ID]; ok {
+				att.info.Todos[idx] = item
+			} else {
+				att.info.Todos = append(att.info.Todos, item)
+			}
+		}
+		return
+	}
+	att.info.Todos = append([]TodoItem(nil), payload.Todos...)
+}
+
+func (att *attachment) recordExtensionLocked(payload ACPDriverExtensionPayload) {
+	att.recentExtensions = append(att.recentExtensions, AttachmentExtensionInfo{
+		Driver:       payload.Driver,
+		Method:       payload.Method,
+		Interactive:  payload.Interactive,
+		SemanticKind: payload.SemanticKind,
+		ToolCallID:   payload.ToolCallID,
+		Summary:      payload.Summary,
+		ObservedAt:   time.Now(),
+	})
+	if len(att.recentExtensions) > 20 {
+		att.recentExtensions = att.recentExtensions[len(att.recentExtensions)-20:]
+	}
+}
+
+func (att *attachment) collectAndClearPendingLocked() []pendingInteractiveRequest {
+	if len(att.pendingRequests) == 0 {
+		return nil
+	}
+	out := make([]pendingInteractiveRequest, 0, len(att.pendingRequests))
+	for key, req := range att.pendingRequests {
+		out = append(out, *req)
+		delete(att.pendingRequests, key)
+	}
+	return out
+}
+
+func (att *attachment) pendingInfosLocked() []AttachmentPendingRequestInfo {
+	if len(att.pendingRequests) == 0 {
+		return nil
+	}
+	out := make([]AttachmentPendingRequestInfo, 0, len(att.pendingRequests))
+	for _, req := range att.pendingRequests {
+		out = append(out, req.info)
+	}
+	return out
+}
+
+func cloneAttachmentExtensionInfo(items []AttachmentExtensionInfo) []AttachmentExtensionInfo {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]AttachmentExtensionInfo, len(items))
+	copy(out, items)
+	return out
+}
+
+func interactiveRequestKey(driver, method, toolCallID string) string {
+	driver = strings.TrimSpace(driver)
+	method = strings.TrimSpace(method)
+	toolCallID = strings.TrimSpace(toolCallID)
+	if toolCallID == "" {
+		return driver + "::" + method
+	}
+	return driver + "::" + method + "::" + toolCallID
+}
+
+func failPendingRequests(pending []pendingInteractiveRequest, err error) {
+	for _, req := range pending {
+		select {
+		case req.responseCh <- pendingInteractiveResult{err: err}:
+		default:
+		}
+	}
 }

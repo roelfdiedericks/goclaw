@@ -365,6 +365,9 @@ func acpInfoResult(prefix string, info *acp.AttachmentInfo) *CommandResult {
 	if info.LastPlanName != "" {
 		text.WriteString(fmt.Sprintf("  Last plan: %s\n", info.LastPlanName))
 	}
+	if info.LastPlanOverview != "" {
+		text.WriteString(fmt.Sprintf("  Last plan overview: %s\n", info.LastPlanOverview))
+	}
 	if info.LastQuestion != "" {
 		text.WriteString(fmt.Sprintf("  Last question: %s\n", info.LastQuestion))
 	}
@@ -372,6 +375,29 @@ func acpInfoResult(prefix string, info *acp.AttachmentInfo) *CommandResult {
 		text.WriteString("  Todos:\n")
 		for _, todo := range info.Todos {
 			text.WriteString(fmt.Sprintf("    - [%s] %s\n", todo.Status, todo.Content))
+		}
+	}
+	if len(info.PendingRequests) > 0 {
+		text.WriteString("  Pending interactive requests:\n")
+		for _, pending := range info.PendingRequests {
+			text.WriteString(fmt.Sprintf("    - [%s] %s (%s", pending.Driver, pending.Method, pending.SemanticKind))
+			if pending.ToolCallID != "" {
+				text.WriteString(", tool=" + pending.ToolCallID)
+			}
+			text.WriteString(")\n")
+		}
+	}
+	if len(info.RecentExtensions) > 0 {
+		text.WriteString("  Recent driver extensions:\n")
+		for _, ext := range info.RecentExtensions {
+			text.WriteString(fmt.Sprintf("    - [%s] %s (%s", ext.Driver, ext.Method, ext.SemanticKind))
+			if ext.ToolCallID != "" {
+				text.WriteString(", tool=" + ext.ToolCallID)
+			}
+			if ext.Summary != "" {
+				text.WriteString(": " + ext.Summary)
+			}
+			text.WriteString(")\n")
 		}
 	}
 	return &CommandResult{
