@@ -1,8 +1,6 @@
 module github.com/roelfdiedericks/goclaw
 
-go 1.25.0
-
-toolchain go1.25.7
+go 1.26.1
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -26,6 +24,7 @@ require (
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/ironpark/go-acp v0.0.0-20260314150148-fe3f8bc41143
 	github.com/itchyny/gojq v0.12.18
 	github.com/jmcarbo/stopwords v1.1.9
 	github.com/knights-analytics/hugot v0.6.4
@@ -132,3 +131,5 @@ require (
 	k8s.io/klog/v2 v2.130.1 // indirect
 	rsc.io/qr v0.2.0 // indirect
 )
+
+replace github.com/ironpark/go-acp => github.com/roelfdiedericks/acp-go v0.0.0-20260401162654-7c287679e3a3

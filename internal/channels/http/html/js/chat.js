@@ -33,6 +33,43 @@
             return { ok: false, error: err };
         }
     }
+    function updateComposerReserve() {
+        var $bar = $('.chat-composer-bar');
+        if (!$bar.length) return;
+        var h = $bar.outerHeight(true);
+        document.documentElement.style.setProperty('--chat-composer-reserve', Math.ceil(h + 12) + 'px');
+    }
+    function ensureComposerVisible(reason, options) {
+        options = options || {};
+        if (!$input.length) return;
+        updateComposerReserve();
+        var $bar = $('.chat-composer-bar');
+        var inputEl = $input[0];
+        if (!inputEl) return;
+        var composerEl = $bar.length ? $bar[0] : inputEl;
+        if (!composerEl) return;
+        var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+        var rect = composerEl.getBoundingClientRect();
+        var outOfView = rect.bottom > viewportHeight || rect.top < 0;
+        if (outOfView && typeof composerEl.scrollIntoView === 'function') {
+            composerEl.scrollIntoView({ block: 'end', inline: 'nearest' });
+        }
+        if (options.focusInput) {
+            window.requestAnimationFrame(function() {
+                try {
+                    inputEl.focus({ preventScroll: true });
+                } catch (err) {
+                    inputEl.focus();
+                }
+            });
+        }
+        logDomCap('composer-ensure', {
+            reason: reason || 'unspecified',
+            target: composerEl === inputEl ? 'input' : 'composer',
+            action: outOfView ? 'scrolled' : 'kept',
+            focusInput: !!options.focusInput
+        });
+    }
     function scrollChatToBottom(reason, options) {
         options = options || {};
         if (!options.force && historyHydrationActive()) {
@@ -47,16 +84,18 @@
             if ($messages.length) {
                 $messages[0].scrollTop = $messages[0].scrollHeight;
             }
+            ensureComposerVisible(reason, { focusInput: !!options.focusInput });
             if (typeof options.afterScroll === 'function') {
                 options.afterScroll();
             }
         });
     }
-    function updateComposerReserve() {
-        var $bar = $('.chat-composer-bar');
-        if (!$bar.length) return;
-        var h = $bar.outerHeight(true);
-        document.documentElement.style.setProperty('--chat-composer-reserve', Math.ceil(h + 12) + 'px');
+    function revealComposer(reason) {
+        window.requestAnimationFrame(function() {
+            window.requestAnimationFrame(function() {
+                ensureComposerVisible(reason, { focusInput: true });
+            });
+        });
     }
     function appendProtocolErrorBubble(eventType) {
         var label = eventType || 'event';
@@ -198,6 +237,7 @@
             reason: reason || 'unspecified',
             mountedWindow: mountedWindowLabel()
         });
+        revealComposer('initial-hydration-complete');
     }
 
     function announceToScreenReader(shortMessage) {
@@ -885,7 +925,7 @@
         refreshToolPanelFilter(panel);
     }
 
-    function createToolRow(panel, key, toolName, inputStr) {
+    function createToolRow(panel, key, toolName, inputLabel, inputStr) {
         var preview = buildToolPreview(inputStr, 120);
         var $item = $('<li class="tool-activity-item" data-tool-key="' + escapeHtmlCompat(key) + '">' +
             '<details>' +
@@ -896,7 +936,7 @@
                     '<span class="tool-activity-duration"></span>' +
                 '</summary>' +
                 '<div class="tool-activity-body">' +
-                    '<div class="tool-activity-section-label">Arguments</div>' +
+                    '<div class="tool-activity-section-label tool-activity-input-label"></div>' +
                     '<pre class="tool-activity-pre tool-activity-input"></pre>' +
                     '<div class="tool-activity-result-wrap" style="display:none;">' +
                         '<div class="tool-activity-section-label tool-activity-result-label">Result</div>' +
@@ -905,6 +945,7 @@
                 '</div>' +
             '</details>' +
         '</li>');
+        $item.find('.tool-activity-input-label').text(String(inputLabel || 'Arguments'));
         $item.find('.tool-activity-input').text(String(inputStr || ''));
         panel.$list.append($item);
 
@@ -917,6 +958,8 @@
             $status: $item.find('.tool-activity-status'),
             $preview: $item.find('.tool-activity-preview'),
             $duration: $item.find('.tool-activity-duration'),
+            $inputLabel: $item.find('.tool-activity-input-label'),
+            $input: $item.find('.tool-activity-input'),
             $resultWrap: $item.find('.tool-activity-result-wrap'),
             $resultLabel: $item.find('.tool-activity-result-label'),
             $resultOutput: $item.find('.tool-activity-output'),
@@ -969,12 +1012,118 @@
         return null;
     }
 
+    function toolCssStatus(status, isError) {
+        if (isError) return 'error';
+        if (status === 'completed') return 'completed';
+        return 'running';
+    }
+
+    function toolStatusLabel(status, isError) {
+        if (isError) return 'error';
+        if (!status) return 'running';
+        return String(status).replace(/_/g, ' ');
+    }
+
+    function stringifyToolInput(input) {
+        if (input == null) return '';
+        if (typeof input === 'string') return input;
+        try {
+            return JSON.stringify(input, null, 2);
+        } catch (err) {
+            return String(input);
+        }
+    }
+
+    function isMeaningfulToolInput(inputStr) {
+        var trimmed = String(inputStr || '').trim();
+        return !!trimmed && trimmed !== '{}' && trimmed !== '[]' && trimmed !== 'null';
+    }
+
+    function buildToolSyntheticDetails(data) {
+        if (!data) return '';
+        var details = {};
+        if (typeof data.kind === 'string' && data.kind) {
+            details.kind = data.kind;
+        }
+        if (Array.isArray(data.locations) && data.locations.length > 0) {
+            details.locations = data.locations;
+        }
+        if (data.meta && typeof data.meta === 'object' && Object.keys(data.meta).length > 0) {
+            details.meta = data.meta;
+        }
+        if (Object.keys(details).length === 0) {
+            return '';
+        }
+        try {
+            return JSON.stringify(details, null, 2);
+        } catch (err) {
+            return '';
+        }
+    }
+
+    function resolveToolInputDisplay(data) {
+        var inputStr = stringifyToolInput(data && data.input);
+        if (isMeaningfulToolInput(inputStr)) {
+            return {
+                label: 'Arguments',
+                text: inputStr
+            };
+        }
+        var details = buildToolSyntheticDetails(data);
+        if (details) {
+            return {
+                label: 'Details',
+                text: details
+            };
+        }
+        return {
+            label: 'Arguments',
+            text: inputStr
+        };
+    }
+
+    function updateToolRowInput(row, data) {
+        if (!row || !data) return;
+        var display = resolveToolInputDisplay(data);
+        var inputStr = display.text;
+        if (!inputStr) return;
+        var current = row.$input.text();
+        if (row.$inputLabel.text() === display.label && current === inputStr) return;
+        row.$inputLabel.text(display.label);
+        row.$input.text(inputStr);
+        if (!row.$preview.text()) {
+            row.$preview.text(buildToolPreview(inputStr, 120));
+        }
+    }
+
+    function updateToolRowProgress(row, data) {
+        if (!row || !data) return;
+        var status = typeof data.status === 'string' ? data.status : '';
+        row.status = toolCssStatus(status, false);
+        row.$status.removeClass('running completed error').addClass(row.status).text(toolStatusLabel(status, false));
+        updateToolRowInput(row, data);
+
+        var output = String(data.displayResult || data.result || '');
+        if (output) {
+            row.$resultWrap.show();
+            row.$resultLabel.text('Update');
+            row.$resultOutput.text(output);
+            row.$preview.text(buildToolPreview(output, 100));
+        }
+        var panel = row.panel;
+        if (panel) {
+            refreshToolPanelFilter(panel);
+        }
+    }
+
     function updateToolRowResult(row, data) {
         if (!row || !data) return;
         var isError = !!data.error;
-        row.status = isError ? 'error' : 'completed';
-        row.$status.removeClass('running completed error').addClass(row.status).text(row.status);
+        var status = typeof data.status === 'string' ? data.status : '';
+        row.status = toolCssStatus(status, isError);
+        row.$status.removeClass('running completed error').addClass(row.status).text(toolStatusLabel(status || row.status, isError));
         row.$duration.text(data.durationMs ? (String(data.durationMs) + 'ms') : '');
+        updateToolRowInput(row, data);
 
         var output = isError ? String(data.error || '') : String(data.displayResult || data.result || '');
         if (output) {
@@ -1766,7 +1915,7 @@
             var data = parsed.value;
             if (!data) return;
             var toolId = data.toolId;
-            var inputStr = typeof data.input === 'string' ? data.input : JSON.stringify(data.input, null, 2);
+            var inputDisplay = resolveToolInputDisplay(data);
             
             var runId = resolveEventRunId(data);
             toolDebugLog('event:tool_start', {
@@ -1782,7 +1931,7 @@
             var panel = ensureToolPanel(runId);
             if (!panel) return;
             var rowKey = toolRowKeyForStart(panel, toolId, data.toolName);
-            createToolRow(panel, rowKey, data.toolName, inputStr);
+            createToolRow(panel, rowKey, data.toolName, inputDisplay.label, inputDisplay.text);
             if (shouldAutoscrollToolActivity()) {
                 scrollChatToBottom();
             }
@@ -1842,6 +1991,42 @@
                 runId: panel.runId,
                 rowKey: row.key,
                 status: row.status,
+            });
+            if (shouldAutoscrollToolActivity()) {
+                scrollChatToBottom();
+            }
+        });
+
+        eventSource.addEventListener('tool_progress', function(e) {
+            var parsed = safeParseJSON(e.type, e.data);
+            if (!parsed.ok) {
+                appendProtocolErrorBubble(e.type);
+                return;
+            }
+            var data = parsed.value;
+            if (!data) return;
+            var toolId = data.toolId;
+            var progressRunId = resolveEventRunId(data);
+            var panel = findPanelForToolEnd(progressRunId, toolId, data.toolName);
+            if (!panel) return;
+
+            var row = null;
+            if (toolId && panel.rowsByKey['id:' + toolId]) {
+                row = panel.rowsByKey['id:' + toolId];
+            } else {
+                var fallbackKey = findRunningToolRowKey(panel, data.toolName);
+                if (fallbackKey) {
+                    row = panel.rowsByKey[fallbackKey];
+                }
+            }
+            if (!row) return;
+
+            updateToolRowProgress(row, data);
+            toolDebugLog('event:tool_progress:updated', {
+                runId: panel.runId,
+                rowKey: row.key,
+                status: row.status,
+                acpStatus: data.status,
             });
             if (shouldAutoscrollToolActivity()) {
                 scrollChatToBottom();
@@ -2421,6 +2606,6 @@
     }
     updateComposerReserve();
     $(window).on('resize', handleWindowResize);
-    $input.focus();
+    revealComposer('page-init');
     });
 })();

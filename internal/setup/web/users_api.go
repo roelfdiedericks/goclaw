@@ -43,6 +43,7 @@ type UserResponse struct {
 	TelegramID    string  `json:"telegram_id,omitempty"`
 	WhatsAppID    string  `json:"whatsapp_id,omitempty"`
 	HasPassword   bool    `json:"has_password"`
+	ACPAllowed    *bool   `json:"acpAllowed,omitempty"`
 	Thinking      *bool   `json:"thinking,omitempty"`
 	ThinkingLevel *string `json:"thinking_level,omitempty"`
 	Sandbox       *bool   `json:"sandbox,omitempty"`
@@ -56,6 +57,7 @@ type CreateUserRequest struct {
 	TelegramID    string  `json:"telegram_id,omitempty"`
 	WhatsAppID    string  `json:"whatsapp_id,omitempty"`
 	Password      string  `json:"password,omitempty"`
+	ACPAllowed    *bool   `json:"acpAllowed,omitempty"`
 	Thinking      *bool   `json:"thinking,omitempty"`
 	ThinkingLevel *string `json:"thinking_level,omitempty"`
 	Sandbox       *bool   `json:"sandbox,omitempty"`
@@ -69,6 +71,7 @@ type UpdateUserRequest struct {
 	WhatsAppID    string  `json:"whatsapp_id,omitempty"`
 	Password      *string `json:"password,omitempty"`
 	ClearPassword bool    `json:"clear_password,omitempty"`
+	ACPAllowed    *bool   `json:"acpAllowed,omitempty"`
 	Thinking      *bool   `json:"thinking,omitempty"`
 	ThinkingLevel *string `json:"thinking_level,omitempty"`
 	Sandbox       *bool   `json:"sandbox,omitempty"`
@@ -238,6 +241,7 @@ func (u *UsersAPI) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		Role:          req.Role,
 		TelegramID:    req.TelegramID,
 		WhatsAppID:    req.WhatsAppID,
+		ACPAllowed:    req.ACPAllowed,
 		Thinking:      req.Thinking,
 		ThinkingLevel: req.ThinkingLevel,
 		Sandbox:       req.Sandbox,
@@ -387,6 +391,7 @@ func (u *UsersAPI) updateUser(w http.ResponseWriter, r *http.Request, username s
 	}
 	entry.Thinking = req.Thinking
 	entry.ThinkingLevel = req.ThinkingLevel
+	entry.ACPAllowed = req.ACPAllowed
 	entry.Sandbox = req.Sandbox
 
 	// Save users
@@ -595,6 +600,7 @@ func userEntryToResponse(username string, entry *user.UserEntry) UserResponse {
 		TelegramID:    entry.TelegramID,
 		WhatsAppID:    entry.WhatsAppID,
 		HasPassword:   entry.HTTPPasswordHash != "",
+		ACPAllowed:    entry.ACPAllowed,
 		Thinking:      entry.Thinking,
 		ThinkingLevel: entry.ThinkingLevel,
 		Sandbox:       entry.Sandbox,

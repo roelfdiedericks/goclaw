@@ -120,6 +120,7 @@ func (e *UserEditorTview) addUser() {
 
 	var username, displayName, telegramID, whatsappID string
 	var roleIndex int
+	acpAllowed := false
 
 	form := tview.NewForm()
 	form.AddInputField("Username", "", 30, nil, func(text string) {
@@ -136,6 +137,9 @@ func (e *UserEditorTview) addUser() {
 	})
 	form.AddInputField("WhatsApp ID (optional)", "", 24, nil, func(text string) {
 		whatsappID = text
+	})
+	form.AddCheckbox("Allow ACP", false, func(checked bool) {
+		acpAllowed = checked
 	})
 
 	form.AddButton("Save", func() {
@@ -164,6 +168,7 @@ func (e *UserEditorTview) addUser() {
 			Role:       role,
 			TelegramID: telegramID,
 			WhatsAppID: whatsappID,
+			ACPAllowed: &acpAllowed,
 		}
 		e.modified = true
 		L_info("users: added user", "username", username, "role", role)
@@ -195,6 +200,7 @@ func (e *UserEditorTview) editUser() {
 		displayName := entry.Name
 		telegramID := entry.TelegramID
 		whatsappID := entry.WhatsAppID
+		acpAllowed := entry.ACPAllowed != nil && *entry.ACPAllowed
 		roleIndex := 0
 		if entry.Role == "owner" {
 			roleIndex = 1
@@ -212,6 +218,9 @@ func (e *UserEditorTview) editUser() {
 		})
 		form.AddInputField("WhatsApp ID", whatsappID, 24, nil, func(text string) {
 			whatsappID = text
+		})
+		form.AddCheckbox("Allow ACP", acpAllowed, func(checked bool) {
+			acpAllowed = checked
 		})
 
 		form.AddButton("Save", func() {
@@ -235,6 +244,10 @@ func (e *UserEditorTview) editUser() {
 			}
 			if whatsappID != entry.WhatsAppID {
 				entry.WhatsAppID = whatsappID
+				changed = true
+			}
+			if entry.ACPAllowed == nil || acpAllowed != *entry.ACPAllowed {
+				entry.ACPAllowed = &acpAllowed
 				changed = true
 			}
 

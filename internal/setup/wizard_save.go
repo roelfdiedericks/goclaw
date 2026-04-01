@@ -48,6 +48,7 @@ func SaveWizardConfigToPath(data *WizardData, configPath string) error {
 		"name": data.UserDisplayName,
 		"role": data.UserRole,
 	}
+	userEntry["acpAllowed"] = data.UserRole == "owner"
 	if data.UserTelegramID != "" {
 		userEntry["telegram_id"] = data.UserTelegramID
 	}

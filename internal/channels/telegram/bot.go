@@ -751,6 +751,7 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 		Name        string
 		Status      string // running | completed | error
 		DurationMs  int64
+		ArgsLabel   string // "args" | "details"
 		ArgsPreview string
 		OutLabel    string // "result" | "error"
 		OutPreview  string
@@ -815,6 +816,18 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 		}
 		return s[:max-3] + "..."
 	}
+	toolArgsPreview := func(rawInput, kind string) (string, string) {
+		raw := strings.TrimSpace(rawInput)
+		switch raw {
+		case "", "{}", "[]", "null":
+			if strings.TrimSpace(kind) == "" {
+				return "", ""
+			}
+			return "details", compactPreview("kind="+kind, 120)
+		default:
+			return "args", compactPreview(raw, 120)
+		}
+	}
 	renderToolsSummary := func(finalCompact bool) string {
 		if len(toolOrder) == 0 {
 			return ""
@@ -838,7 +851,11 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 			))
 			showDetails := !finalCompact || row.Status == "error"
 			if showDetails && row.ArgsPreview != "" {
-				sb.WriteString(fmt.Sprintf("   • args: <code>%s</code>\n", escapeHTML(row.ArgsPreview)))
+				label := row.ArgsLabel
+				if label == "" {
+					label = "args"
+				}
+				sb.WriteString(fmt.Sprintf("   • %s: <code>%s</code>\n", escapeHTML(label), escapeHTML(row.ArgsPreview)))
 			}
 			if showDetails && row.OutPreview != "" {
 				label := row.OutLabel
@@ -942,17 +959,19 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 			// Update structured tool summary if thinking mode is on.
 			if prefs.ShowThinking {
 				id := toolKey(e.ToolID, e.ToolName)
-				inputStr := compactPreview(string(e.Input), 120)
+				inputLabel, inputStr := toolArgsPreview(string(e.Input), e.Kind)
 				if _, ok := toolRowsByID[id]; !ok {
 					toolRowsByID[id] = &toolRow{
 						Name:        e.ToolName,
 						Status:      "running",
+						ArgsLabel:   inputLabel,
 						ArgsPreview: inputStr,
 					}
 					toolOrder = append(toolOrder, id)
 				} else {
 					toolRowsByID[id].Status = "running"
 					if inputStr != "" {
+						toolRowsByID[id].ArgsLabel = inputLabel
 						toolRowsByID[id].ArgsPreview = inputStr
 					}
 				}
@@ -983,6 +1002,10 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 				if row.Name == "" {
 					row.Name = e.ToolName
 				}
+				if label, args := toolArgsPreview(string(e.Input), e.Kind); args != "" && row.ArgsPreview == "" {
+					row.ArgsLabel = label
+					row.ArgsPreview = args
+				}
 				if e.Error != "" {
 					row.Status = "error"
 					row.OutLabel = "error"
@@ -996,6 +1019,42 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 					}
 				}
 				row.DurationMs = e.DurationMs
+				flushToolsSummary(true, false)
+			}
+
+		case gateway.EventToolProgress:
+			logging.L_debug("telegram: tool progress", "tool", e.ToolName, "status", e.Status)
+
+			if prefs.ShowThinking {
+				id := strings.TrimSpace(e.ToolID)
+				if id == "" {
+					id = findRunningKeyByName(e.ToolName)
+				}
+				if id == "" {
+					id = toolKey("", e.ToolName)
+				}
+				row, ok := toolRowsByID[id]
+				if !ok || row == nil {
+					row = &toolRow{Name: e.ToolName}
+					toolRowsByID[id] = row
+					toolOrder = append(toolOrder, id)
+				}
+				if row.Name == "" {
+					row.Name = e.ToolName
+				}
+				row.Status = "running"
+				if label, args := toolArgsPreview(string(e.Input), e.Kind); args != "" && row.ArgsPreview == "" {
+					row.ArgsLabel = label
+					row.ArgsPreview = args
+				}
+				preview := compactPreview(e.DisplayResult, 140)
+				if preview == "" {
+					preview = compactPreview(e.Result, 140)
+				}
+				if preview != "" {
+					row.OutLabel = "update"
+					row.OutPreview = preview
+				}
 				flushToolsSummary(true, false)
 			}
 

@@ -570,7 +570,40 @@ func (c *HTTPChannel) convertEvent(event gateway.AgentEvent) *SSEEvent {
 			"runId":    e.RunID,
 			"toolName": e.ToolName,
 			"toolId":   e.ToolID,
+			"status":   e.Status,
 			"input":    inputStr,
+			"content":  e.Content,
+			"meta":     e.Meta,
+			"rawOutput": e.RawOutput,
+			"kind":     e.Kind,
+			"locations": e.Locations,
+		}}
+
+	case gateway.EventToolProgress:
+		result := e.Result
+		if len(result) > 1024 {
+			result = result[:1024] + "..."
+		}
+		displayResult := e.DisplayResult
+		if displayResult == "" {
+			displayResult = e.Result
+		}
+		if len(displayResult) > 1024 {
+			displayResult = displayResult[:1024] + "..."
+		}
+		return &SSEEvent{Event: "tool_progress", Data: map[string]interface{}{
+			"runId":         e.RunID,
+			"toolName":      e.ToolName,
+			"toolId":        e.ToolID,
+			"status":        e.Status,
+			"result":        result,
+			"displayResult": displayResult,
+			"content":       e.Content,
+			"meta":          e.Meta,
+			"input":         e.Input,
+			"rawOutput":     e.RawOutput,
+			"kind":          e.Kind,
+			"locations":     e.Locations,
 		}}
 
 	case gateway.EventToolEnd:
@@ -590,10 +623,17 @@ func (c *HTTPChannel) convertEvent(event gateway.AgentEvent) *SSEEvent {
 			"runId":         e.RunID,
 			"toolName":      e.ToolName,
 			"toolId":        e.ToolID,
+			"status":        e.Status,
 			"result":        result,
 			"displayResult": displayResult,
 			"error":         e.Error,
 			"durationMs":    e.DurationMs,
+			"content":       e.Content,
+			"meta":          e.Meta,
+			"input":         e.Input,
+			"rawOutput":     e.RawOutput,
+			"kind":          e.Kind,
+			"locations":     e.Locations,
 		}}
 
 	case gateway.EventAgentEnd:

@@ -144,6 +144,7 @@ type User struct {
 	WhatsAppID       string          // WhatsApp JID (phone number, for whatsapp auth)
 	HTTPPasswordHash string          // Argon2id hash of HTTP password
 	Permissions      map[string]bool // tool whitelist (nil = use role defaults)
+	ACPAllowed       bool            // whether ACP runtime access is allowed
 	Thinking         bool            // default /thinking toggle state
 	ThinkingLevel    string          // preferred thinking level: off/minimal/low/medium/high/xhigh
 	Sandbox          bool            // enable file sandboxing
@@ -208,6 +209,11 @@ func (u *User) IsOwner() bool {
 // IsGuest returns true if the user has guest role
 func (u *User) IsGuest() bool {
 	return u != nil && u.Role == RoleGuest
+}
+
+// CanUseACP returns true if the user may use ACP features.
+func (u *User) CanUseACP() bool {
+	return u != nil && u.ACPAllowed
 }
 
 // HasIdentity checks if the user has a specific identity

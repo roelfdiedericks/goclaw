@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/contentguard"
@@ -51,6 +53,138 @@ const (
 	ContextKeyChannel contextKey = "channel"
 	ContextKeyChatID  contextKey = "chatID"
 )
+
+func acpToolLocations(locations []acp.ToolLocation) []ToolLocation {
+	if len(locations) == 0 {
+		return nil
+	}
+	out := make([]ToolLocation, 0, len(locations))
+	for _, location := range locations {
+		var line *int64
+		if location.Line != nil {
+			v := *location.Line
+			line = &v
+		}
+		out = append(out, ToolLocation{
+			Path: location.Path,
+			Line: line,
+		})
+	}
+	return out
+}
+
+func renderToolJSON(raw json.RawMessage) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return ""
+	}
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		return asString
+	}
+	var formatted bytes.Buffer
+	if err := json.Indent(&formatted, raw, "", "  "); err == nil {
+		return formatted.String()
+	}
+	return string(raw)
+}
+
+func acpToolDisplayResult(contentText string, rawOutput json.RawMessage) string {
+	if text := strings.TrimSpace(contentText); text != "" {
+		return text
+	}
+	return strings.TrimSpace(renderToolJSON(rawOutput))
+}
+
+func summarizeGatewayTraceText(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	const max = 512
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "...(truncated)"
+}
+
+func mapACPEventToGatewayEvents(runID string, ev acp.ACPEvent) []AgentEvent {
+	switch ev.Type {
+	case acp.EventTextDelta:
+		if payload, ok := ev.Payload.(acp.TextDeltaPayload); ok {
+			L_trace("gateway: ACP text delta", "runID", runID, "deltaLen", len(payload.Text), "delta", summarizeGatewayTraceText(payload.Text))
+			return []AgentEvent{EventTextDelta{RunID: runID, Delta: payload.Text}}
+		}
+	case acp.EventThought:
+		if payload, ok := ev.Payload.(acp.ThoughtDeltaPayload); ok {
+			L_trace("gateway: ACP thought delta", "runID", runID, "deltaLen", len(payload.Text), "delta", summarizeGatewayTraceText(payload.Text))
+			return []AgentEvent{EventThinkingDelta{RunID: runID, Delta: payload.Text}}
+		}
+	case acp.EventToolStart:
+		if payload, ok := ev.Payload.(acp.ToolStartPayload); ok {
+			event := EventToolStart{
+				RunID:     runID,
+				ToolName:  payload.Title,
+				ToolID:    payload.ToolCallID,
+				Status:    payload.Status,
+				Input:     payload.Input,
+				Content:   payload.Content,
+				Meta:      payload.Meta,
+				RawOutput: payload.RawOutput,
+				Kind:      payload.Kind,
+				Locations: acpToolLocations(payload.Locations),
+			}
+			L_debug("gateway: mapped ACP tool start", "runID", runID, "toolCallID", payload.ToolCallID, "title", payload.Title, "status", payload.Status)
+			L_trace("gateway: ACP tool start detail", "runID", runID, "toolCallID", payload.ToolCallID, "inputBytes", len(payload.Input), "contentBytes", len(payload.Content), "rawOutputBytes", len(payload.RawOutput), "locations", len(payload.Locations), "kind", payload.Kind)
+			return []AgentEvent{event}
+		}
+	case acp.EventToolUpdate:
+		if payload, ok := ev.Payload.(acp.ToolUpdatePayload); ok {
+			displayResult := acpToolDisplayResult(payload.ContentText, payload.RawOutput)
+			if payload.IsTerminal {
+				event := EventToolEnd{
+					RunID:         runID,
+					ToolName:      payload.Title,
+					ToolID:        payload.ToolCallID,
+					Status:        payload.Status,
+					Result:        displayResult,
+					DisplayResult: displayResult,
+					Input:         payload.Input,
+					Content:       payload.Content,
+					Meta:          payload.Meta,
+					RawOutput:     payload.RawOutput,
+					Kind:          payload.Kind,
+					Locations:     acpToolLocations(payload.Locations),
+				}
+				if !payload.IsSuccessful {
+					event.Error = displayResult
+					event.DisplayResult = ""
+				}
+				L_debug("gateway: mapped ACP tool end", "runID", runID, "toolCallID", payload.ToolCallID, "title", payload.Title, "status", payload.Status, "hasError", event.Error != "")
+				L_trace("gateway: ACP tool end detail", "runID", runID, "toolCallID", payload.ToolCallID, "displayLen", len(displayResult), "inputBytes", len(payload.Input), "contentBytes", len(payload.Content), "rawOutputBytes", len(payload.RawOutput), "locations", len(payload.Locations), "kind", payload.Kind)
+				return []AgentEvent{event}
+			}
+			event := EventToolProgress{
+				RunID:         runID,
+				ToolName:      payload.Title,
+				ToolID:        payload.ToolCallID,
+				Status:        payload.Status,
+				Result:        displayResult,
+				DisplayResult: displayResult,
+				Content:       payload.Content,
+				Meta:          payload.Meta,
+				Input:         payload.Input,
+				RawOutput:     payload.RawOutput,
+				Kind:          payload.Kind,
+				Locations:     acpToolLocations(payload.Locations),
+			}
+			L_debug("gateway: mapped ACP tool progress", "runID", runID, "toolCallID", payload.ToolCallID, "title", payload.Title, "status", payload.Status)
+			L_trace("gateway: ACP tool progress detail", "runID", runID, "toolCallID", payload.ToolCallID, "displayLen", len(displayResult), "inputBytes", len(payload.Input), "contentBytes", len(payload.Content), "rawOutputBytes", len(payload.RawOutput), "locations", len(payload.Locations), "kind", payload.Kind)
+			return []AgentEvent{event}
+		}
+	}
+	return nil
+}
 
 // Channel is the interface for messaging channels (TUI, Telegram, etc.)
 type Channel interface {
@@ -2584,6 +2718,45 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 	)
 	const maxOverflowRetries = 2 // Max times to retry after compaction
 
+	if acpMgr := acp.GetManager(); acpMgr != nil && acpMgr.IsAttached(sessionKey) {
+		if len(req.ContentBlocks) > 0 {
+			err := fmt.Errorf("ACP MVP does not support content blocks yet")
+			sendEvent(EventAgentError{RunID: runID, Error: err.Error()})
+			return err
+		}
+
+		result, err := acpMgr.Prompt(agentCtx, sessionKey, req.UserMsg, acp.PromptOptions{
+			OnEvent: func(ev acp.ACPEvent) {
+				for _, mapped := range mapACPEventToGatewayEvents(runID, ev) {
+					sendEvent(mapped)
+				}
+			},
+		})
+		if err != nil {
+			sendEvent(EventAgentError{RunID: runID, Error: err.Error()})
+			return err
+		}
+
+		finalText = result.FinalText
+		L_trace("gateway: ACP final text", "runID", runID, "finalTextLen", len(strings.TrimSpace(finalText)), "finalText", summarizeGatewayTraceText(finalText))
+		if !ephemeralRun && finalText != "" {
+			assistantMsgID := sess.AddAssistantMessage(finalText)
+			g.persistMessage(ctx, PersistMessageParams{
+				MsgID:      assistantMsgID,
+				SessionKey: sessionKey,
+				UserID:     userID,
+				Role:       "assistant",
+				Content:    finalText,
+				Source:     req.Source,
+			})
+		}
+		if !req.IsGroup && !req.SkipMirror && finalText != "" {
+			g.deliverAssistantMessage(ctx, req.User, finalText, g.channelsExcept(req.Source))
+		}
+		sendEvent(EventAgentEnd{RunID: runID, FinalText: finalText})
+		return nil
+	}
+
 	// Resolve purpose once before the loop
 	purpose := req.Purpose
 	if purpose == "" {
@@ -3610,6 +3783,82 @@ func (g *Gateway) GetSessionInfoForCommands(ctx context.Context, sessionKey stri
 		CompactionCount: info.CompactionCount,
 		LastCompaction:  info.LastCompaction,
 	}, nil
+}
+
+func (g *Gateway) resolveACPUser(userID string) (*user.User, error) {
+	u := g.users.Get(userID)
+	if u == nil {
+		return nil, fmt.Errorf("user not found: %s", userID)
+	}
+	return u, nil
+}
+
+func (g *Gateway) ACPAttach(ctx context.Context, sessionKey string, userID string, driver string, cwd string, mode string, sessionID string) (*acp.AttachmentInfo, error) {
+	mgr := acp.GetManager()
+	if mgr == nil {
+		return nil, fmt.Errorf("ACP manager not initialized")
+	}
+	u, err := g.resolveACPUser(userID)
+	if err != nil {
+		return nil, err
+	}
+	return mgr.Attach(ctx, acp.AttachRequest{
+		SessionKey: sessionKey,
+		User:       u,
+		DriverID:   driver,
+		Transport:  acp.TransportLocalStdio,
+		CWD:        cwd,
+		Mode:       mode,
+		SessionID:  sessionID,
+	})
+}
+
+func (g *Gateway) ACPDetach(sessionKey string) (*acp.AttachmentInfo, error) {
+	mgr := acp.GetManager()
+	if mgr == nil {
+		return nil, fmt.Errorf("ACP manager not initialized")
+	}
+	return mgr.Detach(sessionKey)
+}
+
+func (g *Gateway) ACPInspect(sessionKey string) (*acp.AttachmentInfo, error) {
+	mgr := acp.GetManager()
+	if mgr == nil {
+		return nil, fmt.Errorf("ACP manager not initialized")
+	}
+	return mgr.Inspect(sessionKey)
+}
+
+func (g *Gateway) ACPClose(ctx context.Context, sessionKey string) error {
+	mgr := acp.GetManager()
+	if mgr == nil {
+		return fmt.Errorf("ACP manager not initialized")
+	}
+	return mgr.Close(ctx, sessionKey)
+}
+
+func (g *Gateway) ACPSetMode(ctx context.Context, sessionKey string, mode string) (*acp.AttachmentInfo, error) {
+	mgr := acp.GetManager()
+	if mgr == nil {
+		return nil, fmt.Errorf("ACP manager not initialized")
+	}
+	return mgr.SetMode(ctx, sessionKey, mode)
+}
+
+func (g *Gateway) ACPSteer(ctx context.Context, sessionKey string, text string) (*acp.PromptResult, error) {
+	mgr := acp.GetManager()
+	if mgr == nil {
+		return nil, fmt.Errorf("ACP manager not initialized")
+	}
+	return mgr.Steer(ctx, sessionKey, text, acp.PromptOptions{})
+}
+
+func (g *Gateway) ACPCancel(ctx context.Context, sessionKey string) error {
+	mgr := acp.GetManager()
+	if mgr == nil {
+		return fmt.Errorf("ACP manager not initialized")
+	}
+	return mgr.Cancel(ctx, sessionKey)
 }
 
 // TriggerHeartbeat manually triggers a heartbeat check

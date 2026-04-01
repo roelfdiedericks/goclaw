@@ -23,6 +23,7 @@ import (
 	"github.com/sevlyar/go-daemon"
 	"golang.org/x/term"
 
+	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/auth"
 	"github.com/roelfdiedericks/goclaw/internal/browser"
 	"github.com/roelfdiedericks/goclaw/internal/bus"
@@ -55,6 +56,8 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/stt"
 	"github.com/roelfdiedericks/goclaw/internal/supervisor"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
+	toolacpcontrol "github.com/roelfdiedericks/goclaw/internal/tools/acp_control"
+	toolacpinspect "github.com/roelfdiedericks/goclaw/internal/tools/acp_inspect"
 	toolcron "github.com/roelfdiedericks/goclaw/internal/tools/cron"
 	"github.com/roelfdiedericks/goclaw/internal/tools/edit"
 	"github.com/roelfdiedericks/goclaw/internal/tools/exec"
@@ -2804,6 +2807,8 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	}
 	L_info("gateway initialized")
 
+	acp.InitManager(cfg.Gateway.WorkingDir)
+
 	// Register all tools now that gateway and managers are ready
 	messageTool, transcriptMgr := registerTools(toolsReg, cfg, gw, version)
 
@@ -3199,6 +3204,8 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 
 	// Cron tool
 	reg.Register(toolcron.NewTool())
+	reg.Register(toolacpcontrol.NewTool())
+	reg.Register(toolacpinspect.NewTool())
 	if cfg.Tools.Subagent.Enabled && cfg.Gateway.DelegatedRuns.Enabled {
 		reg.Register(toolsubagentspawn.NewTool(
 			func(ctx context.Context, u *user.User, source, sessionKey, runID, message, toolError string) error {

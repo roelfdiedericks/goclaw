@@ -21,7 +21,7 @@
         .navbar-brand { font-weight: bold; }
         .chat-container { height: calc(100vh - 200px); overflow-y: auto; }
 
-        /* /chat only — Layout Option B: document (window) scroll + fixed composer bar */
+        /* /chat only — flex column layout with scrollable message pane and in-flow composer */
         :root {
             --chat-composer-reserve: 7.5rem;
         }
@@ -34,6 +34,7 @@
             flex-direction: column;
             height: calc(100vh - 56px);
             min-height: calc(100vh - 56px);
+            box-sizing: border-box;
             overflow: hidden;
         }
         body.chat-page .chat-root {
@@ -71,7 +72,7 @@
             border-radius: 0;
         }
         body.chat-page .chat-page-card > .card-body.chat-container {
-            flex: 1 1 auto;
+            flex: 1 1 0;
             height: auto !important;
             overflow-y: auto !important;
             overflow-x: hidden !important;
@@ -83,14 +84,17 @@
             display: flex;
             flex-direction: column;
             justify-content: flex-end;
+            flex: 1 1 0;
+            min-height: 0;
             overflow-y: auto !important;
             overflow-x: hidden !important;
             scrollbar-gutter: stable;
+            box-sizing: border-box;
         }
         body.chat-page .chat-composer-bar {
             --bs-card-cap-bg: var(--bs-body-bg);
-            position: static;
             flex: 0 0 auto;
+            position: static;
             background-color: var(--bs-body-bg, #fff);
             border: none;
             box-shadow: none;
@@ -617,7 +621,7 @@
         </div>
     </nav>
     {{if .ChatPage}}
-    <main class="chat-page-shell container-fluid px-0 py-2">
+    <main class="chat-page-shell container-fluid px-0 py-0">
     {{else}}
     <main class="container mt-3 mb-2">
     {{end}}

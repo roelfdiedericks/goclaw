@@ -26,23 +26,60 @@ func (EventTextDelta) agentEvent() {}
 
 // EventToolStart is emitted when a tool execution begins
 type EventToolStart struct {
-	RunID    string          `json:"runId"`
-	ToolName string          `json:"toolName"`
-	ToolID   string          `json:"toolId"`
-	Input    json.RawMessage `json:"input"`
+	RunID     string          `json:"runId"`
+	ToolName  string          `json:"toolName"`
+	ToolID    string          `json:"toolId"`
+	Status    string          `json:"status,omitempty"`
+	Input     json.RawMessage `json:"input"`
+	Content   json.RawMessage `json:"content,omitempty"`
+	Meta      json.RawMessage `json:"meta,omitempty"`
+	RawOutput json.RawMessage `json:"rawOutput,omitempty"`
+	Kind      string          `json:"kind,omitempty"`
+	Locations []ToolLocation  `json:"locations,omitempty"`
 }
 
 func (EventToolStart) agentEvent() {}
 
+// ToolLocation identifies a file location touched by a tool.
+type ToolLocation struct {
+	Path string `json:"path"`
+	Line *int64 `json:"line,omitempty"`
+}
+
+// EventToolProgress is emitted when a tool execution reports progress.
+type EventToolProgress struct {
+	RunID         string          `json:"runId"`
+	ToolName      string          `json:"toolName"`
+	ToolID        string          `json:"toolId"`
+	Status        string          `json:"status,omitempty"`
+	Result        string          `json:"result,omitempty"`
+	DisplayResult string          `json:"displayResult,omitempty"`
+	Content       json.RawMessage `json:"content,omitempty"`
+	Meta          json.RawMessage `json:"meta,omitempty"`
+	Input         json.RawMessage `json:"input,omitempty"`
+	RawOutput     json.RawMessage `json:"rawOutput,omitempty"`
+	Kind          string          `json:"kind,omitempty"`
+	Locations     []ToolLocation  `json:"locations,omitempty"`
+}
+
+func (EventToolProgress) agentEvent() {}
+
 // EventToolEnd is emitted when a tool execution completes
 type EventToolEnd struct {
-	RunID         string `json:"runId"`
-	ToolName      string `json:"toolName"`
-	ToolID        string `json:"toolId"`
-	Result        string `json:"result"`
-	DisplayResult string `json:"displayResult,omitempty"` // Human-readable result for UI/debug (unwrapped)
-	Error         string `json:"error,omitempty"`
-	DurationMs    int64  `json:"durationMs,omitempty"`
+	RunID         string          `json:"runId"`
+	ToolName      string          `json:"toolName"`
+	ToolID        string          `json:"toolId"`
+	Status        string          `json:"status,omitempty"`
+	Result        string          `json:"result"`
+	DisplayResult string          `json:"displayResult,omitempty"` // Human-readable result for UI/debug (unwrapped)
+	Error         string          `json:"error,omitempty"`
+	DurationMs    int64           `json:"durationMs,omitempty"`
+	Content       json.RawMessage `json:"content,omitempty"`
+	Meta          json.RawMessage `json:"meta,omitempty"`
+	Input         json.RawMessage `json:"input,omitempty"`
+	RawOutput     json.RawMessage `json:"rawOutput,omitempty"`
+	Kind          string          `json:"kind,omitempty"`
+	Locations     []ToolLocation  `json:"locations,omitempty"`
 }
 
 func (EventToolEnd) agentEvent() {}

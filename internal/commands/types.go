@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 )
 
@@ -35,6 +36,15 @@ type SessionProvider interface {
 	// Embeddings commands
 	GetEmbeddingsStatus() *EmbeddingsStatusResult
 	TriggerEmbeddingsRebuild() error
+
+	// ACP commands
+	ACPAttach(ctx context.Context, sessionKey string, userID string, driver string, cwd string, mode string, sessionID string) (*acp.AttachmentInfo, error)
+	ACPDetach(sessionKey string) (*acp.AttachmentInfo, error)
+	ACPInspect(sessionKey string) (*acp.AttachmentInfo, error)
+	ACPClose(ctx context.Context, sessionKey string) error
+	ACPSetMode(ctx context.Context, sessionKey string, mode string) (*acp.AttachmentInfo, error)
+	ACPSteer(ctx context.Context, sessionKey string, text string) (*acp.PromptResult, error)
+	ACPCancel(ctx context.Context, sessionKey string) error
 }
 
 // SkillsListResult contains skill listing for /skills command

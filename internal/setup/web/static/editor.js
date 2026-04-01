@@ -2476,6 +2476,7 @@
                     <td><span class="text-muted">${escapeHtml(user.telegram_id || '-')}</span></td>
                     <td><span class="text-muted">${escapeHtml(user.whatsapp_id || '-')}</span></td>
                     <td><span class="text-muted">${user.has_password ? '●●●●' : '-'}</span></td>
+                    <td><span class="text-muted">${user.acpAllowed ? 'yes' : 'no'}</span></td>
                     <td class="text-end">
                         <button class="btn btn-sm btn-outline-primary js-users-edit" data-username="${escapeHtml(user.username)}" title="Edit"><i class="bi bi-pencil"></i></button>
                         <button class="btn btn-sm btn-outline-danger js-users-delete-open" data-username="${escapeHtml(user.username)}" title="Delete"${user.role === 'owner' && ownerCount <= 1 ? ' disabled' : ''}><i class="bi bi-trash"></i></button>
@@ -2496,8 +2497,8 @@
                     <div class="card-body p-0">
                         ${this.usersLoading ? '<div class="text-center py-4"><div class="spinner-border spinner-border-sm"></div></div>' : `
                         <table class="table table-hover mb-0">
-                            <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Telegram</th><th>WhatsApp</th><th>Password</th><th class="text-end">Actions</th></tr></thead>
-                            <tbody>${usersRows || '<tr><td colspan="7" class="text-center text-muted py-4">No users configured</td></tr>'}</tbody>
+                            <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Telegram</th><th>WhatsApp</th><th>Password</th><th>ACP</th><th class="text-end">Actions</th></tr></thead>
+                            <tbody>${usersRows || '<tr><td colspan="8" class="text-center text-muted py-4">No users configured</td></tr>'}</tbody>
                         </table>`}
                     </div>
                 </div>
@@ -2571,6 +2572,10 @@
                                         <input class="form-check-input js-user-form-field" type="checkbox" data-user-field="sandbox"${this.userForm.sandbox ? ' checked' : ''} id="userSandbox">
                                         <label class="form-check-label" for="userSandbox">Sandbox Mode (restricted tools)</label>
                                     </div>
+                                    <div class="form-check mt-2">
+                                        <input class="form-check-input js-user-form-field" type="checkbox" data-user-field="acpAllowed"${this.userForm.acpAllowed ? ' checked' : ''} id="userAcpAllowed">
+                                        <label class="form-check-label" for="userAcpAllowed">Allow ACP</label>
+                                    </div>
                                 </div>
                             </div>
                             <div class="modal-footer">
@@ -2636,6 +2641,7 @@
                     confirmPassword: '',
                     clear_password: false,
                     has_password: !!user.has_password,
+                    acpAllowed: !!user.acpAllowed,
                     thinking: !!user.thinking,
                     thinking_level: user.thinking_level || '',
                     sandbox: user.sandbox !== false
@@ -2651,6 +2657,7 @@
                     confirmPassword: '',
                     clear_password: false,
                     has_password: false,
+                    acpAllowed: false,
                     thinking: false,
                     thinking_level: '',
                     sandbox: true
@@ -2700,6 +2707,7 @@
                     role: this.userForm.role,
                     telegram_id: this.userForm.telegram_id || '',
                     whatsapp_id: this.userForm.whatsapp_id || '',
+                    acpAllowed: !!this.userForm.acpAllowed,
                     thinking: !!this.userForm.thinking,
                     thinking_level: this.userForm.thinking_level || '',
                     sandbox: !!this.userForm.sandbox

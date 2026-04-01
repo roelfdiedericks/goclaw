@@ -445,7 +445,40 @@ func (s *Server) supervisionEventToSSE(event interface{}) *SSEEvent {
 			"runId":    e.RunID,
 			"toolName": e.ToolName,
 			"toolId":   e.ToolID,
+			"status":   e.Status,
 			"input":    inputStr,
+			"content":  e.Content,
+			"meta":     e.Meta,
+			"rawOutput": e.RawOutput,
+			"kind":     e.Kind,
+			"locations": e.Locations,
+		}}
+
+	case gateway.EventToolProgress:
+		result := e.Result
+		if len(result) > 2048 {
+			result = result[:2048] + "..."
+		}
+		displayResult := e.DisplayResult
+		if displayResult == "" {
+			displayResult = e.Result
+		}
+		if len(displayResult) > 2048 {
+			displayResult = displayResult[:2048] + "..."
+		}
+		return &SSEEvent{Event: "tool_progress", Data: map[string]interface{}{
+			"runId":         e.RunID,
+			"toolName":      e.ToolName,
+			"toolId":        e.ToolID,
+			"status":        e.Status,
+			"result":        result,
+			"displayResult": displayResult,
+			"content":       e.Content,
+			"meta":          e.Meta,
+			"input":         e.Input,
+			"rawOutput":     e.RawOutput,
+			"kind":          e.Kind,
+			"locations":     e.Locations,
 		}}
 
 	case gateway.EventToolEnd:
@@ -464,9 +497,18 @@ func (s *Server) supervisionEventToSSE(event interface{}) *SSEEvent {
 			"runId":         e.RunID,
 			"toolName":      e.ToolName,
 			"toolId":        e.ToolID,
+			"status":        e.Status,
 			"result":        result,
 			"displayResult": displayResult,
 			"isError":       e.Error != "",
+			"error":         e.Error,
+			"durationMs":    e.DurationMs,
+			"content":       e.Content,
+			"meta":          e.Meta,
+			"input":         e.Input,
+			"rawOutput":     e.RawOutput,
+			"kind":          e.Kind,
+			"locations":     e.Locations,
 		}}
 
 	case gateway.EventAgentEnd:

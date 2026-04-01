@@ -85,16 +85,21 @@ type UserEntry struct {
 	TelegramID       string  `json:"telegram_id,omitempty"`        // Telegram user ID (numeric string)
 	WhatsAppID       string  `json:"whatsapp_id,omitempty"`        // WhatsApp JID (phone number, e.g. "27821234567")
 	HTTPPasswordHash string  `json:"http_password_hash,omitempty"` // Argon2id hash of HTTP password
+	ACPAllowed       *bool   `json:"acpAllowed,omitempty"`         // Allow ACP usage (nil = role default)
 	Thinking         *bool   `json:"thinking,omitempty"`           // Default /thinking toggle state (nil = role default)
 	ThinkingLevel    *string `json:"thinking_level,omitempty"`     // Preferred thinking level: off/minimal/low/medium/high/xhigh
 	Sandbox          *bool   `json:"sandbox,omitempty"`            // Enable file sandboxing (nil = default true)
 }
 
-// applyDefaults sets defaults for nil Thinking and Sandbox fields.
+// applyDefaults sets defaults for nil ACP/Thinking/Sandbox fields.
 // Sandbox defaults to true (secure) for all roles — owners must explicitly opt out.
 func (e *UserEntry) applyDefaults() {
 	isOwner := e.Role == "owner"
 
+	if e.ACPAllowed == nil {
+		val := isOwner
+		e.ACPAllowed = &val
+	}
 	if e.Thinking == nil {
 		val := isOwner // true for owner, false for others
 		e.Thinking = &val

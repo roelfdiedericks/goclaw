@@ -1,4 +1,4 @@
-.PHONY: build embtest embtest-xla embtest-ort embtest-xla-deps-check embtest-ort-deps-check run debug trace clean install test sandbox-test sandbox-test-short sandbox-test-ci lint audit supply-chain-check install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release deps deps-check metadata
+.PHONY: build embtest embtest-xla embtest-ort embtest-xla-deps-check embtest-ort-deps-check run debug trace clean install test sandbox-test sandbox-test-short sandbox-test-ci lint audit supply-chain-check install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release deps deps-check metadata goacp
 
 SHELL := /bin/bash
 UNAME_S := $(shell uname -s)
@@ -197,6 +197,9 @@ embtest-ort-deps-check:
 
 metadata:
 	go run ./cmd/metamerge --format
+
+goacp:
+	go run ./cmd/goacp $(ARGS)
 
 test:
 	go test -v -vet=off ./...

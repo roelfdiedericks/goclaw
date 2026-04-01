@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/roelfdiedericks/goclaw/internal/acp"
 )
 
 // registerBuiltins registers all built-in commands
@@ -90,6 +92,13 @@ func registerBuiltins(m *Manager) {
 		Description: "Embeddings status and rebuild",
 		Usage:       "[status|rebuild]",
 		Handler:     handleEmbeddings,
+	})
+
+	m.Register(&Command{
+		Name:        "/acp",
+		Description: "Attach, inspect, and control ACP sessions",
+		Usage:       "attach [driver] [--cwd /path] [--mode mode] | detach | status | close | cancel | mode <agent|plan|ask> | steer <message>",
+		Handler:     handleACP,
 	})
 }
 
@@ -230,6 +239,144 @@ func handleCompact(ctx context.Context, args *CommandArgs) *CommandResult {
 	return &CommandResult{
 		Text:     text.String(),
 		Markdown: md.String(),
+	}
+}
+
+func handleACP(ctx context.Context, args *CommandArgs) *CommandResult {
+	raw := strings.TrimSpace(args.RawArgs)
+	if raw == "" {
+		return &CommandResult{
+			Text:     "Usage: /acp " + args.Usage,
+			Markdown: "Usage: `/acp " + args.Usage + "`",
+		}
+	}
+
+	parts := strings.Fields(raw)
+	if len(parts) == 0 {
+		return &CommandResult{Text: "Usage: /acp " + args.Usage, Markdown: "Usage: `/acp " + args.Usage + "`"}
+	}
+	action := strings.ToLower(parts[0])
+	rest := parts[1:]
+
+	switch action {
+	case "attach":
+		driver := "cursor"
+		cwd := ""
+		mode := ""
+		sessionID := ""
+		positional := []string{}
+		for i := 0; i < len(rest); i++ {
+			part := rest[i]
+			switch {
+			case strings.HasPrefix(part, "--cwd="):
+				cwd = strings.TrimPrefix(part, "--cwd=")
+			case part == "--cwd" && i+1 < len(rest):
+				i++
+				cwd = rest[i]
+			case strings.HasPrefix(part, "--mode="):
+				mode = strings.TrimPrefix(part, "--mode=")
+			case part == "--mode" && i+1 < len(rest):
+				i++
+				mode = rest[i]
+			case strings.HasPrefix(part, "--session="):
+				sessionID = strings.TrimPrefix(part, "--session=")
+			case part == "--session" && i+1 < len(rest):
+				i++
+				sessionID = rest[i]
+			default:
+				positional = append(positional, part)
+			}
+		}
+		if len(positional) > 0 {
+			driver = positional[0]
+		}
+		info, err := args.Provider.ACPAttach(ctx, args.SessionKey, args.UserID, driver, cwd, mode, sessionID)
+		if err != nil {
+			return &CommandResult{Text: fmt.Sprintf("ACP attach failed: %s", err), Markdown: fmt.Sprintf("ACP attach failed: `%s`", err), Error: err}
+		}
+		return acpInfoResult("ACP attached.", info)
+	case "detach":
+		info, err := args.Provider.ACPDetach(args.SessionKey)
+		if err != nil {
+			return &CommandResult{Text: fmt.Sprintf("ACP detach failed: %s", err), Markdown: fmt.Sprintf("ACP detach failed: `%s`", err), Error: err}
+		}
+		return acpInfoResult("ACP detached.", info)
+	case "status":
+		info, err := args.Provider.ACPInspect(args.SessionKey)
+		if err != nil {
+			return &CommandResult{Text: fmt.Sprintf("ACP status failed: %s", err), Markdown: fmt.Sprintf("ACP status failed: `%s`", err), Error: err}
+		}
+		return acpInfoResult("ACP status.", info)
+	case "close":
+		if err := args.Provider.ACPClose(ctx, args.SessionKey); err != nil {
+			return &CommandResult{Text: fmt.Sprintf("ACP close failed: %s", err), Markdown: fmt.Sprintf("ACP close failed: `%s`", err), Error: err}
+		}
+		return &CommandResult{Text: "ACP session closed.", Markdown: "ACP session closed."}
+	case "cancel":
+		if err := args.Provider.ACPCancel(ctx, args.SessionKey); err != nil {
+			return &CommandResult{Text: fmt.Sprintf("ACP cancel failed: %s", err), Markdown: fmt.Sprintf("ACP cancel failed: `%s`", err), Error: err}
+		}
+		return &CommandResult{Text: "ACP session cancelled.", Markdown: "ACP session cancelled."}
+	case "mode":
+		if len(rest) == 0 {
+			return &CommandResult{Text: "Usage: /acp mode <agent|plan|ask>", Markdown: "Usage: `/acp mode <agent|plan|ask>`"}
+		}
+		info, err := args.Provider.ACPSetMode(ctx, args.SessionKey, rest[0])
+		if err != nil {
+			return &CommandResult{Text: fmt.Sprintf("ACP mode failed: %s", err), Markdown: fmt.Sprintf("ACP mode failed: `%s`", err), Error: err}
+		}
+		return acpInfoResult("ACP mode updated.", info)
+	case "steer":
+		if len(rest) == 0 {
+			return &CommandResult{Text: "Usage: /acp steer <message>", Markdown: "Usage: `/acp steer <message>`"}
+		}
+		result, err := args.Provider.ACPSteer(ctx, args.SessionKey, strings.Join(rest, " "))
+		if err != nil {
+			return &CommandResult{Text: fmt.Sprintf("ACP steer failed: %s", err), Markdown: fmt.Sprintf("ACP steer failed: `%s`", err), Error: err}
+		}
+		return &CommandResult{Text: result.FinalText, Markdown: result.FinalText}
+	default:
+		return &CommandResult{
+			Text:     "Unknown /acp action. Usage: /acp " + args.Usage,
+			Markdown: "Unknown `/acp` action. Usage: `/acp " + args.Usage + "`",
+		}
+	}
+}
+
+func acpInfoResult(prefix string, info *acp.AttachmentInfo) *CommandResult {
+	if info == nil {
+		return &CommandResult{Text: prefix, Markdown: prefix}
+	}
+	var text strings.Builder
+	text.WriteString(prefix)
+	text.WriteString("\n")
+	text.WriteString(fmt.Sprintf("  Session key: %s\n", info.SessionKey))
+	text.WriteString(fmt.Sprintf("  Attached: %t\n", info.Attached))
+	text.WriteString(fmt.Sprintf("  ACP session: %s\n", info.SessionID))
+	text.WriteString(fmt.Sprintf("  Driver: %s\n", info.Driver))
+	text.WriteString(fmt.Sprintf("  Transport: %s\n", info.Transport))
+	text.WriteString(fmt.Sprintf("  Mode: %s\n", info.Mode))
+	text.WriteString(fmt.Sprintf("  CWD: %s\n", info.CWD))
+	text.WriteString(fmt.Sprintf("  State: %s\n", info.CurrentState))
+	text.WriteString(fmt.Sprintf("  Buffered events: %d\n", info.BufferedEvents))
+	if !info.LastActivity.IsZero() {
+		text.WriteString(fmt.Sprintf("  Last activity: %s\n", info.LastActivity.Format(time.RFC3339)))
+	}
+	if info.LastPlanName != "" {
+		text.WriteString(fmt.Sprintf("  Last plan: %s\n", info.LastPlanName))
+	}
+	if info.LastQuestion != "" {
+		text.WriteString(fmt.Sprintf("  Last question: %s\n", info.LastQuestion))
+	}
+	if len(info.Todos) > 0 {
+		text.WriteString("  Todos:\n")
+		for _, todo := range info.Todos {
+			text.WriteString(fmt.Sprintf("    - [%s] %s\n", todo.Status, todo.Content))
+		}
+	}
+	return &CommandResult{
+		Text:     text.String(),
+		Markdown: text.String(),
 	}
 }
 

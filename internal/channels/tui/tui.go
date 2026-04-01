@@ -488,7 +488,31 @@ func handleAgentEvent(m *Model, event gateway.AgentEvent) {
 		m.currentLine += e.Delta
 	case gateway.EventToolStart:
 		m.finishCurrentLine()
-		m.chatLines = append(m.chatLines, toolStyle.Render(fmt.Sprintf("[Using tool: %s]", e.ToolName)))
+		args := strings.TrimSpace(string(e.Input))
+		if args == "{}" || args == "[]" || args == "null" {
+			args = ""
+		}
+		if args == "" && strings.TrimSpace(e.Kind) != "" {
+			args = "kind=" + strings.TrimSpace(e.Kind)
+		}
+		if args != "" {
+			m.chatLines = append(m.chatLines, toolStyle.Render(fmt.Sprintf("[Using tool: %s %s]", e.ToolName, args)))
+		} else {
+			m.chatLines = append(m.chatLines, toolStyle.Render(fmt.Sprintf("[Using tool: %s]", e.ToolName)))
+		}
+	case gateway.EventToolProgress:
+		progress := strings.TrimSpace(e.DisplayResult)
+		if progress == "" {
+			progress = strings.TrimSpace(e.Result)
+		}
+		if progress != "" {
+			m.finishCurrentLine()
+			status := strings.TrimSpace(e.Status)
+			if status == "" {
+				status = "running"
+			}
+			m.chatLines = append(m.chatLines, toolStyle.Render(fmt.Sprintf("[Tool %s: %s]", e.ToolName, status)))
+		}
 	case gateway.EventToolEnd:
 		if e.Error != "" {
 			m.chatLines = append(m.chatLines, errorStyle.Render(fmt.Sprintf("[Tool error: %s]", e.Error)))

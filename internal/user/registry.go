@@ -50,6 +50,7 @@ func NewRegistryFromUsers(users UsersConfig, rolesConfig RolesConfig) *Registry 
 			TelegramID:       entry.TelegramID,
 			WhatsAppID:       entry.WhatsAppID,
 			HTTPPasswordHash: entry.HTTPPasswordHash,
+			ACPAllowed:       entry.ACPAllowed != nil && *entry.ACPAllowed,
 			Thinking:         entry.Thinking != nil && *entry.Thinking,
 			ThinkingLevel:    thinkingLevel,
 			Sandbox:          entry.Sandbox == nil || *entry.Sandbox, // default true if nil
