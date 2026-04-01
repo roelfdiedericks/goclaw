@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.11] stable - 2026-04-02
+
+- acp: add initial local stdio ACP session support with a first Cursor driver and goacp-backed extension probing
+- acp tools: add agent-facing `acp_attach`, `acp_info`, `acp_respond` and `acp_cancel` workflows
+- cursor acp: surface `ask_question`, `create_plan`, `update_todos`, `task` and `generate_image` events across HTTP, Telegram and TUI with shared handoff/cancellation handling for interactive prompts
+- telegram/http UX: add native Telegram poll handling for single-question multi-select asks, synthetic `Other...` escape hatches, and stale interactive-state cleanup when the user continues in chat
+
 ## [0.1.10] stable - 2026-03-31
 
 - runtime: add `goclaw status --field` for shell-safe machine-readable checks and structured `configured=false` status when no config exists yet
