@@ -328,9 +328,22 @@ func handleACP(ctx context.Context, args *CommandArgs) *CommandResult {
 		return acpInfoResult("ACP mode updated.", info)
 	case "steer":
 		if len(rest) == 0 {
-			return &CommandResult{Text: "Usage: /acp steer <message>", Markdown: "Usage: `/acp steer <message>`"}
+			return &CommandResult{Text: "Usage: /acp steer [--stay-attached] <message>", Markdown: "Usage: `/acp steer [--stay-attached] <message>`"}
 		}
-		result, err := args.Provider.ACPSteer(ctx, args.SessionKey, strings.Join(rest, " "))
+		stayAttached := false
+		messageParts := make([]string, 0, len(rest))
+		for _, part := range rest {
+			switch part {
+			case "--stay-attached", "--stay_attached":
+				stayAttached = true
+			default:
+				messageParts = append(messageParts, part)
+			}
+		}
+		if len(messageParts) == 0 {
+			return &CommandResult{Text: "Usage: /acp steer [--stay-attached] <message>", Markdown: "Usage: `/acp steer [--stay-attached] <message>`"}
+		}
+		result, err := args.Provider.ACPSteer(ctx, args.SessionKey, strings.Join(messageParts, " "), stayAttached)
 		if err != nil {
 			return &CommandResult{Text: fmt.Sprintf("ACP steer failed: %s", err), Markdown: fmt.Sprintf("ACP steer failed: `%s`", err), Error: err}
 		}

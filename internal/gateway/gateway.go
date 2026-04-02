@@ -3883,10 +3883,17 @@ func (g *Gateway) ACPSetMode(ctx context.Context, sessionKey string, mode string
 	return mgr.SetMode(ctx, sessionKey, mode)
 }
 
-func (g *Gateway) ACPSteer(ctx context.Context, sessionKey string, text string) (*acp.PromptResult, error) {
+func (g *Gateway) ACPSteer(ctx context.Context, sessionKey string, text string, stayAttached bool) (*acp.PromptResult, error) {
 	mgr := acp.GetManager()
 	if mgr == nil {
 		return nil, fmt.Errorf("ACP manager not initialized")
+	}
+	if !stayAttached && mgr.IsAttached(sessionKey) {
+		defer func() {
+			if _, err := mgr.Detach(sessionKey); err != nil {
+				L_warn("gateway: failed to detach ACP session after steer", "sessionKey", sessionKey, "error", err)
+			}
+		}()
 	}
 	return mgr.Steer(ctx, sessionKey, text, acp.PromptOptions{})
 }

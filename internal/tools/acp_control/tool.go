@@ -18,7 +18,7 @@ func NewTool() *Tool { return &Tool{} }
 func (t *Tool) Name() string { return "acp_control" }
 
 func (t *Tool) Description() string {
-	return "Control ACP sessions through the ACP manager. Use to attach, detach, close, cancel, change mode, or steer an attached ACP session."
+	return "Control ACP sessions through the ACP manager. Use to attach, detach, close, cancel, change mode, or steer an ACP session. Steering detaches by default unless stayAttached is true."
 }
 
 func (t *Tool) Schema() map[string]any {
@@ -50,18 +50,23 @@ func (t *Tool) Schema() map[string]any {
 				"type":        "string",
 				"description": "Steering message to send into the existing ACP session.",
 			},
+			"stayAttached": map[string]any{
+				"type":        "boolean",
+				"description": "Keep the ACP session attached after steering. Defaults to false.",
+			},
 		},
 		"required": []string{"action"},
 	}
 }
 
 type controlInput struct {
-	Action    string `json:"action"`
-	Driver    string `json:"driver"`
-	CWD       string `json:"cwd"`
-	Mode      string `json:"mode"`
-	SessionID string `json:"sessionId"`
-	Message   string `json:"message"`
+	Action       string `json:"action"`
+	Driver       string `json:"driver"`
+	CWD          string `json:"cwd"`
+	Mode         string `json:"mode"`
+	SessionID    string `json:"sessionId"`
+	Message      string `json:"message"`
+	StayAttached bool   `json:"stayAttached"`
 }
 
 func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
@@ -127,7 +132,14 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		if strings.TrimSpace(in.Message) == "" {
 			return nil, fmt.Errorf("message is required for steer")
 		}
-		L_info("acp_control: steering session", "sessionKey", sessionKey, "mode", in.Mode)
+		L_info("acp_control: steering session", "sessionKey", sessionKey, "mode", in.Mode, "stayAttached", in.StayAttached)
+		if !in.StayAttached && mgr.IsAttached(sessionKey) {
+			defer func() {
+				if _, err := mgr.Detach(sessionKey); err != nil {
+					L_warn("acp_control: failed to detach after steer", "sessionKey", sessionKey, "error", err)
+				}
+			}()
+		}
 		result, err := mgr.Steer(ctx, sessionKey, in.Message, acp.PromptOptions{})
 		if err != nil {
 			return nil, err

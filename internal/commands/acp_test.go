@@ -13,6 +13,8 @@ type acpProviderStub struct {
 	attachDriver string
 	attachCWD    string
 	attachMode   string
+	steerText    string
+	steerStay    bool
 }
 
 func (s *acpProviderStub) GetSessionInfoForCommands(ctx context.Context, sessionKey string) (*SessionInfo, error) {
@@ -49,7 +51,9 @@ func (s *acpProviderStub) ACPClose(ctx context.Context, sessionKey string) error
 func (s *acpProviderStub) ACPSetMode(ctx context.Context, sessionKey string, mode string) (*acp.AttachmentInfo, error) {
 	return &acp.AttachmentInfo{SessionKey: sessionKey, Attached: true, Mode: mode}, nil
 }
-func (s *acpProviderStub) ACPSteer(ctx context.Context, sessionKey string, text string) (*acp.PromptResult, error) {
+func (s *acpProviderStub) ACPSteer(ctx context.Context, sessionKey string, text string, stayAttached bool) (*acp.PromptResult, error) {
+	s.steerText = text
+	s.steerStay = stayAttached
 	return &acp.PromptResult{FinalText: "ok"}, nil
 }
 func (s *acpProviderStub) ACPCancel(ctx context.Context, sessionKey string) error { return nil }
@@ -92,5 +96,45 @@ func TestHandleACPAttachParsesDriverCWDAndMode(t *testing.T) {
 	}
 	if provider.attachMode != "plan" {
 		t.Fatalf("expected mode plan, got %q", provider.attachMode)
+	}
+}
+
+func TestHandleACPSteerDefaultsToDetachAfterPrompt(t *testing.T) {
+	provider := &acpProviderStub{}
+	res := handleACP(context.Background(), &CommandArgs{
+		SessionKey: "primary",
+		UserID:     "owner",
+		Provider:   provider,
+		RawArgs:    "steer ask cursor for cwd",
+		Usage:      "steer [--stay-attached] <message>",
+	})
+	if res == nil {
+		t.Fatalf("expected result")
+	}
+	if provider.steerText != "ask cursor for cwd" {
+		t.Fatalf("expected steer text to be passed through, got %q", provider.steerText)
+	}
+	if provider.steerStay {
+		t.Fatalf("expected steer to detach by default")
+	}
+}
+
+func TestHandleACPSteerParsesStayAttachedFlag(t *testing.T) {
+	provider := &acpProviderStub{}
+	res := handleACP(context.Background(), &CommandArgs{
+		SessionKey: "primary",
+		UserID:     "owner",
+		Provider:   provider,
+		RawArgs:    "steer --stay-attached ask cursor for cwd",
+		Usage:      "steer [--stay-attached] <message>",
+	})
+	if res == nil {
+		t.Fatalf("expected result")
+	}
+	if provider.steerText != "ask cursor for cwd" {
+		t.Fatalf("expected steer text to be passed through, got %q", provider.steerText)
+	}
+	if !provider.steerStay {
+		t.Fatalf("expected stay-attached flag to be passed through")
 	}
 }

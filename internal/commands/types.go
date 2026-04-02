@@ -43,7 +43,7 @@ type SessionProvider interface {
 	ACPInspect(sessionKey string) (*acp.AttachmentInfo, error)
 	ACPClose(ctx context.Context, sessionKey string) error
 	ACPSetMode(ctx context.Context, sessionKey string, mode string) (*acp.AttachmentInfo, error)
-	ACPSteer(ctx context.Context, sessionKey string, text string) (*acp.PromptResult, error)
+	ACPSteer(ctx context.Context, sessionKey string, text string, stayAttached bool) (*acp.PromptResult, error)
 	ACPCancel(ctx context.Context, sessionKey string) error
 }
 
