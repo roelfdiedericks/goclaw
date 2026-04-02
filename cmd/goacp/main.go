@@ -58,7 +58,7 @@ func parseQuestionSelection(params json.RawMessage) questionSelection {
 	var payload struct {
 		Questions []struct {
 			AllowMultiple bool `json:"allowMultiple"`
-			Options []struct {
+			Options       []struct {
 				ID string `json:"id"`
 			} `json:"options"`
 		} `json:"questions"`
@@ -373,10 +373,6 @@ func sanitizeMethodName(method string) string {
 	return method
 }
 
-func normalizeStopReason(reason acp.StopReason) string {
-	return strings.TrimSpace(strings.ToLower(string(reason)))
-}
-
 func (c *spikeClient) extensionSummaries() []extMethodSummary {
 	c.extMu.Lock()
 	defer c.extMu.Unlock()
@@ -462,7 +458,7 @@ func (c *spikeClient) writeExtensionArtifacts(dir, scenario, mode, cwd string) e
 	observations := append([]extObservation(nil), c.extObservations...)
 	c.extMu.Unlock()
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create extension artifact dir: %w", err)
 	}
 
@@ -501,7 +497,7 @@ func (c *spikeClient) writeExtensionArtifacts(dir, scenario, mode, cwd string) e
 		if err != nil {
 			return fmt.Errorf("marshal extension observation %d: %w", obs.Index, err)
 		}
-		if err := os.WriteFile(path, payload, 0o644); err != nil {
+		if err := os.WriteFile(path, payload, 0o600); err != nil {
 			return fmt.Errorf("write extension observation %d: %w", obs.Index, err)
 		}
 		manifestData.Observations = append(manifestData.Observations, observationRecord{
@@ -519,7 +515,7 @@ func (c *spikeClient) writeExtensionArtifacts(dir, scenario, mode, cwd string) e
 	if err != nil {
 		return fmt.Errorf("marshal extension summary: %w", err)
 	}
-	if err := os.WriteFile(summaryPath, summaryBytes, 0o644); err != nil {
+	if err := os.WriteFile(summaryPath, summaryBytes, 0o600); err != nil {
 		return fmt.Errorf("write extension summary: %w", err)
 	}
 

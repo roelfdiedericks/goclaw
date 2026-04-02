@@ -35,14 +35,14 @@ type stdioRuntime struct {
 }
 
 type clientAdapter struct {
-	mu           sync.RWMutex
-	onEvent      func(ACPEvent)
-	onPermission func(PermissionRequest) (PermissionDecision, error)
+	mu            sync.RWMutex
+	onEvent       func(ACPEvent)
+	onPermission  func(PermissionRequest) (PermissionDecision, error)
 	onInteractive func(context.Context, ACPDriverExtensionPayload) (json.RawMessage, error)
-	stateMu      sync.Mutex
-	tools        map[string]toolState
-	seqMu        sync.Mutex
-	callbackSeq  int64
+	stateMu       sync.Mutex
+	tools         map[string]toolState
+	seqMu         sync.Mutex
+	callbackSeq   int64
 }
 
 type toolState struct {
@@ -910,6 +910,7 @@ func (t *localStdioTransport) spawnRuntime(ctx context.Context, driver Driver, c
 	}
 
 	runtimeCtx, runtimeCancel := context.WithCancel(context.Background())
+	// #nosec G204 -- command and args come from the trusted ACP driver launch spec.
 	cmd := osexec.CommandContext(runtimeCtx, spec.Command, spec.Args...)
 	cmd.Dir = cwd
 	if len(spec.Env) > 0 {
@@ -918,14 +919,17 @@ func (t *localStdioTransport) spawnRuntime(ctx context.Context, driver Driver, c
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		runtimeCancel()
 		return nil, fmt.Errorf("failed to create ACP stdin pipe: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		runtimeCancel()
 		return nil, fmt.Errorf("failed to create ACP stdout pipe: %w", err)
 	}
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
+		runtimeCancel()
 		return nil, fmt.Errorf("failed to start ACP driver: %w", err)
 	}
 
@@ -954,6 +958,7 @@ func (t *localStdioTransport) spawnRuntime(ctx context.Context, driver Driver, c
 	})
 	if err != nil {
 		_ = conn.Close()
+		runtimeCancel()
 		return nil, fmt.Errorf("acp initialize failed: %w", err)
 	}
 	_ = initResp
@@ -961,6 +966,7 @@ func (t *localStdioTransport) spawnRuntime(ctx context.Context, driver Driver, c
 		if methodID := strings.TrimSpace(authDriver.AuthMethodID()); methodID != "" {
 			if _, err := conn.Authenticate(ctx, &goacp.AuthenticateRequest{MethodID: methodID}); err != nil {
 				_ = conn.Close()
+				runtimeCancel()
 				return nil, fmt.Errorf("acp authenticate failed: %w", err)
 			}
 		}

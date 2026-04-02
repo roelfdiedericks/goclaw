@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/delegatedrun"
 	"github.com/roelfdiedericks/goclaw/internal/delivery"
-	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
@@ -603,15 +603,15 @@ func (c *HTTPChannel) convertEvent(event gateway.AgentEvent) *SSEEvent {
 			inputStr = inputStr[:1024] + "..."
 		}
 		return &SSEEvent{Event: "tool_start", Data: map[string]interface{}{
-			"runId":    e.RunID,
-			"toolName": e.ToolName,
-			"toolId":   e.ToolID,
-			"status":   e.Status,
-			"input":    inputStr,
-			"content":  e.Content,
-			"meta":     e.Meta,
+			"runId":     e.RunID,
+			"toolName":  e.ToolName,
+			"toolId":    e.ToolID,
+			"status":    e.Status,
+			"input":     inputStr,
+			"content":   e.Content,
+			"meta":      e.Meta,
 			"rawOutput": e.RawOutput,
-			"kind":     e.Kind,
+			"kind":      e.Kind,
 			"locations": e.Locations,
 		}}
 

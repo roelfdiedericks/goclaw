@@ -239,9 +239,9 @@ const (
 )
 
 type PromptRequest struct {
-	Text         string
-	OnEvent      func(ACPEvent)
-	OnPermission func(PermissionRequest) (PermissionDecision, error)
+	Text          string
+	OnEvent       func(ACPEvent)
+	OnPermission  func(PermissionRequest) (PermissionDecision, error)
 	OnInteractive func(context.Context, ACPDriverExtensionPayload) (json.RawMessage, error)
 }
 

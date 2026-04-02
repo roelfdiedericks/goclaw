@@ -442,15 +442,15 @@ func (s *Server) supervisionEventToSSE(event interface{}) *SSEEvent {
 			inputStr = inputStr[:2048] + "..."
 		}
 		return &SSEEvent{Event: "tool_start", Data: map[string]interface{}{
-			"runId":    e.RunID,
-			"toolName": e.ToolName,
-			"toolId":   e.ToolID,
-			"status":   e.Status,
-			"input":    inputStr,
-			"content":  e.Content,
-			"meta":     e.Meta,
+			"runId":     e.RunID,
+			"toolName":  e.ToolName,
+			"toolId":    e.ToolID,
+			"status":    e.Status,
+			"input":     inputStr,
+			"content":   e.Content,
+			"meta":      e.Meta,
 			"rawOutput": e.RawOutput,
-			"kind":     e.Kind,
+			"kind":      e.Kind,
 			"locations": e.Locations,
 		}}
 

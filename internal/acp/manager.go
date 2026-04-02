@@ -44,8 +44,8 @@ type Manager struct {
 }
 
 var (
-	globalManager *Manager
-	managerMu     sync.Mutex
+	globalManager                *Manager
+	managerMu                    sync.Mutex
 	ErrPendingInteractiveHandoff = errors.New("acp interactive request cancelled for handoff")
 )
 

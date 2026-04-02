@@ -66,20 +66,20 @@ type Bot struct {
 }
 
 type telegramInteractiveState struct {
-	ID         string
-	SessionKey string
-	Driver     string
-	Method     string
-	ToolCallID string
-	ChatID     int64
-	MessageID  int
-	Question   acp.QuestionPayload
-	Plan       acp.PlanRequestPayload
-	Selected   map[string]map[string]bool
+	ID             string
+	SessionKey     string
+	Driver         string
+	Method         string
+	ToolCallID     string
+	ChatID         int64
+	MessageID      int
+	Question       acp.QuestionPayload
+	Plan           acp.PlanRequestPayload
+	Selected       map[string]map[string]bool
 	OtherRequested bool
-	PollID     string
-	PollMessageID int
-	PollOptionIDs []string
+	PollID         string
+	PollMessageID  int
+	PollOptionIDs  []string
 }
 
 // getChatPrefs returns preferences for a chat, creating if needed.
@@ -132,13 +132,13 @@ func New(cfg *config.Config, gw *gateway.Gateway, users *user.Registry) (*Bot, e
 	ctx, cancel := context.WithCancel(context.Background())
 
 	b := &Bot{
-		bot:           bot,
-		gateway:       gw,
-		users:         users,
-		config:        cfg,
-		ctx:           ctx,
-		cancel:        cancel,
-		delegatedLast: make(map[string]time.Time),
+		bot:               bot,
+		gateway:           gw,
+		users:             users,
+		config:            cfg,
+		ctx:               ctx,
+		cancel:            cancel,
+		delegatedLast:     make(map[string]time.Time),
 		interactiveStates: make(map[string]*telegramInteractiveState),
 		interactivePolls:  make(map[string]string),
 	}
