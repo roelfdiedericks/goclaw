@@ -23,6 +23,7 @@ This section covers advanced configuration, deployment, and troubleshooting for 
 
 | Topic | Description |
 |-------|-------------|
+| [ACP Sessions](acp.md) | Attach GoClaw to a Cursor ACP session and handle interactive flows |
 | [Metrics](metrics.md) | Prometheus metrics endpoint |
 | [Troubleshooting](troubleshooting.md) | Common issues and solutions |
 
@@ -269,6 +270,7 @@ Add domain-specific capabilities via skills without code changes. See [Skills](s
 ## See Also
 
 - [Deployment](deployment.md) — Production setup
+- [ACP Sessions](acp.md) — Cursor ACP attachment and steering
 - [Troubleshooting](troubleshooting.md) — Common issues
 - [Sandbox](sandbox.md) — Execution isolation
 - [Architecture](architecture.md) — System internals

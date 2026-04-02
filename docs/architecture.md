@@ -89,6 +89,36 @@ GoClaw is a Go implementation of an AI agent gateway, designed to orchestrate LL
 
 ---
 
+## ACP Session Routing
+
+GoClaw can route a text-session turn through one of two paths:
+
+- the normal LLM-and-tools loop
+- an attached ACP session managed by the ACP manager
+
+ACP does not replace channels. Channels still talk to the gateway, and the gateway decides whether the current session is routed to the standard agent loop or to an attached ACP session.
+
+```mermaid
+flowchart LR
+    userChannels[UserChannels]
+    gateway[Gateway]
+    normalLoop[NormalLLMToolLoop]
+    acpManager[ACPManager]
+    acpRuntime[LocalStdioCursorSession]
+    interactiveUx[HTTPTelegramTUIACPEvents]
+
+    userChannels --> gateway
+    gateway --> normalLoop
+    gateway --> acpManager
+    acpManager --> acpRuntime
+    acpRuntime --> interactiveUx
+    interactiveUx --> userChannels
+```
+
+In the current MVP, the ACP path is limited to the Cursor driver over local stdio. The ACP manager keeps session attachment state, tracks pending interactive requests, and exposes those events back to channels for HTTP cards, Telegram prompts or polls, and TUI notices.
+
+---
+
 ## Core Components
 
 ### Gateway (`internal/gateway`)
@@ -196,6 +226,8 @@ Available agent tools (registered conditionally by config/feature flags):
 | `web_search` | Multi-provider web search (Brave/Grok/Perplexity/Gemini) |
 | `web_fetch` | Fetch web page content |
 | `browser` | Browser automation (Chromium) |
+| `acp_control` | Attach, steer, cancel, detach, or close ACP sessions |
+| `acp_inspect` | Inspect ACP attachment state, pending requests, and recent extensions |
 | `hass` | Home Assistant control |
 | `xai_imagine` | xAI image generation |
 | `xai_video` | xAI video generation |
@@ -285,6 +317,7 @@ Unified slash command handling across all channels:
 | `/hass` | Home Assistant status/debug |
 | `/llm` | LLM provider status and cooldown management |
 | `/embeddings` | Embeddings status and rebuild |
+| `/acp` | Attach, inspect, and control ACP sessions |
 
 See [Channel Commands](commands.md) for detailed documentation.
 
@@ -584,6 +617,7 @@ goclaw/
 - [Session Management](session-management.md) — Compaction and checkpoints
 - [Memory Graph](memory-graph.md) — Semantic knowledge graph
 - [Configuration](configuration.md) — All config options
+- [ACP Sessions](acp.md) — ACP routing, commands, and workflow
 - [Tools](tools.md) — Available agent tools
 - [Delegated Runs](delegated-runs.md) — Delegated execution model and control plane
 - [Embeddings](embeddings.md) — Semantic search infrastructure

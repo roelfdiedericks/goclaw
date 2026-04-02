@@ -134,6 +134,15 @@ GoClaw includes a first-class delegated execution architecture that powers isola
 
 See [Delegated Runs](docs/delegated-runs.md) for the architecture and operational model.
 
+### ACP Sessions for Cursor
+
+GoClaw can attach to a live Cursor ACP session, steer it from GoClaw, and surface Cursor interactive flows through HTTP, Telegram, and TUI.
+
+- **Session-scoped attachment** — attach a GoClaw session to Cursor when needed
+- **Interactive UX** — HTTP cards, Telegram prompts or polls, and TUI notices
+
+See [ACP Sessions](docs/acp.md) for the workflow and [ACP Tools](docs/tools/acp.md) for the agent-facing tool reference.
+
 ---
 
 ## Key Concepts
@@ -293,6 +302,7 @@ Full documentation available at [goclaw.org/docs](https://goclaw.org/docs/) or i
 ### Tools
 
 - [Tools Overview](docs/tools.md) — Available tools
+- [ACP Tools](docs/tools/acp.md) — Agent-facing ACP control and inspection
 - [Browser](docs/tools/browser.md) — Web automation
 - [Home Assistant](docs/tools/hass.md) — Smart home
 - [Cron](docs/tools/cron.md) — Scheduling
@@ -308,6 +318,7 @@ Full documentation available at [goclaw.org/docs](https://goclaw.org/docs/) or i
 ### Advanced
 
 - [Advanced Topics](docs/advanced.md) — Deep dives
+- [ACP Sessions](docs/acp.md) — Cursor ACP attachment and workflow
 - [Roles & Access](docs/roles.md) — RBAC and auth
 - [Skills](docs/skills.md) — Extensibility
 - [Sandbox](docs/sandbox.md) — Execution isolation

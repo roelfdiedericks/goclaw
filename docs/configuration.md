@@ -490,6 +490,20 @@ The prompt cache watches workspace identity files (SOUL.md, AGENTS.md, etc.) for
 | `delegatedRuns.defaultTimeoutSeconds` | int | `300` | Default time limit for delegated runs when a tool/job does not set one |
 | `delegatedRuns.maxTimeoutSeconds` | int | `1800` | Maximum delegated run timeout for safety (0 = unlimited) |
 
+### ACP Sessions
+
+ACP is currently a runtime session feature rather than a normal `goclaw.json` section.
+
+There is no top-level `acp` config block to enable. Instead, ACP is started per session with `/acp attach`, then controlled through `/acp` commands or the agent-facing ACP tools.
+
+Current scope:
+
+- Cursor driver only
+- local stdio transport only
+- session-scoped attachment rather than global process configuration
+
+If you are looking for ACP workflow and command details, see [ACP Sessions](acp.md) and [Channel Commands](commands.md).
+
 ### Speech-to-Text (STT)
 
 ```json
@@ -681,5 +695,6 @@ See [Roles](roles.md) for detailed access control documentation.
 - [Session Management](session-management.md) — Compaction, checkpoints, memory flush
 - [LLM Providers](llm-providers.md) — Multi-provider setup
 - [Tools](tools.md) — Tool configuration
+- [ACP Sessions](acp.md) — ACP runtime attachment and workflow
 - [Skills](skills.md) — Skills system
 - [Architecture](architecture.md) — System overview

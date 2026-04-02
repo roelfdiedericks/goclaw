@@ -24,6 +24,7 @@ GoClaw provides slash commands available across all text channels (Telegram, Wha
 | `/hass` | Home Assistant status and debug |
 | `/llm` | LLM provider status and cooldown management |
 | `/embeddings` | Embeddings status and rebuild |
+| `/acp` | Attach, inspect, and control ACP sessions |
 
 ## Command Details
 
@@ -181,6 +182,54 @@ Model: nomic-embed-text
 Provider: ollama
 ```
 
+### /acp
+
+Attach, inspect, and control ACP sessions from any text channel.
+
+**Usage:**
+```
+/acp attach [driver] [--cwd /path] [--mode mode] [--session SESSION_ID]
+/acp detach
+/acp status
+/acp close
+/acp cancel
+/acp mode <agent|plan|ask>
+/acp steer [--stay-attached] <message>
+```
+
+**Subcommands:**
+
+| Subcommand | Description |
+|------------|-------------|
+| `attach` | Create a new ACP session, or re-attach/load an existing one |
+| `detach` | Detach GoClaw from the ACP session without closing it |
+| `status` | Show ACP session details, pending requests, and recent driver extensions |
+| `close` | Close the ACP session entirely |
+| `cancel` | Cancel the currently running ACP prompt |
+| `mode` | Change ACP mode, such as `agent`, `plan`, or `ask` |
+| `steer` | Send a prompt into the attached ACP session |
+
+**Examples:**
+```
+/acp attach
+/acp attach cursor --cwd /path/to/project --mode agent
+/acp attach cursor --session SESSION_ID
+/acp status
+/acp mode plan
+/acp steer Review the current branch and summarize the next safe step.
+/acp steer --stay-attached Ask Cursor to keep the session open for one more turn.
+/acp detach
+/acp close
+```
+
+**Behavior notes:**
+- The default ACP driver is `cursor`
+- `/acp steer` now detaches by default after the prompt completes
+- Use `--stay-attached` when you want to keep routing future turns through ACP
+- `detach` keeps the external ACP session available for later re-attachment, while `close` shuts it down
+
+See [ACP Sessions](acp.md) for the full workflow and [ACP Tools](tools/acp.md) for the agent-facing tool equivalents.
+
 ## Channel-Specific Behavior
 
 Commands work the same across all channels, but output formatting may vary:
@@ -200,6 +249,7 @@ Commands are registered at startup. Custom commands can be added by extending th
 ## See Also
 
 - [Channels](channels.md) — Channel overview
+- [ACP Sessions](acp.md) — ACP attach, steer, and interactive workflows
 - [Telegram](telegram.md) — Telegram bot
 - [TUI](tui.md) — Terminal interface
 - [Web UI](web-ui.md) — HTTP interface

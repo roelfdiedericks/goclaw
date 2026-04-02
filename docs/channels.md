@@ -71,8 +71,21 @@ All text channels support the same set of slash commands:
 | `/hass` | Home Assistant status/debug |
 | `/llm` | LLM provider status and cooldowns |
 | `/embeddings` | Embeddings status and rebuild |
+| `/acp` | Attach, inspect, and control ACP sessions |
 
 See [Channel Commands](commands.md) for detailed documentation.
+
+## ACP Interactive Flows
+
+When the current GoClaw session is attached to ACP, text channels can surface ACP driver events and interactive requests.
+
+- **HTTP/Web UI** renders interactive cards for questions and plan approval, plus status cards for todo, task, and generated-image events
+- **Telegram** uses inline buttons for single-choice flows and native polls for single-question multi-select prompts
+- **TUI** shows notice-style summaries for ACP interactive events, but responses must be handled elsewhere
+
+ACP attachment follows the session key rather than a single frontend, so the same attached session can surface across different text channels that share that session.
+
+See [ACP Sessions](acp.md) for the workflow and limitations.
 
 ## Channel Configuration
 
@@ -290,4 +303,5 @@ Voice uses a completely separate provider system:
 - [Voice](voice.md) — Real-time voice conversations
 - [Cron](cron.md) — Scheduled tasks
 - [Channel Commands](commands.md) — Slash commands
+- [ACP Sessions](acp.md) — ACP workflows across text channels
 - [Configuration](configuration.md) — Full config reference
