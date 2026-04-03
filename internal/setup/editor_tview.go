@@ -132,7 +132,7 @@ func (e *EditorTview) createMenu() *forms.MenuListResult {
 	items := []forms.MenuItem{
 		{Label: "LLM Configuration", OnSelect: e.editLLM},
 		{Label: "VoiceLLM Configuration", OnSelect: e.editVoiceLLM},
-		{Label: "ACP Configuration", OnSelect: e.editACP},
+		{Label: "Coding Agents", OnSelect: e.editACP},
 		{Label: "Gateway Settings", OnSelect: e.editGateway},
 		{Label: "Session Management", OnSelect: e.editSession},
 		{IsSeparator: true, Label: "Channels"},
@@ -755,7 +755,7 @@ func (e *EditorTview) editACP() {
 		return
 	}
 
-	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "ACP"})
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Coding Agents"})
 	e.app.SetFormContent(content)
 }
 

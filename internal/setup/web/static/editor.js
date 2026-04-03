@@ -278,6 +278,7 @@
             this.pendingOwnerPairings = {};
             this.editorPairingStatus = {};
             this.editorPairingPollers = {};
+            this.pendingSubsectionTarget = '';
             this.editorPairingSessions = {
                 telegram: `web-editor-telegram-${Date.now()}`,
                 whatsapp: `web-editor-whatsapp-${Date.now()}`
@@ -316,8 +317,10 @@
                     return;
                 }
                 event.preventDefault();
-                const sectionId = $(event.currentTarget).data('section-target');
-                if (sectionId) this.switchSection(sectionId);
+                const $task = $(event.currentTarget);
+                const sectionId = $task.data('section-target');
+                const subsectionTarget = $task.data('subsection-target') || '';
+                if (sectionId) this.switchSection(sectionId, subsectionTarget);
             });
 
             this.$topSave.on('click', () => this.saveAll());
@@ -443,8 +446,16 @@
             this.dirtyState[this.currentSection] = this.currentDirty();
         }
 
-        async switchSection(sectionId) {
-            if (this.currentSection === sectionId) return;
+        async switchSection(sectionId, subsectionTarget = '') {
+            const target = String(subsectionTarget || '');
+            if (this.currentSection === sectionId) {
+                this.pendingSubsectionTarget = target;
+                if (target) {
+                    this.activatePendingSubsection();
+                }
+                return;
+            }
+            this.pendingSubsectionTarget = target;
             this.cacheCurrentSectionState();
             Object.values(this.editorPairingPollers).forEach((timer) => window.clearTimeout(timer));
             this.editorPairingPollers = {};
@@ -531,6 +542,27 @@
             this.renderProviderLists();
             this.renderRolesLists();
             this.renderEditorPairingPanel();
+            this.activatePendingSubsection();
+        }
+
+        activatePendingSubsection() {
+            const target = String(this.pendingSubsectionTarget || '').trim();
+            if (!target || !this.$formContent.length) {
+                return;
+            }
+            const panel = document.getElementById(target);
+            if (!panel || !this.$formContent.has(panel).length) {
+                return;
+            }
+            const collapse = bootstrap.Collapse.getOrCreateInstance(panel, { toggle: false });
+            collapse.show();
+            const sectionCard = panel.closest('.js-form-section');
+            window.requestAnimationFrame(() => {
+                if (sectionCard && typeof sectionCard.scrollIntoView === 'function') {
+                    sectionCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+            this.pendingSubsectionTarget = '';
         }
 
         renderEditorPairingPanel() {
