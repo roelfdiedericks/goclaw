@@ -354,12 +354,12 @@ func (s *Server) voiceAvailability() voicellm.Availability {
 	return voicellm.AssessConfig(gatewayWithConfig.Config().VoiceLLM)
 }
 
-// handleStaticJS serves embedded static assets under /js/.
+// handleStaticJS serves static assets under /js/.
 // Served without auth middleware for AudioWorklet compatibility.
 func (s *Server) handleStaticJS(w http.ResponseWriter, r *http.Request) {
-	// In dev mode, serve from disk
+	// In dev mode, serve from the same cwd-based tree as HTML templates.
 	if s.devMode && s.templatesDir != "" {
-		filePath := filepath.Join(s.templatesDir, r.URL.Path[1:]) // Remove leading /
+		filePath := s.devAssetPath(r.URL.Path[1:]) // Remove leading /
 		http.ServeFile(w, r, filePath)
 		return
 	}

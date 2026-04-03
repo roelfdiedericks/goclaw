@@ -16,7 +16,7 @@ Do NOT re-read any of these with the read tool. Their contents are already in yo
 
 ## Memory
 
-You wake up fresh each session. These files are your continuity:
+You wake up fresh each session. These files are your continuity along with the memory graph system:
 
 - **Daily notes:** `memory/YYYY-MM-DD.md` (create `memory/` if needed) — raw logs of what happened
 - **Long-term:** `MEMORY.md` — your curated memories, like a human's long-term memory
@@ -35,10 +35,10 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 
 ### Write It Down - No "Mental Notes"!
 
-- **Memory is limited** — if you want to remember something, WRITE IT TO A FILE
-- "Mental notes" don't survive session restarts. Files do.
-- When someone says "remember this" → update `memory/YYYY-MM-DD.md` or relevant file
-- When you learn a lesson → update AGENTS.md, TOOLS.md, or the relevant skill
+- **Memory is limited** — if you want to remember something, WRITE IT TO A FILE, and also use the memory_graph_store tool
+- "Mental notes" don't survive session restarts. Files and the memory graph do.
+- When someone says "remember this" → update `memory/YYYY-MM-DD.md` or relevant file, and the memory graph
+- When you learn a lesson → update AGENTS.md, TOOLS.md, or the relevant skill, and the memory graph
 - When you make a mistake → document it so future-you doesn't repeat it
 - **Text > Brain**
 

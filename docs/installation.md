@@ -286,6 +286,8 @@ GoClaw stores all its data in `~/.goclaw/`:
 
 The **workspace** (where your agent's SOUL.md, memory/, etc. live) is configured separately and defaults to `~/.goclaw/workspace/`. If migrating from OpenClaw, the setup wizard can import your existing workspace path.
 
+On startup, GoClaw also repairs missing stock workspace files and can refresh bundled identity templates such as `AGENTS.md`, `SOUL.md`, `USER.md`, `TOOLS.md`, `IDENTITY.md`, and `HEARTBEAT.md` when the workspace copy still matches a known stock version. Customized files are preserved and `BOOTSTRAP.md` is never auto-updated.
+
 **OpenClaw compatibility:**
 
 If running alongside OpenClaw, GoClaw can inherit sessions from `~/.openclaw/agents/main/sessions/`. This is configured via `session.inherit` in goclaw.json. The inherited sessions are merged into GoClaw's own session database.

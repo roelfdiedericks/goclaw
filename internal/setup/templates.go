@@ -4,22 +4,40 @@ package setup
 import (
 	"embed"
 	"regexp"
+	"slices"
 	"strings"
 )
 
 //go:embed templates/*.md
 var templatesFS embed.FS
 
-// templateFiles lists all workspace template files
-var templateFiles = []string{
-	"AGENTS.md",
-	"SOUL.md",
-	"BOOTSTRAP.md",
-	"IDENTITY.md",
-	"USER.md",
-	"TOOLS.md",
-	"HEARTBEAT.md",
+const bootstrapTemplateName = "BOOTSTRAP.md"
+
+type WorkspaceTemplateSpec struct {
+	Name       string
+	AutoUpdate bool
 }
+
+type TemplateManifestEntry struct {
+	Current string
+	Known   []string
+}
+
+var workspaceTemplateSpecs = []WorkspaceTemplateSpec{
+	{Name: "AGENTS.md", AutoUpdate: true},
+	{Name: "SOUL.md", AutoUpdate: true},
+	{Name: bootstrapTemplateName, AutoUpdate: false},
+	{Name: "IDENTITY.md", AutoUpdate: true},
+	{Name: "USER.md", AutoUpdate: true},
+	{Name: "TOOLS.md", AutoUpdate: true},
+	{Name: "HEARTBEAT.md", AutoUpdate: true},
+}
+
+// templateManifest is populated by generated code.
+var templateManifest = map[string]TemplateManifestEntry{}
+
+// templateFiles lists all workspace template files.
+var templateFiles = templateSpecNames(workspaceTemplateSpecs)
 
 // frontmatterRegex matches YAML frontmatter at the start of a file
 var frontmatterRegex = regexp.MustCompile(`(?s)^---\n.*?\n---\n*`)
@@ -45,4 +63,42 @@ func LoadTemplateStripped(name string) (string, error) {
 		return "", err
 	}
 	return StripFrontmatter(content), nil
+}
+
+func templateSpecNames(specs []WorkspaceTemplateSpec) []string {
+	names := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		names = append(names, spec.Name)
+	}
+	return names
+}
+
+func autoUpdateTemplateSpecs() []WorkspaceTemplateSpec {
+	specs := make([]WorkspaceTemplateSpec, 0, len(workspaceTemplateSpecs))
+	for _, spec := range workspaceTemplateSpecs {
+		if spec.AutoUpdate {
+			specs = append(specs, spec)
+		}
+	}
+	return specs
+}
+
+func templateSupportsAutoUpdate(name string) bool {
+	for _, spec := range workspaceTemplateSpecs {
+		if spec.Name == name {
+			return spec.AutoUpdate
+		}
+	}
+	return false
+}
+
+func templateHasKnownChecksum(name, checksum string) bool {
+	entry, ok := templateManifest[name]
+	if !ok {
+		return false
+	}
+	if entry.Current == checksum {
+		return true
+	}
+	return slices.Contains(entry.Known, checksum)
 }

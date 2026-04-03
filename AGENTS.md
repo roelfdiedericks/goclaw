@@ -102,57 +102,11 @@ func (b *Bot) handleMessage(c tele.Context) error {
 
 ---
 
-## Session & Memory Management
+## CHANGELOG.md updates
+When make changelog updates, follow the similar simple, terse style as the existing CHANGELOG.md entries
+Don't overword things, its a brief changelog not a dissertation. Do not update prior release changelog entries unless requested, add new entries under the "Unreleased" section
 
-### The Compaction Problem
+## Documentation updates
+Follow the docs/AGENTS.md guide for changing files in the docs/ subdirectory. Ensure documentation updates are user-facing and not overly technical.
 
-Long conversations fill up the model's context window. When it overflows, compaction summarizes and truncates older messages. **If important context wasn't written to memory files before compaction, it's lost forever.**
 
-OpenClaw's approach fires a single memory flush prompt close to the limit (~96% context). By then it may be too late — the agent has amnesia before it can save.
-
-### GoClaw's Solution: Proactive Memory Prompts
-
-GoClaw must track context usage and prompt for memory writes at **multiple thresholds**:
-
-| Threshold | Behavior |
-|-----------|----------|
-| 50% | Soft reminder: "Consider noting key decisions" |
-| 75% | Stronger: "Write important context to memory now" |
-| 90% | Urgent: "Compaction imminent. Save critical context." |
-
-This gives the agent time to save context before it's lost.
-
-### Implementation Requirements
-
-See [specs/SESSION_PERSISTENCE.md](specs/SESSION_PERSISTENCE.md) for full details.
-
-**Must implement:**
-
-1. **Token tracking** — Count tokens in session, know the model's context window
-2. **Threshold checking** — After each turn, check if thresholds crossed
-3. **System prompt injection** — Show context usage: `[Context: 156k/200k (78%)]`
-4. **Flush prompts** — Inject memory write prompts at thresholds
-5. **Threshold state** — Track which thresholds fired (reset after compaction)
-
-**Key interfaces:**
-
-```go
-type ContextStats struct {
-    UsedTokens    int
-    MaxTokens     int
-    UsagePercent  float64
-}
-
-func (g *Gateway) GetContextStats(sessionKey string) ContextStats
-func (g *Gateway) checkMemoryFlush(sess *Session)  // Call after each turn
-```
-
-### Why This Matters
-
-An agent losing context mid-session and asking "what were we talking about?" is a bad experience. The agent should:
-
-1. See context pressure building (via system prompt or tool)
-2. Get proactive prompts to save important context
-3. Never be surprised by compaction
-
-This is a **core feature**, not an afterthought. Build it into the session manager from the start.

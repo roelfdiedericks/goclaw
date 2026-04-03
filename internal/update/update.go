@@ -29,6 +29,14 @@ const (
 
 	// GitHubReleasesBase is the GitHub releases download base URL
 	GitHubReleasesBase = "https://github.com"
+
+	EnvPostUpdate            = "GOCLAW_POST_UPDATE"
+	EnvPostUpdateVersion     = "GOCLAW_POST_UPDATE_VERSION"
+	EnvPostUpdateFromVersion = "GOCLAW_POST_UPDATE_FROM_VERSION"
+	EnvPostUpdateChannel     = "GOCLAW_POST_UPDATE_CHANNEL"
+	EnvPostUpdateNotify      = "GOCLAW_POST_UPDATE_NOTIFY"
+	EnvPostUpdateTool        = "GOCLAW_POST_UPDATE_TOOL"
+	EnvPostUpdateTime        = "GOCLAW_POST_UPDATE_TIME"
 )
 
 // Release represents a GitHub release
@@ -79,6 +87,135 @@ type UpdateInfo struct {
 	DownloadURL    string
 	ChecksumURL    string
 	IsNewer        bool
+}
+
+type PostUpdateMarker struct {
+	NewVersion  string
+	FromVersion string
+	Channel     string
+	Notify      bool
+	Tool        string
+	Time        time.Time
+}
+
+func SetPostUpdateMarkerEnv(info *UpdateInfo, initiator string, at time.Time) error {
+	if info == nil {
+		return fmt.Errorf("post-update marker requires update info")
+	}
+	if strings.TrimSpace(info.NewVersion) == "" {
+		return fmt.Errorf("post-update marker requires new version")
+	}
+	if strings.TrimSpace(info.CurrentVersion) == "" {
+		return fmt.Errorf("post-update marker requires current version")
+	}
+	if strings.TrimSpace(info.Channel) == "" {
+		return fmt.Errorf("post-update marker requires channel")
+	}
+	initiator = strings.TrimSpace(initiator)
+	if initiator == "" {
+		return fmt.Errorf("post-update marker requires initiator")
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+
+	envValues := map[string]string{
+		EnvPostUpdate:            "1",
+		EnvPostUpdateVersion:     info.NewVersion,
+		EnvPostUpdateFromVersion: info.CurrentVersion,
+		EnvPostUpdateChannel:     info.Channel,
+		EnvPostUpdateNotify:      "1",
+		EnvPostUpdateTool:        initiator,
+		EnvPostUpdateTime:        at.UTC().Format(time.RFC3339),
+	}
+	for key, value := range envValues {
+		if err := os.Setenv(key, value); err != nil {
+			return fmt.Errorf("set %s: %w", key, err)
+		}
+	}
+
+	L_info("update: post-update marker prepared",
+		"fromVersion", info.CurrentVersion,
+		"newVersion", info.NewVersion,
+		"channel", info.Channel,
+		"tool", initiator,
+	)
+	return nil
+}
+
+func ReadPostUpdateMarkerFromEnv() (*PostUpdateMarker, error) {
+	active := strings.TrimSpace(os.Getenv(EnvPostUpdate))
+	if active == "" || active == "0" {
+		return nil, nil
+	}
+	if active != "1" {
+		return nil, fmt.Errorf("invalid %s value %q", EnvPostUpdate, active)
+	}
+
+	required := func(name string) (string, error) {
+		value := strings.TrimSpace(os.Getenv(name))
+		if value == "" {
+			return "", fmt.Errorf("missing required env %s", name)
+		}
+		return value, nil
+	}
+
+	newVersion, err := required(EnvPostUpdateVersion)
+	if err != nil {
+		return nil, err
+	}
+	fromVersion, err := required(EnvPostUpdateFromVersion)
+	if err != nil {
+		return nil, err
+	}
+	channel, err := required(EnvPostUpdateChannel)
+	if err != nil {
+		return nil, err
+	}
+	notify, err := required(EnvPostUpdateNotify)
+	if err != nil {
+		return nil, err
+	}
+	if notify != "1" {
+		return nil, fmt.Errorf("invalid %s value %q", EnvPostUpdateNotify, notify)
+	}
+	tool, err := required(EnvPostUpdateTool)
+	if err != nil {
+		return nil, err
+	}
+	whenText, err := required(EnvPostUpdateTime)
+	if err != nil {
+		return nil, err
+	}
+	when, err := time.Parse(time.RFC3339, whenText)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", EnvPostUpdateTime, err)
+	}
+
+	return &PostUpdateMarker{
+		NewVersion:  newVersion,
+		FromVersion: fromVersion,
+		Channel:     channel,
+		Notify:      true,
+		Tool:        tool,
+		Time:        when,
+	}, nil
+}
+
+func ClearPostUpdateMarkerEnv() {
+	for _, key := range []string{
+		EnvPostUpdate,
+		EnvPostUpdateVersion,
+		EnvPostUpdateFromVersion,
+		EnvPostUpdateChannel,
+		EnvPostUpdateNotify,
+		EnvPostUpdateTool,
+		EnvPostUpdateTime,
+	} {
+		if err := os.Unsetenv(key); err != nil {
+			L_warn("update: failed to clear post-update env", "key", key, "error", err)
+		}
+	}
 }
 
 // Updater handles the update process
@@ -484,7 +621,7 @@ func formatBytes(b int64) string {
 }
 
 // Apply replaces the current binary with the new one
-func (u *Updater) Apply(newBinaryPath string, noRestart bool) error {
+func (u *Updater) Apply(newBinaryPath string, info *UpdateInfo, noRestart bool, initiator string) error {
 	currentExe, err := GetExecutablePath()
 	if err != nil {
 		return err
@@ -538,8 +675,16 @@ func (u *Updater) Apply(newBinaryPath string, noRestart bool) error {
 		return nil
 	}
 
+	if err := SetPostUpdateMarkerEnv(info, initiator, time.Now().UTC()); err != nil {
+		return fmt.Errorf("failed to prepare post-update marker: %w", err)
+	}
+
 	// Restart via exec (replaces current process)
-	return restart(currentExe)
+	if err := restart(currentExe); err != nil {
+		ClearPostUpdateMarkerEnv()
+		return err
+	}
+	return nil
 }
 
 // restart replaces the current process with a new instance

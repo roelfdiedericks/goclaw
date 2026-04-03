@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/roelfdiedericks/goclaw/internal/delivery"
+	"github.com/roelfdiedericks/goclaw/internal/update"
+	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
 func TestCollectRuntimeStatusMissingConfigReturnsStructuredState(t *testing.T) {
@@ -189,5 +195,136 @@ func TestRestartCmdRunStartsImmediatelyWhenNotRunning(t *testing.T) {
 	}
 	if !startCalled {
 		t.Fatalf("expected start to be called")
+	}
+}
+
+type postUpdateGatewayStub struct {
+	systemUserIDs   []string
+	systemMessages  []delivery.SystemMessage
+	invokeSource    string
+	invokePurpose   string
+	invokeMessage   string
+	invokeSuppress  string
+	invokeCalls     int
+	invokeErr       error
+}
+
+func (s *postUpdateGatewayStub) DeliverSystemMessage(ctx context.Context, userID string, msg delivery.SystemMessage) delivery.Report {
+	s.systemUserIDs = append(s.systemUserIDs, userID)
+	s.systemMessages = append(s.systemMessages, msg)
+	return delivery.Report{
+		Generated:   true,
+		DeliveredTo: 1,
+		Results: []delivery.Result{
+			{Channel: "test", Attempted: true, Delivered: true},
+		},
+	}
+}
+
+func (s *postUpdateGatewayStub) InvokeAgent(ctx context.Context, source, purpose, message, suppressOn string) error {
+	s.invokeCalls++
+	s.invokeSource = source
+	s.invokePurpose = purpose
+	s.invokeMessage = message
+	s.invokeSuppress = suppressOn
+	return s.invokeErr
+}
+
+func testOwnerRegistry(t *testing.T) *user.Registry {
+	t.Helper()
+
+	thinking := false
+	sandbox := true
+	users := user.UsersConfig{
+		"owner": {
+			Name:          "Owner",
+			Role:          "owner",
+			Thinking:      &thinking,
+			Sandbox:       &sandbox,
+			ThinkingLevel: nil,
+		},
+		"owner2": {
+			Name:          "Owner Two",
+			Role:          "owner",
+			Thinking:      &thinking,
+			Sandbox:       &sandbox,
+			ThinkingLevel: nil,
+		},
+		"user": {
+			Name:          "Regular User",
+			Role:          "user",
+			Thinking:      &thinking,
+			Sandbox:       &sandbox,
+			ThinkingLevel: nil,
+		},
+	}
+	roles := user.RolesConfig{
+		"owner": {Tools: "*", Skills: "*", Memory: "full", Transcripts: "all", Commands: true},
+		"user":  {Tools: "", Skills: "", Memory: "none", Transcripts: "none", Commands: false},
+	}
+	return user.NewRegistryFromUsers(users, roles)
+}
+
+func TestReadPostUpdateMarkerFromEnvParsesRequiredFields(t *testing.T) {
+	t.Setenv(update.EnvPostUpdate, "1")
+	t.Setenv(update.EnvPostUpdateVersion, "1.2.3")
+	t.Setenv(update.EnvPostUpdateFromVersion, "1.2.2")
+	t.Setenv(update.EnvPostUpdateChannel, "stable")
+	t.Setenv(update.EnvPostUpdateNotify, "1")
+	t.Setenv(update.EnvPostUpdateTool, "goclaw_update")
+	t.Setenv(update.EnvPostUpdateTime, "2026-03-24T12:34:56Z")
+
+	state, err := readPostUpdateMarkerFromEnv()
+	if err != nil {
+		t.Fatalf("readPostUpdateMarkerFromEnv returned error: %v", err)
+	}
+	if state == nil {
+		t.Fatal("expected marker state")
+	}
+	if state.NewVersion != "1.2.3" || state.FromVersion != "1.2.2" {
+		t.Fatalf("unexpected versions: %#v", state)
+	}
+	if state.Channel != "stable" || state.Tool != "goclaw_update" || !state.Notify {
+		t.Fatalf("unexpected marker fields: %#v", state)
+	}
+	if got := state.Time.UTC().Format(time.RFC3339); got != "2026-03-24T12:34:56Z" {
+		t.Fatalf("unexpected marker time %q", got)
+	}
+}
+
+func TestHandlePostUpdateAfterStartupDeliversAndInvokesAndClearsEnv(t *testing.T) {
+	t.Setenv(update.EnvPostUpdate, "1")
+	t.Setenv(update.EnvPostUpdateVersion, "1.2.3")
+	t.Setenv(update.EnvPostUpdateFromVersion, "1.2.2")
+	t.Setenv(update.EnvPostUpdateChannel, "stable")
+	t.Setenv(update.EnvPostUpdateNotify, "1")
+	t.Setenv(update.EnvPostUpdateTool, "goclaw_update")
+	t.Setenv(update.EnvPostUpdateTime, "2026-03-24T12:34:56Z")
+
+	state, err := readPostUpdateMarkerFromEnv()
+	if err != nil {
+		t.Fatalf("read marker: %v", err)
+	}
+
+	stub := &postUpdateGatewayStub{}
+	users := testOwnerRegistry(t)
+	if err := handlePostUpdateAfterStartup(context.Background(), stub, users, state); err != nil {
+		t.Fatalf("handlePostUpdateAfterStartup returned error: %v", err)
+	}
+
+	if len(stub.systemUserIDs) != 2 {
+		t.Fatalf("expected two owner notifications, got %#v", stub.systemUserIDs)
+	}
+	if stub.invokeCalls != 1 {
+		t.Fatalf("expected one invoke call, got %d", stub.invokeCalls)
+	}
+	if stub.invokeSource != "post_update" || stub.invokePurpose != "agent" {
+		t.Fatalf("unexpected invoke routing: source=%q purpose=%q", stub.invokeSource, stub.invokePurpose)
+	}
+	if !strings.Contains(stub.invokeMessage, "Previous version: 1.2.2") || !strings.Contains(stub.invokeMessage, "New version: 1.2.3") {
+		t.Fatalf("expected version details in prompt, got %q", stub.invokeMessage)
+	}
+	if got := os.Getenv(update.EnvPostUpdate); got != "" {
+		t.Fatalf("expected post-update env to be cleared, got %q", got)
 	}
 }

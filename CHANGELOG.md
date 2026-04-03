@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- setup/runtime: auto-refresh stock workspace identity templates on startup when the workspace copy still matches a known stock version, while preserving customized files and excluding `BOOTSTRAP.md`
+
 ## [0.1.12] stable - 2026-04-03
 
 - setup/runtime: create missing workspace templates during onboarding and self-heal older installs without recreating `BOOTSTRAP.md` after `SOUL.md` exists

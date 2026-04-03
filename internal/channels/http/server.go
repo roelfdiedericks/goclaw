@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"time"
 
@@ -26,6 +25,8 @@ import (
 
 //go:embed html/*.html html/js/*
 var htmlFS embed.FS
+
+const devTemplatesRelativeDir = "internal/channels/http/html"
 
 // Server represents the HTTP server
 type Server struct {
@@ -110,16 +111,13 @@ func NewServer(cfg *ServerConfig, users *user.Registry) (*Server, error) {
 	// Create HTTP channel
 	s.channel = NewHTTPChannel(s)
 
-	// In dev mode, find the templates directory from source location
+	// In dev mode, resolve templates from the current working directory.
 	if s.devMode {
-		_, file, _, ok := runtime.Caller(0)
-		if !ok {
-			return nil, fmt.Errorf("dev mode: failed to determine source directory")
+		templatesDir, err := resolveDevTemplatesDir()
+		if err != nil {
+			return nil, err
 		}
-		s.templatesDir = filepath.Join(filepath.Dir(file), "html")
-		if _, err := os.Stat(s.templatesDir); err != nil {
-			return nil, fmt.Errorf("dev mode: templates directory not found: %s", s.templatesDir)
-		}
+		s.templatesDir = templatesDir
 		logging.L_info("http: dev mode enabled, loading templates from disk", "dir", s.templatesDir)
 	}
 
@@ -235,6 +233,27 @@ func (s *Server) loadTemplates() error {
 	s.templates = tmpl
 	logging.L_debug("http: loaded embedded templates")
 	return nil
+}
+
+func resolveDevTemplatesDir() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("dev mode: failed to determine current working directory: %w", err)
+	}
+
+	templatesDir := filepath.Join(cwd, filepath.FromSlash(devTemplatesRelativeDir))
+	if _, err := os.Stat(templatesDir); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("dev mode: templates directory not found at %s (cwd: %s). Dev mode expects the current working directory to be the GoClaw repo root so %s exists", templatesDir, cwd, devTemplatesRelativeDir)
+		}
+		return "", fmt.Errorf("dev mode: failed to stat templates directory %s: %w", templatesDir, err)
+	}
+
+	return templatesDir, nil
+}
+
+func (s *Server) devAssetPath(rel string) string {
+	return filepath.Join(s.templatesDir, rel)
 }
 
 // reloadTemplatesIfDev reloads templates from disk if in dev mode

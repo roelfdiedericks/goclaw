@@ -1,7 +1,9 @@
 package setup
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,17 +35,11 @@ func CreateWorkspace(wsPath string) error {
 		L_debug("setup: created directory", "path", dirPath)
 	}
 
-	// Copy template files (skip if they already exist)
-	for _, name := range templateFiles {
-		if name == "BOOTSTRAP.md" && hadSoulAtStart {
-			L_debug("setup: bootstrap skipped because soul exists", "path", filepath.Join(wsPath, name))
-			continue
-		}
-		destPath := filepath.Join(wsPath, name)
-		if err := writeTemplateIfMissing(destPath, name); err != nil {
-			L_warn("setup: failed to write template", "file", name, "error", err)
-			// Continue with other files, don't fail completely
-		}
+	if err := createMissingWorkspaceTemplates(wsPath, hadSoulAtStart); err != nil {
+		L_warn("setup: failed while creating missing templates", "path", wsPath, "error", err)
+	}
+	if err := CheckUpdateWorkspace(wsPath); err != nil {
+		L_warn("setup: failed while checking template updates", "path", wsPath, "error", err)
 	}
 
 	L_info("setup: workspace ensured successfully", "path", wsPath, "bootstrapCreated", !hadSoulAtStart)
@@ -76,6 +72,124 @@ func writeTemplateIfMissing(destPath, templateName string) error {
 
 	L_debug("setup: wrote template", "file", destPath)
 	return nil
+}
+
+func createMissingWorkspaceTemplates(wsPath string, hadSoulAtStart bool) error {
+	var firstErr error
+
+	for _, name := range templateFiles {
+		if name == bootstrapTemplateName && hadSoulAtStart {
+			L_debug("setup: bootstrap skipped because soul exists", "path", filepath.Join(wsPath, name))
+			continue
+		}
+		destPath := filepath.Join(wsPath, name)
+		if err := writeTemplateIfMissing(destPath, name); err != nil {
+			L_warn("setup: failed to write template", "file", name, "error", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+
+	return firstErr
+}
+
+func CheckUpdateWorkspace(wsPath string) error {
+	var firstErr error
+
+	for _, spec := range autoUpdateTemplateSpecs() {
+		destPath := filepath.Join(wsPath, spec.Name)
+		templateContent, err := LoadTemplateStripped(spec.Name)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("load template %s: %w", spec.Name, err)
+			}
+			L_warn("setup: failed to load template for update check", "file", spec.Name, "error", err)
+			continue
+		}
+
+		latestChecksum := checksumString(templateContent)
+		currentBytes, err := os.ReadFile(destPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				if err := writeTemplate(destPath, spec.Name, templateContent); err != nil {
+					if firstErr == nil {
+						firstErr = err
+					}
+					L_warn("setup: failed to recreate missing template", "file", spec.Name, "error", err)
+					continue
+				}
+				L_debug("setup: template decision",
+					"status", "created_missing_template",
+					"file", spec.Name,
+				)
+				continue
+			}
+			if firstErr == nil {
+				firstErr = fmt.Errorf("read workspace template %s: %w", spec.Name, err)
+			}
+			L_warn("setup: failed to read workspace template", "file", spec.Name, "error", err)
+			continue
+		}
+
+		currentChecksum := checksumBytes(currentBytes)
+		if currentChecksum == latestChecksum {
+			L_debug("setup: template decision",
+				"status", "unchanged_current_template",
+				"file", spec.Name,
+			)
+			continue
+		}
+
+		if !templateHasKnownChecksum(spec.Name, currentChecksum) {
+			L_debug("setup: template decision",
+				"status", "skipped_customized_template",
+				"file", spec.Name,
+			)
+			continue
+		}
+
+		if err := writeTemplate(destPath, spec.Name, templateContent); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			L_warn("setup: failed to update stock template", "file", spec.Name, "error", err)
+			continue
+		}
+
+		L_debug("setup: template decision",
+			"status", "updated_stock_template",
+			"file", spec.Name,
+		)
+	}
+
+	return firstErr
+}
+
+func writeTemplate(destPath, templateName, content string) error {
+	if content == "" {
+		var err error
+		content, err = LoadTemplateStripped(templateName)
+		if err != nil {
+			return fmt.Errorf("failed to load template %s: %w", templateName, err)
+		}
+	}
+
+	if err := os.WriteFile(destPath, []byte(content), 0o600); err != nil {
+		return fmt.Errorf("failed to write %s: %w", destPath, err)
+	}
+
+	L_debug("setup: wrote template", "file", destPath)
+	return nil
+}
+
+func checksumBytes(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
+}
+
+func checksumString(content string) string {
+	return checksumBytes([]byte(content))
 }
 
 // ExpandPath expands ~ to home directory

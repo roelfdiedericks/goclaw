@@ -38,6 +38,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/configapply"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
+	"github.com/roelfdiedericks/goclaw/internal/delivery"
 	"github.com/roelfdiedericks/goclaw/internal/embeddings"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/hass"
@@ -123,6 +124,104 @@ var (
 	runtimeStopper     = stopDaemon
 	processExitWaiter  = waitForPIDExit
 )
+
+type postUpdateGateway interface {
+	DeliverSystemMessage(ctx context.Context, userID string, msg delivery.SystemMessage) delivery.Report
+	InvokeAgent(ctx context.Context, source, purpose, message, suppressOn string) error
+}
+
+func readPostUpdateMarkerFromEnv() (*update.PostUpdateMarker, error) {
+	return update.ReadPostUpdateMarkerFromEnv()
+}
+
+func ownerUsers(users *user.Registry) []*user.User {
+	if users == nil {
+		return nil
+	}
+
+	owners := make([]*user.User, 0, 1)
+	for _, u := range users.List() {
+		if u != nil && u.IsOwner() {
+			owners = append(owners, u)
+		}
+	}
+	return owners
+}
+
+func buildPostUpdateSystemMessage(state *update.PostUpdateMarker) string {
+	content := fmt.Sprintf("GoClaw restarted successfully after a self-update and is now running version %s", state.NewVersion)
+	if strings.TrimSpace(state.FromVersion) != "" {
+		content += fmt.Sprintf(" (was %s)", state.FromVersion)
+	}
+	if strings.TrimSpace(state.Channel) != "" {
+		content += fmt.Sprintf(" on the %s channel.", state.Channel)
+	} else {
+		content += "."
+	}
+	return content
+}
+
+func buildPostUpdateAgentPrompt(state *update.PostUpdateMarker) string {
+	return fmt.Sprintf(
+		"GoClaw restarted successfully after a self-update.\n\n"+
+			"A deterministic system status message has already been sent to the owner channel(s).\n\n"+
+			"Update details:\n"+
+			"- Previous version: %s\n"+
+			"- New version: %s\n"+
+			"- Channel: %s\n"+
+			"- Initiator: %s\n"+
+			"- Restart marker time: %s\n\n"+
+			"Send a concise user-facing follow-up acknowledging the successful update and restart. Mention the new version. Keep it short and useful. Do not reply with SILENT_OK.",
+		state.FromVersion,
+		state.NewVersion,
+		state.Channel,
+		state.Tool,
+		state.Time.UTC().Format(time.RFC3339),
+	)
+}
+
+func handlePostUpdateAfterStartup(ctx context.Context, gw postUpdateGateway, users *user.Registry, state *update.PostUpdateMarker) error {
+	if state == nil || !state.Notify {
+		return nil
+	}
+	defer update.ClearPostUpdateMarkerEnv()
+
+	owners := ownerUsers(users)
+	if len(owners) == 0 {
+		return fmt.Errorf("no owner users configured for post-update notification")
+	}
+
+	content := buildPostUpdateSystemMessage(state)
+	deliveredOwners := 0
+	for _, owner := range owners {
+		report := gw.DeliverSystemMessage(ctx, owner.ID, delivery.SystemMessage{
+			Kind:    delivery.SystemKindStatus,
+			Source:  "post-update",
+			Title:   "GoClaw Updated",
+			Content: content,
+		})
+		if report.Delivered() {
+			deliveredOwners++
+			continue
+		}
+		L_warn("post-update: deterministic owner notification was not delivered",
+			"user", owner.ID,
+			"results", len(report.Results),
+		)
+	}
+
+	L_info("post-update: deterministic owner notification attempted",
+		"owners", len(owners),
+		"deliveredOwners", deliveredOwners,
+		"newVersion", state.NewVersion,
+	)
+
+	if err := gw.InvokeAgent(ctx, "post_update", "agent", buildPostUpdateAgentPrompt(state), ""); err != nil {
+		return fmt.Errorf("invoke post-update follow-up: %w", err)
+	}
+
+	return nil
+}
 
 // loadRuntimePaths loads config and derives all runtime paths from session.storePath
 func loadRuntimePaths() (*RuntimePaths, error) {
@@ -2678,6 +2777,13 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	cfg := loadResult.Config
 	L_debug("config loaded", "path", loadResult.SourcePath)
 
+	postUpdateState, err := readPostUpdateMarkerFromEnv()
+	if err != nil {
+		L_warn("failed to read post-update marker", "error", err)
+		update.ClearPostUpdateMarkerEnv()
+		postUpdateState = nil
+	}
+
 	// Self-heal older installs by backfilling missing workspace templates
 	// and required subdirectories without overwriting existing files.
 	if err := setup.CreateWorkspace(cfg.Gateway.WorkingDir); err != nil {
@@ -2934,6 +3040,10 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		L_info("cron: disabled by configuration")
 	}
 
+	if err := handlePostUpdateAfterStartup(runCtx, gw, users, postUpdateState); err != nil {
+		L_warn("post-update handling failed", "error", err)
+	}
+
 	if useTUI {
 		// Run TUI mode
 		L_info("starting TUI mode")
@@ -3152,7 +3262,7 @@ func runUpdate(checkOnly bool, channel string, noRestart, force bool) error {
 
 	// Apply update
 	fmt.Println("Installing...")
-	if err := updater.Apply(binaryPath, noRestart); err != nil {
+	if err := updater.Apply(binaryPath, info, noRestart, "goclaw update"); err != nil {
 		return fmt.Errorf("failed to apply update: %w", err)
 	}
 

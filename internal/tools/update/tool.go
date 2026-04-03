@@ -160,7 +160,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 
 	// Apply update (will restart the process)
 	// Note: This will replace the current process, so we won't return
-	if err := updater.Apply(binaryPath, false); err != nil {
+	if err := updater.Apply(binaryPath, info, false, "goclaw_update"); err != nil {
 		L_error("goclaw_update: apply failed", "error", err)
 		return nil, fmt.Errorf("failed to apply update: %w", err)
 	}

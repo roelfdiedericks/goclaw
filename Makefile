@@ -1,4 +1,4 @@
-.PHONY: build embtest embtest-xla embtest-ort embtest-xla-deps-check embtest-ort-deps-check run debug trace clean install test sandbox-test sandbox-test-short sandbox-test-ci lint audit supply-chain-check install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release deps deps-check metadata goacp
+.PHONY: build embtest embtest-xla embtest-ort embtest-xla-deps-check embtest-ort-deps-check run debug trace clean install test sandbox-test sandbox-test-short sandbox-test-ci lint audit supply-chain-check install-lint-tools skills-update skills-check changelog release-check release release-monitor re-release deps deps-check metadata goacp template-manifest
 
 SHELL := /bin/bash
 UNAME_S := $(shell uname -s)
@@ -55,7 +55,16 @@ ifeq ($(SKIP_DEPS_CHECK),1)
 BUILD_DEPS_CHECK :=
 endif
 
-build: $(BUILD_DEPS_CHECK)
+TEMPLATE_SOURCES := $(wildcard internal/setup/templates/*.md)
+TEMPLATE_MANIFEST := internal/setup/template_manifest_generated.go
+TEMPLATE_MANIFEST_GEN_SOURCES := $(wildcard cmd/manifestgen/*.go)
+
+$(TEMPLATE_MANIFEST): $(TEMPLATE_SOURCES) $(TEMPLATE_MANIFEST_GEN_SOURCES)
+	go run ./cmd/manifestgen -out $(TEMPLATE_MANIFEST)
+
+template-manifest: $(TEMPLATE_MANIFEST)
+
+build: $(BUILD_DEPS_CHECK) $(TEMPLATE_MANIFEST)
 	go build -o $(BINARY) ./cmd/goclaw
 
 embtest:
@@ -201,7 +210,7 @@ metadata:
 goacp:
 	go run ./cmd/goacp $(ARGS)
 
-test:
+test: $(TEMPLATE_MANIFEST)
 	go test -v -vet=off ./...
 
 sandbox-test:
