@@ -148,6 +148,8 @@ func renderField(sb *strings.Builder, field forms.Field, prefix string) error {
 		renderSlider(sb, field, inputID, fieldKey, fieldPath)
 	case forms.Select:
 		renderSelect(sb, field, inputID, fieldKey, fieldPath)
+	case forms.SelectWithCustom:
+		renderSelectWithCustom(sb, field, inputID, fieldKey, fieldPath)
 	case forms.TextArea:
 		renderTextArea(sb, field, inputID, fieldKey, fieldPath)
 	case forms.StringList:
@@ -264,6 +266,28 @@ func renderSelect(sb *strings.Builder, field forms.Field, inputID, fieldKey, fie
 			template.HTMLEscapeString(opt.Label)))
 	}
 	sb.WriteString("      </select>\n")
+	renderFieldError(sb, fieldKey)
+}
+
+func renderSelectWithCustom(sb *strings.Builder, field forms.Field, inputID, fieldKey, fieldPath string) {
+	sb.WriteString(fmt.Sprintf(`      <div class="js-select-custom" id="%s" data-field-path="%s">`+"\n",
+		inputID, template.HTMLEscapeString(fieldPath)))
+	sb.WriteString(fmt.Sprintf(`        <select class="form-select js-select-custom-select" data-field-path="%s">`+"\n",
+		template.HTMLEscapeString(fieldPath)))
+	for _, opt := range field.Options {
+		sb.WriteString(fmt.Sprintf(`          <option value="%s">%s</option>`+"\n",
+			template.HTMLEscapeString(opt.Value),
+			template.HTMLEscapeString(opt.Label)))
+	}
+	sb.WriteString(`          <option value="__custom__">Custom...</option>` + "\n")
+	sb.WriteString("        </select>\n")
+	sb.WriteString(fmt.Sprintf(`        <div class="mt-2 js-select-custom-input-wrap d-none"><input type="text" class="form-control js-select-custom-input" data-field-path="%s"`,
+		template.HTMLEscapeString(fieldPath)))
+	if field.Placeholder != "" {
+		sb.WriteString(fmt.Sprintf(` placeholder="%s"`, template.HTMLEscapeString(field.Placeholder)))
+	}
+	sb.WriteString(`></div>` + "\n")
+	sb.WriteString("      </div>\n")
 	renderFieldError(sb, fieldKey)
 }
 

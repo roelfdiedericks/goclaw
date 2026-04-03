@@ -180,7 +180,6 @@ GoClaw is configured via `goclaw.json` in the working directory.
     "workingDir": "~/.goclaw/workspace",
     "logFile": "~/.goclaw/goclaw.log",
     "pidFile": "~/.goclaw/goclaw.pid",
-    "acpCursorModel": "claude-4.6-opus-high-thinking",
     "delegatedRuns": {
       "enabled": true,
       "maxSpawnDepth": 4,
@@ -188,6 +187,15 @@ GoClaw is configured via `goclaw.json` in the working directory.
       "maxConcurrentRuns": 16,
       "defaultTimeoutSeconds": 300,
       "maxTimeoutSeconds": 1800
+    }
+  },
+
+  "acp": {
+    "defaultDriver": "cursor",
+    "drivers": {
+      "cursor": {
+        "model": "claude-4.6-opus-high-thinking"
+      }
     }
   }
 }
@@ -244,6 +252,7 @@ GoClaw is configured via `goclaw.json` in the working directory.
 |---------|-------------|---------------|
 | `media` | Temporary media storage | Below |
 | `promptCache` | Workspace file caching | Below |
+| `acp` | ACP driver defaults and model preferences | [ACP Sessions](acp.md) |
 | `gateway` | Server settings | Below |
 | `auth` | Role elevation via external script | [User Auth Tool](tools/user-auth.md) |
 | `roles` | Role-based access control definitions | [Roles](roles.md) |
@@ -469,7 +478,6 @@ The prompt cache watches workspace identity files (SOUL.md, AGENTS.md, etc.) for
     "workingDir": "~/.goclaw/workspace",
     "logFile": "~/.goclaw/goclaw.log",
     "pidFile": "~/.goclaw/goclaw.pid",
-    "acpCursorModel": "claude-4.6-opus-high-thinking",
     "delegatedRuns": {
       "enabled": true,
       "maxSpawnDepth": 4,
@@ -485,7 +493,6 @@ The prompt cache watches workspace identity files (SOUL.md, AGENTS.md, etc.) for
 | `workingDir` | string | `~/.goclaw/workspace` | Workspace directory |
 | `logFile` | string | - | Log file path |
 | `pidFile` | string | - | PID file path |
-| `acpCursorModel` | string | `claude-4.6-opus-high-thinking` | Friendly model alias to apply after attaching to a Cursor ACP session |
 | `delegatedRuns.enabled` | bool | `true` | Enable subagents, fanout, and other delegated background runs |
 | `delegatedRuns.maxSpawnDepth` | int | `4` | Max parent-child subagent depth (0 = unlimited) |
 | `delegatedRuns.maxActiveChildrenPerParent` | int | `4` | Max active child runs per parent (0 = unlimited) |
@@ -495,9 +502,20 @@ The prompt cache watches workspace identity files (SOUL.md, AGENTS.md, etc.) for
 
 ### ACP Sessions
 
-ACP is currently a runtime session feature rather than a normal `goclaw.json` section.
+ACP now has its own top-level `acp` config section in `goclaw.json` and its own dedicated setup-editor section in both the web UI and the TUI.
 
-There is no top-level `acp` config block to enable. Instead, ACP is started per session with `/acp attach`, then controlled through `/acp` commands or the agent-facing ACP tools.
+```json
+{
+  "acp": {
+    "defaultDriver": "cursor",
+    "drivers": {
+      "cursor": {
+        "model": "claude-4.6-opus-high-thinking"
+      }
+    }
+  }
+}
+```
 
 Current scope:
 
@@ -505,9 +523,16 @@ Current scope:
 - local stdio transport only
 - session-scoped attachment rather than global process configuration
 
-The preferred Cursor ACP model is configurable through `gateway.acpCursorModel`. If you omit it, GoClaw defaults to `claude-4.6-opus-high-thinking`.
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `defaultDriver` | string | `cursor` | ACP driver used when attach omits an explicit driver |
+| `drivers.cursor.model` | string | `claude-4.6-opus-high-thinking` | Friendly Cursor model alias to apply after attach |
 
-This value is a friendly alias, not the raw internal Cursor ACP option value. GoClaw resolves it against the live model options advertised by the attached Cursor session and applies it right after `/acp attach`.
+The saved Cursor model is still a single effective string. The setup editors offer a curated known-model dropdown plus a custom entry path, but only the final `drivers.cursor.model` string is written into config.
+
+The `Refresh Cursor Models` action rebuilds an in-memory model catalog for the current running process. That refreshed catalog is used to repopulate the dropdown in the setup editors, but the catalog itself is not persisted into `goclaw.json`.
+
+Refresh failures leave the currently visible list unchanged. The refresh action is always shown; if a driver cannot refresh models live, the action returns a normal error.
 
 If you are looking for ACP workflow and command details, see [ACP Sessions](acp.md) and [Channel Commands](commands.md).
 

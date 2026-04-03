@@ -4,12 +4,11 @@ package types
 
 // GatewayConfig contains gateway server settings
 type GatewayConfig struct {
-	LogFile        string              `json:"logFile"`
-	PIDFile        string              `json:"pidFile"`
-	WorkingDir     string              `json:"workingDir"`
-	ACPCursorModel string              `json:"acpCursorModel" default:"claude-4.6-opus-high-thinking"`
-	DelegatedRuns  DelegatedRunsConfig `json:"delegatedRuns"`
-	ToolExecution  ToolExecutionConfig `json:"toolExecution"`
+	LogFile       string              `json:"logFile"`
+	PIDFile       string              `json:"pidFile"`
+	WorkingDir    string              `json:"workingDir"`
+	DelegatedRuns DelegatedRunsConfig `json:"delegatedRuns"`
+	ToolExecution ToolExecutionConfig `json:"toolExecution"`
 }
 
 // DelegatedRunsConfig controls delegated runner behavior and rollout.

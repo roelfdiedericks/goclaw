@@ -327,6 +327,8 @@
             this.$errorAlert.find('.btn-close').on('click', () => hideAlert(this.$errorAlert));
             this.$successAlert.find('.btn-close').on('click', () => hideAlert(this.$successAlert));
             this.$formContent.on('input change', '.js-bound-field', (event) => this.handleBoundFieldChange(event));
+            this.$formContent.on('change', '.js-select-custom-select', (event) => this.handleSelectCustomChange(event));
+            this.$formContent.on('input change', '.js-select-custom-input', (event) => this.handleSelectCustomInput(event));
             this.$formContent.on('click', '.js-model-chain-add', (event) => this.openModelModal(
                 $(event.currentTarget).data('field-path'),
                 $(event.currentTarget).data('purpose') || ''
@@ -524,6 +526,7 @@
             this.populateBoundFields(this.$formContent, this.formData);
             this.applyShowWhen(this.$formContent, this.formData);
             this.renderFieldErrors(this.$formContent, this.fieldErrors);
+            this.renderSelectCustomWidgets();
             this.initModelWidgets();
             this.renderProviderLists();
             this.renderRolesLists();
@@ -698,6 +701,7 @@
 
         renderFieldErrors($container, errors) {
             $container.find('.js-bound-field').removeClass('is-invalid');
+            $container.find('.js-select-custom-select, .js-select-custom-input').removeClass('is-invalid');
             $container.find('[data-field-error]').each((_, el) => {
                 const $error = $(el);
                 const fieldPath = $error.data('field-error');
@@ -705,6 +709,8 @@
                 $error.toggleClass('d-none', !message).text(message || '');
                 if (message) {
                     $container.find(`.js-bound-field[data-bind="${fieldPath}"]`).addClass('is-invalid');
+                    $container.find(`.js-select-custom[data-field-path="${fieldPath}"] .js-select-custom-select`).addClass('is-invalid');
+                    $container.find(`.js-select-custom[data-field-path="${fieldPath}"] .js-select-custom-input`).addClass('is-invalid');
                 }
             });
         }
@@ -1580,6 +1586,62 @@
                 this.ensureModelMetaForField(fieldPath, purpose);
                 this.renderModelChain(fieldPath);
             });
+        }
+
+        renderSelectCustomWidgets() {
+            this.$formContent.find('.js-select-custom').each((_, el) => {
+                const $widget = $(el);
+                const fieldPath = $widget.data('field-path');
+                const currentValue = getByPath(this.formData, fieldPath);
+                const currentText = currentValue == null ? '' : String(currentValue);
+                const $select = $widget.find('.js-select-custom-select');
+                const $inputWrap = $widget.find('.js-select-custom-input-wrap');
+                const $input = $widget.find('.js-select-custom-input');
+                const hasKnownOption = $select.find(`option[value="${CSS.escape(currentText)}"]`).length > 0;
+                if (currentText && !hasKnownOption) {
+                    $select.val('__custom__');
+                    $input.val(currentText);
+                    $inputWrap.removeClass('d-none');
+                } else {
+                    $select.val(hasKnownOption ? currentText : ($select.find('option').first().val() || ''));
+                    $input.val('');
+                    $inputWrap.toggleClass('d-none', $select.val() !== '__custom__');
+                }
+            });
+        }
+
+        handleSelectCustomChange(event) {
+            const $select = $(event.currentTarget);
+            const fieldPath = $select.data('field-path');
+            const $widget = $select.closest('.js-select-custom');
+            const $inputWrap = $widget.find('.js-select-custom-input-wrap');
+            const $input = $widget.find('.js-select-custom-input');
+            const selected = String($select.val() || '');
+            if (selected === '__custom__') {
+                $inputWrap.removeClass('d-none');
+                setByPath(this.formData, fieldPath, String($input.val() || ''));
+            } else {
+                $inputWrap.addClass('d-none');
+                setByPath(this.formData, fieldPath, selected);
+            }
+            this.sectionDrafts[this.currentSection] = deepClone(this.formData);
+            this.dirtyState[this.currentSection] = this.currentDirty();
+            this.fieldErrors[fieldPath] = '';
+            this.applyShowWhen(this.$formContent, this.formData);
+            this.renderFieldErrors(this.$formContent, this.fieldErrors);
+            this.syncTopBar();
+        }
+
+        handleSelectCustomInput(event) {
+            const $input = $(event.currentTarget);
+            const fieldPath = $input.data('field-path');
+            setByPath(this.formData, fieldPath, String($input.val() || ''));
+            this.sectionDrafts[this.currentSection] = deepClone(this.formData);
+            this.dirtyState[this.currentSection] = this.currentDirty();
+            this.fieldErrors[fieldPath] = '';
+            this.applyShowWhen(this.$formContent, this.formData);
+            this.renderFieldErrors(this.$formContent, this.fieldErrors);
+            this.syncTopBar();
         }
 
         ensureModelMetaForField(fieldPath, purpose) {

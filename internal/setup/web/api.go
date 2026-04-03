@@ -89,7 +89,11 @@ func (a *API) HandleSectionAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := bus.SendCommandWithSource(section.ID, actionDef.Name, nil, "web", "")
+	commandName := actionDef.Name
+	if strings.TrimSpace(actionDef.Command) != "" {
+		commandName = strings.TrimSpace(actionDef.Command)
+	}
+	result := bus.SendCommandWithSource(section.ID, commandName, actionDef.Payload, "web", "")
 	if result.Error != nil {
 		writeJSON(w, http.StatusBadRequest, APIResponse{
 			Success: false,

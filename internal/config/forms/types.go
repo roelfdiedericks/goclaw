@@ -6,17 +6,18 @@ package forms
 type FieldType int
 
 const (
-	Toggle       FieldType = iota // Boolean on/off
-	Text                          // Single-line text input
-	Number                        // Numeric input (int or float)
-	Slider                        // Slider input (web) / stepped numeric input (TUI)
-	Secret                        // Password/token input (masked)
-	Select                        // Dropdown selection
-	TextArea                      // Multi-line text input
-	StringList                    // Comma-separated string list (for []string fields)
-	ModelChain                    // Ordered list of model references with rich UI (drag-drop, details panel)
-	ProviderList                  // Map of LLM provider configs with inline add/edit UI
-	RolesList                     // Map of role permission configs with inline add/edit UI
+	Toggle           FieldType = iota // Boolean on/off
+	Text                              // Single-line text input
+	Number                            // Numeric input (int or float)
+	Slider                            // Slider input (web) / stepped numeric input (TUI)
+	Secret                            // Password/token input (masked)
+	Select                            // Dropdown selection
+	SelectWithCustom                  // Dropdown with custom text entry, binds to one string field
+	TextArea                          // Multi-line text input
+	StringList                        // Comma-separated string list (for []string fields)
+	ModelChain                        // Ordered list of model references with rich UI (drag-drop, details panel)
+	ProviderList                      // Map of LLM provider configs with inline add/edit UI
+	RolesList                         // Map of role permission configs with inline add/edit UI
 )
 
 // FormDef defines a form for editing a config struct
@@ -70,10 +71,13 @@ type Option struct {
 
 // ActionDef defines an action button on the form
 type ActionDef struct {
-	Name    string // Action name (used with action bus)
-	Label   string // Button label
-	Desc    string // Tooltip/description
-	Confirm string // Confirmation prompt (empty = no confirm)
+	Name            string // Unique UI action name
+	Command         string // Optional bus command name override (defaults to Name)
+	Label           string // Button label
+	Desc            string // Tooltip/description
+	Confirm         string // Confirmation prompt (empty = no confirm)
+	ReloadOnSuccess bool   // Rebuild the form after a successful action
+	Payload         any    // Optional static command payload override
 }
 
 // Configurable is implemented by config structs that provide form definitions

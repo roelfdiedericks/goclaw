@@ -108,11 +108,22 @@ func BuildFormContent(def FormDef, value any, component string, onResult func(Tv
 		actionCopy := action
 		buttonBar.AddButton(action.Label, func() {
 			logging.L_info("action: running", "action", actionCopy.Label)
-			res := bus.SendCommand(component, actionCopy.Name, value)
+			commandName := actionCopy.Name
+			if strings.TrimSpace(actionCopy.Command) != "" {
+				commandName = strings.TrimSpace(actionCopy.Command)
+			}
+			payload := any(value)
+			if actionCopy.Payload != nil {
+				payload = actionCopy.Payload
+			}
+			res := bus.SendCommand(component, commandName, payload)
 			if res.Error != nil {
 				logging.L_error("action: failed", "action", actionCopy.Label, "error", res.Message)
 			} else {
 				logging.L_info("action: completed", "action", actionCopy.Label, "result", res.Message)
+				if actionCopy.ReloadOnSuccess {
+					rebuildForm()
+				}
 			}
 		})
 	}
@@ -381,11 +392,22 @@ func RenderTview(def FormDef, value any, component string) (TviewResult, error) 
 		buttonBar.AddButton(action.Label, func() {
 			logging.L_info("action: running", "action", actionCopy.Label)
 
-			res := bus.SendCommand(component, actionCopy.Name, value)
+			commandName := actionCopy.Name
+			if strings.TrimSpace(actionCopy.Command) != "" {
+				commandName = strings.TrimSpace(actionCopy.Command)
+			}
+			payload := any(value)
+			if actionCopy.Payload != nil {
+				payload = actionCopy.Payload
+			}
+			res := bus.SendCommand(component, commandName, payload)
 			if res.Error != nil {
 				logging.L_error("action: failed", "action", actionCopy.Label, "error", res.Message)
 			} else {
 				logging.L_info("action: completed", "action", actionCopy.Label, "result", res.Message)
+				if actionCopy.ReloadOnSuccess {
+					rebuildForm()
+				}
 			}
 		})
 	}
@@ -760,6 +782,53 @@ func addFieldToFormInternal(form *tview.Form, field Field, fv reflect.Value, aft
 				afterChange()
 			}
 		})
+
+	case SelectWithCustom:
+		currentVal := fmt.Sprintf("%v", fv.Interface())
+		options := make([]string, 0, len(field.Options)+1)
+		currentIdx := len(field.Options)
+		customActive := true
+		for i, opt := range field.Options {
+			options = append(options, opt.Label)
+			if opt.Value == currentVal {
+				currentIdx = i
+				customActive = false
+			}
+		}
+		options = append(options, "Custom...")
+		dropdown := tview.NewDropDown()
+		dropdown.SetLabel(label + " ")
+		dropdown.SetOptions(options, nil)
+		dropdown.SetCurrentOption(currentIdx)
+		customValue := currentVal
+		inputLabel := field.Title + " (custom) "
+		input := tview.NewInputField()
+		input.SetLabel(inputLabel)
+		input.SetText(customValue)
+		input.SetFieldWidth(0)
+		input.SetChangedFunc(func(text string) {
+			customValue = text
+			if customActive && fv.CanSet() {
+				fv.SetString(text)
+			}
+		})
+		dropdown.SetSelectedFunc(func(option string, index int) {
+			if !fv.CanSet() {
+				return
+			}
+			if index >= 0 && index < len(field.Options) {
+				customActive = false
+				fv.SetString(field.Options[index].Value)
+			} else {
+				customActive = true
+				fv.SetString(customValue)
+			}
+			if afterChange != nil {
+				afterChange()
+			}
+		})
+		form.AddFormItem(dropdown)
+		form.AddFormItem(input)
 
 	case TextArea:
 		val := fmt.Sprintf("%v", fv.Interface())

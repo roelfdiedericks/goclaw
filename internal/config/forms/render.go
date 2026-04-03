@@ -149,7 +149,7 @@ func (b fieldBinding) Apply() error {
 		if v, ok := b.FormValue.(*string); ok {
 			return setNumericFieldScaled(b.FieldValue, *v, b.Scale)
 		}
-	case Select:
+	case Select, SelectWithCustom:
 		if v, ok := b.FormValue.(*string); ok {
 			b.FieldValue.SetString(*v)
 		}
@@ -243,6 +243,15 @@ func renderField(def Field, rv reflect.Value) (huh.Field, fieldBinding, error) {
 			Title(def.Title).
 			Description(def.Desc).
 			Options(options...).
+			Value(&val)
+
+	case SelectWithCustom:
+		val := fmt.Sprintf("%v", fv.Interface())
+		binding.FormValue = &val
+		field = huh.NewInput().
+			Title(def.Title).
+			Description(def.Desc).
+			Placeholder(def.Placeholder).
 			Value(&val)
 
 	case TextArea:

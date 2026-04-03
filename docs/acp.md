@@ -21,9 +21,30 @@ GoClaw currently supports:
 - agent-facing ACP control and inspection tools
 - interactive Cursor extension flows surfaced in HTTP, Telegram, and TUI
 
-By default, GoClaw applies the friendly model alias `claude-4.6-opus-high-thinking` after attaching to a Cursor ACP session. You can override that preferred model with `gateway.acpCursorModel` in `goclaw.json`.
+By default, GoClaw applies the friendly model alias `claude-4.6-opus-high-thinking` after attaching to a Cursor ACP session. You can override that preferred model with `acp.drivers.cursor.model` in `goclaw.json` or through the dedicated `Configuration -> ACP` editor section.
 
 ACP attachment is tied to the GoClaw session key, not to one specific UI tab or one specific chat transport. For owner sessions, that usually means the attached ACP session follows the shared `primary` session.
+
+## Configuration
+
+ACP preferences now live under the top-level `acp` config tree rather than under `gateway`:
+
+```json
+{
+  "acp": {
+    "defaultDriver": "cursor",
+    "drivers": {
+      "cursor": {
+        "model": "claude-4.6-opus-high-thinking"
+      }
+    }
+  }
+}
+```
+
+Both setup editors expose this through a dedicated `ACP` section. For Cursor, the UI offers a curated model dropdown plus a custom entry path while still saving only the final `drivers.cursor.model` string.
+
+The `Refresh Cursor Models` action rebuilds the in-memory model catalog for the current running process and then reloads the ACP form so the dropdown reflects the refreshed list. The catalog itself is not written back into `goclaw.json`.
 
 ## Common Workflow
 
@@ -35,7 +56,7 @@ Attach a new Cursor ACP session from the current GoClaw session:
 /acp attach
 ```
 
-When attach succeeds, GoClaw also tries to apply the configured `gateway.acpCursorModel` alias to that ACP session. If the attached Cursor session does not expose that alias, attach fails with a clear error instead of silently picking something else.
+When attach succeeds, GoClaw also tries to apply the configured `acp.drivers.cursor.model` alias to that ACP session. If the attached Cursor session does not expose that alias, attach fails with a clear error instead of silently picking something else.
 
 Attach with an explicit working directory or startup mode:
 

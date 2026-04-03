@@ -36,7 +36,6 @@ func ConfigFormDef() forms.FormDef {
 					{Name: "gateway.logFile", Title: "Log File", Type: forms.Text, Desc: "Path to log file"},
 					{Name: "gateway.pidFile", Title: "PID File", Type: forms.Text, Desc: "Path to PID file"},
 					{Name: "gateway.workingDir", Title: "Working Directory", Type: forms.Text, Desc: "Working directory for sessions"},
-					{Name: "gateway.acpCursorModel", Title: "ACP Cursor Model", Type: forms.Text, Default: "claude-4.6-opus-high-thinking", Desc: "Friendly ACP model alias to apply after attaching to a Cursor ACP session"},
 				},
 			},
 			{

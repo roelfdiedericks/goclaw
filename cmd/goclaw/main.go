@@ -2813,7 +2813,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	}
 	L_info("gateway initialized")
 
-	acp.InitManager(cfg.Gateway.WorkingDir, cfg.Gateway.ACPCursorModel)
+	acp.InitManager(cfg.Gateway.WorkingDir, cfg.ACP.Drivers.Cursor.Model)
 
 	// Register all tools now that gateway and managers are ready
 	messageTool, transcriptMgr := registerTools(toolsReg, cfg, gw, version)
@@ -2828,6 +2828,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	skills.RegisterCommands()
 	cron.RegisterCommands()
 	auth.RegisterCommands()
+	acp.RegisterCommands()
 	gateway.RegisterCommands()
 	transcript.RegisterCommands()
 	llm.RegisterCommands()

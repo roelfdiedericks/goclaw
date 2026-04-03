@@ -139,10 +139,12 @@ See [Delegated Runs](docs/delegated-runs.md) for the architecture and operationa
 GoClaw can attach to a live Cursor ACP session, steer it from GoClaw, and surface Cursor interactive flows through HTTP, Telegram, and TUI.
 
 - **Session-scoped attachment** — attach a GoClaw session to Cursor when needed
-- **Configurable ACP model alias** — defaults to `claude-4.6-opus-high-thinking`
+- **Dedicated ACP config section** — configure ACP separately from generic gateway settings
+- **Configurable ACP model alias** — stored at `acp.drivers.cursor.model`, defaults to `claude-4.6-opus-high-thinking`
+- **Refreshable model catalog** — setup editors can refresh the in-memory Cursor model list for the current process
 - **Interactive UX** — HTTP cards, Telegram prompts or polls, and TUI notices
 
-See [ACP Sessions](docs/acp.md) for the workflow and [ACP Tools](docs/tools/acp.md) for the agent-facing tool reference.
+See [ACP Sessions](docs/acp.md) for the workflow, [Configuration Reference](docs/configuration.md#acp-sessions) for the config shape, and [ACP Tools](docs/tools/acp.md) for the agent-facing tool reference.
 
 ---
 

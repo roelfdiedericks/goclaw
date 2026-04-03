@@ -3,6 +3,7 @@ package web
 import (
 	"sync"
 
+	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/auth"
 	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
 	telegramconfig "github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
@@ -31,6 +32,7 @@ func registerWebActionCommands() {
 		httpconfig.RegisterCommands()
 		tuiconfig.RegisterCommands()
 		llm.RegisterCommands()
+		acp.RegisterCommands()
 		gateway.RegisterCommands()
 		session.RegisterCommands()
 		media.RegisterCommands()

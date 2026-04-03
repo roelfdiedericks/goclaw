@@ -14,6 +14,20 @@ type Driver interface {
 	LaunchSpec(ctx context.Context, req LaunchSpecRequest) (LaunchSpec, error)
 }
 
+type ModelCatalogProvider interface {
+	KnownModelCatalog() *ACPModelState
+	CachedModelCatalog() *ACPModelState
+	EffectiveModelCatalog() *ACPModelState
+}
+
+type ModelCatalogRefreshRequest struct {
+	CWD string
+}
+
+type ModelCatalogRefresher interface {
+	RefreshModelCatalog(ctx context.Context, req ModelCatalogRefreshRequest) (*ACPModelState, error)
+}
+
 type AuthMethodProvider interface {
 	AuthMethodID() string
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/creasty/defaults"
+	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/auth"
 	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
 	telegramconfig "github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
@@ -175,6 +176,7 @@ type ChannelsConfig struct {
 // Config represents the merged goclaw configuration
 type Config struct {
 	Gateway       gwtypes.GatewayConfig       `json:"gateway"`
+	ACP           acp.Config                  `json:"acp"`
 	Agent         gwtypes.AgentIdentityConfig `json:"agent"`
 	LLM           llm.LLMConfig               `json:"llm"`
 	VoiceLLM      voicellm.Config             `json:"voicellm"`      // Real-time voice LLM configuration
@@ -248,6 +250,10 @@ func Load() (*LoadResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("migrate sandbox config: %w", err)
 	}
+	goclawData, err = migrateACPConfigJSON(goclawData)
+	if err != nil {
+		return nil, fmt.Errorf("migrate ACP config: %w", err)
+	}
 
 	// Unmarshal JSON - only overwrites fields actually present in the JSON
 	if err := json.Unmarshal(goclawData, cfg); err != nil {
@@ -315,6 +321,10 @@ func LoadFromPath(path string) (*LoadResult, error) {
 	data, err = migrateSandboxConfigJSON(data)
 	if err != nil {
 		return nil, fmt.Errorf("migrate sandbox config: %w", err)
+	}
+	data, err = migrateACPConfigJSON(data)
+	if err != nil {
+		return nil, fmt.Errorf("migrate ACP config: %w", err)
 	}
 	if err := json.Unmarshal(data, cfg); err != nil {
 		logging.L_error("config: failed to parse explicit config path", "path", absPath, "error", err)
@@ -418,6 +428,10 @@ func LoadRuntime() (*LoadResult, error) {
 		return nil, fmt.Errorf("migrate sandbox config: %w", err)
 	}
 	goclawData = migratedData
+	goclawData, err = migrateACPConfigJSON(goclawData)
+	if err != nil {
+		return nil, fmt.Errorf("migrate ACP config: %w", err)
+	}
 
 	if err := json.Unmarshal(goclawData, cfg); err != nil {
 		logging.L_error("config: failed to parse goclaw.json", "path", goclawPath, "error", err)
@@ -588,6 +602,42 @@ func migrateSandboxConfigJSON(data []byte) ([]byte, error) {
 	return json.Marshal(raw)
 }
 
+func migrateACPConfigJSON(data []byte) ([]byte, error) {
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	gatewayNode, ok := raw["gateway"].(map[string]any)
+	if !ok {
+		return data, nil
+	}
+	legacyModel, _ := gatewayNode["acpCursorModel"].(string)
+	legacyModel = strings.TrimSpace(legacyModel)
+	if legacyModel == "" {
+		return data, nil
+	}
+	acpNode, _ := raw["acp"].(map[string]any)
+	if acpNode == nil {
+		acpNode = map[string]any{}
+		raw["acp"] = acpNode
+	}
+	driversNode, _ := acpNode["drivers"].(map[string]any)
+	if driversNode == nil {
+		driversNode = map[string]any{}
+		acpNode["drivers"] = driversNode
+	}
+	cursorNode, _ := driversNode["cursor"].(map[string]any)
+	if cursorNode == nil {
+		cursorNode = map[string]any{}
+		driversNode["cursor"] = cursorNode
+	}
+	currentModel, _ := cursorNode["model"].(string)
+	if strings.TrimSpace(currentModel) == "" {
+		cursorNode["model"] = legacyModel
+	}
+	return json.Marshal(raw)
+}
+
 func moveIfMissing(dst map[string]any, dstKey string, src map[string]any, srcKey string) {
 	if _, ok := dst[dstKey]; ok {
 		return
@@ -751,6 +801,7 @@ func isPathLikeField(fieldInfo reflect.StructField) bool {
 type DefaultConfigTemplate struct {
 	LLM      DefaultLLMTemplate      `json:"llm"`
 	Gateway  DefaultGatewayTemplate  `json:"gateway,omitempty"`
+	ACP      acp.Config              `json:"acp,omitempty"`
 	Channels DefaultChannelsTemplate `json:"channels,omitempty"`
 	Roles    user.RolesConfig        `json:"roles,omitempty"`
 }
@@ -762,8 +813,7 @@ type DefaultLLMTemplate struct {
 }
 
 type DefaultGatewayTemplate struct {
-	WorkingDir     string `json:"workingDir,omitempty"`
-	ACPCursorModel string `json:"acpCursorModel,omitempty"`
+	WorkingDir string `json:"workingDir,omitempty"`
 }
 
 type DefaultChannelsTemplate struct {
@@ -800,8 +850,15 @@ func DefaultConfig() *DefaultConfigTemplate {
 			},
 		},
 		Gateway: DefaultGatewayTemplate{
-			WorkingDir:     "~/.goclaw/workspace",
-			ACPCursorModel: "claude-4.6-opus-high-thinking",
+			WorkingDir: "~/.goclaw/workspace",
+		},
+		ACP: acp.Config{
+			DefaultDriver: acp.DriverCursor,
+			Drivers: acp.DriversConfig{
+				Cursor: acp.CursorConfig{
+					Model: acp.DefaultCursorModel,
+				},
+			},
 		},
 		Channels: DefaultChannelsTemplate{
 			HTTP: DefaultHTTPTemplate{

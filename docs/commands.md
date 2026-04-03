@@ -229,7 +229,7 @@ Attach, inspect, and control ACP sessions from any text channel.
 
 **Behavior notes:**
 - The default ACP driver is `cursor`
-- `/acp attach` tries to apply the configured `gateway.acpCursorModel` alias immediately after attaching
+- `/acp attach` tries to apply the configured `acp.drivers.cursor.model` alias immediately after attaching
 - `/acp model list` shows the live friendly aliases exposed by the attached Cursor ACP session
 - `/acp model <friendly-id>` switches the current ACP session to that alias
 - `/acp steer` now detaches by default after the prompt completes

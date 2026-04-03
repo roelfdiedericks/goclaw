@@ -2,6 +2,7 @@
 package web
 
 import (
+	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/auth"
 	"github.com/roelfdiedericks/goclaw/internal/channels/http/config"
 	telegramconfig "github.com/roelfdiedericks/goclaw/internal/channels/telegram/config"
@@ -31,6 +32,7 @@ var formDefRegistry = map[string]FormDefGetter{
 	"llm-providers": llmProvidersFormDef,
 	"llm":           llm.ConfigFormDef,
 	"voicellm":      voicellm.ConfigFormDef,
+	"acp":           acp.ConfigFormDef,
 	"gateway":       gateway.ConfigFormDef,
 	"session":       session.ConfigFormDef,
 

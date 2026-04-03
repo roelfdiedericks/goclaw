@@ -29,7 +29,7 @@ Supported actions:
 - `set_model`
 - `steer`
 
-In the current MVP, `attach` targets the Cursor driver over local stdio. After attach, GoClaw applies the configured `gateway.acpCursorModel` alias and defaults to `claude-4.6-opus-high-thinking`.
+In the current MVP, `attach` targets the Cursor driver over local stdio. After attach, GoClaw applies the configured `acp.drivers.cursor.model` alias and defaults to `claude-4.6-opus-high-thinking`.
 
 ### `attach`
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/rivo/tview"
+	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/auth"
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
@@ -70,6 +71,7 @@ func (e *EditorTview) Run() error {
 	sandbox.RegisterCommands()
 	cron.RegisterCommands()
 	auth.RegisterCommands()
+	acp.RegisterCommands()
 	gateway.RegisterCommands()
 	transcript.RegisterCommands()
 	stt.RegisterCommands()
@@ -130,6 +132,7 @@ func (e *EditorTview) createMenu() *forms.MenuListResult {
 	items := []forms.MenuItem{
 		{Label: "LLM Configuration", OnSelect: e.editLLM},
 		{Label: "VoiceLLM Configuration", OnSelect: e.editVoiceLLM},
+		{Label: "ACP Configuration", OnSelect: e.editACP},
 		{Label: "Gateway Settings", OnSelect: e.editGateway},
 		{Label: "Session Management", OnSelect: e.editSession},
 		{IsSeparator: true, Label: "Channels"},
@@ -727,6 +730,32 @@ func (e *EditorTview) editGateway() {
 	}
 
 	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Gateway Settings"})
+	e.app.SetFormContent(content)
+}
+
+// editACP opens the ACP configuration form.
+func (e *EditorTview) editACP() {
+	L_info("editor: opening ACP config")
+
+	acpCfg := e.cfg.ACP
+	formDef := acp.ConfigFormDef()
+
+	content, err := forms.BuildFormContent(formDef, &acpCfg, "acp", func(result forms.TviewResult) {
+		if result == forms.ResultAccepted {
+			e.cfg.ACP = acpCfg
+			e.dirty = true
+			L_info("editor: ACP config updated")
+		} else {
+			L_info("editor: ACP config cancelled")
+		}
+		e.showMainMenu()
+	}, e.app.App())
+	if err != nil {
+		L_error("editor: ACP form error", "error", err)
+		return
+	}
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "ACP"})
 	e.app.SetFormContent(content)
 }
 
