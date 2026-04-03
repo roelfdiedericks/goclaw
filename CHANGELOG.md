@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.12] stable - 2026-04-03
+
 - setup/runtime: create missing workspace templates during onboarding and self-heal older installs without recreating `BOOTSTRAP.md` after `SOUL.md` exists
 - coding agents/acp: move Cursor ACP preferences into a dedicated top-level config section, add standalone web/TUI editor support, live model refresh, and compatibility mapping from legacy `gateway.acpCursorModel`
 - setup web UI: add Coding Agents and Web Search quick-task dashboard shortcuts, including deep-link expansion into `Tools -> Web Search`
+
 ## [0.1.11] stable - 2026-04-02
 
 - acp: add initial local stdio ACP session support with a first Cursor driver and goacp-backed extension probing
