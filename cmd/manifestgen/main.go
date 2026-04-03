@@ -59,7 +59,7 @@ func generateManifest(outPath, templatesDir string) error {
 		return err
 	}
 
-	if err := os.WriteFile(outPath, content, 0o644); err != nil {
+	if err := os.WriteFile(outPath, content, 0o600); err != nil {
 		return fmt.Errorf("write generated manifest: %w", err)
 	}
 	return nil
@@ -181,7 +181,7 @@ func readExistingManifestData(path string) (map[string]manifestEntry, error) {
 			continue
 		case "// " + dataEndMarker:
 			inBlock = false
-			break
+			continue
 		}
 		if !inBlock {
 			continue

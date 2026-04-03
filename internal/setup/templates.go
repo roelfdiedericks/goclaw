@@ -83,15 +83,6 @@ func autoUpdateTemplateSpecs() []WorkspaceTemplateSpec {
 	return specs
 }
 
-func templateSupportsAutoUpdate(name string) bool {
-	for _, spec := range workspaceTemplateSpecs {
-		if spec.Name == name {
-			return spec.AutoUpdate
-		}
-	}
-	return false
-}
-
 func templateHasKnownChecksum(name, checksum string) bool {
 	entry, ok := templateManifest[name]
 	if !ok {
