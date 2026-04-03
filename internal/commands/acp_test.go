@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/roelfdiedericks/goclaw/internal/acp"
@@ -13,6 +14,8 @@ type acpProviderStub struct {
 	attachDriver string
 	attachCWD    string
 	attachMode   string
+	models       []acp.ACPModelOption
+	setModel     string
 	steerText    string
 	steerStay    bool
 }
@@ -50,6 +53,18 @@ func (s *acpProviderStub) ACPInspect(sessionKey string) (*acp.AttachmentInfo, er
 func (s *acpProviderStub) ACPClose(ctx context.Context, sessionKey string) error { return nil }
 func (s *acpProviderStub) ACPSetMode(ctx context.Context, sessionKey string, mode string) (*acp.AttachmentInfo, error) {
 	return &acp.AttachmentInfo{SessionKey: sessionKey, Attached: true, Mode: mode}, nil
+}
+func (s *acpProviderStub) ACPListModels(ctx context.Context, sessionKey string) ([]acp.ACPModelOption, error) {
+	if len(s.models) == 0 {
+		s.models = []acp.ACPModelOption{
+			{FriendlyID: "claude-4.6-opus-high-thinking", Name: "Claude Opus 4.6", Current: true},
+		}
+	}
+	return s.models, nil
+}
+func (s *acpProviderStub) ACPSetModel(ctx context.Context, sessionKey string, model string) (*acp.AttachmentInfo, error) {
+	s.setModel = model
+	return &acp.AttachmentInfo{SessionKey: sessionKey, Attached: true, CurrentModel: model}, nil
 }
 func (s *acpProviderStub) ACPSteer(ctx context.Context, sessionKey string, text string, stayAttached bool) (*acp.PromptResult, error) {
 	s.steerText = text
@@ -137,4 +152,52 @@ func TestHandleACPSteerParsesStayAttachedFlag(t *testing.T) {
 	if !provider.steerStay {
 		t.Fatalf("expected stay-attached flag to be passed through")
 	}
+}
+
+func TestHandleACPModelList(t *testing.T) {
+	provider := &acpProviderStub{
+		models: []acp.ACPModelOption{
+			{FriendlyID: "claude-4.6-opus-high-thinking", Name: "Claude Opus 4.6", Current: true},
+			{FriendlyID: "auto", Name: "Automatic"},
+		},
+	}
+	res := handleACP(context.Background(), &CommandArgs{
+		SessionKey: "primary",
+		UserID:     "owner",
+		Provider:   provider,
+		RawArgs:    "model list",
+		Usage:      "model <list|friendly-id>",
+	})
+	if res == nil {
+		t.Fatalf("expected result")
+	}
+	if got := res.Text; got == "" || !containsAll(got, "ACP models:", "claude-4.6-opus-high-thinking", "auto") {
+		t.Fatalf("unexpected model list output: %q", got)
+	}
+}
+
+func TestHandleACPModelSet(t *testing.T) {
+	provider := &acpProviderStub{}
+	res := handleACP(context.Background(), &CommandArgs{
+		SessionKey: "primary",
+		UserID:     "owner",
+		Provider:   provider,
+		RawArgs:    "model claude-4.6-opus-high-thinking",
+		Usage:      "model <list|friendly-id>",
+	})
+	if res == nil {
+		t.Fatalf("expected result")
+	}
+	if provider.setModel != "claude-4.6-opus-high-thinking" {
+		t.Fatalf("expected model to be passed through, got %q", provider.setModel)
+	}
+}
+
+func containsAll(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
 }

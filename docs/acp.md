@@ -21,6 +21,8 @@ GoClaw currently supports:
 - agent-facing ACP control and inspection tools
 - interactive Cursor extension flows surfaced in HTTP, Telegram, and TUI
 
+By default, GoClaw applies the friendly model alias `claude-4.6-opus-high-thinking` after attaching to a Cursor ACP session. You can override that preferred model with `gateway.acpCursorModel` in `goclaw.json`.
+
 ACP attachment is tied to the GoClaw session key, not to one specific UI tab or one specific chat transport. For owner sessions, that usually means the attached ACP session follows the shared `primary` session.
 
 ## Common Workflow
@@ -32,6 +34,8 @@ Attach a new Cursor ACP session from the current GoClaw session:
 ```bash
 /acp attach
 ```
+
+When attach succeeds, GoClaw also tries to apply the configured `gateway.acpCursorModel` alias to that ACP session. If the attached Cursor session does not expose that alias, attach fails with a clear error instead of silently picking something else.
 
 Attach with an explicit working directory or startup mode:
 
@@ -53,6 +57,8 @@ Check the current ACP attachment:
 /acp status
 ```
 
+The status output includes the current ACP mode and, when available, the currently selected friendly model alias.
+
 Change the ACP mode when the driver supports it:
 
 ```bash
@@ -60,6 +66,20 @@ Change the ACP mode when the driver supports it:
 ```
 
 Typical modes used by Cursor are `agent`, `plan`, and `ask`.
+
+List the live model aliases that the attached Cursor ACP session currently accepts:
+
+```bash
+/acp model list
+```
+
+Switch the attached ACP session to one of those friendly aliases:
+
+```bash
+/acp model claude-4.6-opus-high-thinking
+```
+
+Use `/acp model list` first when you want to confirm the exact aliases exposed by the currently attached Cursor session.
 
 ### 3. Steer the attached session
 

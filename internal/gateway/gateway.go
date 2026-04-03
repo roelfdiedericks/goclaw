@@ -3883,6 +3883,22 @@ func (g *Gateway) ACPSetMode(ctx context.Context, sessionKey string, mode string
 	return mgr.SetMode(ctx, sessionKey, mode)
 }
 
+func (g *Gateway) ACPListModels(ctx context.Context, sessionKey string) ([]acp.ACPModelOption, error) {
+	mgr := acp.GetManager()
+	if mgr == nil {
+		return nil, fmt.Errorf("ACP manager not initialized")
+	}
+	return mgr.ListModels(ctx, sessionKey)
+}
+
+func (g *Gateway) ACPSetModel(ctx context.Context, sessionKey string, model string) (*acp.AttachmentInfo, error) {
+	mgr := acp.GetManager()
+	if mgr == nil {
+		return nil, fmt.Errorf("ACP manager not initialized")
+	}
+	return mgr.SetModel(ctx, sessionKey, model)
+}
+
 func (g *Gateway) ACPSteer(ctx context.Context, sessionKey string, text string, stayAttached bool) (*acp.PromptResult, error) {
 	mgr := acp.GetManager()
 	if mgr == nil {

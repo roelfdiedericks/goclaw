@@ -18,7 +18,7 @@ func NewTool() *Tool { return &Tool{} }
 func (t *Tool) Name() string { return "acp_control" }
 
 func (t *Tool) Description() string {
-	return "Control ACP sessions through the ACP manager. Use to attach, detach, close, cancel, change mode, or steer an ACP session. Steering detaches by default unless stayAttached is true."
+	return "Control ACP sessions through the ACP manager. Use to attach, detach, close, cancel, change mode, list or set the model, or steer an ACP session. Steering detaches by default unless stayAttached is true."
 }
 
 func (t *Tool) Schema() map[string]any {
@@ -27,7 +27,7 @@ func (t *Tool) Schema() map[string]any {
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"attach", "detach", "close", "cancel", "set_mode", "steer"},
+				"enum":        []string{"attach", "detach", "close", "cancel", "set_mode", "list_models", "set_model", "steer"},
 				"description": "ACP control action to perform.",
 			},
 			"driver": map[string]any{
@@ -50,6 +50,10 @@ func (t *Tool) Schema() map[string]any {
 				"type":        "string",
 				"description": "Steering message to send into the existing ACP session.",
 			},
+			"model": map[string]any{
+				"type":        "string",
+				"description": "Friendly model alias to set on the attached ACP session, such as claude-4.6-opus-high-thinking.",
+			},
 			"stayAttached": map[string]any{
 				"type":        "boolean",
 				"description": "Keep the ACP session attached after steering. Defaults to false.",
@@ -66,6 +70,7 @@ type controlInput struct {
 	Mode         string `json:"mode"`
 	SessionID    string `json:"sessionId"`
 	Message      string `json:"message"`
+	Model        string `json:"model"`
 	StayAttached bool   `json:"stayAttached"`
 }
 
@@ -128,6 +133,18 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 			return nil, err
 		}
 		return infoResult("ACP mode updated.", info), nil
+	case "list_models":
+		models, err := mgr.ListModels(ctx, sessionKey)
+		if err != nil {
+			return nil, err
+		}
+		return modelListResult(models), nil
+	case "set_model":
+		info, err := mgr.SetModel(ctx, sessionKey, in.Model)
+		if err != nil {
+			return nil, err
+		}
+		return infoResult("ACP model updated.", info), nil
 	case "steer":
 		if strings.TrimSpace(in.Message) == "" {
 			return nil, fmt.Errorf("message is required for steer")
@@ -155,7 +172,7 @@ func infoResult(prefix string, info *acp.AttachmentInfo) *types.ToolResult {
 		return types.TextResult(prefix)
 	}
 	text := fmt.Sprintf(
-		"%s\nsessionKey=%s\nattached=%t\nsessionId=%s\ndriver=%s\ntransport=%s\nmode=%s\ncwd=%s\nstate=%s\nbufferedEvents=%d",
+		"%s\nsessionKey=%s\nattached=%t\nsessionId=%s\ndriver=%s\ntransport=%s\nmode=%s\ncwd=%s\nmodel=%s\nstate=%s\nbufferedEvents=%d",
 		prefix,
 		info.SessionKey,
 		info.Attached,
@@ -164,8 +181,31 @@ func infoResult(prefix string, info *acp.AttachmentInfo) *types.ToolResult {
 		info.Transport,
 		info.Mode,
 		info.CWD,
+		info.CurrentModel,
 		info.CurrentState,
 		info.BufferedEvents,
 	)
 	return types.TextResult(text)
+}
+
+func modelListResult(models []acp.ACPModelOption) *types.ToolResult {
+	if len(models) == 0 {
+		return types.TextResult("No ACP models are available for this session.")
+	}
+	var text strings.Builder
+	text.WriteString("ACP models:\n")
+	for _, model := range models {
+		prefix := "- "
+		if model.Current {
+			prefix = "* "
+		}
+		text.WriteString(prefix)
+		text.WriteString(model.FriendlyID)
+		if model.Name != "" {
+			text.WriteString(" - ")
+			text.WriteString(model.Name)
+		}
+		text.WriteString("\n")
+	}
+	return types.TextResult(strings.TrimSpace(text.String()))
 }

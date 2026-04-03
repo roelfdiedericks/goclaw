@@ -762,7 +762,8 @@ type DefaultLLMTemplate struct {
 }
 
 type DefaultGatewayTemplate struct {
-	WorkingDir string `json:"workingDir,omitempty"`
+	WorkingDir     string `json:"workingDir,omitempty"`
+	ACPCursorModel string `json:"acpCursorModel,omitempty"`
 }
 
 type DefaultChannelsTemplate struct {
@@ -799,7 +800,8 @@ func DefaultConfig() *DefaultConfigTemplate {
 			},
 		},
 		Gateway: DefaultGatewayTemplate{
-			WorkingDir: "~/.goclaw/workspace",
+			WorkingDir:     "~/.goclaw/workspace",
+			ACPCursorModel: "claude-4.6-opus-high-thinking",
 		},
 		Channels: DefaultChannelsTemplate{
 			HTTP: DefaultHTTPTemplate{

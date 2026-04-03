@@ -72,5 +72,11 @@ func SaveWizardConfigToPath(data *WizardData, configPath string) error {
 		return fmt.Errorf("saving users: %w", err)
 	}
 
+	if data.WorkspacePath != "" {
+		if err := CreateWorkspace(ExpandPath(data.WorkspacePath)); err != nil {
+			return fmt.Errorf("ensuring workspace: %w", err)
+		}
+	}
+
 	return nil
 }

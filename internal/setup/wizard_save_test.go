@@ -43,3 +43,45 @@ func TestSaveWizardConfigToPathWritesOwnerChannelIDs(t *testing.T) {
 		t.Fatalf("expected whatsapp_id to be saved, got %#v", got)
 	}
 }
+
+func TestSaveWizardConfigToPathCreatesWorkspaceTemplates(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "goclaw.json")
+	workspacePath := filepath.Join(tmpDir, "workspace")
+
+	data := NewWizardData()
+	data.UserName = "owner"
+	data.UserDisplayName = "Owner"
+	data.UserRole = "owner"
+	data.WorkspacePath = workspacePath
+
+	if err := SaveWizardConfigToPath(data, configPath); err != nil {
+		t.Fatalf("SaveWizardConfigToPath: %v", err)
+	}
+
+	for _, name := range []string{"AGENTS.md", "SOUL.md", "BOOTSTRAP.md", "IDENTITY.md", "USER.md", "TOOLS.md", "HEARTBEAT.md"} {
+		if _, err := os.Stat(filepath.Join(workspacePath, name)); err != nil {
+			t.Fatalf("expected %q to be created in workspace: %v", name, err)
+		}
+	}
+}
+
+func TestPrintWizardConfigCreatesWorkspaceTemplates(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+	workspacePath := filepath.Join(tmpDir, "workspace")
+
+	data := NewWizardData()
+	data.UserName = "owner"
+	data.UserDisplayName = "Owner"
+	data.UserRole = "owner"
+	data.WorkspacePath = workspacePath
+
+	printWizardConfig(data)
+
+	for _, name := range []string{"AGENTS.md", "SOUL.md", "BOOTSTRAP.md", "IDENTITY.md", "USER.md", "TOOLS.md", "HEARTBEAT.md"} {
+		if _, err := os.Stat(filepath.Join(workspacePath, name)); err != nil {
+			t.Fatalf("expected %q to be created in workspace: %v", name, err)
+		}
+	}
+}

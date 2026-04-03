@@ -97,7 +97,7 @@ func registerBuiltins(m *Manager) {
 	m.Register(&Command{
 		Name:        "/acp",
 		Description: "Attach, inspect, and control ACP sessions",
-		Usage:       "attach [driver] [--cwd /path] [--mode mode] | detach | status | close | cancel | mode <agent|plan|ask> | steer <message>",
+		Usage:       "attach [driver] [--cwd /path] [--mode mode] | detach | status | close | cancel | mode <agent|plan|ask> | model <list|friendly-id> | steer <message>",
 		Handler:     handleACP,
 	})
 }
@@ -326,6 +326,22 @@ func handleACP(ctx context.Context, args *CommandArgs) *CommandResult {
 			return &CommandResult{Text: fmt.Sprintf("ACP mode failed: %s", err), Markdown: fmt.Sprintf("ACP mode failed: `%s`", err), Error: err}
 		}
 		return acpInfoResult("ACP mode updated.", info)
+	case "model":
+		if len(rest) == 0 {
+			return &CommandResult{Text: "Usage: /acp model <list|friendly-id>", Markdown: "Usage: `/acp model <list|friendly-id>`"}
+		}
+		if strings.EqualFold(rest[0], "list") {
+			models, err := args.Provider.ACPListModels(ctx, args.SessionKey)
+			if err != nil {
+				return &CommandResult{Text: fmt.Sprintf("ACP model list failed: %s", err), Markdown: fmt.Sprintf("ACP model list failed: `%s`", err), Error: err}
+			}
+			return acpModelListResult(models)
+		}
+		info, err := args.Provider.ACPSetModel(ctx, args.SessionKey, strings.Join(rest, " "))
+		if err != nil {
+			return &CommandResult{Text: fmt.Sprintf("ACP model update failed: %s", err), Markdown: fmt.Sprintf("ACP model update failed: `%s`", err), Error: err}
+		}
+		return acpInfoResult("ACP model updated.", info)
 	case "steer":
 		if len(rest) == 0 {
 			return &CommandResult{Text: "Usage: /acp steer [--stay-attached] <message>", Markdown: "Usage: `/acp steer [--stay-attached] <message>`"}
@@ -370,6 +386,9 @@ func acpInfoResult(prefix string, info *acp.AttachmentInfo) *CommandResult {
 	text.WriteString(fmt.Sprintf("  Transport: %s\n", info.Transport))
 	text.WriteString(fmt.Sprintf("  Mode: %s\n", info.Mode))
 	text.WriteString(fmt.Sprintf("  CWD: %s\n", info.CWD))
+	if info.CurrentModel != "" {
+		text.WriteString(fmt.Sprintf("  Model: %s\n", info.CurrentModel))
+	}
 	text.WriteString(fmt.Sprintf("  State: %s\n", info.CurrentState))
 	text.WriteString(fmt.Sprintf("  Buffered events: %d\n", info.BufferedEvents))
 	if !info.LastActivity.IsZero() {
@@ -412,6 +431,34 @@ func acpInfoResult(prefix string, info *acp.AttachmentInfo) *CommandResult {
 			}
 			text.WriteString(")\n")
 		}
+	}
+	return &CommandResult{
+		Text:     text.String(),
+		Markdown: text.String(),
+	}
+}
+
+func acpModelListResult(models []acp.ACPModelOption) *CommandResult {
+	if len(models) == 0 {
+		return &CommandResult{
+			Text:     "No ACP models are available for this session.",
+			Markdown: "No ACP models are available for this session.",
+		}
+	}
+	var text strings.Builder
+	text.WriteString("ACP models:\n")
+	for _, model := range models {
+		prefix := "  - "
+		if model.Current {
+			prefix = "  * "
+		}
+		text.WriteString(prefix)
+		text.WriteString(model.FriendlyID)
+		if model.Name != "" {
+			text.WriteString(" - ")
+			text.WriteString(model.Name)
+		}
+		text.WriteString("\n")
 	}
 	return &CommandResult{
 		Text:     text.String(),

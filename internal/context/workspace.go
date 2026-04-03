@@ -19,7 +19,7 @@ const (
 	FileIdentity  = "IDENTITY.md"  // Agent identity - main agent only
 	FileUser      = "USER.md"      // User info - main agent only
 	FileHeartbeat = "HEARTBEAT.md" // Periodic tasks - main agent only
-	FileBootstrap = "BOOTSTRAP.md" // First-run setup - deleted after use
+	FileBootstrap = "BOOTSTRAP.md" // First-run setup - agent should delete after bootstrapping
 	FileMemory    = "MEMORY.md"    // Long-term memories - main agent only
 )
 

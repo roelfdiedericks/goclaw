@@ -34,6 +34,35 @@ type stdioRuntime struct {
 	closed bool
 }
 
+type rawSessionResponse struct {
+	SessionID     string                `json:"sessionId"`
+	Modes         *rawSessionModeState  `json:"modes,omitempty"`
+	ConfigOptions []rawSessionConfigDef `json:"configOptions,omitempty"`
+}
+
+type rawSetConfigOptionResponse struct {
+	ConfigOptions []rawSessionConfigDef `json:"configOptions,omitempty"`
+}
+
+type rawSessionModeState struct {
+	CurrentModeID string `json:"currentModeId"`
+}
+
+type rawSessionConfigDef struct {
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	CurrentValue string          `json:"currentValue,omitempty"`
+	Options      json.RawMessage `json:"options,omitempty"`
+}
+
+type rawSessionConfigOption struct {
+	Name        string                   `json:"name"`
+	Value       string                   `json:"value"`
+	Description string                   `json:"description,omitempty"`
+	Options     []rawSessionConfigOption `json:"options,omitempty"`
+}
+
 type clientAdapter struct {
 	mu            sync.RWMutex
 	onEvent       func(ACPEvent)
@@ -274,6 +303,64 @@ func debugRaw(raw json.RawMessage) string {
 		return ""
 	}
 	return string(raw)
+}
+
+func decodeRawResponse[T any](raw json.RawMessage) (*T, error) {
+	var out T
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func flattenSessionConfigOptions(rawOptions json.RawMessage) []rawSessionConfigOption {
+	var options []rawSessionConfigOption
+	if len(rawOptions) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(rawOptions, &options); err != nil {
+		return nil
+	}
+	var flat []rawSessionConfigOption
+	var walk func(items []rawSessionConfigOption)
+	walk = func(items []rawSessionConfigOption) {
+		for _, item := range items {
+			if strings.TrimSpace(item.Value) != "" {
+				flat = append(flat, rawSessionConfigOption{
+					Name:        strings.TrimSpace(item.Name),
+					Value:       strings.TrimSpace(item.Value),
+					Description: strings.TrimSpace(item.Description),
+				})
+			}
+			if len(item.Options) > 0 {
+				walk(item.Options)
+			}
+		}
+	}
+	walk(options)
+	return flat
+}
+
+func extractModelState(configOptions []rawSessionConfigDef) *ACPModelState {
+	for _, cfg := range configOptions {
+		if strings.TrimSpace(cfg.ID) != "model" {
+			continue
+		}
+		flat := flattenSessionConfigOptions(cfg.Options)
+		state := &ACPModelState{
+			CurrentValue: strings.TrimSpace(cfg.CurrentValue),
+			Options:      make([]ACPModelChoice, 0, len(flat)),
+		}
+		for _, option := range flat {
+			state.Options = append(state.Options, ACPModelChoice{
+				Value:       option.Value,
+				Name:        option.Name,
+				Description: option.Description,
+			})
+		}
+		return state
+	}
+	return nil
 }
 
 func summarizeTraceLine(s string) string {
@@ -735,6 +822,45 @@ func (c *clientAdapter) ExtMethod(ctx context.Context, method string, params jso
 	return decoded, nil
 }
 
+func (t *localStdioTransport) newSessionRaw(ctx context.Context, runtime *stdioRuntime, cwd string) (*rawSessionResponse, error) {
+	raw, err := runtime.conn.ExtMethod(ctx, goacp.AgentMethods.SessionNew, &goacp.NewSessionRequest{
+		Cwd:        cwd,
+		MCPServers: []goacp.MCPServer{},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return decodeRawResponse[rawSessionResponse](raw)
+}
+
+func (t *localStdioTransport) loadSessionRaw(ctx context.Context, runtime *stdioRuntime, cwd string, sessionID string) (*rawSessionResponse, error) {
+	raw, err := runtime.conn.ExtMethod(ctx, goacp.AgentMethods.SessionLoad, &goacp.LoadSessionRequest{
+		Cwd:        cwd,
+		MCPServers: []goacp.MCPServer{},
+		SessionID:  goacp.SessionID(sessionID),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return decodeRawResponse[rawSessionResponse](raw)
+}
+
+func (t *localStdioTransport) setModelRaw(ctx context.Context, runtime *stdioRuntime, sessionID string, modelValue string) (*ACPModelState, error) {
+	raw, err := runtime.conn.ExtMethod(ctx, goacp.AgentMethods.SessionSetConfigOption, &goacp.SetSessionConfigOptionRequest{
+		SessionID: goacp.SessionID(sessionID),
+		ConfigID:  goacp.SessionConfigID("model"),
+		Value:     goacp.SessionConfigValueID(modelValue),
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := decodeRawResponse[rawSetConfigOptionResponse](raw)
+	if err != nil {
+		return nil, err
+	}
+	return extractModelState(resp.ConfigOptions), nil
+}
+
 func (t *localStdioTransport) NewSession(ctx context.Context, req NewSessionRequest) (*SessionHandle, error) {
 	cwd := strings.TrimSpace(req.CWD)
 	if cwd == "" {
@@ -744,21 +870,22 @@ func (t *localStdioTransport) NewSession(ctx context.Context, req NewSessionRequ
 	if err != nil {
 		return nil, err
 	}
-	resp, err := runtime.conn.NewSession(ctx, &goacp.NewSessionRequest{
-		Cwd:        cwd,
-		MCPServers: []goacp.MCPServer{},
-	})
+	resp, err := t.newSessionRaw(ctx, runtime, cwd)
 	if err != nil {
 		_ = t.closeRuntime(ctx, runtime)
 		return nil, fmt.Errorf("acp session/new failed: %w", err)
 	}
 	handle := &SessionHandle{
-		SessionID: string(resp.SessionID),
+		SessionID: strings.TrimSpace(resp.SessionID),
 		CWD:       cwd,
 		Mode:      "",
 		Transport: t.ID(),
 		Driver:    req.Driver.ID(),
+		Models:    extractModelState(resp.ConfigOptions),
 		runtime:   runtime,
+	}
+	if resp.Modes != nil {
+		handle.Mode = strings.TrimSpace(resp.Modes.CurrentModeID)
 	}
 	if req.Mode != "" {
 		if err := t.SetMode(ctx, handle, req.Mode); err != nil {
@@ -781,11 +908,7 @@ func (t *localStdioTransport) LoadSession(ctx context.Context, req LoadSessionRe
 	if err != nil {
 		return nil, err
 	}
-	resp, err := runtime.conn.LoadSession(ctx, &goacp.LoadSessionRequest{
-		Cwd:        cwd,
-		MCPServers: []goacp.MCPServer{},
-		SessionID:  goacp.SessionID(req.SessionID),
-	})
+	resp, err := t.loadSessionRaw(ctx, runtime, cwd, req.SessionID)
 	if err != nil {
 		_ = t.closeRuntime(ctx, runtime)
 		return nil, fmt.Errorf("acp session/load failed: %w", err)
@@ -796,10 +919,11 @@ func (t *localStdioTransport) LoadSession(ctx context.Context, req LoadSessionRe
 		Mode:      "",
 		Transport: t.ID(),
 		Driver:    req.Driver.ID(),
+		Models:    extractModelState(resp.ConfigOptions),
 		runtime:   runtime,
 	}
 	if resp.Modes != nil {
-		handle.Mode = string(resp.Modes.CurrentModeID)
+		handle.Mode = strings.TrimSpace(resp.Modes.CurrentModeID)
 	}
 	if req.Mode != "" {
 		if err := t.SetMode(ctx, handle, req.Mode); err != nil {
@@ -827,6 +951,41 @@ func (t *localStdioTransport) SetMode(ctx context.Context, handle *SessionHandle
 	}
 	handle.Mode = mode
 	return nil
+}
+
+func (t *localStdioTransport) SetModel(ctx context.Context, handle *SessionHandle, modelValue string) (*ACPModelState, error) {
+	runtime, err := requireRuntime(handle)
+	if err != nil {
+		return nil, err
+	}
+	modelValue = strings.TrimSpace(modelValue)
+	if modelValue == "" {
+		return nil, errors.New("model value is required")
+	}
+	state, err := t.setModelRaw(ctx, runtime, handle.SessionID, modelValue)
+	if err != nil {
+		return nil, fmt.Errorf("acp session/set_config_option failed: %w", err)
+	}
+	if state == nil {
+		state = cloneModelState(handle.Models)
+		if state == nil {
+			state = &ACPModelState{}
+		}
+		state.CurrentValue = modelValue
+	}
+	handle.Models = cloneModelState(state)
+	return cloneModelState(state), nil
+}
+
+func (t *localStdioTransport) ListModels(ctx context.Context, handle *SessionHandle) (*ACPModelState, error) {
+	_ = ctx
+	if handle == nil {
+		return nil, errors.New("acp session handle is required")
+	}
+	if handle.Models == nil || len(handle.Models.Options) == 0 {
+		return nil, errors.New("ACP session does not advertise any model options")
+	}
+	return cloneModelState(handle.Models), nil
 }
 
 func (t *localStdioTransport) Prompt(ctx context.Context, handle *SessionHandle, req PromptRequest) (*PromptResult, error) {

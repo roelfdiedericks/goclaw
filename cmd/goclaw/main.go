@@ -2678,6 +2678,12 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	cfg := loadResult.Config
 	L_debug("config loaded", "path", loadResult.SourcePath)
 
+	// Self-heal older installs by backfilling missing workspace templates
+	// and required subdirectories without overwriting existing files.
+	if err := setup.CreateWorkspace(cfg.Gateway.WorkingDir); err != nil {
+		L_warn("failed to ensure workspace", "dir", cfg.Gateway.WorkingDir, "error", err)
+	}
+
 	// Change process working directory to workspace
 	// This ensures agent's view matches reality for any code using os.Getwd()
 	if err := os.Chdir(cfg.Gateway.WorkingDir); err != nil {
@@ -2807,7 +2813,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	}
 	L_info("gateway initialized")
 
-	acp.InitManager(cfg.Gateway.WorkingDir)
+	acp.InitManager(cfg.Gateway.WorkingDir, cfg.Gateway.ACPCursorModel)
 
 	// Register all tools now that gateway and managers are ready
 	messageTool, transcriptMgr := registerTools(toolsReg, cfg, gw, version)

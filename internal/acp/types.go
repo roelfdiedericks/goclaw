@@ -35,6 +35,8 @@ type Transport interface {
 	NewSession(ctx context.Context, req NewSessionRequest) (*SessionHandle, error)
 	LoadSession(ctx context.Context, req LoadSessionRequest) (*SessionHandle, error)
 	SetMode(ctx context.Context, handle *SessionHandle, mode string) error
+	SetModel(ctx context.Context, handle *SessionHandle, modelValue string) (*ACPModelState, error)
+	ListModels(ctx context.Context, handle *SessionHandle) (*ACPModelState, error)
 	Prompt(ctx context.Context, handle *SessionHandle, req PromptRequest) (*PromptResult, error)
 	Cancel(ctx context.Context, handle *SessionHandle) error
 	Close(ctx context.Context, handle *SessionHandle) error
@@ -59,7 +61,27 @@ type SessionHandle struct {
 	Mode      string
 	Transport string
 	Driver    string
+	Models    *ACPModelState
 	runtime   any
+}
+
+type ACPModelChoice struct {
+	Value       string `json:"value"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type ACPModelState struct {
+	CurrentValue string           `json:"currentValue,omitempty"`
+	Options      []ACPModelChoice `json:"options,omitempty"`
+}
+
+type ACPModelOption struct {
+	FriendlyID  string `json:"friendlyId"`
+	Name        string `json:"name"`
+	ACPValue    string `json:"acpValue"`
+	Description string `json:"description,omitempty"`
+	Current     bool   `json:"current,omitempty"`
 }
 
 type ACPEventType string
@@ -278,6 +300,8 @@ type AttachmentInfo struct {
 	LastPlanName     string
 	LastPlanOverview string
 	LastQuestion     string
+	CurrentModel     string
+	AvailableModels  []ACPModelOption
 	RecentExtensions []AttachmentExtensionInfo
 	PendingRequests  []AttachmentPendingRequestInfo
 }

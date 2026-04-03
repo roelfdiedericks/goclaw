@@ -180,6 +180,7 @@ GoClaw is configured via `goclaw.json` in the working directory.
     "workingDir": "~/.goclaw/workspace",
     "logFile": "~/.goclaw/goclaw.log",
     "pidFile": "~/.goclaw/goclaw.pid",
+    "acpCursorModel": "claude-4.6-opus-high-thinking",
     "delegatedRuns": {
       "enabled": true,
       "maxSpawnDepth": 4,
@@ -468,6 +469,7 @@ The prompt cache watches workspace identity files (SOUL.md, AGENTS.md, etc.) for
     "workingDir": "~/.goclaw/workspace",
     "logFile": "~/.goclaw/goclaw.log",
     "pidFile": "~/.goclaw/goclaw.pid",
+    "acpCursorModel": "claude-4.6-opus-high-thinking",
     "delegatedRuns": {
       "enabled": true,
       "maxSpawnDepth": 4,
@@ -483,6 +485,7 @@ The prompt cache watches workspace identity files (SOUL.md, AGENTS.md, etc.) for
 | `workingDir` | string | `~/.goclaw/workspace` | Workspace directory |
 | `logFile` | string | - | Log file path |
 | `pidFile` | string | - | PID file path |
+| `acpCursorModel` | string | `claude-4.6-opus-high-thinking` | Friendly model alias to apply after attaching to a Cursor ACP session |
 | `delegatedRuns.enabled` | bool | `true` | Enable subagents, fanout, and other delegated background runs |
 | `delegatedRuns.maxSpawnDepth` | int | `4` | Max parent-child subagent depth (0 = unlimited) |
 | `delegatedRuns.maxActiveChildrenPerParent` | int | `4` | Max active child runs per parent (0 = unlimited) |
@@ -501,6 +504,10 @@ Current scope:
 - Cursor driver only
 - local stdio transport only
 - session-scoped attachment rather than global process configuration
+
+The preferred Cursor ACP model is configurable through `gateway.acpCursorModel`. If you omit it, GoClaw defaults to `claude-4.6-opus-high-thinking`.
+
+This value is a friendly alias, not the raw internal Cursor ACP option value. GoClaw resolves it against the live model options advertised by the attached Cursor session and applies it right after `/acp attach`.
 
 If you are looking for ACP workflow and command details, see [ACP Sessions](acp.md) and [Channel Commands](commands.md).
 

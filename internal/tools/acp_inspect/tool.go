@@ -66,6 +66,9 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	b.WriteString(fmt.Sprintf("  Transport: %s\n", info.Transport))
 	b.WriteString(fmt.Sprintf("  Mode: %s\n", info.Mode))
 	b.WriteString(fmt.Sprintf("  CWD: %s\n", info.CWD))
+	if info.CurrentModel != "" {
+		b.WriteString(fmt.Sprintf("  Model: %s\n", info.CurrentModel))
+	}
 	b.WriteString(fmt.Sprintf("  State: %s\n", info.CurrentState))
 	b.WriteString(fmt.Sprintf("  Buffered events: %d\n", info.BufferedEvents))
 	if info.LastAssistant != "" {

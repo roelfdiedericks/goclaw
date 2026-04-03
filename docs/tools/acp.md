@@ -25,9 +25,11 @@ Supported actions:
 - `close`
 - `cancel`
 - `set_mode`
+- `list_models`
+- `set_model`
 - `steer`
 
-In the current MVP, `attach` targets the Cursor driver over local stdio.
+In the current MVP, `attach` targets the Cursor driver over local stdio. After attach, GoClaw applies the configured `gateway.acpCursorModel` alias and defaults to `claude-4.6-opus-high-thinking`.
 
 ### `attach`
 
@@ -70,6 +72,34 @@ Change the attached ACP session mode:
   "mode": "plan"
 }
 ```
+
+### `list_models`
+
+List the live ACP model aliases accepted by the currently attached Cursor session:
+
+```json
+{
+  "action": "list_models"
+}
+```
+
+This returns the friendly aliases GoClaw accepts for `set_model`, with the current one marked in the text output.
+
+### `set_model`
+
+Switch the attached Cursor ACP session to a friendly model alias:
+
+```json
+{
+  "action": "set_model",
+  "model": "claude-4.6-opus-high-thinking"
+}
+```
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `action` | Yes | `set_model` |
+| `model` | Yes | Friendly model alias exposed by the attached Cursor ACP session |
 
 ### `steer`
 
@@ -150,6 +180,7 @@ The tool output can include:
 
 - whether the session is attached
 - ACP session ID, driver, transport, mode, and CWD
+- current friendly ACP model alias
 - current state and buffered event count
 - last assistant text, last question, and last plan overview
 - current ACP todo list
@@ -165,6 +196,8 @@ Use ACP tools when the agent must:
 - inspect whether an ACP session is already attached
 - attach to Cursor before steering an external session
 - switch ACP mode before sending a prompt
+- inspect the live ACP model aliases before switching models
+- switch the attached Cursor session to a specific friendly model alias
 - cancel a blocked interactive ACP request
 - keep or release ACP attachment intentionally after steering
 

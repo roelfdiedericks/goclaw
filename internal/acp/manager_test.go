@@ -24,6 +24,7 @@ type fakeTransport struct {
 	newCalled  bool
 	loadCalled bool
 	lastMode   string
+	lastModel  string
 	cancelled  bool
 	closed     bool
 	promptFn   func(context.Context, *SessionHandle, PromptRequest) (*PromptResult, error)
@@ -38,6 +39,13 @@ func (t *fakeTransport) NewSession(ctx context.Context, req NewSessionRequest) (
 		Mode:      req.Mode,
 		Transport: t.ID(),
 		Driver:    req.Driver.ID(),
+		Models: &ACPModelState{
+			CurrentValue: "default[]",
+			Options: []ACPModelChoice{
+				{Value: "default[]", Name: "Automatic"},
+				{Value: "claude-opus-4-6[thinking=true,context=200k,effort=high,fast=false]", Name: "Claude Opus 4.6"},
+			},
+		},
 		runtime:   struct{}{},
 	}, nil
 }
@@ -49,6 +57,13 @@ func (t *fakeTransport) LoadSession(ctx context.Context, req LoadSessionRequest)
 		Mode:      req.Mode,
 		Transport: t.ID(),
 		Driver:    req.Driver.ID(),
+		Models: &ACPModelState{
+			CurrentValue: "default[]",
+			Options: []ACPModelChoice{
+				{Value: "default[]", Name: "Automatic"},
+				{Value: "claude-opus-4-6[thinking=true,context=200k,effort=high,fast=false]", Name: "Claude Opus 4.6"},
+			},
+		},
 		runtime:   struct{}{},
 	}, nil
 }
@@ -56,6 +71,17 @@ func (t *fakeTransport) SetMode(ctx context.Context, handle *SessionHandle, mode
 	t.lastMode = mode
 	handle.Mode = mode
 	return nil
+}
+func (t *fakeTransport) SetModel(ctx context.Context, handle *SessionHandle, modelValue string) (*ACPModelState, error) {
+	t.lastModel = modelValue
+	if handle.Models == nil {
+		handle.Models = &ACPModelState{}
+	}
+	handle.Models.CurrentValue = modelValue
+	return cloneModelState(handle.Models), nil
+}
+func (t *fakeTransport) ListModels(ctx context.Context, handle *SessionHandle) (*ACPModelState, error) {
+	return cloneModelState(handle.Models), nil
 }
 func (t *fakeTransport) Prompt(ctx context.Context, handle *SessionHandle, req PromptRequest) (*PromptResult, error) {
 	if t.promptFn != nil {
@@ -350,5 +376,36 @@ func TestManagerCancelPendingHandoffWithoutAttachmentIsNoop(t *testing.T) {
 	}
 	if len(cancelled) != 0 {
 		t.Fatalf("expected no cancelled requests, got %d", len(cancelled))
+	}
+}
+
+func TestManagerSetModelUsesFriendlyAlias(t *testing.T) {
+	transport := &fakeTransport{}
+	mgr := &Manager{
+		defaultCWD:  "/tmp",
+		transports:  map[string]Transport{"fake-transport": transport},
+		drivers:     map[string]Driver{"fake": &fakeDriver{}},
+		attachments: map[string]*attachment{},
+	}
+	u := &user.User{ID: "owner", Role: user.RoleOwner, ACPAllowed: true}
+	if _, err := mgr.Attach(context.Background(), AttachRequest{
+		SessionKey: "primary",
+		User:       u,
+		DriverID:   "fake",
+		Transport:  "fake-transport",
+		CWD:        "/tmp/work",
+	}); err != nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+
+	info, err := mgr.SetModel(context.Background(), "primary", "claude-4.6-opus-high-thinking")
+	if err != nil {
+		t.Fatalf("set model failed: %v", err)
+	}
+	if transport.lastModel != "claude-opus-4-6[thinking=true,context=200k,effort=high,fast=false]" {
+		t.Fatalf("unexpected ACP model value: %q", transport.lastModel)
+	}
+	if info.CurrentModel != "claude-4.6-opus-high-thinking" {
+		t.Fatalf("unexpected current model: %q", info.CurrentModel)
 	}
 }

@@ -2214,10 +2214,13 @@ func formWithHeader(headerText string, headerLines int, form *tview.Form) tview.
 
 // printWizardConfig saves the wizard config and users to their respective files
 func printWizardConfig(data *WizardData) {
-	// Get save paths
 	configPath, err := paths.DefaultConfigPath()
 	if err != nil {
 		fmt.Printf("Error getting config path: %v\n", err)
+		return
+	}
+	if err := SaveWizardConfigToPath(data, configPath); err != nil {
+		fmt.Printf("Error saving setup: %v\n", err)
 		return
 	}
 	usersPath, err := paths.UsersPath(configPath)
@@ -2225,50 +2228,7 @@ func printWizardConfig(data *WizardData) {
 		fmt.Printf("Error getting users path: %v\n", err)
 		return
 	}
-
-	// Ensure parent directory exists
-	if err := paths.EnsureParentDir(configPath); err != nil {
-		fmt.Printf("Error creating config directory: %v\n", err)
-		return
-	}
-
-	// Build and save config
-	cfg := buildConfigFromWizardData(data)
-	if err := config.BackupAndWriteJSON(configPath, cfg, config.DefaultBackupCount); err != nil {
-		fmt.Printf("Error saving config: %v\n", err)
-		return
-	}
 	fmt.Printf("Configuration saved to: %s\n", configPath)
-
-	// Build and save users
-	userEntry := map[string]interface{}{
-		"name": data.UserDisplayName,
-		"role": data.UserRole,
-	}
-	if data.UserTelegramID != "" {
-		userEntry["telegram_id"] = data.UserTelegramID
-	}
-	if data.UserWhatsAppID != "" {
-		userEntry["whatsapp_id"] = data.UserWhatsAppID
-	}
-	if data.UserPassword != "" {
-		hash, err := user.HashPassword(data.UserPassword)
-		if err != nil {
-			fmt.Printf("Error hashing password: %v\n", err)
-		} else {
-			userEntry["http_password_hash"] = hash
-		}
-	} else if data.UserExistingPwdHash != "" {
-		userEntry["http_password_hash"] = data.UserExistingPwdHash
-	}
-	users := map[string]interface{}{
-		data.UserName: userEntry,
-	}
-
-	if err := config.BackupAndWriteJSON(usersPath, users, config.DefaultBackupCount); err != nil {
-		fmt.Printf("Error saving users: %v\n", err)
-		return
-	}
 	fmt.Printf("Users saved to: %s\n", usersPath)
 
 	// Print next steps

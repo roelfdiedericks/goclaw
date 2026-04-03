@@ -36,11 +36,12 @@ type pendingInteractiveResult struct {
 }
 
 type Manager struct {
-	defaultCWD  string
-	transports  map[string]Transport
-	drivers     map[string]Driver
-	attachments map[string]*attachment
-	mu          sync.RWMutex
+	defaultCWD         string
+	defaultCursorModel string
+	transports         map[string]Transport
+	drivers            map[string]Driver
+	attachments        map[string]*attachment
+	mu                 sync.RWMutex
 }
 
 var (
@@ -49,26 +50,43 @@ var (
 	ErrPendingInteractiveHandoff = errors.New("acp interactive request cancelled for handoff")
 )
 
-func InitManager(defaultCWD string) *Manager {
+func InitManager(defaultCWD, cursorModel string) *Manager {
 	managerMu.Lock()
 	defer managerMu.Unlock()
 	if globalManager != nil {
 		if strings.TrimSpace(defaultCWD) != "" {
 			globalManager.defaultCWD = defaultCWD
 		}
+		globalManager.defaultCursorModel = strings.TrimSpace(cursorModel)
+		globalManager.drivers[DriverCursor] = NewCursorDriver()
 		return globalManager
 	}
 	globalManager = &Manager{
-		defaultCWD:  defaultCWD,
-		transports:  map[string]Transport{TransportLocalStdio: NewLocalStdioTransport()},
-		drivers:     map[string]Driver{DriverCursor: NewCursorDriver()},
-		attachments: make(map[string]*attachment),
+		defaultCWD:         defaultCWD,
+		defaultCursorModel: strings.TrimSpace(cursorModel),
+		transports:         map[string]Transport{TransportLocalStdio: NewLocalStdioTransport()},
+		drivers:            map[string]Driver{DriverCursor: NewCursorDriver()},
+		attachments:        make(map[string]*attachment),
 	}
 	return globalManager
 }
 
 func GetManager() *Manager {
 	return globalManager
+}
+
+func syncAttachmentModelInfo(info *AttachmentInfo, state *ACPModelState) {
+	if info == nil {
+		return
+	}
+	info.AvailableModels = buildFriendlyModelOptions(state)
+	info.CurrentModel = ""
+	for _, option := range info.AvailableModels {
+		if option.Current {
+			info.CurrentModel = option.FriendlyID
+			break
+		}
+	}
 }
 
 func (m *Manager) resolveCWD(cwd string) (string, error) {
@@ -163,6 +181,19 @@ func (m *Manager) Attach(ctx context.Context, req AttachRequest) (*AttachmentInf
 	if err != nil {
 		return nil, err
 	}
+	if driver.ID() == DriverCursor && strings.TrimSpace(m.defaultCursorModel) != "" {
+		modelChoice, err := resolveFriendlyModelValue(m.defaultCursorModel, handle.Models)
+		if err != nil {
+			_ = transport.Close(ctx, handle)
+			return nil, fmt.Errorf("failed to resolve ACP model %q: %w", m.defaultCursorModel, err)
+		}
+		modelState, err := transport.SetModel(ctx, handle, modelChoice.Value)
+		if err != nil {
+			_ = transport.Close(ctx, handle)
+			return nil, fmt.Errorf("failed to apply ACP model %q: %w", m.defaultCursorModel, err)
+		}
+		handle.Models = cloneModelState(modelState)
+	}
 
 	now := time.Now()
 	att := &attachment{
@@ -182,6 +213,7 @@ func (m *Manager) Attach(ctx context.Context, req AttachRequest) (*AttachmentInf
 		bufferLimit:     200,
 		pendingRequests: map[string]*pendingInteractiveRequest{},
 	}
+	syncAttachmentModelInfo(&att.info, handle.Models)
 
 	m.mu.Lock()
 	m.attachments[sessionKey] = att
@@ -447,6 +479,71 @@ func (m *Manager) SetMode(ctx context.Context, sessionKey, mode string) (*Attach
 	}
 	att.mu.Lock()
 	att.info.Mode = mode
+	att.info.LastActivity = time.Now()
+	info := att.info
+	info.PendingRequests = att.pendingInfosLocked()
+	info.RecentExtensions = cloneAttachmentExtensionInfo(att.recentExtensions)
+	att.mu.Unlock()
+	return &info, nil
+}
+
+func (m *Manager) ListModels(ctx context.Context, sessionKey string) ([]ACPModelOption, error) {
+	m.mu.RLock()
+	att := m.attachments[sessionKey]
+	m.mu.RUnlock()
+	if att == nil {
+		return nil, fmt.Errorf("no ACP session attached")
+	}
+	att.mu.Lock()
+	transportID := att.info.Transport
+	handle := att.handle
+	att.mu.Unlock()
+	transport, err := m.resolveTransport(transportID)
+	if err != nil {
+		return nil, err
+	}
+	state, err := transport.ListModels(ctx, handle)
+	if err != nil {
+		return nil, err
+	}
+	att.mu.Lock()
+	handle.Models = cloneModelState(state)
+	syncAttachmentModelInfo(&att.info, state)
+	att.info.LastActivity = time.Now()
+	models := append([]ACPModelOption(nil), att.info.AvailableModels...)
+	att.mu.Unlock()
+	return models, nil
+}
+
+func (m *Manager) SetModel(ctx context.Context, sessionKey, model string) (*AttachmentInfo, error) {
+	m.mu.RLock()
+	att := m.attachments[sessionKey]
+	m.mu.RUnlock()
+	if att == nil {
+		return nil, fmt.Errorf("no ACP session attached")
+	}
+	att.mu.Lock()
+	transportID := att.info.Transport
+	handle := att.handle
+	currentState := cloneModelState(handle.Models)
+	att.mu.Unlock()
+
+	modelChoice, err := resolveFriendlyModelValue(model, currentState)
+	if err != nil {
+		return nil, err
+	}
+	transport, err := m.resolveTransport(transportID)
+	if err != nil {
+		return nil, err
+	}
+	modelState, err := transport.SetModel(ctx, handle, modelChoice.Value)
+	if err != nil {
+		return nil, err
+	}
+
+	att.mu.Lock()
+	handle.Models = cloneModelState(modelState)
+	syncAttachmentModelInfo(&att.info, modelState)
 	att.info.LastActivity = time.Now()
 	info := att.info
 	info.PendingRequests = att.pendingInfosLocked()

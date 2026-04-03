@@ -194,6 +194,8 @@ Attach, inspect, and control ACP sessions from any text channel.
 /acp close
 /acp cancel
 /acp mode <agent|plan|ask>
+/acp model list
+/acp model <friendly-id>
 /acp steer [--stay-attached] <message>
 ```
 
@@ -207,6 +209,7 @@ Attach, inspect, and control ACP sessions from any text channel.
 | `close` | Close the ACP session entirely |
 | `cancel` | Cancel the currently running ACP prompt |
 | `mode` | Change ACP mode, such as `agent`, `plan`, or `ask` |
+| `model` | List or switch the friendly model aliases exposed by the attached Cursor ACP session |
 | `steer` | Send a prompt into the attached ACP session |
 
 **Examples:**
@@ -216,6 +219,8 @@ Attach, inspect, and control ACP sessions from any text channel.
 /acp attach cursor --session SESSION_ID
 /acp status
 /acp mode plan
+/acp model list
+/acp model claude-4.6-opus-high-thinking
 /acp steer Review the current branch and summarize the next safe step.
 /acp steer --stay-attached Ask Cursor to keep the session open for one more turn.
 /acp detach
@@ -224,6 +229,9 @@ Attach, inspect, and control ACP sessions from any text channel.
 
 **Behavior notes:**
 - The default ACP driver is `cursor`
+- `/acp attach` tries to apply the configured `gateway.acpCursorModel` alias immediately after attaching
+- `/acp model list` shows the live friendly aliases exposed by the attached Cursor ACP session
+- `/acp model <friendly-id>` switches the current ACP session to that alias
 - `/acp steer` now detaches by default after the prompt completes
 - Use `--stay-attached` when you want to keep routing future turns through ACP
 - `detach` keeps the external ACP session available for later re-attachment, while `close` shuts it down

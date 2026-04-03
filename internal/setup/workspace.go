@@ -12,7 +12,11 @@ import (
 
 // CreateWorkspace initializes a new workspace at the given path
 func CreateWorkspace(wsPath string) error {
-	L_info("setup: creating workspace", "path", wsPath)
+	L_info("setup: ensuring workspace", "path", wsPath)
+
+	// BOOTSTRAP.md is only for a fresh identity. If SOUL.md already exists
+	// before we start repairing the workspace, do not recreate BOOTSTRAP.md.
+	hadSoulAtStart := fileExists(filepath.Join(wsPath, "SOUL.md"))
 
 	// Create main workspace directory
 	if err := os.MkdirAll(wsPath, 0750); err != nil {
@@ -31,6 +35,10 @@ func CreateWorkspace(wsPath string) error {
 
 	// Copy template files (skip if they already exist)
 	for _, name := range templateFiles {
+		if name == "BOOTSTRAP.md" && hadSoulAtStart {
+			L_debug("setup: bootstrap skipped because soul exists", "path", filepath.Join(wsPath, name))
+			continue
+		}
 		destPath := filepath.Join(wsPath, name)
 		if err := writeTemplateIfMissing(destPath, name); err != nil {
 			L_warn("setup: failed to write template", "file", name, "error", err)
@@ -38,8 +46,13 @@ func CreateWorkspace(wsPath string) error {
 		}
 	}
 
-	L_info("setup: workspace created successfully", "path", wsPath)
+	L_info("setup: workspace ensured successfully", "path", wsPath, "bootstrapCreated", !hadSoulAtStart)
 	return nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // writeTemplateIfMissing writes a template file only if it doesn't exist
