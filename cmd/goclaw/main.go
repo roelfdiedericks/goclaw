@@ -49,6 +49,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/memorygraph"
 	"github.com/roelfdiedericks/goclaw/internal/metrics"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
+	"github.com/roelfdiedericks/goclaw/internal/runtimeinfo"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
 	sbruntime "github.com/roelfdiedericks/goclaw/internal/sandbox/runtime"
 	"github.com/roelfdiedericks/goclaw/internal/session"
@@ -320,11 +321,14 @@ func (c *A2AStatusCmd) Run(ctx *Context) error {
 	}
 	loadResult.Config.A2A.Normalize()
 	status := a2a.NewManager(loadResult.Config.A2A, nil).Status()
-	fmt.Printf("A2A enabled: %t\n", status.Enabled)
-	fmt.Printf("Transport: %s\n", status.ActiveTransport)
-	fmt.Printf("Bootstrap peers: %d\n", status.BootstrapPeers)
-	fmt.Printf("Trusted peers: %d\n", status.TrustedPeers)
-	fmt.Printf("Rendezvous: %t (%s)\n", status.RendezvousEnabled, status.RendezvousNamespace)
+	L_info("a2a status",
+		"enabled", status.Enabled,
+		"transport", status.ActiveTransport,
+		"bootstrapPeers", status.BootstrapPeers,
+		"trustedPeers", status.TrustedPeers,
+		"rendezvousEnabled", status.RendezvousEnabled,
+		"rendezvousNamespace", status.RendezvousNamespace,
+	)
 	return nil
 }
 
@@ -334,23 +338,32 @@ type A2ALibp2pCmd struct {
 	Both      A2ALibp2pBothCmd      `cmd:"" help:"Run infra-only bootstrap, rendezvous, and relay mode"`
 }
 
-type A2ALibp2pBootstrapCmd struct{}
-type A2ALibp2pRelayCmd struct{}
-type A2ALibp2pBothCmd struct{}
+type A2AInfraFlags struct {
+	Port int `help:"Override infra listen port for both TCP and QUIC."`
+}
+
+type A2ALibp2pBootstrapCmd struct{ A2AInfraFlags }
+type A2ALibp2pRelayCmd struct{ A2AInfraFlags }
+type A2ALibp2pBothCmd struct{ A2AInfraFlags }
 
 func (c *A2ALibp2pBootstrapCmd) Run(ctx *Context) error {
-	return runA2AInfra(ctx, a2a.RuntimeModeBootstrap)
+	return runA2AInfra(ctx, a2a.RuntimeModeBootstrap, c.Port)
 }
-func (c *A2ALibp2pRelayCmd) Run(ctx *Context) error { return runA2AInfra(ctx, a2a.RuntimeModeRelay) }
-func (c *A2ALibp2pBothCmd) Run(ctx *Context) error  { return runA2AInfra(ctx, a2a.RuntimeModeBoth) }
+func (c *A2ALibp2pRelayCmd) Run(ctx *Context) error {
+	return runA2AInfra(ctx, a2a.RuntimeModeRelay, c.Port)
+}
+func (c *A2ALibp2pBothCmd) Run(ctx *Context) error {
+	return runA2AInfra(ctx, a2a.RuntimeModeBoth, c.Port)
+}
 
-func runA2AInfra(ctx *Context, mode a2a.RuntimeMode) error {
+func runA2AInfra(ctx *Context, mode a2a.RuntimeMode, port int) error {
 	loadResult, err := config.LoadRuntime()
 	if err != nil {
 		return err
 	}
 	loadResult.Config.A2A.Enabled = true
 	loadResult.Config.A2A.Libp2p.Enabled = true
+	overrideInfraListenAddrs(&loadResult.Config.A2A, port)
 	manager := a2a.NewManager(loadResult.Config.A2A, nil)
 	runCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -358,13 +371,45 @@ func runA2AInfra(ctx *Context, mode a2a.RuntimeMode) error {
 		return err
 	}
 	status := manager.Status()
-	fmt.Printf("A2A infra mode: %s\n", status.RuntimeMode)
-	fmt.Printf("PeerID: %s\n", status.LocalPeerID)
+	L_info("a2a infra mode started", "mode", status.RuntimeMode, "peerID", status.LocalPeerID)
 	for _, addr := range status.AdvertisedAddrs {
-		fmt.Printf("Addr: %s\n", addr)
+		L_info("a2a infra advertise address", "addr", addr)
 	}
 	<-runCtx.Done()
 	return nil
+}
+
+func overrideInfraListenAddrs(cfg *a2a.Config, port int) {
+	if cfg == nil {
+		return
+	}
+	useInfraDefaults := len(cfg.Libp2p.ListenAddrs) == 0 || usesLocalA2AListenDefaults(cfg.Libp2p.ListenAddrs)
+	switch {
+	case port > 0:
+		cfg.Libp2p.ListenAddrs = []string{
+			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port),
+			fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", port),
+		}
+	case useInfraDefaults:
+		cfg.Libp2p.ListenAddrs = []string{a2a.DefaultListenTCP, a2a.DefaultListenQUIC}
+	}
+}
+
+func usesLocalA2AListenDefaults(addrs []string) bool {
+	if len(addrs) != 2 {
+		return false
+	}
+	hasLocalTCP := false
+	hasLocalQUIC := false
+	for _, addr := range addrs {
+		switch addr {
+		case a2a.DefaultLocalListenTCP:
+			hasLocalTCP = true
+		case a2a.DefaultLocalListenQUIC:
+			hasLocalQUIC = true
+		}
+	}
+	return hasLocalTCP && hasLocalQUIC
 }
 
 // StartCmd daemonizes the gateway with supervision
@@ -3031,6 +3076,8 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		sig := <-sigCh
 		L_info("received signal", "signal", sig)
 		signal.Stop(sigCh) // Prevent handling the same signal twice
+		runtimeinfo.SetShuttingDown()
+		L_info("application shutting down")
 		// Cancel runCtx FIRST so goroutines (compaction retry, etc.) can exit.
 		// Otherwise Shutdown blocks waiting for them while they wait on I/O.
 		cancel()
@@ -3208,6 +3255,14 @@ func main() {
 		Level:      level,
 		ShowCaller: true,
 	})
+	RedirectStdlibLog()
+
+	if cwd, err := os.Getwd(); err != nil {
+		L_warn("failed to capture launch cwd", "error", err)
+	} else {
+		runtimeinfo.SetLaunchCwd(cwd)
+		L_debug("captured launch cwd", "dir", cwd)
+	}
 
 	// Hard-stop contract gate: any invalid setup FormDef/ShowWhen path aborts process.
 	if err := setupweb.ValidateAllSectionContractsStrict(); err != nil {

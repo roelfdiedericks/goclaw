@@ -20,6 +20,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/delivery"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/runtimeinfo"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
@@ -236,15 +237,19 @@ func (s *Server) loadTemplates() error {
 }
 
 func resolveDevTemplatesDir() (string, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("dev mode: failed to determine current working directory: %w", err)
+	baseDir := runtimeinfo.LaunchCwd()
+	if baseDir == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("dev mode: failed to determine launch cwd: %w", err)
+		}
+		baseDir = cwd
 	}
 
-	templatesDir := filepath.Join(cwd, filepath.FromSlash(devTemplatesRelativeDir))
+	templatesDir := filepath.Join(baseDir, filepath.FromSlash(devTemplatesRelativeDir))
 	if _, err := os.Stat(templatesDir); err != nil {
 		if os.IsNotExist(err) {
-			return "", fmt.Errorf("dev mode: templates directory not found at %s (cwd: %s). Dev mode expects the current working directory to be the GoClaw repo root so %s exists", templatesDir, cwd, devTemplatesRelativeDir)
+			return "", fmt.Errorf("dev mode: templates directory not found at %s (launch cwd: %s). Dev mode expects GoClaw to be launched from the repo root so %s exists", templatesDir, baseDir, devTemplatesRelativeDir)
 		}
 		return "", fmt.Errorf("dev mode: failed to stat templates directory %s: %w", templatesDir, err)
 	}

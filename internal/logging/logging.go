@@ -3,10 +3,12 @@
 package logging
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
 	"runtime"
+	stdlog "log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,14 +34,18 @@ var (
 	// Current log level (used for trace filtering since charmbracelet doesn't have trace)
 	currentLevel int32 = LevelInfo
 
-	// Global shutdown flag - checked by components before operations
-	shuttingDown int32
-
 	// Log hook for TUI integration
 	logHook         func(level, msg string)
 	logHookLock     sync.RWMutex
 	hookIsExclusive int32 // When set, don't write to stderr
+
+	stdlibRedirectOnce sync.Once
 )
+
+type stdlibRedirectWriter struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
 
 // LogConfig holds logging configuration
 type LogConfig struct {
@@ -95,6 +101,41 @@ func ensureInit() {
 	if logger == nil {
 		Init(nil)
 	}
+}
+
+// RedirectStdlibLog routes standard library log output through GoClaw logging.
+// This is kept inside the logging package so the rest of the application can
+// continue using only L_* helpers.
+func RedirectStdlibLog() {
+	stdlibRedirectOnce.Do(func() {
+		stdlog.SetFlags(0)
+		stdlog.SetPrefix("")
+		stdlog.SetOutput(&stdlibRedirectWriter{})
+	})
+}
+
+func (w *stdlibRedirectWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if _, err := w.buf.Write(p); err != nil {
+		return 0, err
+	}
+
+	for {
+		line, err := w.buf.ReadString('\n')
+		if err != nil {
+			if line != "" {
+				_, _ = w.buf.WriteString(line)
+			}
+			break
+		}
+		if msg := strings.TrimSpace(line); msg != "" {
+			L_info("stdlib log", "message", msg)
+		}
+	}
+
+	return len(p), nil
 }
 
 // hasFmtVerb checks if a string contains printf-style format verbs
@@ -332,17 +373,6 @@ func SetLevel(level int) {
 // GetLevel returns the current log level
 func GetLevel() int {
 	return int(atomic.LoadInt32(&currentLevel))
-}
-
-// SetShuttingDown marks the application as shutting down
-func SetShuttingDown() {
-	atomic.StoreInt32(&shuttingDown, 1)
-	L_info("Application shutting down")
-}
-
-// IsShuttingDown returns true if application is shutting down
-func IsShuttingDown() bool {
-	return atomic.LoadInt32(&shuttingDown) == 1
 }
 
 // L_elapsed logs with elapsed time since start

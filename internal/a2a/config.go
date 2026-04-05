@@ -20,6 +20,7 @@ const (
 	DefaultLocalListenTCP   = "/ip4/0.0.0.0/tcp/0"
 	DefaultLocalListenQUIC  = "/ip4/0.0.0.0/udp/0/quic-v1"
 	DefaultRetentionSeconds = 3600
+	DefaultBootstrapSeedTXT = "p2p_boot.goclaw.org"
 )
 
 type Config struct {
@@ -50,6 +51,7 @@ type DiscoveryConfig struct {
 	DHTEnabled           bool   `json:"dhtEnabled" default:"false"`
 	RendezvousEnabled    bool   `json:"rendezvousEnabled" default:"true"`
 	RendezvousNamespace  string `json:"rendezvousNamespace" default:"goclaw-a2a-v1"`
+	BootstrapSeedTXT     string `json:"bootstrapSeedTXT" default:"p2p_boot.goclaw.org"`
 	RegisterIntervalSecs int    `json:"registerIntervalSeconds" default:"30"`
 	QueryIntervalSecs    int    `json:"queryIntervalSeconds" default:"30"`
 }
@@ -93,6 +95,9 @@ func (c *Config) Normalize() {
 	}
 	if c.Libp2p.Discovery.RendezvousNamespace == "" {
 		c.Libp2p.Discovery.RendezvousNamespace = DefaultRendezvousNS
+	}
+	if c.Libp2p.Discovery.BootstrapSeedTXT == "" {
+		c.Libp2p.Discovery.BootstrapSeedTXT = DefaultBootstrapSeedTXT
 	}
 	if c.Libp2p.Discovery.RegisterIntervalSecs <= 0 {
 		c.Libp2p.Discovery.RegisterIntervalSecs = 30
@@ -154,7 +159,8 @@ func ConfigFormDef() forms.FormDef {
 			{
 				Title: "libp2p - Bootstrap And Discovery",
 				Fields: []forms.Field{
-					{Name: "libp2p.bootstrapPeers", Title: "Bootstrap Peers", Type: forms.StringList, Placeholder: "/dns4/bootstrap.example.com/tcp/4001/p2p/<peerid>", Desc: "Rendezvous-capable bootstrap peers."},
+					{Name: "libp2p.bootstrapPeers", Title: "Bootstrap Peers", Type: forms.StringList, Placeholder: "/dns4/bootstrap.example.com/tcp/4001/p2p/<peerid>", Desc: "Explicit rendezvous-capable bootstrap peers. When set, DNS TXT fallback is skipped."},
+					{Name: "libp2p.discovery.bootstrapSeedTXT", Title: "Bootstrap Seed TXT", Type: forms.Text, Default: DefaultBootstrapSeedTXT, Desc: "TXT record name to query for bootstrap multiaddrs when Bootstrap Peers is empty."},
 					{Name: "libp2p.discovery.rendezvousEnabled", Title: "Enable Rendezvous", Type: forms.Toggle, Default: true, Desc: "Enable GoClaw-hosted rendezvous registration and lookup."},
 					{Name: "libp2p.discovery.rendezvousNamespace", Title: "Rendezvous Namespace", Type: forms.Text, Default: DefaultRendezvousNS, Desc: "Namespace used for GoClaw peer discovery."},
 					{Name: "libp2p.discovery.registerIntervalSeconds", Title: "Register Interval (seconds)", Type: forms.Number, Default: 30, Desc: "How often nodes refresh their rendezvous registration."},

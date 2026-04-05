@@ -124,6 +124,7 @@ func (m *Manager) startWithMode(ctx context.Context, mode RuntimeMode) error {
 		IdentityKeyFile:      m.cfg.Libp2p.Identity.KeyFile,
 		ListenAddrs:          m.cfg.Libp2p.ListenAddrs,
 		BootstrapPeers:       m.cfg.Libp2p.BootstrapPeers,
+		BootstrapSeedTXT:     m.cfg.Libp2p.Discovery.BootstrapSeedTXT,
 		MDNSEnabled:          m.cfg.Libp2p.Discovery.MDNSEnabled,
 		MDNSServiceName:      m.cfg.Libp2p.Discovery.ServiceName,
 		RendezvousEnabled:    m.cfg.Libp2p.Discovery.RendezvousEnabled,

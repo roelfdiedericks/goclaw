@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +42,7 @@ type Config struct {
 	IdentityKeyFile      string
 	ListenAddrs          []string
 	BootstrapPeers       []string
+	BootstrapSeedTXT     string
 	MDNSEnabled          bool
 	MDNSServiceName      string
 	RendezvousEnabled    bool
@@ -172,8 +174,12 @@ func (r *Runtime) Start(ctx context.Context) error {
 		}
 		r.relay = relaySvc
 	}
-	if err := r.connectBootstrapPeers(ctx); err != nil {
-		L_warn("a2a libp2p: bootstrap connect pass failed", "error", err)
+	if r.bootstrapDialEnabled() {
+		if err := r.connectBootstrapPeers(ctx); err != nil {
+			L_warn("a2a libp2p: bootstrap connect pass failed", "error", err)
+		}
+	} else {
+		L_info("a2a libp2p: bootstrap connect pass skipped", "mode", r.mode)
 	}
 	if r.cfg.RelayClientEnabled {
 		r.reserveStaticRelays(ctx)
@@ -324,8 +330,13 @@ func (r *Runtime) CancelRemoteTask(ctx context.Context, target, taskID string, k
 }
 
 func (r *Runtime) runBackground(ctx context.Context) {
-	bootstrapTicker := time.NewTicker(30 * time.Second)
-	defer bootstrapTicker.Stop()
+	var bootstrapTicker *time.Ticker
+	var bootstrapCh <-chan time.Time
+	if r.bootstrapDialEnabled() {
+		bootstrapTicker = time.NewTicker(30 * time.Second)
+		bootstrapCh = bootstrapTicker.C
+		defer bootstrapTicker.Stop()
+	}
 
 	registerEvery := time.Duration(r.cfg.RegisterIntervalSecs) * time.Second
 	if registerEvery <= 0 {
@@ -347,7 +358,7 @@ func (r *Runtime) runBackground(ctx context.Context) {
 				_ = r.host.Close()
 			}
 			return
-		case <-bootstrapTicker.C:
+		case <-bootstrapCh:
 			_ = r.connectBootstrapPeers(ctx)
 		case <-registerTicker.C:
 			if r.mode == RuntimeModeNode && r.cfg.RendezvousEnabled {
@@ -362,11 +373,25 @@ func (r *Runtime) runBackground(ctx context.Context) {
 }
 
 func (r *Runtime) connectBootstrapPeers(ctx context.Context) error {
+	entries, source, resolutionErr := r.bootstrapPeerEntries()
+	if resolutionErr != nil {
+		return resolutionErr
+	}
+	if len(entries) == 0 {
+		L_info("a2a libp2p: no bootstrap peers resolved", "source", source)
+		return nil
+	}
+	L_info("a2a libp2p: bootstrap candidates resolved", "source", source, "count", len(entries))
 	var errs []string
-	for _, entry := range r.cfg.BootstrapPeers {
+	for _, entry := range entries {
 		info, err := parseAddrInfo(entry)
 		if err != nil {
+			L_warn("a2a libp2p: invalid bootstrap multiaddr", "source", source, "addr", entry, "error", err)
 			errs = append(errs, err.Error())
+			continue
+		}
+		if r.host != nil && info.ID == r.host.ID() {
+			L_info("a2a libp2p: skipping self bootstrap candidate", "source", source, "peerID", info.ID)
 			continue
 		}
 		if err := r.connectAddrInfo(ctx, *info); err != nil {
@@ -377,6 +402,40 @@ func (r *Runtime) connectBootstrapPeers(ctx context.Context) error {
 		return fmt.Errorf(strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+func (r *Runtime) bootstrapDialEnabled() bool {
+	return r.mode == RuntimeModeNode
+}
+
+func (r *Runtime) bootstrapPeerEntries() ([]string, string, error) {
+	if len(r.cfg.BootstrapPeers) > 0 {
+		return cloneStrings(r.cfg.BootstrapPeers), "config", nil
+	}
+	seed := strings.TrimSpace(r.cfg.BootstrapSeedTXT)
+	if seed == "" {
+		return nil, "dns_txt", nil
+	}
+	txts, err := net.LookupTXT(seed)
+	if err != nil {
+		return nil, "dns_txt", fmt.Errorf("resolve bootstrap TXT %s: %w", seed, err)
+	}
+	valid := make([]string, 0, len(txts))
+	var invalid int
+	for _, txt := range txts {
+		entry := strings.TrimSpace(txt)
+		if entry == "" {
+			continue
+		}
+		if _, err := parseAddrInfo(entry); err != nil {
+			L_warn("a2a libp2p: ignoring malformed bootstrap TXT entry", "seed", seed, "value", entry, "error", err)
+			invalid++
+			continue
+		}
+		valid = append(valid, entry)
+	}
+	L_info("a2a libp2p: bootstrap TXT resolved", "seed", seed, "records", len(txts), "valid", len(valid), "invalid", invalid)
+	return valid, "dns_txt", nil
 }
 
 func (r *Runtime) connectAddrInfo(ctx context.Context, info peer.AddrInfo) error {
@@ -482,7 +541,12 @@ func (r *Runtime) registerRendezvous(ctx context.Context) {
 		PeerID:    r.host.ID().String(),
 		Addrs:     r.AdvertisedAddrs(),
 	}
-	for _, addr := range r.cfg.BootstrapPeers {
+	entries, _, err := r.bootstrapPeerEntries()
+	if err != nil {
+		L_warn("a2a libp2p: rendezvous bootstrap resolution failed", "error", err)
+		return
+	}
+	for _, addr := range entries {
 		info, err := parseAddrInfo(addr)
 		if err != nil {
 			continue
@@ -499,7 +563,12 @@ func (r *Runtime) queryRendezvous(ctx context.Context) {
 		Namespace: r.cfg.RendezvousNamespace,
 		PeerID:    r.host.ID().String(),
 	}
-	for _, addr := range r.cfg.BootstrapPeers {
+	entries, _, err := r.bootstrapPeerEntries()
+	if err != nil {
+		L_warn("a2a libp2p: rendezvous bootstrap resolution failed", "error", err)
+		return
+	}
+	for _, addr := range entries {
 		info, err := parseAddrInfo(addr)
 		if err != nil {
 			continue

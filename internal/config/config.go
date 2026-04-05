@@ -513,6 +513,9 @@ func applyRuntimeDefaults(cfg *Config, goclawDir, home string) {
 	if cfg.A2A.Libp2p.Discovery.RendezvousNamespace == "" {
 		cfg.A2A.Libp2p.Discovery.RendezvousNamespace = a2a.DefaultRendezvousNS
 	}
+	if cfg.A2A.Libp2p.Discovery.BootstrapSeedTXT == "" {
+		cfg.A2A.Libp2p.Discovery.BootstrapSeedTXT = a2a.DefaultBootstrapSeedTXT
+	}
 	if cfg.A2A.Libp2p.Discovery.RegisterIntervalSecs == 0 {
 		cfg.A2A.Libp2p.Discovery.RegisterIntervalSecs = 30
 	}
@@ -888,6 +891,7 @@ func DefaultConfig() *DefaultConfigTemplate {
 				Discovery: a2a.DiscoveryConfig{
 					RendezvousEnabled:    true,
 					RendezvousNamespace:  a2a.DefaultRendezvousNS,
+					BootstrapSeedTXT:     a2a.DefaultBootstrapSeedTXT,
 					ServiceName:          a2a.DefaultRendezvousNS,
 					RegisterIntervalSecs: 30,
 					QueryIntervalSecs:    30,
