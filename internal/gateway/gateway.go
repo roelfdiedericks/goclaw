@@ -1444,6 +1444,8 @@ func (g *Gateway) Start(ctx context.Context) {
 	if g.a2aManager != nil {
 		if err := g.a2aManager.Start(ctx); err != nil {
 			L_warn("a2a: start failed", "error", err)
+		} else {
+			L_info("a2a: startup scheduled")
 		}
 	}
 

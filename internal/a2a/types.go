@@ -26,6 +26,17 @@ const (
 	RuntimeModeBoth      RuntimeMode = "both"
 )
 
+type LifecycleState string
+
+const (
+	LifecycleStateIdle      LifecycleState = "idle"
+	LifecycleStateDisabled  LifecycleState = "disabled"
+	LifecycleStateStarting  LifecycleState = "starting"
+	LifecycleStateRunning   LifecycleState = "running"
+	LifecycleStateDegraded  LifecycleState = "degraded"
+	LifecycleStateFailed    LifecycleState = "failed"
+)
+
 type TaskState string
 
 const (
@@ -63,6 +74,9 @@ type PeerRecord struct {
 type Status struct {
 	Enabled             bool           `json:"enabled"`
 	ActiveTransport     string         `json:"activeTransport"`
+	LifecycleState      LifecycleState `json:"lifecycleState"`
+	Ready               bool           `json:"ready"`
+	WarmupComplete      bool           `json:"warmupComplete"`
 	RuntimeMode         RuntimeMode    `json:"runtimeMode"`
 	LocalPeerID         string         `json:"localPeerId,omitempty"`
 	ListenAddrs         []string       `json:"listenAddrs,omitempty"`

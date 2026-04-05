@@ -312,12 +312,10 @@ func snapshotFromTransportUpdate(update libp2ptransport.TaskUpdate, peerID, sess
 }
 
 func (m *Manager) SubmitRemoteTask(ctx context.Context, target, input string) (string, <-chan TaskSnapshot, error) {
-	m.mu.RLock()
-	rt := m.runtime
-	m.mu.RUnlock()
-	if rt == nil {
-		L_warn("a2a: outbound task submit rejected", "peerID", target, "error", "runtime not started")
-		return "", nil, fmt.Errorf("A2A runtime not started")
+	rt, err := m.readyRuntime()
+	if err != nil {
+		L_warn("a2a: outbound task submit rejected", "peerID", target, "error", err)
+		return "", nil, err
 	}
 	taskID := "remote-" + strings.ReplaceAll(time.Now().UTC().Format("20060102T150405.000000000"), ".", "")
 	sessionKey := SessionKeyForTask(TransportIDLibp2p, target, taskID)
@@ -364,12 +362,10 @@ func (m *Manager) SubmitRemoteTask(ctx context.Context, target, input string) (s
 }
 
 func (m *Manager) ResumeRemoteTask(ctx context.Context, target, taskID string) (<-chan TaskSnapshot, error) {
-	m.mu.RLock()
-	rt := m.runtime
-	m.mu.RUnlock()
-	if rt == nil {
-		L_warn("a2a: outbound task resume rejected", "peerID", target, "taskID", taskID, "error", "runtime not started")
-		return nil, fmt.Errorf("A2A runtime not started")
+	rt, err := m.readyRuntime()
+	if err != nil {
+		L_warn("a2a: outbound task resume rejected", "peerID", target, "taskID", taskID, "error", err)
+		return nil, err
 	}
 	sessionKey := SessionKeyForTask(TransportIDLibp2p, target, taskID)
 	key := taskKey(target, taskID)
@@ -424,12 +420,10 @@ func (m *Manager) ResumeRemoteTask(ctx context.Context, target, taskID string) (
 }
 
 func (m *Manager) CancelRemoteTask(ctx context.Context, target, taskID string) (TaskSnapshot, error) {
-	m.mu.RLock()
-	rt := m.runtime
-	m.mu.RUnlock()
-	if rt == nil {
-		L_warn("a2a: outbound task cancel rejected", "peerID", target, "taskID", taskID, "error", "runtime not started")
-		return TaskSnapshot{}, fmt.Errorf("A2A runtime not started")
+	rt, err := m.readyRuntime()
+	if err != nil {
+		L_warn("a2a: outbound task cancel rejected", "peerID", target, "taskID", taskID, "error", err)
+		return TaskSnapshot{}, err
 	}
 	L_info("a2a: outbound task cancel requested", "peerID", target, "taskID", taskID)
 	update, err := rt.CancelRemoteTask(ctx, target, taskID, m.transportPeerCandidates())

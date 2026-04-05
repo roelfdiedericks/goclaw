@@ -23,6 +23,9 @@ type Manager struct {
 	adapter  ExecutionAdapter
 	runtime  *libp2ptransport.Runtime
 
+	lifecycleState LifecycleState
+	runtimeMode    RuntimeMode
+	warmupComplete bool
 	peers        map[string]*PeerRecord
 	tasks        map[string]*taskRuntime
 	expiredTasks map[string]time.Time
@@ -61,6 +64,8 @@ func NewManager(cfg Config, users *user.Registry) *Manager {
 	m := &Manager{
 		cfg:          cfg,
 		users:        users,
+		lifecycleState: LifecycleStateIdle,
+		runtimeMode:  RuntimeModeNode,
 		peers:        make(map[string]*PeerRecord),
 		tasks:        make(map[string]*taskRuntime),
 		expiredTasks: make(map[string]time.Time),
@@ -106,20 +111,44 @@ func (m *Manager) StartInfra(ctx context.Context, mode RuntimeMode) error {
 }
 
 func (m *Manager) startWithMode(ctx context.Context, mode RuntimeMode) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if !m.cfg.Enabled || !m.cfg.Libp2p.Enabled {
+		m.mu.Lock()
+		m.runtimeMode = mode
+		m.lifecycleState = LifecycleStateDisabled
+		m.warmupComplete = false
+		m.lastError = ""
+		m.mu.Unlock()
 		L_info("a2a: startup skipped", "enabled", m.cfg.Enabled, "libp2pEnabled", m.cfg.Libp2p.Enabled)
 		return nil
 	}
 	if m.cfg.DefaultTransport != DefaultTransportLibp2p {
 		return fmt.Errorf("unsupported A2A transport: %s", m.cfg.DefaultTransport)
 	}
-	if m.runtime != nil {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lifecycleState == LifecycleStateStarting {
+		if m.runtimeMode != mode {
+			return fmt.Errorf("A2A startup already in progress for mode %s", m.runtimeMode)
+		}
 		return nil
 	}
-	now := time.Now()
+	if m.runtime != nil {
+		if m.runtimeMode != mode {
+			return fmt.Errorf("A2A runtime already active in mode %s", m.runtimeMode)
+		}
+		return nil
+	}
+	m.runtimeMode = mode
+	m.lifecycleState = LifecycleStateStarting
+	m.warmupComplete = false
+	m.startedAt = nil
+	m.lastError = ""
+	L_info("a2a: startup scheduled", "mode", mode)
+	go m.runStartup(ctx, mode)
+	return nil
+}
+
+func (m *Manager) runStartup(ctx context.Context, mode RuntimeMode) {
 	rt := libp2ptransport.New(libp2ptransport.Config{
 		IdentityKeyFile:      m.cfg.Libp2p.Identity.KeyFile,
 		ListenAddrs:          m.cfg.Libp2p.ListenAddrs,
@@ -143,14 +172,68 @@ func (m *Manager) startWithMode(ctx context.Context, mode RuntimeMode) error {
 		OnInboundCancel: m.CancelTask,
 	})
 	if err := rt.Start(ctx); err != nil {
+		m.mu.Lock()
+		m.runtime = nil
+		m.lifecycleState = LifecycleStateFailed
+		m.warmupComplete = false
 		m.lastError = err.Error()
-		return err
+		m.mu.Unlock()
+		L_error("a2a: startup failed", "mode", mode, "error", err)
+		return
 	}
+
+	now := time.Now()
+	m.mu.Lock()
 	m.runtime = rt
 	m.startedAt = &now
+	m.lifecycleState = LifecycleStateRunning
+	m.warmupComplete = false
 	m.lastError = ""
+	m.mu.Unlock()
 	L_info("a2a: started", "mode", mode, "peerID", rt.LocalPeerID())
-	return nil
+
+	if err := rt.Warmup(ctx); err != nil {
+		m.mu.Lock()
+		if m.runtime == rt {
+			m.lifecycleState = LifecycleStateDegraded
+			m.warmupComplete = true
+			m.lastError = err.Error()
+		}
+		m.mu.Unlock()
+		L_warn("a2a: warmup completed with errors", "mode", mode, "error", err)
+	} else {
+		m.mu.Lock()
+		if m.runtime == rt {
+			m.lifecycleState = LifecycleStateRunning
+			m.warmupComplete = true
+			m.lastError = ""
+		}
+		m.mu.Unlock()
+		L_info("a2a: warmup complete", "mode", mode, "peerID", rt.LocalPeerID())
+	}
+
+	if err := rt.Run(ctx); err != nil {
+		m.mu.Lock()
+		if m.runtime == rt {
+			m.runtime = nil
+			m.lifecycleState = LifecycleStateFailed
+			m.warmupComplete = false
+			m.lastError = err.Error()
+		}
+		m.mu.Unlock()
+		L_error("a2a: runtime failed", "mode", mode, "error", err)
+		return
+	}
+
+	m.mu.Lock()
+	if m.runtime == rt {
+		m.runtime = nil
+		m.lifecycleState = LifecycleStateIdle
+		m.warmupComplete = false
+		m.lastError = ""
+	}
+	m.mu.Unlock()
+	L_info("a2a: runtime stopped", "mode", mode)
 }
 
 func (m *Manager) Status() Status {
@@ -161,7 +244,10 @@ func (m *Manager) Status() Status {
 	status := Status{
 		Enabled:            m.cfg.Enabled && m.cfg.Libp2p.Enabled,
 		ActiveTransport:    m.cfg.DefaultTransport,
-		RuntimeMode:        RuntimeModeNode,
+		LifecycleState:     m.currentLifecycleStateLocked(),
+		Ready:              m.runtime != nil && (m.lifecycleState == LifecycleStateRunning || m.lifecycleState == LifecycleStateDegraded),
+		WarmupComplete:     m.warmupComplete,
+		RuntimeMode:        m.runtimeMode,
 		BootstrapPeers:     len(m.cfg.Libp2p.BootstrapPeers),
 		TrustedPeers:       len(m.cfg.Libp2p.TrustedPeers),
 		KnownPeers:         len(m.peers),
@@ -257,14 +343,13 @@ func matchesTaskFilter(summary TaskSummary, filter, peer string) bool {
 }
 
 func (m *Manager) PairingPayload() PairingPayload {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if m.runtime == nil {
+	rt, err := m.readyRuntime()
+	if err != nil {
 		return PairingPayload{}
 	}
 	return PairingPayload{
-		PeerID: m.runtime.LocalPeerID(),
-		Addrs:  m.runtime.AdvertisedAddrs(),
+		PeerID: rt.LocalPeerID(),
+		Addrs:  rt.AdvertisedAddrs(),
 	}
 }
 
@@ -310,11 +395,9 @@ func matchesPeerFilter(rec *PeerRecord, filter string) bool {
 }
 
 func (m *Manager) PingPeer(ctx context.Context, target string) (PingResult, error) {
-	m.mu.RLock()
-	rt := m.runtime
-	m.mu.RUnlock()
-	if rt == nil {
-		return PingResult{}, fmt.Errorf("A2A runtime not started")
+	rt, err := m.readyRuntime()
+	if err != nil {
+		return PingResult{}, err
 	}
 	peerID, latency, message, err := rt.PingPeer(ctx, target, m.transportPeerCandidates())
 	if err != nil {
@@ -459,4 +542,35 @@ func (m *Manager) transportPeerCandidates() []libp2ptransport.PeerCandidate {
 		})
 	}
 	return out
+}
+
+func (m *Manager) currentLifecycleStateLocked() LifecycleState {
+	if !m.cfg.Enabled || !m.cfg.Libp2p.Enabled {
+		return LifecycleStateDisabled
+	}
+	if m.lifecycleState == "" {
+		return LifecycleStateIdle
+	}
+	return m.lifecycleState
+}
+
+func (m *Manager) readyRuntime() (*libp2ptransport.Runtime, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	switch m.currentLifecycleStateLocked() {
+	case LifecycleStateDisabled:
+		return nil, fmt.Errorf("A2A is disabled")
+	case LifecycleStateStarting:
+		return nil, fmt.Errorf("A2A is still starting")
+	case LifecycleStateFailed:
+		if strings.TrimSpace(m.lastError) != "" {
+			return nil, fmt.Errorf("A2A startup failed: %s", m.lastError)
+		}
+		return nil, fmt.Errorf("A2A startup failed")
+	}
+	if m.runtime == nil {
+		return nil, fmt.Errorf("A2A runtime not started")
+	}
+	return m.runtime, nil
 }

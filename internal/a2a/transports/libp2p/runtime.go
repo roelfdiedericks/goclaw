@@ -174,20 +174,40 @@ func (r *Runtime) Start(ctx context.Context) error {
 		}
 		r.relay = relaySvc
 	}
+	return nil
+}
+
+func (r *Runtime) Warmup(ctx context.Context) error {
+	if r.host == nil {
+		return fmt.Errorf("host not started")
+	}
+	var errs []string
 	if r.bootstrapDialEnabled() {
 		if err := r.connectBootstrapPeers(ctx); err != nil {
 			L_warn("a2a libp2p: bootstrap connect pass failed", "error", err)
+			errs = append(errs, err.Error())
 		}
 	} else {
 		L_info("a2a libp2p: bootstrap connect pass skipped", "mode", r.mode)
 	}
 	if r.cfg.RelayClientEnabled {
-		r.reserveStaticRelays(ctx)
+		if err := r.reserveStaticRelays(ctx); err != nil {
+			errs = append(errs, err.Error())
+		}
 	}
 	if r.mode == RuntimeModeNode && r.cfg.MDNSEnabled {
-		r.startMDNS()
+		if err := r.startMDNS(); err != nil {
+			errs = append(errs, err.Error())
+		}
 	}
-	go r.runBackground(ctx)
+	if len(errs) > 0 {
+		return fmt.Errorf(strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+func (r *Runtime) Run(ctx context.Context) error {
+	r.runBackground(ctx)
 	return nil
 }
 
@@ -460,32 +480,41 @@ func (r *Runtime) connectAddrInfo(ctx context.Context, info peer.AddrInfo) error
 	return nil
 }
 
-func (r *Runtime) reserveStaticRelays(ctx context.Context) {
+func (r *Runtime) reserveStaticRelays(ctx context.Context) error {
+	var errs []string
 	for _, relayAddr := range r.cfg.StaticRelays {
 		info, err := parseAddrInfo(relayAddr)
 		if err != nil {
 			L_warn("a2a libp2p: invalid static relay", "addr", relayAddr, "error", err)
+			errs = append(errs, err.Error())
 			continue
 		}
 		if err := r.connectAddrInfo(ctx, *info); err != nil {
 			L_warn("a2a libp2p: connect static relay failed", "peerID", info.ID, "error", err)
+			errs = append(errs, err.Error())
 			continue
 		}
 		if _, err := relayclient.Reserve(ctx, r.host, *info); err != nil {
 			L_warn("a2a libp2p: relay reservation failed", "peerID", info.ID, "error", err)
+			errs = append(errs, err.Error())
 			continue
 		}
 		L_info("a2a libp2p: relay reserved", "peerID", info.ID)
 	}
+	if len(errs) > 0 {
+		return fmt.Errorf(strings.Join(errs, "; "))
+	}
+	return nil
 }
 
-func (r *Runtime) startMDNS() {
+func (r *Runtime) startMDNS() error {
 	service := mdns.NewMdnsService(r.host, r.cfg.MDNSServiceName, &mdnsNotifee{runtime: r})
 	if err := service.Start(); err != nil {
 		L_warn("a2a libp2p: mdns start failed", "error", err)
-		return
+		return err
 	}
 	L_info("a2a libp2p: mdns started", "service", r.cfg.MDNSServiceName)
+	return nil
 }
 
 func (r *Runtime) observeDiscoveredPeer(info peer.AddrInfo) {

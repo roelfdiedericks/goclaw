@@ -488,6 +488,9 @@ func a2aStatusResult(status a2a.Status) *CommandResult {
 	text.WriteString("A2A Status\n")
 	text.WriteString(fmt.Sprintf("  Enabled: %t\n", status.Enabled))
 	text.WriteString(fmt.Sprintf("  Transport: %s\n", status.ActiveTransport))
+	text.WriteString(fmt.Sprintf("  Lifecycle: %s\n", status.LifecycleState))
+	text.WriteString(fmt.Sprintf("  Ready: %t\n", status.Ready))
+	text.WriteString(fmt.Sprintf("  Warmup complete: %t\n", status.WarmupComplete))
 	text.WriteString(fmt.Sprintf("  Mode: %s\n", status.RuntimeMode))
 	if status.LocalPeerID != "" {
 		text.WriteString(fmt.Sprintf("  PeerID: %s\n", status.LocalPeerID))
@@ -606,8 +609,8 @@ func a2aPeersResult(peers []a2a.PeerRecord, filter string) *CommandResult {
 func a2aPairingResult(payload a2a.PairingPayload) *CommandResult {
 	if payload.PeerID == "" {
 		return &CommandResult{
-			Text:     "A2A runtime not started yet.",
-			Markdown: "A2A runtime not started yet.",
+			Text:     "A2A runtime not ready yet.",
+			Markdown: "A2A runtime not ready yet.",
 		}
 	}
 	var text strings.Builder

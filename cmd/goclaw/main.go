@@ -324,6 +324,9 @@ func (c *A2AStatusCmd) Run(ctx *Context) error {
 	L_info("a2a status",
 		"enabled", status.Enabled,
 		"transport", status.ActiveTransport,
+		"lifecycle", status.LifecycleState,
+		"ready", status.Ready,
+		"warmupComplete", status.WarmupComplete,
 		"bootstrapPeers", status.BootstrapPeers,
 		"trustedPeers", status.TrustedPeers,
 		"rendezvousEnabled", status.RendezvousEnabled,
@@ -370,13 +373,50 @@ func runA2AInfra(ctx *Context, mode a2a.RuntimeMode, port int) error {
 	if err := manager.StartInfra(runCtx, mode); err != nil {
 		return err
 	}
-	status := manager.Status()
-	L_info("a2a infra mode started", "mode", status.RuntimeMode, "peerID", status.LocalPeerID)
+	status, err := awaitA2AInfraHostReady(runCtx, manager, 5*time.Second)
+	if err != nil {
+		return err
+	}
+	L_info("a2a infra mode started",
+		"mode", status.RuntimeMode,
+		"lifecycle", status.LifecycleState,
+		"ready", status.Ready,
+		"peerID", status.LocalPeerID,
+	)
 	for _, addr := range status.AdvertisedAddrs {
 		L_info("a2a infra advertise address", "addr", addr)
 	}
 	<-runCtx.Done()
 	return nil
+}
+
+func awaitA2AInfraHostReady(ctx context.Context, manager *a2a.Manager, timeout time.Duration) (a2a.Status, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		status := manager.Status()
+		if status.LifecycleState == a2a.LifecycleStateFailed {
+			if strings.TrimSpace(status.LastError) != "" {
+				return status, fmt.Errorf("A2A infra startup failed: %s", status.LastError)
+			}
+			return status, fmt.Errorf("A2A infra startup failed")
+		}
+		if status.Ready || status.LifecycleState == a2a.LifecycleStateRunning || status.LifecycleState == a2a.LifecycleStateDegraded {
+			return status, nil
+		}
+		if time.Now().After(deadline) {
+			L_info("a2a infra startup still in progress",
+				"mode", status.RuntimeMode,
+				"lifecycle", status.LifecycleState,
+				"ready", status.Ready,
+			)
+			return status, nil
+		}
+		select {
+		case <-ctx.Done():
+			return status, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 func overrideInfraListenAddrs(cfg *a2a.Config, port int) {
