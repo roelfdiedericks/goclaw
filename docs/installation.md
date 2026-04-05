@@ -122,6 +122,7 @@ This will:
 - Install Debian WSL distribution
 - Run the Linux installer inside WSL
 - Create a "GoClaw" desktop shortcut
+- Auto-install the optional `libwebkit2gtk-4.1-0` runtime inside WSL so the embedded web setup UI is more likely to work without extra manual steps
 
 **Manual setup:**
 
@@ -131,6 +132,8 @@ This will:
    curl -fsSL https://goclaw.org/install.sh | sh
    goclaw onboard
    ```
+
+If you skip optional GUI dependencies or want to install them later, the embedded web setup UI on Debian/Ubuntu uses `libwebkit2gtk-4.1-0`.
 
 ### Run Setup Wizard
 

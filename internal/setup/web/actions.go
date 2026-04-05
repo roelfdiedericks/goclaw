@@ -3,6 +3,7 @@ package web
 import (
 	"sync"
 
+	"github.com/roelfdiedericks/goclaw/internal/a2a"
 	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/auth"
 	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
@@ -33,6 +34,7 @@ func registerWebActionCommands() {
 		tuiconfig.RegisterCommands()
 		llm.RegisterCommands()
 		acp.RegisterCommands()
+		a2a.RegisterCommands()
 		gateway.RegisterCommands()
 		session.RegisterCommands()
 		media.RegisterCommands()

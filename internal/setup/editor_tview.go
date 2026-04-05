@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/rivo/tview"
+	"github.com/roelfdiedericks/goclaw/internal/a2a"
 	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/auth"
 	"github.com/roelfdiedericks/goclaw/internal/bus"
@@ -72,6 +73,7 @@ func (e *EditorTview) Run() error {
 	cron.RegisterCommands()
 	auth.RegisterCommands()
 	acp.RegisterCommands()
+	a2a.RegisterCommands()
 	gateway.RegisterCommands()
 	transcript.RegisterCommands()
 	stt.RegisterCommands()
@@ -133,6 +135,7 @@ func (e *EditorTview) createMenu() *forms.MenuListResult {
 		{Label: "LLM Configuration", OnSelect: e.editLLM},
 		{Label: "VoiceLLM Configuration", OnSelect: e.editVoiceLLM},
 		{Label: "Coding Agents", OnSelect: e.editACP},
+		{Label: "A2A Networking", OnSelect: e.editA2A},
 		{Label: "Gateway Settings", OnSelect: e.editGateway},
 		{Label: "Session Management", OnSelect: e.editSession},
 		{IsSeparator: true, Label: "Channels"},
@@ -756,6 +759,33 @@ func (e *EditorTview) editACP() {
 	}
 
 	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "Coding Agents"})
+	e.app.SetFormContent(content)
+}
+
+func (e *EditorTview) editA2A() {
+	L_info("editor: opening A2A config")
+
+	a2aCfg := e.cfg.A2A
+	a2aCfg.Normalize()
+	formDef := a2a.ConfigFormDef()
+
+	content, err := forms.BuildFormContent(formDef, &a2aCfg, "a2a", func(result forms.TviewResult) {
+		if result == forms.ResultAccepted {
+			a2aCfg.Normalize()
+			e.cfg.A2A = a2aCfg
+			e.dirty = true
+			L_info("editor: A2A config updated")
+		} else {
+			L_info("editor: A2A config cancelled")
+		}
+		e.showMainMenu()
+	}, e.app.App())
+	if err != nil {
+		L_error("editor: A2A form error", "error", err)
+		return
+	}
+
+	e.app.SetBreadcrumbs([]string{"GoClaw Configuration", "A2A Networking"})
 	e.app.SetFormContent(content)
 }
 

@@ -2,6 +2,7 @@
 package web
 
 import (
+	"github.com/roelfdiedericks/goclaw/internal/a2a"
 	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/auth"
 	"github.com/roelfdiedericks/goclaw/internal/channels/http/config"
@@ -33,6 +34,7 @@ var formDefRegistry = map[string]FormDefGetter{
 	"llm":           llm.ConfigFormDef,
 	"voicellm":      voicellm.ConfigFormDef,
 	"acp":           acp.ConfigFormDef,
+	"a2a":           a2a.ConfigFormDef,
 	"gateway":       gateway.ConfigFormDef,
 	"session":       session.ConfigFormDef,
 

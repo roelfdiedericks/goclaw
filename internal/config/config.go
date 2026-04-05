@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/creasty/defaults"
+	"github.com/roelfdiedericks/goclaw/internal/a2a"
 	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/auth"
 	httpconfig "github.com/roelfdiedericks/goclaw/internal/channels/http/config"
@@ -175,6 +176,7 @@ type ChannelsConfig struct {
 
 // Config represents the merged goclaw configuration
 type Config struct {
+	A2A           a2a.Config                  `json:"a2a"`
 	Gateway       gwtypes.GatewayConfig       `json:"gateway"`
 	ACP           acp.Config                  `json:"acp"`
 	Agent         gwtypes.AgentIdentityConfig `json:"agent"`
@@ -483,6 +485,48 @@ func applyRuntimeDefaults(cfg *Config, goclawDir, home string) {
 	}
 	if cfg.Session.InheritPath == "" {
 		cfg.Session.InheritPath = filepath.Join(home, ".openclaw", "agents", "main", "sessions")
+	}
+	if cfg.A2A.DefaultTransport == "" {
+		cfg.A2A.DefaultTransport = a2a.DefaultTransportLibp2p
+	}
+	if cfg.A2A.Libp2p.Identity.KeyFile == "" {
+		cfg.A2A.Libp2p.Identity.KeyFile = a2a.DefaultIdentityKeyFile
+	}
+	if cfg.A2A.Libp2p.Identity.KeyType == "" {
+		cfg.A2A.Libp2p.Identity.KeyType = "ed25519"
+	}
+	if cfg.A2A.Libp2p.ListenAddrs == nil {
+		cfg.A2A.Libp2p.ListenAddrs = []string{a2a.DefaultLocalListenTCP, a2a.DefaultLocalListenQUIC}
+	}
+	if cfg.A2A.Libp2p.BootstrapPeers == nil {
+		cfg.A2A.Libp2p.BootstrapPeers = []string{}
+	}
+	if cfg.A2A.Libp2p.Relay.StaticRelays == nil {
+		cfg.A2A.Libp2p.Relay.StaticRelays = []string{}
+	}
+	if cfg.A2A.Libp2p.TrustedPeers == nil {
+		cfg.A2A.Libp2p.TrustedPeers = []a2a.TrustedPeerConfig{}
+	}
+	if cfg.A2A.Libp2p.Discovery.ServiceName == "" {
+		cfg.A2A.Libp2p.Discovery.ServiceName = a2a.DefaultRendezvousNS
+	}
+	if cfg.A2A.Libp2p.Discovery.RendezvousNamespace == "" {
+		cfg.A2A.Libp2p.Discovery.RendezvousNamespace = a2a.DefaultRendezvousNS
+	}
+	if cfg.A2A.Libp2p.Discovery.RegisterIntervalSecs == 0 {
+		cfg.A2A.Libp2p.Discovery.RegisterIntervalSecs = 30
+	}
+	if cfg.A2A.Libp2p.Discovery.QueryIntervalSecs == 0 {
+		cfg.A2A.Libp2p.Discovery.QueryIntervalSecs = 30
+	}
+	if cfg.A2A.Libp2p.Protocol.RPCProtocolID == "" {
+		cfg.A2A.Libp2p.Protocol.RPCProtocolID = a2a.DefaultRPCProtocolID
+	}
+	if cfg.A2A.Libp2p.Protocol.RendezvousProtocolID == "" {
+		cfg.A2A.Libp2p.Protocol.RendezvousProtocolID = a2a.DefaultRendezvousID
+	}
+	if cfg.A2A.Libp2p.Protocol.StateRetentionSecs == 0 {
+		cfg.A2A.Libp2p.Protocol.StateRetentionSecs = a2a.DefaultRetentionSeconds
 	}
 
 	// Map defaults
@@ -799,6 +843,7 @@ func isPathLikeField(fieldInfo reflect.StructField) bool {
 // Only includes fields that users typically need to customize.
 // The full defaults are applied by Load() when merging.
 type DefaultConfigTemplate struct {
+	A2A      a2a.Config              `json:"a2a,omitempty"`
 	LLM      DefaultLLMTemplate      `json:"llm"`
 	Gateway  DefaultGatewayTemplate  `json:"gateway,omitempty"`
 	ACP      acp.Config              `json:"acp,omitempty"`
@@ -829,6 +874,37 @@ type DefaultHTTPTemplate struct {
 // The apiKey field has a placeholder that must be replaced.
 func DefaultConfig() *DefaultConfigTemplate {
 	return &DefaultConfigTemplate{
+		A2A: a2a.Config{
+			Enabled:          false,
+			DefaultTransport: a2a.DefaultTransportLibp2p,
+			Libp2p: a2a.Libp2pConfig{
+				Enabled:        false,
+				ListenAddrs:    []string{a2a.DefaultLocalListenTCP, a2a.DefaultLocalListenQUIC},
+				BootstrapPeers: []string{},
+				Identity: a2a.IdentityConfig{
+					KeyFile: a2a.DefaultIdentityKeyFile,
+					KeyType: "ed25519",
+				},
+				Discovery: a2a.DiscoveryConfig{
+					RendezvousEnabled:    true,
+					RendezvousNamespace:  a2a.DefaultRendezvousNS,
+					ServiceName:          a2a.DefaultRendezvousNS,
+					RegisterIntervalSecs: 30,
+					QueryIntervalSecs:    30,
+				},
+				Relay: a2a.RelayConfig{
+					EnableClient: true,
+					EnableServer: false,
+					StaticRelays: []string{},
+				},
+				TrustedPeers: []a2a.TrustedPeerConfig{},
+				Protocol: a2a.ProtocolConfig{
+					RPCProtocolID:        a2a.DefaultRPCProtocolID,
+					RendezvousProtocolID: a2a.DefaultRendezvousID,
+					StateRetentionSecs:   a2a.DefaultRetentionSeconds,
+				},
+			},
+		},
 		LLM: DefaultLLMTemplate{
 			Providers: map[string]llm.LLMProviderConfig{
 				"anthropic": {

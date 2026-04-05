@@ -17,7 +17,9 @@ import (
 	"sync"
 	"time"
 
+	a2aproto "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
+	"github.com/roelfdiedericks/goclaw/internal/a2a"
 	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/config"
@@ -262,6 +264,7 @@ type Gateway struct {
 	mediaStore          *media.MediaStore
 	memoryManager       *memory.Manager
 	memoryGraphManager  *memorygraph.Manager
+	a2aManager          *a2a.Manager
 	commandHandler      *commands.Handler
 	skillManager        *skills.Manager
 	cronService         *cron.Service
@@ -638,6 +641,9 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 	} else {
 		L_info("skills: disabled by configuration")
 	}
+
+	g.a2aManager = a2a.NewManager(cfg.A2A, users)
+	g.a2aManager.SetExecutor(g)
 
 	return g, nil
 }
@@ -1434,6 +1440,12 @@ func (g *Gateway) Start(ctx context.Context) {
 
 	// Check embeddings model mismatch and auto-rebuild if configured
 	g.checkEmbeddingsMismatch(ctx)
+
+	if g.a2aManager != nil {
+		if err := g.a2aManager.Start(ctx); err != nil {
+			L_warn("a2a: start failed", "error", err)
+		}
+	}
 
 	// NOTE: Cron is NOT started here - call StartCron() after channels are registered
 }
@@ -3936,6 +3948,140 @@ func (g *Gateway) ACPHandoffPending(ctx context.Context, sessionKey string) ([]a
 		return nil, fmt.Errorf("ACP manager not initialized")
 	}
 	return mgr.CancelPendingHandoff(ctx, sessionKey)
+}
+
+func (g *Gateway) GetA2AStatus() a2a.Status {
+	if g.a2aManager == nil {
+		return a2a.Status{}
+	}
+	return g.a2aManager.Status()
+}
+
+func (g *Gateway) ListA2APeers(filter string) []a2a.PeerRecord {
+	if g.a2aManager == nil {
+		return nil
+	}
+	return g.a2aManager.ListPeers(filter)
+}
+
+func (g *Gateway) ListA2ATasks(filter string, peer string) []a2a.TaskSummary {
+	if g.a2aManager == nil {
+		return nil
+	}
+	return g.a2aManager.ListTasks(filter, peer)
+}
+
+func (g *Gateway) GetA2APairingPayload() a2a.PairingPayload {
+	if g.a2aManager == nil {
+		return a2a.PairingPayload{}
+	}
+	return g.a2aManager.PairingPayload()
+}
+
+func (g *Gateway) PingA2APeer(ctx context.Context, target string) (a2a.PingResult, error) {
+	if g.a2aManager == nil {
+		return a2a.PingResult{}, fmt.Errorf("A2A manager not initialized")
+	}
+	return g.a2aManager.PingPeer(ctx, target)
+}
+
+func (g *Gateway) SubmitA2ATask(ctx context.Context, target string, input string) (string, <-chan a2a.TaskSnapshot, error) {
+	if g.a2aManager == nil {
+		return "", nil, fmt.Errorf("A2A manager not initialized")
+	}
+	return g.a2aManager.SubmitRemoteTask(ctx, target, input)
+}
+
+func (g *Gateway) ResumeA2ATask(ctx context.Context, target string, taskID string) (<-chan a2a.TaskSnapshot, error) {
+	if g.a2aManager == nil {
+		return nil, fmt.Errorf("A2A manager not initialized")
+	}
+	return g.a2aManager.ResumeRemoteTask(ctx, target, taskID)
+}
+
+func (g *Gateway) CancelA2ATask(ctx context.Context, target string, taskID string) (a2a.TaskSnapshot, error) {
+	if g.a2aManager == nil {
+		return a2a.TaskSnapshot{}, fmt.Errorf("A2A manager not initialized")
+	}
+	return g.a2aManager.CancelRemoteTask(ctx, target, taskID)
+}
+
+func (g *Gateway) ExecuteTask(ctx context.Context, req a2a.ExecutionRequest, emit func(a2aproto.Event)) error {
+	localUser := g.users.Get(req.LocalUser)
+	if localUser == nil {
+		return fmt.Errorf("local user not found: %s", req.LocalUser)
+	}
+	if req.Message == nil {
+		return fmt.Errorf("A2A execution message is required")
+	}
+
+	taskInfo := a2aproto.TaskInfo{
+		TaskID:    req.TaskID,
+		ContextID: req.ContextID,
+	}
+	events := make(chan AgentEvent, 100)
+	go func() {
+		_ = g.RunAgent(ctx, AgentRequest{
+			User:       localUser,
+			Source:     "a2a",
+			UserMsg:    textFromA2AMessage(req.Message),
+			SessionID:  req.SessionKey,
+			SkipMirror: true,
+		}, events)
+	}()
+
+	emit(a2aproto.NewStatusUpdateEvent(taskInfo, a2aproto.TaskStateWorking, nil))
+
+	sawArtifact := false
+	for event := range events {
+		switch ev := event.(type) {
+		case EventTextDelta:
+			if ev.Delta == "" {
+				continue
+			}
+			emit(newA2AArtifactEvent(taskInfo, req.ArtifactID, ev.Delta, sawArtifact))
+			sawArtifact = true
+		case EventAgentEnd:
+			if ev.FinalText != "" && !sawArtifact {
+				emit(newA2AArtifactEvent(taskInfo, req.ArtifactID, ev.FinalText, false))
+			}
+			emit(a2aproto.NewStatusUpdateEvent(taskInfo, a2aproto.TaskStateCompleted, nil))
+		case EventAgentError:
+			emit(a2aproto.NewStatusUpdateEvent(
+				taskInfo,
+				a2aproto.TaskStateFailed,
+				a2aproto.NewMessageForTask(a2aproto.MessageRoleAgent, taskInfo, a2aproto.NewTextPart(ev.Error)),
+			))
+			return nil
+		}
+	}
+	return nil
+}
+
+func newA2AArtifactEvent(taskInfo a2aproto.TaskInfo, artifactID a2aproto.ArtifactID, text string, appendChunk bool) *a2aproto.TaskArtifactUpdateEvent {
+	return &a2aproto.TaskArtifactUpdateEvent{
+		Append:    appendChunk,
+		ContextID: taskInfo.ContextID,
+		TaskID:    taskInfo.TaskID,
+		Artifact: &a2aproto.Artifact{
+			ID:    artifactID,
+			Parts: a2aproto.ContentParts{a2aproto.NewTextPart(text)},
+		},
+	}
+}
+
+func textFromA2AMessage(msg *a2aproto.Message) string {
+	if msg == nil {
+		return ""
+	}
+	var text strings.Builder
+	for _, part := range msg.Parts {
+		if part == nil {
+			continue
+		}
+		text.WriteString(part.Text())
+	}
+	return text.String()
 }
 
 // TriggerHeartbeat manually triggers a heartbeat check

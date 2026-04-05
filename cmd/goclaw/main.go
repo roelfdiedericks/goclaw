@@ -23,6 +23,7 @@ import (
 	"github.com/sevlyar/go-daemon"
 	"golang.org/x/term"
 
+	"github.com/roelfdiedericks/goclaw/internal/a2a"
 	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/auth"
 	"github.com/roelfdiedericks/goclaw/internal/browser"
@@ -272,6 +273,7 @@ type CLI struct {
 	Browser    BrowserCmd    `cmd:"" help:"Manage browser (download, profiles, setup)"`
 	Embeddings EmbeddingsCmd `cmd:"" help:"Manage embeddings (status, rebuild)"`
 	Graph      GraphCmd      `cmd:"" help:"Memory graph operations (ingest, search, bulletin, stats)"`
+	A2A        A2ACmd        `cmd:"" help:"A2A libp2p runtime, status, and infra modes"`
 	Setup      SetupCmd      `cmd:"" help:"Interactive setup wizard"`
 	Onboard    OnboardCmd    `cmd:"" help:"Run onboarding wizard"`
 	Config     ConfigCmd     `cmd:"" help:"View configuration"`
@@ -302,6 +304,67 @@ type GatewayTUICmd struct {
 
 func (g *GatewayTUICmd) Run(ctx *Context) error {
 	return runGateway(ctx, true, g.Dev)
+}
+
+type A2ACmd struct {
+	Status A2AStatusCmd `cmd:"" help:"Show configured A2A runtime status"`
+	Libp2p A2ALibp2pCmd `cmd:"" help:"Run dedicated libp2p infra modes"`
+}
+
+type A2AStatusCmd struct{}
+
+func (c *A2AStatusCmd) Run(ctx *Context) error {
+	loadResult, err := config.LoadRuntime()
+	if err != nil {
+		return err
+	}
+	loadResult.Config.A2A.Normalize()
+	status := a2a.NewManager(loadResult.Config.A2A, nil).Status()
+	fmt.Printf("A2A enabled: %t\n", status.Enabled)
+	fmt.Printf("Transport: %s\n", status.ActiveTransport)
+	fmt.Printf("Bootstrap peers: %d\n", status.BootstrapPeers)
+	fmt.Printf("Trusted peers: %d\n", status.TrustedPeers)
+	fmt.Printf("Rendezvous: %t (%s)\n", status.RendezvousEnabled, status.RendezvousNamespace)
+	return nil
+}
+
+type A2ALibp2pCmd struct {
+	Bootstrap A2ALibp2pBootstrapCmd `cmd:"" help:"Run infra-only bootstrap and rendezvous mode"`
+	Relay     A2ALibp2pRelayCmd     `cmd:"" help:"Run infra-only relay mode"`
+	Both      A2ALibp2pBothCmd      `cmd:"" help:"Run infra-only bootstrap, rendezvous, and relay mode"`
+}
+
+type A2ALibp2pBootstrapCmd struct{}
+type A2ALibp2pRelayCmd struct{}
+type A2ALibp2pBothCmd struct{}
+
+func (c *A2ALibp2pBootstrapCmd) Run(ctx *Context) error {
+	return runA2AInfra(ctx, a2a.RuntimeModeBootstrap)
+}
+func (c *A2ALibp2pRelayCmd) Run(ctx *Context) error { return runA2AInfra(ctx, a2a.RuntimeModeRelay) }
+func (c *A2ALibp2pBothCmd) Run(ctx *Context) error  { return runA2AInfra(ctx, a2a.RuntimeModeBoth) }
+
+func runA2AInfra(ctx *Context, mode a2a.RuntimeMode) error {
+	loadResult, err := config.LoadRuntime()
+	if err != nil {
+		return err
+	}
+	loadResult.Config.A2A.Enabled = true
+	loadResult.Config.A2A.Libp2p.Enabled = true
+	manager := a2a.NewManager(loadResult.Config.A2A, nil)
+	runCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	if err := manager.StartInfra(runCtx, mode); err != nil {
+		return err
+	}
+	status := manager.Status()
+	fmt.Printf("A2A infra mode: %s\n", status.RuntimeMode)
+	fmt.Printf("PeerID: %s\n", status.LocalPeerID)
+	for _, addr := range status.AdvertisedAddrs {
+		fmt.Printf("Addr: %s\n", addr)
+	}
+	<-runCtx.Done()
+	return nil
 }
 
 // StartCmd daemonizes the gateway with supervision
@@ -2458,7 +2521,7 @@ func (s *SetupAutoCmd) Run(ctx *Context) error {
 		if s.Web && err == setupweb.ErrNoUIAvailable {
 			fmt.Println("\nCould not open web editor.")
 			fmt.Println("The web-based editor requires either:")
-			fmt.Println("  1. webkit2gtk installed (apt install libwebkit2gtk-4.1-dev)")
+			fmt.Println("  1. webkit2gtk installed (apt install libwebkit2gtk-4.1-0)")
 			fmt.Println("  2. A web browser (xdg-open)")
 			fmt.Println("\nUse --tui flag for terminal interface instead:")
 			fmt.Println("  goclaw setup --tui")
@@ -2479,7 +2542,7 @@ func (s *SetupAutoCmd) Run(ctx *Context) error {
 	if s.Web && err == setupweb.ErrNoUIAvailable {
 		fmt.Println("\nError: Cannot open web interface.")
 		fmt.Println("\nTo use the web wizard, install one of:")
-		fmt.Println("  - webkit2gtk: sudo apt install libwebkit2gtk-4.1-dev")
+		fmt.Println("  - webkit2gtk: sudo apt install libwebkit2gtk-4.1-0")
 		fmt.Println("  - Or any web browser")
 		fmt.Println("\nAlternatively, run: goclaw setup --tui")
 		return err
@@ -2522,7 +2585,7 @@ func (s *SetupEditCmd) Run(ctx *Context) error {
 		if err == setupweb.ErrNoUIAvailable {
 			fmt.Println("\nCould not open web editor.")
 			fmt.Println("The web-based editor requires either:")
-			fmt.Println("  1. webkit2gtk installed (apt install libwebkit2gtk-4.1-dev)")
+			fmt.Println("  1. webkit2gtk installed (apt install libwebkit2gtk-4.1-0)")
 			fmt.Println("  2. A web browser (xdg-open)")
 			fmt.Println("\nUse --tui flag for terminal interface instead:")
 			fmt.Println("  goclaw setup edit --tui")
@@ -2575,7 +2638,7 @@ func runSetupWizardInterface(forceWeb, forceTUI, dev bool, tuiHint string) error
 		if err == setupweb.ErrNoUIAvailable {
 			fmt.Println("\nError: Cannot open web interface.")
 			fmt.Println("\nTo use the web wizard, install one of:")
-			fmt.Println("  - webkit2gtk: sudo apt install libwebkit2gtk-4.1-dev")
+			fmt.Println("  - webkit2gtk: sudo apt install libwebkit2gtk-4.1-0")
 			fmt.Println("  - Or any web browser")
 			fmt.Printf("\nAlternatively, run: %s\n", tuiHint)
 			return err
@@ -2935,6 +2998,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	cron.RegisterCommands()
 	auth.RegisterCommands()
 	acp.RegisterCommands()
+	a2a.RegisterCommands()
 	gateway.RegisterCommands()
 	transcript.RegisterCommands()
 	llm.RegisterCommands()

@@ -445,6 +445,74 @@ prompt_yes_no_tty() {
     return 1
 }
 
+is_wsl() {
+    if [ ! -r /proc/sys/kernel/osrelease ] && [ ! -r /proc/version ]; then
+        return 1
+    fi
+    if [ -r /proc/sys/kernel/osrelease ] && grep -qi "microsoft" /proc/sys/kernel/osrelease 2>/dev/null; then
+        return 0
+    fi
+    if [ -r /proc/version ] && grep -qi "microsoft" /proc/version 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+has_linux_gui() {
+    if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
+        return 0
+    fi
+    return 1
+}
+
+package_is_installed() {
+    pkg_mgr="$1"
+    pkg_name="$2"
+    case "$pkg_mgr" in
+        apt-get)
+            if ! command -v dpkg-query >/dev/null 2>&1; then
+                return 1
+            fi
+            dpkg-query -W -f='${Status}' "$pkg_name" 2>/dev/null | grep -q "install ok installed"
+            ;;
+        dnf)
+            command -v rpm >/dev/null 2>&1 && rpm -q "$pkg_name" >/dev/null 2>&1
+            ;;
+        pacman)
+            pacman -Q "$pkg_name" >/dev/null 2>&1
+            ;;
+        apk)
+            apk info -e "$pkg_name" >/dev/null 2>&1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+detect_package_manager() {
+    if command -v apt-get >/dev/null 2>&1; then
+        echo "apt-get"
+    elif command -v dnf >/dev/null 2>&1; then
+        echo "dnf"
+    elif command -v pacman >/dev/null 2>&1; then
+        echo "pacman"
+    elif command -v apk >/dev/null 2>&1; then
+        echo "apk"
+    fi
+}
+
+package_install_command() {
+    pkg_mgr="$1"
+    case "$pkg_mgr" in
+        apt-get) echo "apt-get install -y" ;;
+        dnf) echo "dnf install -y" ;;
+        pacman) echo "pacman -S --noconfirm" ;;
+        apk) echo "apk add" ;;
+        *) return 1 ;;
+    esac
+}
+
 # Root installs are discouraged for security; require explicit confirmation.
 confirm_root_install() {
     if [ "$(id -u)" -ne 0 ]; then
@@ -620,16 +688,10 @@ install_dependencies() {
     info "Optional dependencies not found: $missing"
     info "These enable sandboxed execution and audio processing."
     
-    # Detect package manager
+    pkg_mgr=$(detect_package_manager)
     pkg_cmd=""
-    if command -v apt-get >/dev/null 2>&1; then
-        pkg_cmd="apt-get install -y"
-    elif command -v dnf >/dev/null 2>&1; then
-        pkg_cmd="dnf install -y"
-    elif command -v pacman >/dev/null 2>&1; then
-        pkg_cmd="pacman -S --noconfirm"
-    elif command -v apk >/dev/null 2>&1; then
-        pkg_cmd="apk add"
+    if [ -n "$pkg_mgr" ]; then
+        pkg_cmd=$(package_install_command "$pkg_mgr")
     fi
     
     if [ -z "$pkg_cmd" ]; then
@@ -689,6 +751,84 @@ install_dependencies() {
                 echo "Run: sudo $pkg_cmd $missing"
             else
                 echo "Run as root: $pkg_cmd $missing"
+            fi
+        fi
+    fi
+
+    webview_pkg="libwebkit2gtk-4.1-0"
+    if ! package_is_installed "$pkg_mgr" "$webview_pkg"; then
+        gui_install_cmd=""
+        gui_run_cmd=""
+        gui_can_auto_install=true
+        if [ -n "$pkg_cmd" ]; then
+            gui_install_cmd="$pkg_cmd $webview_pkg"
+            gui_run_cmd="$gui_install_cmd"
+            if [ "$(id -u)" -ne 0 ]; then
+                if command -v sudo >/dev/null 2>&1; then
+                    gui_install_cmd="sudo $gui_install_cmd"
+                    gui_run_cmd="sudo $gui_run_cmd"
+                else
+                    gui_can_auto_install=false
+                fi
+            fi
+        else
+            gui_can_auto_install=false
+        fi
+
+        if is_wsl; then
+            info "WSL detected: embedded web setup works better with $webview_pkg installed."
+            if [ "$pkg_mgr" = "apt-get" ] && [ "$gui_can_auto_install" = true ]; then
+                info "Auto-installing optional WSL GUI dependency: $webview_pkg"
+                # shellcheck disable=SC2086
+                $gui_run_cmd && success "Installed optional GUI dependency" || warn "Optional GUI dependency install failed"
+            elif [ "$pkg_mgr" = "apt-get" ]; then
+                warn "Could not auto-install optional GUI dependency without root privileges or sudo."
+                echo "Run: sudo apt-get install -y $webview_pkg"
+            fi
+        elif has_linux_gui; then
+            info "Optional GUI dependency not found: $webview_pkg"
+            info "This improves embedded web setup on Linux desktops when no browser fallback is desired."
+            if [ "$pkg_mgr" = "apt-get" ]; then
+                should_install_gui=false
+                case "$DEPS_MODE" in
+                    install)
+                        if [ "$gui_can_auto_install" = true ]; then
+                            should_install_gui=true
+                        else
+                            warn "Cannot auto-install optional GUI dependency without root privileges or sudo."
+                        fi
+                        ;;
+                    skip)
+                        ;;
+                    auto)
+                        if [ "$gui_can_auto_install" = true ]; then
+                            if prompt_yes_no_tty "Install optional GUI dependency with: ${GREEN}${gui_install_cmd}${NC}? [y/N] "; then
+                                should_install_gui=true
+                            else
+                                rc=$?
+                                if [ "$rc" -eq 2 ]; then
+                                    info "No interactive terminal detected; skipping optional GUI dependency install."
+                                fi
+                            fi
+                        else
+                            warn "Cannot auto-install optional GUI dependency without root privileges or sudo."
+                        fi
+                        ;;
+                esac
+
+                if [ "$should_install_gui" = true ]; then
+                    # shellcheck disable=SC2086
+                    $gui_run_cmd && success "Installed optional GUI dependency" || warn "Optional GUI dependency install failed"
+                else
+                    echo "Optional GUI dependency skipped. Install manually if needed: $webview_pkg"
+                    if [ "$(id -u)" -eq 0 ]; then
+                        echo "Run: apt-get install -y $webview_pkg"
+                    else
+                        echo "Run: sudo apt-get install -y $webview_pkg"
+                    fi
+                fi
+            else
+                info "Install your distro's WebKitGTK runtime package if you want embedded web setup without relying on a browser."
             fi
         fi
     fi

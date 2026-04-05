@@ -3,9 +3,11 @@ package commands
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/a2a"
 	"github.com/roelfdiedericks/goclaw/internal/acp"
 )
 
@@ -99,6 +101,13 @@ func registerBuiltins(m *Manager) {
 		Description: "Attach, inspect, and control ACP sessions",
 		Usage:       "attach [driver] [--cwd /path] [--mode mode] | detach | status | close | cancel | mode <agent|plan|ask> | model <list|friendly-id> | steer <message>",
 		Handler:     handleACP,
+	})
+
+	m.Register(&Command{
+		Name:        "/a2a",
+		Description: "Inspect A2A transport, peers, pairing payloads, and ping",
+		Usage:       "status | peers [all|connected|trusted|authorized|discovered|relayed|disconnected] [list] | tasks [all|active|resumable|failed|inbound|outbound] [peer <peer>] | pair | ping <peer> | submit <peer> <message> | resume <peer> <task-id> | cancel <peer> <task-id>",
+		Handler:     handleA2A,
 	})
 }
 
@@ -370,6 +379,300 @@ func handleACP(ctx context.Context, args *CommandArgs) *CommandResult {
 			Markdown: "Unknown `/acp` action. Usage: `/acp " + args.Usage + "`",
 		}
 	}
+}
+
+func handleA2A(ctx context.Context, args *CommandArgs) *CommandResult {
+	parts := strings.Fields(strings.TrimSpace(args.RawArgs))
+	if len(parts) == 0 || parts[0] == "status" {
+		return a2aStatusResult(args.Provider.GetA2AStatus())
+	}
+	switch parts[0] {
+	case "peers":
+		filter := "all"
+		if len(parts) > 1 && !strings.EqualFold(parts[1], "list") {
+			filter = parts[1]
+		}
+		return a2aPeersResult(args.Provider.ListA2APeers(filter), filter)
+	case "tasks":
+		filter := "all"
+		peer := ""
+		if len(parts) > 1 && !strings.EqualFold(parts[1], "peer") {
+			filter = parts[1]
+		}
+		for i := 1; i < len(parts); i++ {
+			if strings.EqualFold(parts[i], "peer") && i+1 < len(parts) {
+				peer = parts[i+1]
+				break
+			}
+		}
+		return a2aTasksResult(args.Provider.ListA2ATasks(filter, peer), filter, peer)
+	case "pair":
+		return a2aPairingResult(args.Provider.GetA2APairingPayload())
+	case "ping":
+		if len(parts) < 2 {
+			return &CommandResult{
+				Text:     "Usage: /a2a ping <peer>",
+				Markdown: "Usage: `/a2a ping <peer>`",
+			}
+		}
+		result, err := args.Provider.PingA2APeer(ctx, parts[1])
+		if err != nil {
+			return &CommandResult{
+				Text:     fmt.Sprintf("A2A ping failed: %s", err),
+				Markdown: fmt.Sprintf("A2A ping failed: `%s`", err),
+				Error:    err,
+			}
+		}
+		return &CommandResult{
+			Text:     fmt.Sprintf("A2A ping %s: %s (%s)", result.PeerID, result.Message, result.Latency),
+			Markdown: fmt.Sprintf("A2A ping `%s`: %s (`%s`)", result.PeerID, result.Message, result.Latency),
+		}
+	case "submit", "send":
+		if len(parts) < 3 {
+			return &CommandResult{
+				Text:     "Usage: /a2a submit <peer> <message>",
+				Markdown: "Usage: `/a2a submit <peer> <message>`",
+			}
+		}
+		taskID, updates, err := args.Provider.SubmitA2ATask(ctx, parts[1], strings.Join(parts[2:], " "))
+		if err != nil {
+			return &CommandResult{
+				Text:     fmt.Sprintf("A2A submit failed: %s", err),
+				Markdown: fmt.Sprintf("A2A submit failed: `%s`", err),
+				Error:    err,
+			}
+		}
+		return a2aTaskResult(taskID, parts[1], drainA2ATaskSnapshots(ctx, updates))
+	case "resume":
+		if len(parts) < 3 {
+			return &CommandResult{
+				Text:     "Usage: /a2a resume <peer> <task-id>",
+				Markdown: "Usage: `/a2a resume <peer> <task-id>`",
+			}
+		}
+		updates, err := args.Provider.ResumeA2ATask(ctx, parts[1], parts[2])
+		if err != nil {
+			return &CommandResult{
+				Text:     fmt.Sprintf("A2A resume failed: %s", err),
+				Markdown: fmt.Sprintf("A2A resume failed: `%s`", err),
+				Error:    err,
+			}
+		}
+		return a2aTaskResult(parts[2], parts[1], drainA2ATaskSnapshots(ctx, updates))
+	case "cancel":
+		if len(parts) < 3 {
+			return &CommandResult{
+				Text:     "Usage: /a2a cancel <peer> <task-id>",
+				Markdown: "Usage: `/a2a cancel <peer> <task-id>`",
+			}
+		}
+		snapshot, err := args.Provider.CancelA2ATask(ctx, parts[1], parts[2])
+		if err != nil {
+			return &CommandResult{
+				Text:     fmt.Sprintf("A2A cancel failed: %s", err),
+				Markdown: fmt.Sprintf("A2A cancel failed: `%s`", err),
+				Error:    err,
+			}
+		}
+		return a2aTaskResult(parts[2], parts[1], snapshot)
+	default:
+		return &CommandResult{
+			Text:     "Usage: /a2a " + args.Usage,
+			Markdown: "Usage: `/a2a " + args.Usage + "`",
+		}
+	}
+}
+
+func a2aStatusResult(status a2a.Status) *CommandResult {
+	var text strings.Builder
+	text.WriteString("A2A Status\n")
+	text.WriteString(fmt.Sprintf("  Enabled: %t\n", status.Enabled))
+	text.WriteString(fmt.Sprintf("  Transport: %s\n", status.ActiveTransport))
+	text.WriteString(fmt.Sprintf("  Mode: %s\n", status.RuntimeMode))
+	if status.LocalPeerID != "" {
+		text.WriteString(fmt.Sprintf("  PeerID: %s\n", status.LocalPeerID))
+	}
+	text.WriteString(fmt.Sprintf("  Bootstrap peers: %d\n", status.BootstrapPeers))
+	text.WriteString(fmt.Sprintf("  Trusted peers: %d\n", status.TrustedPeers))
+	text.WriteString(fmt.Sprintf("  Known peers: %d\n", status.KnownPeers))
+	text.WriteString(fmt.Sprintf("  Discovered peers: %d\n", status.DiscoveredPeers))
+	text.WriteString(fmt.Sprintf("  Connected peers: %d\n", status.ConnectedPeers))
+	text.WriteString(fmt.Sprintf("  Retained tasks: %d\n", status.RecentTaskCount))
+	text.WriteString(fmt.Sprintf("  State retention: %ds\n", status.StateRetentionSecs))
+	text.WriteString(fmt.Sprintf("  Relay client: %t\n", status.RelayClientEnabled))
+	text.WriteString(fmt.Sprintf("  Relay server: %t\n", status.RelayServerEnabled))
+	text.WriteString(fmt.Sprintf("  Rendezvous: %t\n", status.RendezvousEnabled))
+	if status.StartedAt != nil {
+		text.WriteString(fmt.Sprintf("  Started: %s\n", status.StartedAt.Format(time.RFC3339)))
+	}
+	if status.RendezvousNamespace != "" {
+		text.WriteString(fmt.Sprintf("  Rendezvous namespace: %s\n", status.RendezvousNamespace))
+	}
+	for _, addr := range status.ListenAddrs {
+		text.WriteString(fmt.Sprintf("  Listen: %s\n", addr))
+	}
+	for _, addr := range status.AdvertisedAddrs {
+		text.WriteString(fmt.Sprintf("  Advertise: %s\n", addr))
+	}
+	if len(status.PeerStateCounts) > 0 {
+		text.WriteString("  Peer states:\n")
+		keys := make([]string, 0, len(status.PeerStateCounts))
+		for state := range status.PeerStateCounts {
+			keys = append(keys, state)
+		}
+		sort.Strings(keys)
+		for _, state := range keys {
+			text.WriteString(fmt.Sprintf("    %s: %d\n", state, status.PeerStateCounts[state]))
+		}
+	}
+	if status.LastError != "" {
+		text.WriteString(fmt.Sprintf("  Last error: %s\n", status.LastError))
+	}
+	return &CommandResult{Text: text.String(), Markdown: text.String()}
+}
+
+func a2aTasksResult(tasks []a2a.TaskSummary, filter, peer string) *CommandResult {
+	if len(tasks) == 0 {
+		message := fmt.Sprintf("No retained A2A tasks for filter %q.", filter)
+		if peer != "" {
+			message = fmt.Sprintf("No retained A2A tasks for filter %q and peer %q.", filter, peer)
+		}
+		return &CommandResult{
+			Text:     message,
+			Markdown: message,
+		}
+	}
+	var text strings.Builder
+	text.WriteString("A2A Tasks\n")
+	for _, task := range tasks {
+		text.WriteString(fmt.Sprintf("  %s - %s [%s]", task.TaskID, task.State, task.Direction))
+		if task.PeerID != "" {
+			text.WriteString(fmt.Sprintf(" peer=%s", task.PeerID))
+		}
+		if task.Resumable {
+			text.WriteString(" resumable=yes")
+		} else {
+			text.WriteString(" resumable=no")
+		}
+		if !task.UpdatedAt.IsZero() {
+			text.WriteString(fmt.Sprintf(" updated=%s", task.UpdatedAt.Format(time.RFC3339)))
+		}
+		text.WriteString("\n")
+		if task.SessionKey != "" {
+			text.WriteString(fmt.Sprintf("    session=%s\n", task.SessionKey))
+		}
+		if task.ContextID != "" {
+			text.WriteString(fmt.Sprintf("    context=%s\n", task.ContextID))
+		}
+		if task.LocalUser != "" {
+			text.WriteString(fmt.Sprintf("    user=%s\n", task.LocalUser))
+		}
+		if task.LastError != "" {
+			text.WriteString(fmt.Sprintf("    error=%s\n", task.LastError))
+		}
+	}
+	return &CommandResult{Text: text.String(), Markdown: text.String()}
+}
+
+func a2aPeersResult(peers []a2a.PeerRecord, filter string) *CommandResult {
+	if len(peers) == 0 {
+		return &CommandResult{
+			Text:     fmt.Sprintf("No A2A peers for filter %q.", filter),
+			Markdown: fmt.Sprintf("No A2A peers for filter `%s`.", filter),
+		}
+	}
+	var text strings.Builder
+	text.WriteString("A2A Peers\n")
+	for _, peer := range peers {
+		alias := peer.Alias
+		if alias == "" {
+			alias = peer.PeerID
+		}
+		text.WriteString(fmt.Sprintf("  %s - %s", alias, peer.State))
+		if peer.LocalUser != "" {
+			text.WriteString(fmt.Sprintf(" (user=%s)", peer.LocalUser))
+		}
+		if peer.Relayed {
+			text.WriteString(" [relayed]")
+		}
+		if !peer.Connected && peer.LastDisconnectAt.IsZero() && !peer.LastSeen.IsZero() {
+			text.WriteString(" [seen]")
+		}
+		text.WriteString("\n")
+	}
+	return &CommandResult{Text: text.String(), Markdown: text.String()}
+}
+
+func a2aPairingResult(payload a2a.PairingPayload) *CommandResult {
+	if payload.PeerID == "" {
+		return &CommandResult{
+			Text:     "A2A runtime not started yet.",
+			Markdown: "A2A runtime not started yet.",
+		}
+	}
+	var text strings.Builder
+	text.WriteString("A2A Pairing Payload\n")
+	text.WriteString(fmt.Sprintf("  PeerID: %s\n", payload.PeerID))
+	for _, addr := range payload.Addrs {
+		text.WriteString(fmt.Sprintf("  Addr: %s\n", addr))
+	}
+	return &CommandResult{Text: text.String(), Markdown: text.String()}
+}
+
+func drainA2ATaskSnapshots(ctx context.Context, updates <-chan a2a.TaskSnapshot) a2a.TaskSnapshot {
+	var latest a2a.TaskSnapshot
+	for {
+		select {
+		case <-ctx.Done():
+			if latest.TaskID == "" {
+				return a2a.TaskSnapshot{
+					State:     a2a.TaskStateFailed,
+					Error:     ctx.Err().Error(),
+					UpdatedAt: time.Now(),
+				}
+			}
+			latest.Error = ctx.Err().Error()
+			latest.UpdatedAt = time.Now()
+			return latest
+		case snapshot, ok := <-updates:
+			if !ok {
+				return latest
+			}
+			latest = snapshot
+		}
+	}
+}
+
+func a2aTaskResult(taskID, peer string, snapshot a2a.TaskSnapshot) *CommandResult {
+	if snapshot.TaskID == "" {
+		snapshot.TaskID = taskID
+	}
+	var text strings.Builder
+	text.WriteString("A2A Task\n")
+	text.WriteString(fmt.Sprintf("  Peer: %s\n", peer))
+	text.WriteString(fmt.Sprintf("  TaskID: %s\n", snapshot.TaskID))
+	text.WriteString(fmt.Sprintf("  State: %s\n", snapshot.State))
+	text.WriteString(fmt.Sprintf("  Resumable: %t\n", a2aTaskResumable(snapshot.State)))
+	if snapshot.SessionKey != "" {
+		text.WriteString(fmt.Sprintf("  Session: %s\n", snapshot.SessionKey))
+	}
+	if snapshot.ContextID != "" {
+		text.WriteString(fmt.Sprintf("  Context: %s\n", snapshot.ContextID))
+	}
+	if snapshot.Error != "" {
+		text.WriteString(fmt.Sprintf("  Error: %s\n", snapshot.Error))
+	}
+	if strings.TrimSpace(snapshot.Content) != "" {
+		text.WriteString("  Output:\n")
+		for _, line := range strings.Split(snapshot.Content, "\n") {
+			text.WriteString("    " + line + "\n")
+		}
+	}
+	return &CommandResult{Text: text.String(), Markdown: text.String()}
+}
+
+func a2aTaskResumable(state a2a.TaskState) bool {
+	return state != a2a.TaskStateCompleted && state != a2a.TaskStateFailed && state != a2a.TaskStateCancelled
 }
 
 func acpInfoResult(prefix string, info *acp.AttachmentInfo) *CommandResult {

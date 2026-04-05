@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/a2a"
 	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 )
@@ -47,6 +48,16 @@ type SessionProvider interface {
 	ACPSetModel(ctx context.Context, sessionKey string, model string) (*acp.AttachmentInfo, error)
 	ACPSteer(ctx context.Context, sessionKey string, text string, stayAttached bool) (*acp.PromptResult, error)
 	ACPCancel(ctx context.Context, sessionKey string) error
+
+	// A2A commands
+	GetA2AStatus() a2a.Status
+	ListA2APeers(filter string) []a2a.PeerRecord
+	ListA2ATasks(filter string, peer string) []a2a.TaskSummary
+	GetA2APairingPayload() a2a.PairingPayload
+	PingA2APeer(ctx context.Context, target string) (a2a.PingResult, error)
+	SubmitA2ATask(ctx context.Context, target string, input string) (string, <-chan a2a.TaskSnapshot, error)
+	ResumeA2ATask(ctx context.Context, target string, taskID string) (<-chan a2a.TaskSnapshot, error)
+	CancelA2ATask(ctx context.Context, target string, taskID string) (a2a.TaskSnapshot, error)
 }
 
 // SkillsListResult contains skill listing for /skills command
