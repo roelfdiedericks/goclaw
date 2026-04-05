@@ -17,6 +17,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	"github.com/roelfdiedericks/goclaw/internal/configapply"
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
@@ -1200,7 +1201,17 @@ func validateStep(stepID string, data *setup.WizardData) map[string]string {
 			errors["LLMProviderID"] = "Please select an LLM provider"
 		}
 		if data.LLMAPIKey == "" && data.LLMProviderID != "custom" {
-			errors["LLMAPIKey"] = "API key is required"
+			driver := ""
+			baseURL := data.LLMBaseURL
+			if prov, ok := metadata.Get().GetModelProvider(data.LLMProviderID); ok {
+				driver = prov.Driver
+				if baseURL == "" {
+					baseURL = prov.APIEndpoint
+				}
+			}
+			if !llm.DriverOrEndpointIsLocal(driver, baseURL) {
+				errors["LLMAPIKey"] = "API key is required"
+			}
 		}
 
 	case "voice":
