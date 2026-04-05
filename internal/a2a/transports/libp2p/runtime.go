@@ -442,10 +442,13 @@ func (r *Runtime) connectAddrInfo(ctx context.Context, info peer.AddrInfo) error
 	if r.host == nil {
 		return fmt.Errorf("host not started")
 	}
+	L_trace("a2a libp2p: dialing peer", "peerID", info.ID, "addrs", len(info.Addrs))
 	r.host.Peerstore().AddAddrs(info.ID, info.Addrs, time.Hour)
 	if err := r.host.Connect(ctx, info); err != nil {
+		L_debug("a2a libp2p: dial failed", "peerID", info.ID, "error", err)
 		return fmt.Errorf("connect %s: %w", info.ID, err)
 	}
+	L_trace("a2a libp2p: dial established", "peerID", info.ID, "addrs", len(info.Addrs))
 	r.observePeer(PeerObservation{
 		PeerID:          info.ID.String(),
 		Addrs:           multiaddrsToStrings(info.Addrs),
@@ -472,6 +475,7 @@ func (r *Runtime) reserveStaticRelays(ctx context.Context) {
 			L_warn("a2a libp2p: relay reservation failed", "peerID", info.ID, "error", err)
 			continue
 		}
+		L_info("a2a libp2p: relay reserved", "peerID", info.ID)
 	}
 }
 
@@ -479,13 +483,16 @@ func (r *Runtime) startMDNS() {
 	service := mdns.NewMdnsService(r.host, r.cfg.MDNSServiceName, &mdnsNotifee{runtime: r})
 	if err := service.Start(); err != nil {
 		L_warn("a2a libp2p: mdns start failed", "error", err)
+		return
 	}
+	L_info("a2a libp2p: mdns started", "service", r.cfg.MDNSServiceName)
 }
 
 func (r *Runtime) observeDiscoveredPeer(info peer.AddrInfo) {
 	if info.ID == r.host.ID() {
 		return
 	}
+	L_trace("a2a libp2p: discovered peer candidate", "peerID", info.ID, "addrs", len(info.Addrs), "relayed", hasRelayedAddr(info.Addrs))
 	r.host.Peerstore().AddAddrs(info.ID, info.Addrs, time.Hour)
 	r.observePeer(PeerObservation{
 		PeerID:    info.ID.String(),
@@ -503,6 +510,8 @@ func (r *Runtime) observeDiscoveredPeer(info peer.AddrInfo) {
 			LastSeen:        time.Now(),
 			LastConnectedAt: time.Now(),
 		})
+	} else {
+		L_debug("a2a libp2p: connect discovered peer failed", "peerID", info.ID, "error", err)
 	}
 }
 
@@ -513,6 +522,7 @@ func (r *Runtime) observePeer(observation PeerObservation) {
 }
 
 func (r *Runtime) handlePeerConnected(conn network.Conn) {
+	L_info("a2a libp2p: peer connected", "peerID", conn.RemotePeer(), "addr", conn.RemoteMultiaddr(), "relayed", conn.Stat().Limited)
 	r.observePeer(PeerObservation{
 		PeerID:          conn.RemotePeer().String(),
 		Addrs:           multiaddrsToStrings([]ma.Multiaddr{conn.RemoteMultiaddr()}),
@@ -524,6 +534,7 @@ func (r *Runtime) handlePeerConnected(conn network.Conn) {
 }
 
 func (r *Runtime) handlePeerDisconnected(conn network.Conn) {
+	L_info("a2a libp2p: peer disconnected", "peerID", conn.RemotePeer(), "addr", conn.RemoteMultiaddr(), "relayed", conn.Stat().Limited)
 	r.observePeer(PeerObservation{
 		PeerID:           conn.RemotePeer().String(),
 		Addrs:            multiaddrsToStrings([]ma.Multiaddr{conn.RemoteMultiaddr()}),
@@ -546,15 +557,20 @@ func (r *Runtime) registerRendezvous(ctx context.Context) {
 		L_warn("a2a libp2p: rendezvous bootstrap resolution failed", "error", err)
 		return
 	}
+	successes := 0
 	for _, addr := range entries {
 		info, err := parseAddrInfo(addr)
 		if err != nil {
 			continue
 		}
+		L_trace("a2a libp2p: rendezvous register attempt", "peerID", info.ID, "namespace", payload.Namespace)
 		if err := r.sendRendezvousRequest(ctx, *info, payload, nil); err != nil {
 			L_warn("a2a libp2p: rendezvous register failed", "peerID", info.ID, "error", err)
+			continue
 		}
+		successes++
 	}
+	L_info("a2a libp2p: rendezvous register pass complete", "namespace", payload.Namespace, "targets", len(entries), "successful", successes)
 }
 
 func (r *Runtime) queryRendezvous(ctx context.Context) {
@@ -568,16 +584,21 @@ func (r *Runtime) queryRendezvous(ctx context.Context) {
 		L_warn("a2a libp2p: rendezvous bootstrap resolution failed", "error", err)
 		return
 	}
+	successes := 0
+	returned := 0
 	for _, addr := range entries {
 		info, err := parseAddrInfo(addr)
 		if err != nil {
 			continue
 		}
+		L_trace("a2a libp2p: rendezvous query attempt", "peerID", info.ID, "namespace", payload.Namespace)
 		var resp rendezvousResponse
 		if err := r.sendRendezvousRequest(ctx, *info, payload, &resp); err != nil {
 			L_warn("a2a libp2p: rendezvous query failed", "peerID", info.ID, "error", err)
 			continue
 		}
+		successes++
+		returned += len(resp.Entries)
 		for _, entry := range resp.Entries {
 			if entry.PeerID == r.host.ID().String() {
 				continue
@@ -590,9 +611,11 @@ func (r *Runtime) queryRendezvous(ctx context.Context) {
 			r.observeDiscoveredPeer(*addrInfo)
 		}
 	}
+	L_info("a2a libp2p: rendezvous query pass complete", "namespace", payload.Namespace, "targets", len(entries), "successful", successes, "entries", returned)
 }
 
 func (r *Runtime) sendRendezvousRequest(ctx context.Context, info peer.AddrInfo, payload rendezvousRequest, resp *rendezvousResponse) error {
+	L_trace("a2a libp2p: opening rendezvous stream", "peerID", info.ID, "action", payload.Action, "namespace", payload.Namespace)
 	if err := r.connectAddrInfo(ctx, info); err != nil {
 		return err
 	}
@@ -628,6 +651,7 @@ func (r *Runtime) handleRendezvousStream(stream network.Stream) {
 		L_warn("a2a libp2p: rendezvous decode failed", "error", err)
 		return
 	}
+	L_trace("a2a libp2p: rendezvous request received", "action", req.Action, "namespace", req.Namespace, "peerID", req.PeerID)
 	resp := rendezvousResponse{}
 	switch req.Action {
 	case "register":
@@ -647,8 +671,10 @@ func (r *Runtime) handleRendezvousStream(stream network.Stream) {
 			ExpiresAt: time.Now().Add(2 * time.Minute),
 		}
 		r.rendezvousMu.Unlock()
+		L_trace("a2a libp2p: rendezvous peer registered", "peerID", req.PeerID, "namespace", namespace, "addrs", len(req.Addrs))
 	case "list":
 		resp.Entries = r.listRendezvous(req.Namespace, req.PeerID)
+		L_info("a2a libp2p: rendezvous list served", "requester", req.PeerID, "namespace", req.Namespace, "entries", len(resp.Entries))
 	default:
 		resp.Error = "unknown rendezvous action"
 	}

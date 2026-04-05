@@ -438,6 +438,14 @@ func (m *Manager) observePeer(observation libp2ptransport.PeerObservation) {
 		}
 	}
 	m.UpsertPeer(record)
+	L_trace("a2a: peer observation applied",
+		"peerID", record.PeerID,
+		"state", record.State,
+		"connected", record.Connected,
+		"relayed", record.Relayed,
+		"trusted", record.Trusted,
+		"authorized", record.Authorized,
+	)
 }
 
 func (m *Manager) transportPeerCandidates() []libp2ptransport.PeerCandidate {

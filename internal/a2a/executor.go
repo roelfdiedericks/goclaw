@@ -8,6 +8,7 @@ import (
 
 	a2aproto "github.com/a2aproject/a2a-go/v2/a2a"
 	libp2ptransport "github.com/roelfdiedericks/goclaw/internal/a2a/transports/libp2p"
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
 func (m *Manager) StartInboundTask(ctx context.Context, peerID, taskID, input string) (<-chan TaskSnapshot, error) {
@@ -16,15 +17,18 @@ func (m *Manager) StartInboundTask(ctx context.Context, peerID, taskID, input st
 	m.pruneExpiredTasksLocked(time.Now())
 
 	if m.adapter == nil {
+		L_warn("a2a: inbound task rejected", "peerID", peerID, "taskID", taskID, "error", "A2A executor not configured")
 		return nil, fmt.Errorf("A2A executor not configured")
 	}
 	trusted, localUser, err := m.resolveTrustedPeer(peerID)
 	if err != nil {
+		L_warn("a2a: inbound task rejected", "peerID", peerID, "taskID", taskID, "error", err)
 		return nil, err
 	}
 
 	key := taskKey(peerID, taskID)
 	if existing := m.tasks[key]; existing != nil {
+		L_warn("a2a: inbound task rejected", "peerID", peerID, "taskID", taskID, "error", "task already exists")
 		return nil, fmt.Errorf("task %s already exists for peer %s", taskID, peerID)
 	}
 
@@ -48,12 +52,14 @@ func (m *Manager) StartInboundTask(ctx context.Context, peerID, taskID, input st
 	}
 	m.tasks[key] = rt
 	m.broadcastLocked(rt, rt.Snapshot)
+	L_info("a2a: inbound task accepted", "peerID", peerID, "taskID", taskID, "localUser", trusted.LocalUser, "contextID", contextID, "inputLength", len(input))
 
 	go m.runInboundTask(taskCtx, rt, localUser.ID, strings.TrimSpace(input))
 	return watcher, nil
 }
 
 func (m *Manager) runInboundTask(ctx context.Context, rt *taskRuntime, localUserID, input string) {
+	L_info("a2a: inbound task started", "peerID", rt.RemotePeer, "taskID", rt.TaskID, "localUser", localUserID, "contextID", rt.ContextID)
 	emit := func(event a2aproto.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -63,6 +69,7 @@ func (m *Manager) runInboundTask(ctx context.Context, rt *taskRuntime, localUser
 		}
 		next := applyEventToSnapshot(current.Snapshot, event)
 		current.State = next.State
+		L_trace("a2a: inbound task event applied", "peerID", current.RemotePeer, "taskID", current.TaskID, "state", next.State, "contextID", next.ContextID)
 		m.broadcastLocked(current, next)
 	}
 
@@ -99,6 +106,12 @@ func (m *Manager) runInboundTask(ctx context.Context, rt *taskRuntime, localUser
 		current.Snapshot.State = TaskStateFailed
 		current.Snapshot.Error = err.Error()
 	}
+	switch current.State {
+	case TaskStateFailed:
+		L_warn("a2a: inbound task finished", "peerID", current.RemotePeer, "taskID", current.TaskID, "state", current.State, "error", current.Snapshot.Error)
+	default:
+		L_info("a2a: inbound task finished", "peerID", current.RemotePeer, "taskID", current.TaskID, "state", current.State, "contextID", current.Snapshot.ContextID)
+	}
 	m.broadcastLocked(current, current.Snapshot)
 }
 
@@ -111,10 +124,13 @@ func (m *Manager) ResumeTask(peerID, taskID string) (<-chan TaskSnapshot, error)
 	rt := m.tasks[key]
 	if rt == nil {
 		if m.isExpiredTaskLocked(key, time.Now()) {
+			L_warn("a2a: task resume rejected", "peerID", peerID, "taskID", taskID, "error", "retained state expired")
 			return nil, fmt.Errorf("task %s can no longer be resumed: retained state expired", taskID)
 		}
+		L_warn("a2a: task resume rejected", "peerID", peerID, "taskID", taskID, "error", "task not resumable")
 		return nil, fmt.Errorf("task %s can no longer be resumed", taskID)
 	}
+	L_info("a2a: task resume subscribed", "peerID", peerID, "taskID", taskID, "state", rt.State)
 	return m.subscribeTaskLocked(rt, true), nil
 }
 
@@ -123,14 +139,17 @@ func (m *Manager) CancelTask(peerID, taskID string) error {
 	rt := m.tasks[taskKey(peerID, taskID)]
 	m.mu.RUnlock()
 	if rt == nil {
+		L_warn("a2a: task cancel rejected", "peerID", peerID, "taskID", taskID, "error", "task not found")
 		return fmt.Errorf("task %s not found", taskID)
 	}
+	L_info("a2a: task cancel requested", "peerID", peerID, "taskID", taskID, "direction", rt.Direction)
 	rt.Cancel()
 	return nil
 }
 
 func (m *Manager) broadcastLocked(rt *taskRuntime, snapshot TaskSnapshot) {
 	rt.Snapshot = snapshot
+	L_trace("a2a: broadcasting task snapshot", "peerID", rt.RemotePeer, "taskID", rt.TaskID, "state", snapshot.State, "watchers", len(rt.Watchers), "direction", rt.Direction)
 	active := rt.Watchers[:0]
 	for _, watcher := range rt.Watchers {
 		if watcher == nil {
@@ -160,10 +179,12 @@ func (m *Manager) subscribeTaskLocked(rt *taskRuntime, includeInitial bool) chan
 		return ch
 	}
 	rt.Watchers = append(rt.Watchers, ch)
+	L_trace("a2a: watcher subscribed", "peerID", rt.RemotePeer, "taskID", rt.TaskID, "watchers", len(rt.Watchers))
 	return ch
 }
 
 func (m *Manager) closeWatchersLocked(rt *taskRuntime) {
+	L_trace("a2a: closing task watchers", "peerID", rt.RemotePeer, "taskID", rt.TaskID, "watchers", len(rt.Watchers))
 	for _, watcher := range rt.Watchers {
 		if watcher == nil {
 			continue
@@ -185,6 +206,7 @@ func (m *Manager) removeWatcherLocked(rt *taskRuntime, target chan TaskSnapshot)
 		next = append(next, watcher)
 	}
 	rt.Watchers = next
+	L_trace("a2a: watcher removed", "peerID", rt.RemotePeer, "taskID", rt.TaskID, "watchers", len(rt.Watchers))
 }
 
 func (m *Manager) retentionDuration() time.Duration {
@@ -294,6 +316,7 @@ func (m *Manager) SubmitRemoteTask(ctx context.Context, target, input string) (s
 	rt := m.runtime
 	m.mu.RUnlock()
 	if rt == nil {
+		L_warn("a2a: outbound task submit rejected", "peerID", target, "error", "runtime not started")
 		return "", nil, fmt.Errorf("A2A runtime not started")
 	}
 	taskID := "remote-" + strings.ReplaceAll(time.Now().UTC().Format("20060102T150405.000000000"), ".", "")
@@ -304,6 +327,7 @@ func (m *Manager) SubmitRemoteTask(ctx context.Context, target, input string) (s
 	key := taskKey(target, taskID)
 	if existing := m.tasks[key]; existing != nil {
 		m.mu.Unlock()
+		L_warn("a2a: outbound task submit rejected", "peerID", target, "taskID", taskID, "error", "task already exists")
 		return "", nil, fmt.Errorf("task %s already exists for peer %s", taskID, target)
 	}
 	taskRuntime := &taskRuntime{
@@ -324,6 +348,7 @@ func (m *Manager) SubmitRemoteTask(ctx context.Context, target, input string) (s
 	m.tasks[key] = taskRuntime
 	watcher := m.subscribeTaskLocked(taskRuntime, true)
 	m.mu.Unlock()
+	L_info("a2a: outbound task submitted", "peerID", target, "taskID", taskID, "sessionKey", sessionKey, "inputLength", len(input))
 
 	updates, err := rt.SubmitRemoteTask(ctx, target, taskID, input, m.transportPeerCandidates())
 	if err != nil {
@@ -331,6 +356,7 @@ func (m *Manager) SubmitRemoteTask(ctx context.Context, target, input string) (s
 		close(watcher)
 		delete(m.tasks, key)
 		m.mu.Unlock()
+		L_warn("a2a: outbound task submit failed", "peerID", target, "taskID", taskID, "error", err)
 		return "", nil, err
 	}
 	go m.trackRemoteTaskUpdates(key, target, sessionKey, updates)
@@ -342,6 +368,7 @@ func (m *Manager) ResumeRemoteTask(ctx context.Context, target, taskID string) (
 	rt := m.runtime
 	m.mu.RUnlock()
 	if rt == nil {
+		L_warn("a2a: outbound task resume rejected", "peerID", target, "taskID", taskID, "error", "runtime not started")
 		return nil, fmt.Errorf("A2A runtime not started")
 	}
 	sessionKey := SessionKeyForTask(TransportIDLibp2p, target, taskID)
@@ -372,8 +399,10 @@ func (m *Manager) ResumeRemoteTask(ctx context.Context, target, taskID string) (
 	m.mu.Unlock()
 
 	if isTerminalTaskState(current.State) {
+		L_info("a2a: outbound task resume reused terminal snapshot", "peerID", target, "taskID", taskID, "state", current.State)
 		return watcher, nil
 	}
+	L_info("a2a: outbound task resume requested", "peerID", target, "taskID", taskID, "sessionKey", sessionKey)
 	updates, err := rt.ResumeRemoteTask(ctx, target, taskID, m.transportPeerCandidates())
 	if err != nil {
 		m.mu.Lock()
@@ -387,6 +416,7 @@ func (m *Manager) ResumeRemoteTask(ctx context.Context, target, taskID string) (
 			m.broadcastLocked(current, current.Snapshot)
 		}
 		m.mu.Unlock()
+		L_warn("a2a: outbound task resume failed", "peerID", target, "taskID", taskID, "error", err)
 		return nil, err
 	}
 	go m.trackRemoteTaskUpdates(key, target, sessionKey, updates)
@@ -398,10 +428,13 @@ func (m *Manager) CancelRemoteTask(ctx context.Context, target, taskID string) (
 	rt := m.runtime
 	m.mu.RUnlock()
 	if rt == nil {
+		L_warn("a2a: outbound task cancel rejected", "peerID", target, "taskID", taskID, "error", "runtime not started")
 		return TaskSnapshot{}, fmt.Errorf("A2A runtime not started")
 	}
+	L_info("a2a: outbound task cancel requested", "peerID", target, "taskID", taskID)
 	update, err := rt.CancelRemoteTask(ctx, target, taskID, m.transportPeerCandidates())
 	if err != nil {
+		L_warn("a2a: outbound task cancel failed", "peerID", target, "taskID", taskID, "error", err)
 		return TaskSnapshot{}, err
 	}
 	snapshot := snapshotFromTransportUpdate(update, target, SessionKeyForTask(TransportIDLibp2p, target, taskID))
@@ -423,12 +456,14 @@ func (m *Manager) CancelRemoteTask(ctx context.Context, target, taskID string) (
 	current.Snapshot = snapshot
 	m.broadcastLocked(current, snapshot)
 	m.mu.Unlock()
+	L_info("a2a: outbound task cancelled", "peerID", target, "taskID", taskID, "state", snapshot.State)
 	return snapshot, nil
 }
 
 func (m *Manager) trackRemoteTaskUpdates(key, peerID, sessionKey string, updates <-chan libp2ptransport.TaskUpdate) {
 	for update := range updates {
 		snapshot := snapshotFromTransportUpdate(update, peerID, sessionKey)
+		L_trace("a2a: remote task update received", "peerID", peerID, "taskID", update.TaskID, "state", update.State, "contextID", update.ContextID)
 		m.mu.Lock()
 		current := m.tasks[key]
 		if current == nil {
@@ -442,6 +477,12 @@ func (m *Manager) trackRemoteTaskUpdates(key, peerID, sessionKey string, updates
 		current.State = snapshot.State
 		m.broadcastLocked(current, snapshot)
 		m.mu.Unlock()
+		switch snapshot.State {
+		case TaskStateFailed:
+			L_warn("a2a: remote task state updated", "peerID", peerID, "taskID", update.TaskID, "state", snapshot.State, "error", snapshot.Error)
+		case TaskStateCompleted, TaskStateCancelled, TaskStateInterrupted:
+			L_info("a2a: remote task state updated", "peerID", peerID, "taskID", update.TaskID, "state", snapshot.State, "contextID", snapshot.ContextID)
+		}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -450,6 +491,7 @@ func (m *Manager) trackRemoteTaskUpdates(key, peerID, sessionKey string, updates
 		return
 	}
 	if current.State == TaskStateInterrupted {
+		L_info("a2a: remote task stream interrupted", "peerID", peerID, "taskID", current.TaskID, "contextID", current.ContextID)
 		m.closeWatchersLocked(current)
 	}
 	m.pruneExpiredTasksLocked(time.Now())
