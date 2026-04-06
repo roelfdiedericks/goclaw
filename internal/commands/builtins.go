@@ -509,6 +509,8 @@ func a2aStatusResult(status a2a.Status) *CommandResult {
 	text.WriteString(fmt.Sprintf("  NAT port map: %t\n", status.NATPortMapEnabled))
 	text.WriteString(fmt.Sprintf("  Announce private addrs: %t\n", status.AnnouncePrivate))
 	text.WriteString(fmt.Sprintf("  Rendezvous: %t\n", status.RendezvousEnabled))
+	text.WriteString(fmt.Sprintf("  Rendezvous admission mode: %s\n", status.RendezvousAdmissionMode))
+	text.WriteString(fmt.Sprintf("  Rendezvous accepts private: %t\n", status.RendezvousAcceptsPrivate))
 	if status.StartedAt != nil {
 		text.WriteString(fmt.Sprintf("  Started: %s\n", status.StartedAt.Format(time.RFC3339)))
 	}

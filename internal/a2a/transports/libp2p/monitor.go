@@ -49,9 +49,10 @@ func (r *Runtime) RendezvousSnapshot() []RendezvousNamespaceSnapshot {
 		}
 		for _, peerID := range peerIDs {
 			entry := bucket[peerID]
+			sanitized, _, _ := r.sanitizeRemoteRegistrationAddrs(entry.PeerID, entry.Addrs)
 			namespaceSnapshot.Entries = append(namespaceSnapshot.Entries, RendezvousEntrySnapshot{
 				PeerID:    entry.PeerID,
-				Addrs:     cloneMonitorStrings(entry.Addrs),
+				Addrs:     cloneMonitorStrings(sanitized),
 				ExpiresAt: entry.ExpiresAt,
 			})
 		}

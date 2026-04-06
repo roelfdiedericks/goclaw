@@ -153,6 +153,7 @@ func (m *Manager) runStartup(ctx context.Context, mode RuntimeMode) {
 		MDNSServiceName:              m.cfg.Libp2p.Discovery.ServiceName,
 		RendezvousEnabled:            m.cfg.Libp2p.Discovery.RendezvousEnabled,
 		RendezvousNamespace:          m.cfg.Libp2p.Discovery.RendezvousNamespace,
+		RendezvousAdmissionMode:      m.cfg.Libp2p.Discovery.RendezvousAdmissionMode,
 		RegisterIntervalSecs:         m.cfg.Libp2p.Discovery.RegisterIntervalSecs,
 		QueryIntervalSecs:            m.cfg.Libp2p.Discovery.QueryIntervalSecs,
 		RelayClientEnabled:           m.cfg.Libp2p.Relay.EnableClient,

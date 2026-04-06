@@ -58,6 +58,7 @@ type Config struct {
 	MDNSServiceName             string
 	RendezvousEnabled           bool
 	RendezvousNamespace         string
+	RendezvousAdmissionMode     string
 	RegisterIntervalSecs        int
 	QueryIntervalSecs           int
 	RelayClientEnabled          bool
@@ -217,6 +218,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 		"natPortMap", r.cfg.NATPortMap,
 		"relayClient", r.cfg.RelayClientEnabled,
 		"relayServer", r.cfg.RelayServerEnabled,
+		"rendezvousAdmissionMode", r.cfg.RendezvousAdmissionMode,
 		"autoRelay", r.cfg.AutoRelayEnabled,
 		"holePunch", r.cfg.HolePunchEnabled,
 		"staticRelays", len(staticRelayInfos),
@@ -919,13 +921,24 @@ func (r *Runtime) handleRendezvousStream(stream network.Stream) {
 			bucket = make(map[string]rendezvousEntry)
 			r.rendezvousData[namespace] = bucket
 		}
+		sanitized, dropped, reasons := r.sanitizeRemoteRegistrationAddrs(req.PeerID, req.Addrs)
 		bucket[req.PeerID] = rendezvousEntry{
 			PeerID:    req.PeerID,
-			Addrs:     cloneStrings(req.Addrs),
+			Addrs:     sanitized,
 			ExpiresAt: time.Now().Add(2 * time.Minute),
 		}
 		r.rendezvousMu.Unlock()
-		L_trace("a2a libp2p: rendezvous peer registered", "peerID", req.PeerID, "namespace", namespace, "addrs", len(req.Addrs))
+		if dropped > 0 {
+			L_info("a2a libp2p: rendezvous registration sanitized",
+				"peerID", req.PeerID,
+				"namespace", namespace,
+				"kept", len(sanitized),
+				"dropped", dropped,
+				"reasons", formatCounts(reasons),
+				"mode", r.cfg.RendezvousAdmissionMode,
+			)
+		}
+		L_trace("a2a libp2p: rendezvous peer registered", "peerID", req.PeerID, "namespace", namespace, "addrs", len(sanitized))
 	case "list":
 		resp.Entries = r.listRendezvous(req.Namespace, req.PeerID)
 		L_info("a2a libp2p: rendezvous list served", "requester", req.PeerID, "namespace", req.Namespace, "entries", len(resp.Entries))
@@ -957,7 +970,12 @@ func (r *Runtime) listRendezvous(namespace, requester string) []rendezvousEntry 
 		if peerID == requester {
 			continue
 		}
-		out = append(out, entry)
+		sanitized, _, _ := r.sanitizeRemoteRegistrationAddrs(entry.PeerID, entry.Addrs)
+		out = append(out, rendezvousEntry{
+			PeerID:    entry.PeerID,
+			Addrs:     sanitized,
+			ExpiresAt: entry.ExpiresAt,
+		})
 	}
 	return out
 }
@@ -1122,6 +1140,84 @@ func (r *Runtime) addrFactory(explicit []ma.Multiaddr) func([]ma.Multiaddr) []ma
 		)
 		return filtered
 	}
+}
+
+func (r *Runtime) sanitizeRemoteRegistrationAddrs(peerID string, raw []string) ([]string, int, map[string]int) {
+	reasons := map[string]int{}
+	if strings.TrimSpace(peerID) == "" {
+		peerID = "unknown"
+	}
+	parsed := make([]ma.Multiaddr, 0, len(raw))
+	for _, item := range raw {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		addr, err := ma.NewMultiaddr(item)
+		if err != nil {
+			reasons["invalid"]++
+			L_warn("a2a libp2p: rendezvous registration address ignored", "peerID", peerID, "addr", item, "error", err)
+			continue
+		}
+		transport, addrPeerID := peer.SplitAddr(addr)
+		if transport == nil {
+			reasons["missing-transport"]++
+			continue
+		}
+		if addrPeerID != "" && addrPeerID.String() != peerID {
+			L_warn("a2a libp2p: rendezvous registration peer mismatch", "peerID", peerID, "addrPeerID", addrPeerID.String(), "addr", item)
+		}
+		if reason := rendezvousAdmissionFilterReason(r.cfg.RendezvousAdmissionMode, transport); reason != "" {
+			reasons[reason]++
+			continue
+		}
+		parsed = append(parsed, transport.Encapsulate(ma.StringCast("/p2p/"+peerID)))
+	}
+	sanitized := multiaddrsToStrings(dedupeMultiaddrs(parsed))
+	dropped := 0
+	for _, count := range reasons {
+		dropped += count
+	}
+	return sanitized, dropped, reasons
+}
+
+func rendezvousAdmissionFilterReason(mode string, addr ma.Multiaddr) string {
+	reason := advertisedAddrFilterReason(addr)
+	if reason == "" {
+		return ""
+	}
+	switch normalizedRendezvousAdmissionMode(mode) {
+	case "private-network":
+		switch reason {
+		case "private", "carrier-grade-nat":
+			return ""
+		}
+	}
+	return reason
+}
+
+func normalizedRendezvousAdmissionMode(mode string) string {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return "public-safe"
+	}
+	return mode
+}
+
+func formatCounts(values map[string]int) string {
+	if len(values) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", key, values[key]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func shouldFilterAdvertisedAddr(addr ma.Multiaddr) bool {

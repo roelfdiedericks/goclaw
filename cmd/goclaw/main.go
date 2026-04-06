@@ -399,6 +399,8 @@ func runA2AInfra(ctx *Context, mode a2a.RuntimeMode, port int, useTUI bool) erro
 		"lifecycle", status.LifecycleState,
 		"ready", status.Ready,
 		"peerID", status.LocalPeerID,
+		"rendezvousAdmissionMode", status.RendezvousAdmissionMode,
+		"rendezvousAcceptsPrivate", status.RendezvousAcceptsPrivate,
 	)
 	for _, addr := range status.AdvertisedAddrs {
 		L_info("a2a infra advertise address", "addr", addr)
@@ -436,6 +438,8 @@ func logA2AInfraSnapshot(snapshot a2a.InfraSnapshot) {
 		"lifecycle", snapshot.Status.LifecycleState,
 		"ready", snapshot.Status.Ready,
 		"reachability", snapshot.Status.Reachability,
+		"rendezvousAdmissionMode", snapshot.Status.RendezvousAdmissionMode,
+		"rendezvousAcceptsPrivate", snapshot.Status.RendezvousAcceptsPrivate,
 		"connected", snapshot.Summary.ConnectedPeers,
 		"direct", snapshot.Summary.ConnectedDirectPeers,
 		"relayed", snapshot.Summary.ConnectedRelayedPeers,
@@ -508,13 +512,15 @@ func formatInfraCounts(values map[string]int) string {
 
 func a2aInfraStartupLines(status a2a.Status) []string {
 	lines := []string{
-		fmt.Sprintf("%s [INFO] a2a infra mode started mode=%s lifecycle=%s ready=%t peerID=%s reachability=%s",
+		fmt.Sprintf("%s [INFO] a2a infra mode started mode=%s lifecycle=%s ready=%t peerID=%s reachability=%s rendezvousAdmissionMode=%s rendezvousAcceptsPrivate=%t",
 			time.Now().Format("15:04:05"),
 			status.RuntimeMode,
 			status.LifecycleState,
 			status.Ready,
 			status.LocalPeerID,
 			status.Reachability,
+			status.RendezvousAdmissionMode,
+			status.RendezvousAcceptsPrivate,
 		),
 	}
 	for _, addr := range status.ListenAddrs {

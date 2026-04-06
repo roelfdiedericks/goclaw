@@ -286,6 +286,7 @@ func (m *monitor) renderSummaryLocked() {
 		fmt.Sprintf("[white]Rendezvous entries:[-] %d  [white]Namespaces:[-] %d", summary.RendezvousEntries, summary.RendezvousNamespaces),
 		fmt.Sprintf("[white]Rendezvous by namespace:[-] %s", emptyDash(formatCounts(summary.RendezvousByNamespace))),
 		fmt.Sprintf("[white]Reachability:[-] %s  [white]Listen:[-] %d  [white]Advertised:[-] %d  [white]Relay addrs:[-] %d", emptyDash(status.Reachability), len(status.ListenAddrs), len(status.AdvertisedAddrs), len(status.RelayAddrs)),
+		fmt.Sprintf("[white]Rendezvous policy:[-] %s  [white]Private accepted:[-] %t", emptyDash(status.RendezvousAdmissionMode), status.RendezvousAcceptsPrivate),
 		fmt.Sprintf("[white]Port map:[-] %t  [white]Auto relay:[-] %t  [white]Hole punch:[-] %t", status.NATPortMapEnabled, status.AutoRelayEnabled, status.HolePunchEnabled),
 	}
 	m.summary.SetText(strings.Join(lines, "\n"))
@@ -422,6 +423,8 @@ func (m *monitor) renderDetailLocked() {
 		fmt.Sprintf("[white]Auto relay:[-] %t", status.AutoRelayEnabled),
 		fmt.Sprintf("[white]Hole punch:[-] %t", status.HolePunchEnabled),
 		fmt.Sprintf("[white]Announce private addrs:[-] %t", status.AnnouncePrivate),
+		fmt.Sprintf("[white]Rendezvous admission mode:[-] %s", emptyDash(status.RendezvousAdmissionMode)),
+		fmt.Sprintf("[white]Rendezvous accepts private:[-] %t", status.RendezvousAcceptsPrivate),
 		"[white]Listen addrs:[-]",
 	}
 	if len(status.ListenAddrs) == 0 {

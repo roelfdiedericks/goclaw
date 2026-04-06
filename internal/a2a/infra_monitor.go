@@ -171,6 +171,8 @@ func (m *Manager) statusLocked() Status {
 	status.AnnouncePrivate = m.cfg.Libp2p.AnnouncePrivateAddrs
 	status.RendezvousEnabled = m.cfg.Libp2p.Discovery.RendezvousEnabled
 	status.RendezvousNamespace = m.cfg.Libp2p.Discovery.RendezvousNamespace
+	status.RendezvousAdmissionMode = m.cfg.Libp2p.Discovery.RendezvousAdmissionMode
+	status.RendezvousAcceptsPrivate = m.cfg.Libp2p.Discovery.RendezvousAdmissionMode == RendezvousAdmissionPrivateNet
 	for _, rec := range m.peers {
 		status.PeerStateCounts[string(rec.State)]++
 		if rec.Connected {

@@ -95,6 +95,8 @@ type Status struct {
 	AnnouncePrivate     bool           `json:"announcePrivate"`
 	RendezvousEnabled   bool           `json:"rendezvousEnabled"`
 	RendezvousNamespace string         `json:"rendezvousNamespace,omitempty"`
+	RendezvousAdmissionMode string     `json:"rendezvousAdmissionMode,omitempty"`
+	RendezvousAcceptsPrivate bool      `json:"rendezvousAcceptsPrivate"`
 	Reachability        string         `json:"reachability,omitempty"`
 	PeerStateCounts     map[string]int `json:"peerStateCounts,omitempty"`
 	LastError           string         `json:"lastError,omitempty"`

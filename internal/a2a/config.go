@@ -14,6 +14,7 @@ const (
 	DefaultRPCProtocolID    = "/goclaw/a2a/rpc/1.0.0"
 	DefaultRendezvousID     = "/goclaw/a2a/rendezvous/1.0.0"
 	DefaultRendezvousNS     = "goclaw-a2a-v1"
+	DefaultRendezvousAdmissionMode = RendezvousAdmissionPublicSafe
 	DefaultIdentityKeyFile  = "~/.goclaw/a2a/libp2p/identity.key"
 	DefaultListenTCP        = "/ip4/0.0.0.0/tcp/4001"
 	DefaultListenQUIC       = "/ip4/0.0.0.0/udp/4001/quic-v1"
@@ -21,6 +22,11 @@ const (
 	DefaultLocalListenQUIC  = "/ip4/0.0.0.0/udp/0/quic-v1"
 	DefaultRetentionSeconds = 3600
 	DefaultBootstrapSeedTXT = "p2p_boot.goclaw.org"
+)
+
+const (
+	RendezvousAdmissionPublicSafe   = "public-safe"
+	RendezvousAdmissionPrivateNet   = "private-network"
 )
 
 type Config struct {
@@ -54,6 +60,7 @@ type DiscoveryConfig struct {
 	DHTEnabled           bool   `json:"dhtEnabled" default:"false"`
 	RendezvousEnabled    bool   `json:"rendezvousEnabled" default:"true"`
 	RendezvousNamespace  string `json:"rendezvousNamespace" default:"goclaw-a2a-v1"`
+	RendezvousAdmissionMode string `json:"rendezvousAdmissionMode" default:"public-safe"`
 	BootstrapSeedTXT     string `json:"bootstrapSeedTXT" default:"p2p_boot.goclaw.org"`
 	RegisterIntervalSecs int    `json:"registerIntervalSeconds" default:"30"`
 	QueryIntervalSecs    int    `json:"queryIntervalSeconds" default:"30"`
@@ -94,6 +101,13 @@ func (c *Config) Normalize() {
 	}
 	if c.Libp2p.Discovery.RendezvousNamespace == "" {
 		c.Libp2p.Discovery.RendezvousNamespace = DefaultRendezvousNS
+	}
+	switch c.Libp2p.Discovery.RendezvousAdmissionMode {
+	case "", RendezvousAdmissionPublicSafe:
+		c.Libp2p.Discovery.RendezvousAdmissionMode = DefaultRendezvousAdmissionMode
+	case RendezvousAdmissionPrivateNet:
+	default:
+		c.Libp2p.Discovery.RendezvousAdmissionMode = DefaultRendezvousAdmissionMode
 	}
 	if c.Libp2p.Discovery.BootstrapSeedTXT == "" {
 		c.Libp2p.Discovery.BootstrapSeedTXT = DefaultBootstrapSeedTXT
@@ -161,6 +175,17 @@ func ConfigFormDef() forms.FormDef {
 					{Name: "libp2p.discovery.bootstrapSeedTXT", Title: "Bootstrap Seed TXT", Type: forms.Text, Default: DefaultBootstrapSeedTXT, Desc: "TXT record name to query for bootstrap multiaddrs when Bootstrap Peers is empty."},
 					{Name: "libp2p.discovery.rendezvousEnabled", Title: "Enable Rendezvous", Type: forms.Toggle, Default: true, Desc: "Enable GoClaw-hosted rendezvous registration and lookup."},
 					{Name: "libp2p.discovery.rendezvousNamespace", Title: "Rendezvous Namespace", Type: forms.Text, Default: DefaultRendezvousNS, Desc: "Namespace used for GoClaw peer discovery."},
+					{
+						Name:    "libp2p.discovery.rendezvousAdmissionMode",
+						Title:   "Rendezvous Admission Mode",
+						Type:    forms.Select,
+						Default: DefaultRendezvousAdmissionMode,
+						Desc:    "Controls which remote addresses infra nodes accept into rendezvous registration. Public-safe rejects private/local addresses; private-network allows RFC1918, CGNAT, and ULA but still rejects loopback and link-local.",
+						Options: []forms.Option{
+							{Label: "Public-safe", Value: RendezvousAdmissionPublicSafe},
+							{Label: "Private-network", Value: RendezvousAdmissionPrivateNet},
+						},
+					},
 					{Name: "libp2p.discovery.registerIntervalSeconds", Title: "Register Interval (seconds)", Type: forms.Number, Default: 30, Desc: "How often nodes refresh their rendezvous registration."},
 					{Name: "libp2p.discovery.queryIntervalSeconds", Title: "Query Interval (seconds)", Type: forms.Number, Default: 30, Desc: "How often nodes query rendezvous peers for candidates."},
 					{Name: "libp2p.discovery.mdnsEnabled", Title: "Enable mDNS", Type: forms.Toggle, Default: false, Desc: "Enable LAN-only peer discovery."},
@@ -216,6 +241,7 @@ func handleApply(cmd bus.Command) bus.CommandResult {
 		"defaultTransport", cfg.DefaultTransport,
 		"libp2pEnabled", cfg.Libp2p.Enabled,
 		"bootstrapPeers", len(cfg.Libp2p.BootstrapPeers),
+		"rendezvousAdmissionMode", cfg.Libp2p.Discovery.RendezvousAdmissionMode,
 	)
 	bus.PublishEvent(configPath+".config.applied", &cfg)
 	return bus.CommandResult{
