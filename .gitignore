@@ -33,6 +33,8 @@ apierror.txt
 # Reference code (not part of goclaw)
 ref/
 
+goacp-schema/
+
 # Skills sparse checkout temp directory
 .skills-upstream/
 
