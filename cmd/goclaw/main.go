@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -24,6 +25,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/roelfdiedericks/goclaw/internal/a2a"
+	a2ainfratui "github.com/roelfdiedericks/goclaw/internal/a2a/infratui"
 	"github.com/roelfdiedericks/goclaw/internal/a2apeers"
 	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/auth"
@@ -347,7 +349,8 @@ type A2ALibp2pCmd struct {
 }
 
 type A2AInfraFlags struct {
-	Port int `help:"Override infra listen port for both TCP and QUIC."`
+	Port int  `help:"Override infra listen port for both TCP and QUIC."`
+	TUI  bool `help:"Run a dedicated infra monitor TUI."`
 }
 
 type A2ALibp2pBootstrapCmd struct{ A2AInfraFlags }
@@ -355,16 +358,18 @@ type A2ALibp2pRelayCmd struct{ A2AInfraFlags }
 type A2ALibp2pBothCmd struct{ A2AInfraFlags }
 
 func (c *A2ALibp2pBootstrapCmd) Run(ctx *Context) error {
-	return runA2AInfra(ctx, a2a.RuntimeModeBootstrap, c.Port)
+	return runA2AInfra(ctx, a2a.RuntimeModeBootstrap, c.Port, c.TUI)
 }
 func (c *A2ALibp2pRelayCmd) Run(ctx *Context) error {
-	return runA2AInfra(ctx, a2a.RuntimeModeRelay, c.Port)
+	return runA2AInfra(ctx, a2a.RuntimeModeRelay, c.Port, c.TUI)
 }
 func (c *A2ALibp2pBothCmd) Run(ctx *Context) error {
-	return runA2AInfra(ctx, a2a.RuntimeModeBoth, c.Port)
+	return runA2AInfra(ctx, a2a.RuntimeModeBoth, c.Port, c.TUI)
 }
 
-func runA2AInfra(ctx *Context, mode a2a.RuntimeMode, port int) error {
+const a2aInfraMonitorInterval = 10 * time.Second
+
+func runA2AInfra(ctx *Context, mode a2a.RuntimeMode, port int, useTUI bool) error {
 	loadResult, err := config.LoadRuntime()
 	if err != nil {
 		return err
@@ -395,8 +400,97 @@ func runA2AInfra(ctx *Context, mode a2a.RuntimeMode, port int) error {
 	for _, addr := range status.AdvertisedAddrs {
 		L_info("a2a infra advertise address", "addr", addr)
 	}
-	<-runCtx.Done()
-	return nil
+	if useTUI {
+		return a2ainfratui.Run(runCtx, manager)
+	}
+	return monitorA2AInfraCLI(runCtx, manager)
+}
+
+func monitorA2AInfraCLI(ctx context.Context, manager *a2a.Manager) error {
+	snapshot := manager.InfraSnapshot()
+	lastFingerprint := snapshot.Fingerprint()
+	logA2AInfraSnapshot(snapshot)
+
+	ticker := time.NewTicker(a2aInfraMonitorInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			snapshot = manager.InfraSnapshot()
+			fingerprint := snapshot.Fingerprint()
+			if fingerprint == lastFingerprint {
+				continue
+			}
+			lastFingerprint = fingerprint
+			logA2AInfraSnapshot(snapshot)
+		}
+	}
+}
+
+func logA2AInfraSnapshot(snapshot a2a.InfraSnapshot) {
+	L_info("a2a infra summary",
+		"mode", snapshot.Status.RuntimeMode,
+		"lifecycle", snapshot.Status.LifecycleState,
+		"ready", snapshot.Status.Ready,
+		"connected", snapshot.Summary.ConnectedPeers,
+		"direct", snapshot.Summary.ConnectedDirectPeers,
+		"relayed", snapshot.Summary.ConnectedRelayedPeers,
+		"connectedByState", formatInfraCounts(snapshot.Summary.ConnectedPeerStateCount),
+		"rendezvousEntries", snapshot.Summary.RendezvousEntries,
+		"rendezvousNamespaces", snapshot.Summary.RendezvousNamespaces,
+		"rendezvousByNamespace", formatInfraCounts(snapshot.Summary.RendezvousByNamespace),
+	)
+	if len(snapshot.Peers) == 0 {
+		L_info("a2a infra connected peers", "count", 0)
+	} else {
+		for _, peer := range snapshot.Peers {
+			L_info("a2a infra connected peer",
+				"peerID", peer.PeerID,
+				"alias", peer.Alias,
+				"state", peer.State,
+				"relayed", peer.Relayed,
+				"authorized", peer.Authorized,
+				"addrs", strings.Join(peer.Addrs, ", "),
+			)
+		}
+	}
+	if len(snapshot.Rendezvous) == 0 {
+		L_info("a2a infra rendezvous entries", "count", 0)
+		return
+	}
+	for _, namespace := range snapshot.Rendezvous {
+		if len(namespace.Entries) == 0 {
+			L_info("a2a infra rendezvous namespace", "namespace", namespace.Namespace, "entries", 0)
+			continue
+		}
+		for _, entry := range namespace.Entries {
+			L_info("a2a infra rendezvous entry",
+				"namespace", entry.Namespace,
+				"peerID", entry.PeerID,
+				"expiresAt", entry.ExpiresAt.Format(time.RFC3339),
+				"addrs", strings.Join(entry.Addrs, ", "),
+			)
+		}
+	}
+}
+
+func formatInfraCounts(values map[string]int) string {
+	if len(values) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", key, values[key]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func awaitA2AInfraHostReady(ctx context.Context, manager *a2a.Manager, timeout time.Duration) (a2a.Status, error) {

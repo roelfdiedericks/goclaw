@@ -231,43 +231,7 @@ func (m *Manager) Status() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pruneExpiredTasksLocked(time.Now())
-
-	status := Status{
-		Enabled:            m.cfg.Enabled && m.cfg.Libp2p.Enabled,
-		ActiveTransport:    m.cfg.DefaultTransport,
-		LifecycleState:     m.currentLifecycleStateLocked(),
-		Ready:              m.runtime != nil && (m.lifecycleState == LifecycleStateRunning || m.lifecycleState == LifecycleStateDegraded),
-		WarmupComplete:     m.warmupComplete,
-		RuntimeMode:        m.runtimeMode,
-		BootstrapPeers:     len(m.cfg.Libp2p.BootstrapPeers),
-		TrustedPeers:       m.trustedPeerCountLocked(),
-		KnownPeers:         len(m.peers),
-		PeerStateCounts:    make(map[string]int),
-		LastError:          m.lastError,
-		StartedAt:          m.startedAt,
-		RecentTaskCount:    len(m.tasks),
-		StateRetentionSecs: m.cfg.Libp2p.Protocol.StateRetentionSecs,
-	}
-	status.RelayClientEnabled = m.cfg.Libp2p.Relay.EnableClient
-	status.RelayServerEnabled = m.cfg.Libp2p.Relay.EnableServer
-	status.RendezvousEnabled = m.cfg.Libp2p.Discovery.RendezvousEnabled
-	status.RendezvousNamespace = m.cfg.Libp2p.Discovery.RendezvousNamespace
-	for _, rec := range m.peers {
-		status.PeerStateCounts[string(rec.State)]++
-		if rec.Connected {
-			status.ConnectedPeers++
-		}
-		if rec.State == PeerStateDiscoveredUntrusted {
-			status.DiscoveredPeers++
-		}
-	}
-	if m.runtime != nil {
-		status.RuntimeMode = RuntimeMode(m.runtime.Mode())
-		status.LocalPeerID = m.runtime.LocalPeerID()
-		status.ListenAddrs = m.runtime.ListenAddrs()
-		status.AdvertisedAddrs = m.runtime.AdvertisedAddrs()
-	}
-	return status
+	return m.statusLocked()
 }
 
 func (m *Manager) ListTasks(filter, peer string) []TaskSummary {
