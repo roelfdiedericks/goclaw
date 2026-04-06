@@ -498,6 +498,9 @@ func applyRuntimeDefaults(cfg *Config, goclawDir, home string) {
 	if cfg.A2A.Libp2p.ListenAddrs == nil {
 		cfg.A2A.Libp2p.ListenAddrs = []string{a2a.DefaultLocalListenTCP, a2a.DefaultLocalListenQUIC}
 	}
+	if cfg.A2A.Libp2p.AnnounceAddrs == nil {
+		cfg.A2A.Libp2p.AnnounceAddrs = []string{}
+	}
 	if cfg.A2A.Libp2p.BootstrapPeers == nil {
 		cfg.A2A.Libp2p.BootstrapPeers = []string{}
 	}
@@ -880,6 +883,8 @@ func DefaultConfig() *DefaultConfigTemplate {
 			Libp2p: a2a.Libp2pConfig{
 				Enabled:        false,
 				ListenAddrs:    []string{a2a.DefaultLocalListenTCP, a2a.DefaultLocalListenQUIC},
+				AnnounceAddrs:  []string{},
+				NATPortMap:     true,
 				BootstrapPeers: []string{},
 				Identity: a2a.IdentityConfig{
 					KeyFile: a2a.DefaultIdentityKeyFile,
@@ -894,9 +899,11 @@ func DefaultConfig() *DefaultConfigTemplate {
 					QueryIntervalSecs:    30,
 				},
 				Relay: a2a.RelayConfig{
-					EnableClient: true,
-					EnableServer: false,
-					StaticRelays: []string{},
+					EnableClient:    true,
+					EnableServer:    false,
+					EnableAutoRelay: true,
+					EnableHolePunch: true,
+					StaticRelays:    []string{},
 				},
 				Protocol: a2a.ProtocolConfig{
 					RPCProtocolID:        a2a.DefaultRPCProtocolID,

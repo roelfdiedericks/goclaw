@@ -165,6 +165,10 @@ func (m *Manager) statusLocked() Status {
 	}
 	status.RelayClientEnabled = m.cfg.Libp2p.Relay.EnableClient
 	status.RelayServerEnabled = m.cfg.Libp2p.Relay.EnableServer
+	status.AutoRelayEnabled = m.cfg.Libp2p.Relay.EnableAutoRelay
+	status.HolePunchEnabled = m.cfg.Libp2p.Relay.EnableHolePunch
+	status.NATPortMapEnabled = m.cfg.Libp2p.NATPortMap
+	status.AnnouncePrivate = m.cfg.Libp2p.AnnouncePrivateAddrs
 	status.RendezvousEnabled = m.cfg.Libp2p.Discovery.RendezvousEnabled
 	status.RendezvousNamespace = m.cfg.Libp2p.Discovery.RendezvousNamespace
 	for _, rec := range m.peers {
@@ -181,6 +185,8 @@ func (m *Manager) statusLocked() Status {
 		status.LocalPeerID = m.runtime.LocalPeerID()
 		status.ListenAddrs = m.runtime.ListenAddrs()
 		status.AdvertisedAddrs = m.runtime.AdvertisedAddrs()
+		status.RelayAddrs = m.runtime.RelayAddrs()
+		status.Reachability = m.runtime.Reachability()
 	}
 	return status
 }

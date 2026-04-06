@@ -435,6 +435,7 @@ func logA2AInfraSnapshot(snapshot a2a.InfraSnapshot) {
 		"mode", snapshot.Status.RuntimeMode,
 		"lifecycle", snapshot.Status.LifecycleState,
 		"ready", snapshot.Status.Ready,
+		"reachability", snapshot.Status.Reachability,
 		"connected", snapshot.Summary.ConnectedPeers,
 		"direct", snapshot.Summary.ConnectedDirectPeers,
 		"relayed", snapshot.Summary.ConnectedRelayedPeers,
@@ -442,7 +443,19 @@ func logA2AInfraSnapshot(snapshot a2a.InfraSnapshot) {
 		"rendezvousEntries", snapshot.Summary.RendezvousEntries,
 		"rendezvousNamespaces", snapshot.Summary.RendezvousNamespaces,
 		"rendezvousByNamespace", formatInfraCounts(snapshot.Summary.RendezvousByNamespace),
+		"listenAddrs", len(snapshot.Status.ListenAddrs),
+		"advertisedAddrs", len(snapshot.Status.AdvertisedAddrs),
+		"relayAddrs", len(snapshot.Status.RelayAddrs),
 	)
+	for _, addr := range snapshot.Status.ListenAddrs {
+		L_info("a2a infra listen address", "addr", addr)
+	}
+	for _, addr := range snapshot.Status.AdvertisedAddrs {
+		L_info("a2a infra advertise address", "addr", addr)
+	}
+	for _, addr := range snapshot.Status.RelayAddrs {
+		L_info("a2a infra relay advertise address", "addr", addr)
+	}
 	if len(snapshot.Peers) == 0 {
 		L_info("a2a infra connected peers", "count", 0)
 	} else {
@@ -495,16 +508,23 @@ func formatInfraCounts(values map[string]int) string {
 
 func a2aInfraStartupLines(status a2a.Status) []string {
 	lines := []string{
-		fmt.Sprintf("%s [INFO] a2a infra mode started mode=%s lifecycle=%s ready=%t peerID=%s",
+		fmt.Sprintf("%s [INFO] a2a infra mode started mode=%s lifecycle=%s ready=%t peerID=%s reachability=%s",
 			time.Now().Format("15:04:05"),
 			status.RuntimeMode,
 			status.LifecycleState,
 			status.Ready,
 			status.LocalPeerID,
+			status.Reachability,
 		),
+	}
+	for _, addr := range status.ListenAddrs {
+		lines = append(lines, fmt.Sprintf("%s [INFO] a2a infra listen address addr=%s", time.Now().Format("15:04:05"), addr))
 	}
 	for _, addr := range status.AdvertisedAddrs {
 		lines = append(lines, fmt.Sprintf("%s [INFO] a2a infra advertise address addr=%s", time.Now().Format("15:04:05"), addr))
+	}
+	for _, addr := range status.RelayAddrs {
+		lines = append(lines, fmt.Sprintf("%s [INFO] a2a infra relay advertise address addr=%s", time.Now().Format("15:04:05"), addr))
 	}
 	return lines
 }

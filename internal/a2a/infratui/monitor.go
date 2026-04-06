@@ -127,6 +127,17 @@ func newMonitor(ctx context.Context, manager *a2a.Manager) *monitor {
 			m.renderDetailLocked()
 		}
 	})
+	m.peerList.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if action == tview.MouseLeftClick {
+			m.mu.Lock()
+			m.focus = focusPeers
+			m.applyFocusStylingLocked()
+			m.renderDetailLocked()
+			m.mu.Unlock()
+			m.app.SetFocus(m.peerList)
+		}
+		return action, event
+	})
 	m.rvList.SetChangedFunc(func(index int, _, _ string, _ rune) {
 		if m.suppressChange {
 			return
@@ -140,6 +151,28 @@ func newMonitor(ctx context.Context, manager *a2a.Manager) *monitor {
 			m.applyFocusStylingLocked()
 			m.renderDetailLocked()
 		}
+	})
+	m.rvList.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if action == tview.MouseLeftClick {
+			m.mu.Lock()
+			m.focus = focusRendezvous
+			m.applyFocusStylingLocked()
+			m.renderDetailLocked()
+			m.mu.Unlock()
+			m.app.SetFocus(m.rvList)
+		}
+		return action, event
+	})
+	m.logView.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if action == tview.MouseLeftClick {
+			m.mu.Lock()
+			m.focus = focusLogs
+			m.applyFocusStylingLocked()
+			m.renderDetailLocked()
+			m.mu.Unlock()
+			m.app.SetFocus(m.logView)
+		}
+		return action, event
 	})
 
 	inputCapture := func(event *tcell.EventKey) *tcell.EventKey {
@@ -252,7 +285,8 @@ func (m *monitor) renderSummaryLocked() {
 		fmt.Sprintf("[white]Connected by state:[-] %s", emptyDash(formatCounts(summary.ConnectedPeerStateCount))),
 		fmt.Sprintf("[white]Rendezvous entries:[-] %d  [white]Namespaces:[-] %d", summary.RendezvousEntries, summary.RendezvousNamespaces),
 		fmt.Sprintf("[white]Rendezvous by namespace:[-] %s", emptyDash(formatCounts(summary.RendezvousByNamespace))),
-		fmt.Sprintf("[white]Advertised addrs:[-] %d", len(status.AdvertisedAddrs)),
+		fmt.Sprintf("[white]Reachability:[-] %s  [white]Listen:[-] %d  [white]Advertised:[-] %d  [white]Relay addrs:[-] %d", emptyDash(status.Reachability), len(status.ListenAddrs), len(status.AdvertisedAddrs), len(status.RelayAddrs)),
+		fmt.Sprintf("[white]Port map:[-] %t  [white]Auto relay:[-] %t  [white]Hole punch:[-] %t", status.NATPortMapEnabled, status.AutoRelayEnabled, status.HolePunchEnabled),
 	}
 	m.summary.SetText(strings.Join(lines, "\n"))
 }
@@ -383,12 +417,33 @@ func (m *monitor) renderDetailLocked() {
 		fmt.Sprintf("[white]Lifecycle:[-] %s", status.LifecycleState),
 		fmt.Sprintf("[white]Ready:[-] %t", status.Ready),
 		fmt.Sprintf("[white]PeerID:[-] %s", emptyDash(status.LocalPeerID)),
-		"[white]Advertised addrs:[-]",
+		fmt.Sprintf("[white]Reachability:[-] %s", emptyDash(status.Reachability)),
+		fmt.Sprintf("[white]Port map:[-] %t", status.NATPortMapEnabled),
+		fmt.Sprintf("[white]Auto relay:[-] %t", status.AutoRelayEnabled),
+		fmt.Sprintf("[white]Hole punch:[-] %t", status.HolePunchEnabled),
+		fmt.Sprintf("[white]Announce private addrs:[-] %t", status.AnnouncePrivate),
+		"[white]Listen addrs:[-]",
 	}
+	if len(status.ListenAddrs) == 0 {
+		lines = append(lines, "  -")
+	} else {
+		for _, addr := range status.ListenAddrs {
+			lines = append(lines, "  "+addr)
+		}
+	}
+	lines = append(lines, "[white]Advertised addrs:[-]")
 	if len(status.AdvertisedAddrs) == 0 {
 		lines = append(lines, "  -")
 	} else {
 		for _, addr := range status.AdvertisedAddrs {
+			lines = append(lines, "  "+addr)
+		}
+	}
+	lines = append(lines, "[white]Relay addrs:[-]")
+	if len(status.RelayAddrs) == 0 {
+		lines = append(lines, "  -")
+	} else {
+		for _, addr := range status.RelayAddrs {
 			lines = append(lines, "  "+addr)
 		}
 	}

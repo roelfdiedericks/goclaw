@@ -81,6 +81,7 @@ type Status struct {
 	LocalPeerID         string         `json:"localPeerId,omitempty"`
 	ListenAddrs         []string       `json:"listenAddrs,omitempty"`
 	AdvertisedAddrs     []string       `json:"advertisedAddrs,omitempty"`
+	RelayAddrs          []string       `json:"relayAddrs,omitempty"`
 	BootstrapPeers      int            `json:"bootstrapPeers"`
 	TrustedPeers        int            `json:"trustedPeers"`
 	KnownPeers          int            `json:"knownPeers"`
@@ -88,8 +89,13 @@ type Status struct {
 	DiscoveredPeers     int            `json:"discoveredPeers"`
 	RelayClientEnabled  bool           `json:"relayClientEnabled"`
 	RelayServerEnabled  bool           `json:"relayServerEnabled"`
+	AutoRelayEnabled    bool           `json:"autoRelayEnabled"`
+	HolePunchEnabled    bool           `json:"holePunchEnabled"`
+	NATPortMapEnabled   bool           `json:"natPortMapEnabled"`
+	AnnouncePrivate     bool           `json:"announcePrivate"`
 	RendezvousEnabled   bool           `json:"rendezvousEnabled"`
 	RendezvousNamespace string         `json:"rendezvousNamespace,omitempty"`
+	Reachability        string         `json:"reachability,omitempty"`
 	PeerStateCounts     map[string]int `json:"peerStateCounts,omitempty"`
 	LastError           string         `json:"lastError,omitempty"`
 	StartedAt           *time.Time     `json:"startedAt,omitempty"`

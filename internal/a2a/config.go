@@ -30,13 +30,17 @@ type Config struct {
 }
 
 type Libp2pConfig struct {
-	Enabled        bool            `json:"enabled" default:"false"`
-	Identity       IdentityConfig  `json:"identity"`
-	ListenAddrs    []string        `json:"listenAddrs"`
-	BootstrapPeers []string        `json:"bootstrapPeers"`
-	Discovery      DiscoveryConfig `json:"discovery"`
-	Relay          RelayConfig     `json:"relay"`
-	Protocol       ProtocolConfig  `json:"protocol"`
+	Enabled                       bool            `json:"enabled" default:"false"`
+	Identity                      IdentityConfig  `json:"identity"`
+	ListenAddrs                   []string        `json:"listenAddrs"`
+	AnnounceAddrs                 []string        `json:"announceAddrs"`
+	AnnouncePrivateAddrs          bool            `json:"announcePrivateAddrs" default:"false"`
+	DisableIdentifyAddrDiscovery  bool            `json:"disableIdentifyAddressDiscovery" default:"false"`
+	NATPortMap                    bool            `json:"natPortMap" default:"true"`
+	BootstrapPeers                []string        `json:"bootstrapPeers"`
+	Discovery                     DiscoveryConfig `json:"discovery"`
+	Relay                         RelayConfig     `json:"relay"`
+	Protocol                      ProtocolConfig  `json:"protocol"`
 }
 
 type IdentityConfig struct {
@@ -56,9 +60,11 @@ type DiscoveryConfig struct {
 }
 
 type RelayConfig struct {
-	EnableClient bool     `json:"enableClient" default:"true"`
-	EnableServer bool     `json:"enableServer" default:"false"`
-	StaticRelays []string `json:"staticRelays"`
+	EnableClient   bool     `json:"enableClient" default:"true"`
+	EnableServer   bool     `json:"enableServer" default:"false"`
+	EnableAutoRelay bool    `json:"enableAutoRelay" default:"true"`
+	EnableHolePunch bool    `json:"enableHolePunch" default:"true"`
+	StaticRelays   []string `json:"staticRelays"`
 }
 
 type ProtocolConfig struct {
@@ -79,6 +85,9 @@ func (c *Config) Normalize() {
 	}
 	if len(c.Libp2p.ListenAddrs) == 0 {
 		c.Libp2p.ListenAddrs = []string{DefaultListenTCP, DefaultListenQUIC}
+	}
+	if c.Libp2p.AnnounceAddrs == nil {
+		c.Libp2p.AnnounceAddrs = []string{}
 	}
 	if c.Libp2p.Discovery.ServiceName == "" {
 		c.Libp2p.Discovery.ServiceName = DefaultRendezvousNS
@@ -139,6 +148,10 @@ func ConfigFormDef() forms.FormDef {
 						Options: []forms.Option{{Label: "ed25519", Value: "ed25519"}},
 					},
 					{Name: "libp2p.listenAddrs", Title: "Listen Addresses", Type: forms.StringList, Placeholder: DefaultListenTCP + ", " + DefaultListenQUIC, Desc: "Listen addresses for the libp2p host."},
+					{Name: "libp2p.announceAddrs", Title: "Announce Addresses", Type: forms.StringList, Placeholder: "/dns4/public.example.com/tcp/4001", Desc: "Optional explicit globally advertised addresses. Leave empty to let libp2p derive advertised addresses automatically."},
+					{Name: "libp2p.announcePrivateAddrs", Title: "Announce Private Addresses", Type: forms.Toggle, Default: false, Desc: "Allow private or link-local addresses into global advertised output. Normally leave off and use mDNS for LAN discovery."},
+					{Name: "libp2p.disableIdentifyAddressDiscovery", Title: "Disable Identify Address Discovery", Type: forms.Toggle, Default: false, Desc: "Disable observed-address discovery from remote peers. Use only for tightly controlled deployments."},
+					{Name: "libp2p.natPortMap", Title: "Enable NAT Port Mapping", Type: forms.Toggle, Default: true, Desc: "Best-effort UPnP/NAT-PMP port mapping for directly reachable public addresses."},
 				},
 			},
 			{
@@ -159,6 +172,8 @@ func ConfigFormDef() forms.FormDef {
 				Fields: []forms.Field{
 					{Name: "libp2p.relay.enableClient", Title: "Enable Relay Client", Type: forms.Toggle, Default: true, Desc: "Allow relayed connectivity when direct paths fail."},
 					{Name: "libp2p.relay.enableServer", Title: "Enable Relay Server", Type: forms.Toggle, Default: false, Desc: "Offer relay service from this node."},
+					{Name: "libp2p.relay.enableAutoRelay", Title: "Enable Auto Relay", Type: forms.Toggle, Default: true, Desc: "Advertise relay-reachable addresses when the node is private and static relays are available."},
+					{Name: "libp2p.relay.enableHolePunch", Title: "Enable Hole Punching", Type: forms.Toggle, Default: true, Desc: "Attempt direct libp2p hole punching upgrades on top of relay-backed connectivity."},
 					{Name: "libp2p.relay.staticRelays", Title: "Static Relays", Type: forms.StringList, Placeholder: "/dns4/relay.example.com/tcp/4001/p2p/<peerid>", Desc: "Optional relay peers to reserve with explicitly."},
 					{Name: "libp2p.protocol.rpcProtocolId", Title: "RPC Protocol ID", Type: forms.Text, Default: DefaultRPCProtocolID, Desc: "Protocol ID used for A2A traffic."},
 					{Name: "libp2p.protocol.rendezvousProtocolId", Title: "Rendezvous Protocol ID", Type: forms.Text, Default: DefaultRendezvousID, Desc: "Protocol ID used for GoClaw rendezvous."},

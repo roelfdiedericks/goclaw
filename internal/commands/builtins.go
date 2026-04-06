@@ -504,6 +504,10 @@ func a2aStatusResult(status a2a.Status) *CommandResult {
 	text.WriteString(fmt.Sprintf("  State retention: %ds\n", status.StateRetentionSecs))
 	text.WriteString(fmt.Sprintf("  Relay client: %t\n", status.RelayClientEnabled))
 	text.WriteString(fmt.Sprintf("  Relay server: %t\n", status.RelayServerEnabled))
+	text.WriteString(fmt.Sprintf("  Auto relay: %t\n", status.AutoRelayEnabled))
+	text.WriteString(fmt.Sprintf("  Hole punch: %t\n", status.HolePunchEnabled))
+	text.WriteString(fmt.Sprintf("  NAT port map: %t\n", status.NATPortMapEnabled))
+	text.WriteString(fmt.Sprintf("  Announce private addrs: %t\n", status.AnnouncePrivate))
 	text.WriteString(fmt.Sprintf("  Rendezvous: %t\n", status.RendezvousEnabled))
 	if status.StartedAt != nil {
 		text.WriteString(fmt.Sprintf("  Started: %s\n", status.StartedAt.Format(time.RFC3339)))
@@ -511,11 +515,17 @@ func a2aStatusResult(status a2a.Status) *CommandResult {
 	if status.RendezvousNamespace != "" {
 		text.WriteString(fmt.Sprintf("  Rendezvous namespace: %s\n", status.RendezvousNamespace))
 	}
+	if status.Reachability != "" {
+		text.WriteString(fmt.Sprintf("  Reachability: %s\n", status.Reachability))
+	}
 	for _, addr := range status.ListenAddrs {
 		text.WriteString(fmt.Sprintf("  Listen: %s\n", addr))
 	}
 	for _, addr := range status.AdvertisedAddrs {
 		text.WriteString(fmt.Sprintf("  Advertise: %s\n", addr))
+	}
+	for _, addr := range status.RelayAddrs {
+		text.WriteString(fmt.Sprintf("  Relay advertise: %s\n", addr))
 	}
 	if len(status.PeerStateCounts) > 0 {
 		text.WriteString("  Peer states:\n")

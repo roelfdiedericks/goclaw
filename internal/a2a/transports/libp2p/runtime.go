@@ -10,12 +10,14 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	golibp2p "github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/event"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -44,21 +46,27 @@ const (
 )
 
 type Config struct {
-	IdentityKeyFile      string
-	ListenAddrs          []string
-	BootstrapPeers       []string
-	BootstrapSeedTXT     string
-	MDNSEnabled          bool
-	MDNSServiceName      string
-	RendezvousEnabled    bool
-	RendezvousNamespace  string
-	RegisterIntervalSecs int
-	QueryIntervalSecs    int
-	RelayClientEnabled   bool
-	RelayServerEnabled   bool
-	StaticRelays         []string
-	RPCProtocolID        string
-	RendezvousProtocolID string
+	IdentityKeyFile             string
+	ListenAddrs                 []string
+	AnnounceAddrs               []string
+	AnnouncePrivateAddrs        bool
+	DisableIdentifyAddrDiscovery bool
+	NATPortMap                  bool
+	BootstrapPeers              []string
+	BootstrapSeedTXT            string
+	MDNSEnabled                 bool
+	MDNSServiceName             string
+	RendezvousEnabled           bool
+	RendezvousNamespace         string
+	RegisterIntervalSecs        int
+	QueryIntervalSecs           int
+	RelayClientEnabled          bool
+	RelayServerEnabled          bool
+	AutoRelayEnabled            bool
+	HolePunchEnabled            bool
+	StaticRelays                []string
+	RPCProtocolID               string
+	RendezvousProtocolID        string
 }
 
 type PeerObservation struct {
@@ -112,6 +120,10 @@ type Runtime struct {
 	bootstrapResolvedAt time.Time
 	bootstrapPeerIDs    map[peer.ID]struct{}
 	lastRendezvousQuery time.Time
+
+	stateMu           sync.RWMutex
+	localReachability network.Reachability
+	relayAddrs        []string
 }
 
 type rendezvousEntry struct {
@@ -143,10 +155,11 @@ type rpcEnvelope struct {
 
 func New(cfg Config, mode RuntimeMode, callbacks Callbacks) *Runtime {
 	return &Runtime{
-		cfg:            cfg,
-		mode:           mode,
-		callbacks:      callbacks,
-		rendezvousData: make(map[string]map[string]rendezvousEntry),
+		cfg:               cfg,
+		mode:              mode,
+		callbacks:         callbacks,
+		rendezvousData:    make(map[string]map[string]rendezvousEntry),
+		localReachability: network.ReachabilityUnknown,
 	}
 }
 
@@ -159,12 +172,35 @@ func (r *Runtime) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("parse listen addrs: %w", err)
 	}
+	announceAddrs, err := parseAdvertiseMultiaddrs(r.cfg.AnnounceAddrs)
+	if err != nil {
+		return fmt.Errorf("parse announce addrs: %w", err)
+	}
+	staticRelayInfos, relayParseErrs := parseAddrInfos(r.cfg.StaticRelays)
+	for _, relayErr := range relayParseErrs {
+		L_warn("a2a libp2p: static relay ignored", "error", relayErr)
+	}
 
-	h, err := golibp2p.New(
+	options := []golibp2p.Option{
 		golibp2p.Identity(priv),
 		golibp2p.ListenAddrs(listenAddrs...),
 		golibp2p.EnableRelay(),
-	)
+		golibp2p.AddrsFactory(r.addrFactory(announceAddrs)),
+	}
+	if r.cfg.NATPortMap {
+		options = append(options, golibp2p.NATPortMap())
+	}
+	if r.cfg.DisableIdentifyAddrDiscovery {
+		options = append(options, golibp2p.DisableIdentifyAddressDiscovery())
+	}
+	if r.cfg.RelayClientEnabled && r.cfg.AutoRelayEnabled && len(staticRelayInfos) > 0 {
+		options = append(options, golibp2p.EnableAutoRelayWithStaticRelays(staticRelayInfos))
+	}
+	if r.cfg.RelayClientEnabled && r.cfg.HolePunchEnabled {
+		options = append(options, golibp2p.EnableHolePunching())
+	}
+
+	h, err := golibp2p.New(options...)
 	if err != nil {
 		return fmt.Errorf("create libp2p host: %w", err)
 	}
@@ -172,6 +208,19 @@ func (r *Runtime) Start(ctx context.Context) error {
 	r.startedAt = time.Now()
 	r.ping = pingproto.NewPingService(h)
 	h.Network().Notify(&notifiee{runtime: r})
+	r.startEventWatchers(ctx)
+
+	L_info("a2a libp2p: host created",
+		"mode", r.mode,
+		"listenAddrs", len(listenAddrs),
+		"explicitAnnounceAddrs", len(announceAddrs),
+		"natPortMap", r.cfg.NATPortMap,
+		"relayClient", r.cfg.RelayClientEnabled,
+		"relayServer", r.cfg.RelayServerEnabled,
+		"autoRelay", r.cfg.AutoRelayEnabled,
+		"holePunch", r.cfg.HolePunchEnabled,
+		"staticRelays", len(staticRelayInfos),
+	)
 
 	if r.mode == RuntimeModeBootstrap || r.mode == RuntimeModeBoth {
 		h.SetStreamHandler(protocol.ID(r.cfg.RendezvousProtocolID), r.handleRendezvousStream)
@@ -218,6 +267,74 @@ func (r *Runtime) Warmup(ctx context.Context) error {
 	return nil
 }
 
+func (r *Runtime) startEventWatchers(ctx context.Context) {
+	if r.host == nil {
+		return
+	}
+	reachabilitySub, err := r.host.EventBus().Subscribe(new(event.EvtLocalReachabilityChanged))
+	if err != nil {
+		L_warn("a2a libp2p: reachability subscription failed", "error", err)
+	} else {
+		go r.watchReachability(ctx, reachabilitySub)
+	}
+	relaySub, err := r.host.EventBus().Subscribe(new(event.EvtAutoRelayAddrsUpdated))
+	if err != nil {
+		L_warn("a2a libp2p: auto relay subscription failed", "error", err)
+	} else {
+		go r.watchAutoRelayAddrs(ctx, relaySub)
+	}
+}
+
+func (r *Runtime) watchReachability(ctx context.Context, sub interface {
+	Out() <-chan interface{}
+	Close() error
+}) {
+	defer sub.Close()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-sub.Out():
+			if !ok {
+				return
+			}
+			reachability := evt.(event.EvtLocalReachabilityChanged).Reachability
+			r.stateMu.Lock()
+			changed := r.localReachability != reachability
+			r.localReachability = reachability
+			r.stateMu.Unlock()
+			if changed {
+				L_info("a2a libp2p: reachability changed", "reachability", strings.ToLower(reachability.String()))
+			}
+		}
+	}
+}
+
+func (r *Runtime) watchAutoRelayAddrs(ctx context.Context, sub interface {
+	Out() <-chan interface{}
+	Close() error
+}) {
+	defer sub.Close()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-sub.Out():
+			if !ok {
+				return
+			}
+			relayAddrs := multiaddrsWithPeerIDToStrings(evt.(event.EvtAutoRelayAddrsUpdated).RelayAddrs, r.host.ID())
+			r.stateMu.Lock()
+			r.relayAddrs = relayAddrs
+			r.stateMu.Unlock()
+			L_info("a2a libp2p: relay addresses updated", "count", len(relayAddrs))
+			for _, addr := range relayAddrs {
+				L_trace("a2a libp2p: relay advertised address", "addr", addr)
+			}
+		}
+	}
+}
+
 func (r *Runtime) Run(ctx context.Context) error {
 	r.runBackground(ctx)
 	return nil
@@ -236,18 +353,26 @@ func (r *Runtime) ListenAddrs() []string {
 	if r.host == nil {
 		return nil
 	}
-	return multiaddrsToStrings(r.host.Addrs())
+	return multiaddrsToStrings(r.host.Network().ListenAddresses())
 }
 
 func (r *Runtime) AdvertisedAddrs() []string {
 	if r.host == nil {
 		return nil
 	}
-	out := make([]string, 0, len(r.host.Addrs()))
-	for _, addr := range r.host.Addrs() {
-		out = append(out, addr.Encapsulate(ma.StringCast("/p2p/"+r.host.ID().String())).String())
-	}
-	return out
+	return multiaddrsWithPeerIDToStrings(r.host.Addrs(), r.host.ID())
+}
+
+func (r *Runtime) RelayAddrs() []string {
+	r.stateMu.RLock()
+	defer r.stateMu.RUnlock()
+	return cloneStrings(r.relayAddrs)
+}
+
+func (r *Runtime) Reachability() string {
+	r.stateMu.RLock()
+	defer r.stateMu.RUnlock()
+	return strings.ToLower(r.localReachability.String())
 }
 
 func (r *Runtime) PingPeer(ctx context.Context, target string, knownPeers []PeerCandidate) (string, time.Duration, string, error) {
@@ -670,11 +795,16 @@ func (r *Runtime) handlePeerDisconnected(conn network.Conn) {
 }
 
 func (r *Runtime) registerRendezvous(ctx context.Context) {
+	advertised := r.AdvertisedAddrs()
+	if len(advertised) == 0 {
+		L_info("a2a libp2p: rendezvous register skipped", "reason", "no-advertised-addresses")
+		return
+	}
 	payload := rendezvousRequest{
 		Action:    "register",
 		Namespace: r.cfg.RendezvousNamespace,
 		PeerID:    r.host.ID().String(),
-		Addrs:     r.AdvertisedAddrs(),
+		Addrs:     advertised,
 	}
 	entries, _, err := r.bootstrapPeerEntries(false)
 	if err != nil {
@@ -871,6 +1001,39 @@ func parseMultiaddrs(raw []string) ([]ma.Multiaddr, error) {
 	return out, nil
 }
 
+func parseAdvertiseMultiaddrs(raw []string) ([]ma.Multiaddr, error) {
+	addrs, err := parseMultiaddrs(raw)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ma.Multiaddr, 0, len(addrs))
+	for _, addr := range addrs {
+		transport, _ := peer.SplitAddr(addr)
+		if transport == nil {
+			continue
+		}
+		out = append(out, transport)
+	}
+	return dedupeMultiaddrs(out), nil
+}
+
+func parseAddrInfos(raw []string) ([]peer.AddrInfo, []error) {
+	out := make([]peer.AddrInfo, 0, len(raw))
+	var errs []error
+	for _, item := range raw {
+		if strings.TrimSpace(item) == "" {
+			continue
+		}
+		info, err := parseAddrInfo(item)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", strings.TrimSpace(item), err))
+			continue
+		}
+		out = append(out, *info)
+	}
+	return out, errs
+}
+
 func parseAddrInfo(raw string) (*peer.AddrInfo, error) {
 	addr, err := ma.NewMultiaddr(strings.TrimSpace(raw))
 	if err != nil {
@@ -896,7 +1059,119 @@ func multiaddrsToStrings(addrs []ma.Multiaddr) []string {
 	for _, addr := range addrs {
 		out = append(out, addr.String())
 	}
+	sort.Strings(out)
 	return out
+}
+
+func multiaddrsWithPeerIDToStrings(addrs []ma.Multiaddr, peerID peer.ID) []string {
+	out := make([]string, 0, len(addrs))
+	for _, addr := range dedupeMultiaddrs(addrs) {
+		out = append(out, addr.Encapsulate(ma.StringCast("/p2p/"+peerID.String())).String())
+	}
+	sort.Strings(out)
+	return out
+}
+
+func dedupeMultiaddrs(addrs []ma.Multiaddr) []ma.Multiaddr {
+	if len(addrs) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(addrs))
+	out := make([]ma.Multiaddr, 0, len(addrs))
+	for _, addr := range addrs {
+		if addr == nil {
+			continue
+		}
+		key := addr.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, addr)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
+	return out
+}
+
+func (r *Runtime) addrFactory(explicit []ma.Multiaddr) func([]ma.Multiaddr) []ma.Multiaddr {
+	explicit = dedupeMultiaddrs(explicit)
+	return func(addrs []ma.Multiaddr) []ma.Multiaddr {
+		source := addrs
+		sourceType := "derived"
+		if len(explicit) > 0 {
+			source = explicit
+			sourceType = "explicit"
+		}
+		filtered := make([]ma.Multiaddr, 0, len(source))
+		dropped := 0
+		for _, addr := range source {
+			if !r.cfg.AnnouncePrivateAddrs && shouldFilterAdvertisedAddr(addr) {
+				dropped++
+				L_trace("a2a libp2p: advertised address filtered", "addr", addr.String(), "reason", advertisedAddrFilterReason(addr))
+				continue
+			}
+			filtered = append(filtered, addr)
+		}
+		filtered = dedupeMultiaddrs(filtered)
+		L_debug("a2a libp2p: advertised address set evaluated",
+			"source", sourceType,
+			"input", len(source),
+			"kept", len(filtered),
+			"dropped", dropped,
+			"announcePrivate", r.cfg.AnnouncePrivateAddrs,
+		)
+		return filtered
+	}
+}
+
+func shouldFilterAdvertisedAddr(addr ma.Multiaddr) bool {
+	return advertisedAddrFilterReason(addr) != ""
+}
+
+func advertisedAddrFilterReason(addr ma.Multiaddr) string {
+	if addr == nil {
+		return "nil"
+	}
+	text := addr.String()
+	if strings.Contains(text, "/p2p-circuit") {
+		return ""
+	}
+	ip := ipFromMultiaddr(addr)
+	if ip == nil {
+		return ""
+	}
+	switch {
+	case ip.IsLoopback():
+		return "loopback"
+	case ip.IsUnspecified():
+		return "unspecified"
+	case ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast():
+		return "link-local"
+	case ip.IsPrivate():
+		return "private"
+	case isCarrierGradeNAT(ip):
+		return "carrier-grade-nat"
+	default:
+		return ""
+	}
+}
+
+func ipFromMultiaddr(addr ma.Multiaddr) net.IP {
+	if value, err := addr.ValueForProtocol(ma.P_IP4); err == nil {
+		return net.ParseIP(value)
+	}
+	if value, err := addr.ValueForProtocol(ma.P_IP6); err == nil {
+		return net.ParseIP(value)
+	}
+	return nil
+}
+
+func isCarrierGradeNAT(ip net.IP) bool {
+	v4 := ip.To4()
+	if v4 == nil {
+		return false
+	}
+	return v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127
 }
 
 func hasRelayedAddr(addrs []ma.Multiaddr) bool {
