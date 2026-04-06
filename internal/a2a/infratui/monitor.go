@@ -19,6 +19,11 @@ const (
 	maxLogLines     = 400
 )
 
+var (
+	focusedBorderColor   = tcell.ColorAqua
+	unfocusedBorderColor = tcell.ColorWhite
+)
+
 type focusPane int
 
 const (
@@ -51,9 +56,16 @@ type monitor struct {
 	suppressChange bool
 }
 
-func Run(ctx context.Context, manager *a2a.Manager) error {
+func Run(ctx context.Context, manager *a2a.Manager, initialLogLines []string) error {
 	m := newMonitor(ctx, manager)
 	m.applySnapshot(manager.InfraSnapshot())
+	for _, line := range initialLogLines {
+		m.appendLog(line)
+	}
+
+	root := m.layout()
+	m.app.SetRoot(root, true)
+	m.app.SetFocus(m.peerList)
 
 	logging.SetHookExclusive(func(level, msg string) {
 		formatted := fmt.Sprintf("%s [%s] %s", time.Now().Format("15:04:05"), level, msg)
@@ -63,16 +75,13 @@ func Run(ctx context.Context, manager *a2a.Manager) error {
 	})
 	defer logging.SetHookExclusive(nil)
 
-	logging.L_info("a2a infra tui started")
-
 	go m.runRefreshLoop()
 	go func() {
 		<-ctx.Done()
 		m.app.Stop()
 	}()
 
-	m.app.SetFocus(m.peerList)
-	return m.app.SetRoot(m.layout(), true).EnableMouse(true).Run()
+	return m.app.EnableMouse(true).Run()
 }
 
 func newMonitor(ctx context.Context, manager *a2a.Manager) *monitor {
@@ -103,6 +112,7 @@ func newMonitor(ctx context.Context, manager *a2a.Manager) *monitor {
 	m.logView.SetBorder(true).SetTitle(" Logs ").SetTitleAlign(tview.AlignLeft)
 	m.lastUpdate.SetBorder(true).SetTitle(" Refreshed ").SetTitleAlign(tview.AlignLeft)
 	m.footer.SetText("[gray]Tab switch pane  arrows move  mouse click selects  q quit")
+	m.applyFocusStylingLocked()
 
 	m.peerList.SetChangedFunc(func(index int, _, _ string, _ rune) {
 		if m.suppressChange {
@@ -113,6 +123,7 @@ func newMonitor(ctx context.Context, manager *a2a.Manager) *monitor {
 		if index >= 0 && index < len(m.snapshot.Peers) {
 			m.selectedPeerID = m.snapshot.Peers[index].PeerID
 			m.focus = focusPeers
+			m.applyFocusStylingLocked()
 			m.renderDetailLocked()
 		}
 	})
@@ -126,6 +137,7 @@ func newMonitor(ctx context.Context, manager *a2a.Manager) *monitor {
 		if index >= 0 && index < len(entries) {
 			m.selectedRVKey = rendezvousKey(entries[index])
 			m.focus = focusRendezvous
+			m.applyFocusStylingLocked()
 			m.renderDetailLocked()
 		}
 	})
@@ -410,15 +422,33 @@ func (m *monitor) advanceFocus() {
 	switch m.focus {
 	case focusPeers:
 		m.focus = focusRendezvous
+		m.applyFocusStylingLocked()
 		m.app.SetFocus(m.rvList)
 	case focusRendezvous:
 		m.focus = focusLogs
+		m.applyFocusStylingLocked()
 		m.app.SetFocus(m.logView)
 	default:
 		m.focus = focusPeers
+		m.applyFocusStylingLocked()
 		m.app.SetFocus(m.peerList)
 	}
 	m.renderDetailLocked()
+}
+
+func (m *monitor) applyFocusStylingLocked() {
+	m.peerList.SetBorderColor(unfocusedBorderColor)
+	m.rvList.SetBorderColor(unfocusedBorderColor)
+	m.logView.SetBorderColor(unfocusedBorderColor)
+
+	switch m.focus {
+	case focusPeers:
+		m.peerList.SetBorderColor(focusedBorderColor)
+	case focusRendezvous:
+		m.rvList.SetBorderColor(focusedBorderColor)
+	case focusLogs:
+		m.logView.SetBorderColor(focusedBorderColor)
+	}
 }
 
 func flattenRendezvous(namespaces []a2a.InfraRendezvousNamespace) []a2a.InfraRendezvousEntry {

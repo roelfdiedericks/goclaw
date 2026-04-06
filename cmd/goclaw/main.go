@@ -391,6 +391,9 @@ func runA2AInfra(ctx *Context, mode a2a.RuntimeMode, port int, useTUI bool) erro
 	if err != nil {
 		return err
 	}
+	if useTUI {
+		return a2ainfratui.Run(runCtx, manager, a2aInfraStartupLines(status))
+	}
 	L_info("a2a infra mode started",
 		"mode", status.RuntimeMode,
 		"lifecycle", status.LifecycleState,
@@ -399,9 +402,6 @@ func runA2AInfra(ctx *Context, mode a2a.RuntimeMode, port int, useTUI bool) erro
 	)
 	for _, addr := range status.AdvertisedAddrs {
 		L_info("a2a infra advertise address", "addr", addr)
-	}
-	if useTUI {
-		return a2ainfratui.Run(runCtx, manager)
 	}
 	return monitorA2AInfraCLI(runCtx, manager)
 }
@@ -491,6 +491,22 @@ func formatInfraCounts(values map[string]int) string {
 		parts = append(parts, fmt.Sprintf("%s=%d", key, values[key]))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func a2aInfraStartupLines(status a2a.Status) []string {
+	lines := []string{
+		fmt.Sprintf("%s [INFO] a2a infra mode started mode=%s lifecycle=%s ready=%t peerID=%s",
+			time.Now().Format("15:04:05"),
+			status.RuntimeMode,
+			status.LifecycleState,
+			status.Ready,
+			status.LocalPeerID,
+		),
+	}
+	for _, addr := range status.AdvertisedAddrs {
+		lines = append(lines, fmt.Sprintf("%s [INFO] a2a infra advertise address addr=%s", time.Now().Format("15:04:05"), addr))
+	}
+	return lines
 }
 
 func awaitA2AInfraHostReady(ctx context.Context, manager *a2a.Manager, timeout time.Duration) (a2a.Status, error) {
