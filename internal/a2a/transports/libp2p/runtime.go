@@ -197,7 +197,15 @@ func (r *Runtime) Start(ctx context.Context) error {
 		options = append(options, golibp2p.DisableIdentifyAddressDiscovery())
 	}
 	if r.mode == RuntimeModeNode && r.cfg.RelayClientEnabled && r.cfg.AutoRelayEnabled {
-		options = append(options, golibp2p.EnableAutoRelayWithPeerSource(r.bootstrapRelayPeerSource()))
+		options = append(options, golibp2p.EnableAutoRelayWithPeerSource(
+			r.bootstrapRelayPeerSource(),
+			autorelay.WithBootDelay(0),
+			autorelay.WithMinCandidates(1),
+			autorelay.WithMaxCandidates(1),
+			autorelay.WithNumRelays(1),
+			autorelay.WithMinInterval(1*time.Second),
+			autorelay.WithBackoff(15*time.Second),
+		))
 	}
 	if r.mode == RuntimeModeNode && r.cfg.RelayClientEnabled && r.cfg.HolePunchEnabled {
 		options = append(options, golibp2p.EnableHolePunching())
@@ -224,6 +232,10 @@ func (r *Runtime) Start(ctx context.Context) error {
 		"autoNATv2", true,
 		"natService", r.natServiceEnabled(),
 		"autoRelay", r.cfg.AutoRelayEnabled,
+		"autoRelayBootDelay", "0s",
+		"autoRelayMinCandidates", 1,
+		"autoRelayMaxCandidates", 1,
+		"autoRelayDesiredRelays", 1,
 		"holePunch", r.cfg.HolePunchEnabled,
 		"autoRelayCandidateSource", "bootstrap",
 	)
