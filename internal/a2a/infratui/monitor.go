@@ -209,7 +209,7 @@ func (m *monitor) layout() tview.Primitive {
 
 	return tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(top, 3, 0, false).
+		AddItem(top, 4, 0, false).
 		AddItem(m.summary, 5, 0, false).
 		AddItem(middle, 0, 2, true).
 		AddItem(m.detail, 10, 0, false).
@@ -268,11 +268,16 @@ func (m *monitor) appendLog(line string) {
 func (m *monitor) renderHeaderLocked() {
 	status := m.snapshot.Status
 	header := fmt.Sprintf(
-		"[white]Mode:[-] %s  [white]Lifecycle:[-] %s  [white]Ready:[-] %t  [white]PeerID:[-] %s",
+		"[white]Mode:[-] %s  [white]Lifecycle:[-] %s  [white]Ready:[-] %t  [white]PeerID:[-] %s\n[white]Reachability:[-] %s  [white]AutoNATv2:[-] %t  [white]NAT service:[-] %t  [white]Auto relay:[-] %t  [white]Hole punch:[-] %t",
 		status.RuntimeMode,
 		status.LifecycleState,
 		status.Ready,
 		emptyDash(status.LocalPeerID),
+		emptyDash(status.Reachability),
+		status.AutoNATv2Enabled,
+		status.NATServiceEnabled,
+		status.AutoRelayEnabled,
+		status.HolePunchEnabled,
 	)
 	m.header.SetText(header)
 }
