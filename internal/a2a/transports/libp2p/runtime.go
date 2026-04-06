@@ -614,7 +614,11 @@ func (r *Runtime) bootstrapPeerEntries(forceRefresh bool) ([]string, string, err
 
 func (r *Runtime) resolveBootstrapPeerEntries() ([]string, string, error) {
 	if len(r.cfg.BootstrapPeers) > 0 {
-		return cloneStrings(r.cfg.BootstrapPeers), "config", nil
+		normalized := normalizeBootstrapEntries(r.cfg.BootstrapPeers)
+		if len(normalized) != len(r.cfg.BootstrapPeers) {
+			L_info("a2a libp2p: bootstrap candidates normalized", "source", "config", "input", len(r.cfg.BootstrapPeers), "kept", len(normalized), "transportPreference", "quic>tcp")
+		}
+		return normalized, "config", nil
 	}
 	seed := strings.TrimSpace(r.cfg.BootstrapSeedTXT)
 	if seed == "" {
@@ -639,7 +643,11 @@ func (r *Runtime) resolveBootstrapPeerEntries() ([]string, string, error) {
 		valid = append(valid, entry)
 	}
 	L_info("a2a libp2p: bootstrap TXT resolved", "seed", seed, "records", len(txts), "valid", len(valid), "invalid", invalid)
-	return valid, "dns_txt", nil
+	normalized := normalizeBootstrapEntries(valid)
+	if len(normalized) != len(valid) {
+		L_info("a2a libp2p: bootstrap candidates normalized", "source", "dns_txt", "input", len(valid), "kept", len(normalized), "transportPreference", "quic>tcp")
+	}
+	return normalized, "dns_txt", nil
 }
 
 func (r *Runtime) cachedBootstrapPeerEntries() ([]string, string, bool) {
@@ -712,13 +720,13 @@ func (r *Runtime) connectAddrInfo(ctx context.Context, info peer.AddrInfo) error
 	if r.host == nil {
 		return fmt.Errorf("host not started")
 	}
-	L_trace("a2a libp2p: dialing peer", "peerID", info.ID, "addrs", len(info.Addrs))
+	L_info("a2a libp2p: dialing peer", "peerID", info.ID, "addrs", strings.Join(multiaddrsToStrings(info.Addrs), ", "), "preferredTransport", preferredTransportLabel(info.Addrs))
 	r.host.Peerstore().AddAddrs(info.ID, info.Addrs, time.Hour)
 	if err := r.host.Connect(ctx, info); err != nil {
-		L_debug("a2a libp2p: dial failed", "peerID", info.ID, "error", err)
+		L_warn("a2a libp2p: dial failed", "peerID", info.ID, "preferredTransport", preferredTransportLabel(info.Addrs), "addrs", strings.Join(multiaddrsToStrings(info.Addrs), ", "), "error", err)
 		return fmt.Errorf("connect %s: %w", info.ID, err)
 	}
-	L_trace("a2a libp2p: dial established", "peerID", info.ID, "addrs", len(info.Addrs))
+	L_info("a2a libp2p: dial established", "peerID", info.ID, "transport", preferredTransportLabel(info.Addrs), "addrs", strings.Join(multiaddrsToStrings(info.Addrs), ", "))
 	r.observePeer(PeerObservation{
 		PeerID:          info.ID.String(),
 		Addrs:           multiaddrsToStrings(info.Addrs),
@@ -1135,6 +1143,86 @@ func addrInfoFromStrings(peerID string, raw []string) (*peer.AddrInfo, error) {
 		return nil, err
 	}
 	return &peer.AddrInfo{ID: id, Addrs: addrs}, nil
+}
+
+func normalizeBootstrapEntries(entries []string) []string {
+	type candidate struct {
+		entry string
+		score int
+	}
+	byPeer := make(map[peer.ID]candidate)
+	orderedPeerIDs := make([]peer.ID, 0)
+	for _, entry := range entries {
+		info, err := parseAddrInfo(entry)
+		if err != nil || info == nil || len(info.Addrs) == 0 {
+			continue
+		}
+		score := bootstrapCandidateScore(info.Addrs[0])
+		current, exists := byPeer[info.ID]
+		if !exists {
+			orderedPeerIDs = append(orderedPeerIDs, info.ID)
+			byPeer[info.ID] = candidate{entry: entry, score: score}
+			continue
+		}
+		if score < current.score {
+			byPeer[info.ID] = candidate{entry: entry, score: score}
+		}
+	}
+	out := make([]string, 0, len(orderedPeerIDs))
+	for _, peerID := range orderedPeerIDs {
+		out = append(out, byPeer[peerID].entry)
+	}
+	return out
+}
+
+func bootstrapCandidateScore(addr ma.Multiaddr) int {
+	if addr == nil {
+		return 1 << 30
+	}
+	switch {
+	case hasProtocol(addr, ma.P_QUIC_V1), hasProtocol(addr, ma.P_QUIC):
+		return 0
+	case hasProtocol(addr, ma.P_TCP):
+		return 1
+	default:
+		return 2
+	}
+}
+
+func preferredTransportLabel(addrs []ma.Multiaddr) string {
+	best := "other"
+	bestScore := 1 << 30
+	for _, addr := range addrs {
+		score := bootstrapCandidateScore(addr)
+		if score >= bestScore {
+			continue
+		}
+		bestScore = score
+		switch score {
+		case 0:
+			best = "quic"
+		case 1:
+			best = "tcp"
+		default:
+			best = "other"
+		}
+	}
+	return best
+}
+
+func hasProtocol(addr ma.Multiaddr, code int) bool {
+	if addr == nil {
+		return false
+	}
+	found := false
+	ma.ForEach(addr, func(c ma.Component) bool {
+		if c.Protocol().Code == code {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func multiaddrsToStrings(addrs []ma.Multiaddr) []string {

@@ -171,6 +171,20 @@ func TestBootstrapRelayPeerSourceUsesBootstrapPeers(t *testing.T) {
 	}
 }
 
+func TestNormalizeBootstrapEntriesPrefersQUICOverTCPForSamePeer(t *testing.T) {
+	peerID := mustTestPeerID(t)
+	entries := normalizeBootstrapEntries([]string{
+		"/ip4/34.35.192.27/tcp/4001/p2p/" + peerID,
+		"/ip4/34.35.192.27/udp/4001/quic-v1/p2p/" + peerID,
+	})
+	if len(entries) != 1 {
+		t.Fatalf("expected one normalized entry, got %d: %#v", len(entries), entries)
+	}
+	if got := entries[0]; got != "/ip4/34.35.192.27/udp/4001/quic-v1/p2p/"+peerID {
+		t.Fatalf("expected QUIC entry to win, got %s", got)
+	}
+}
+
 func TestNatServiceEnabledByMode(t *testing.T) {
 	tests := []struct {
 		name string
