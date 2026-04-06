@@ -2,11 +2,14 @@ package libp2p
 
 import (
 	"crypto/rand"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/roelfdiedericks/goclaw/internal/logging"
+	ma "github.com/multiformats/go-multiaddr"
 )
 
 func TestSanitizeRemoteRegistrationAddrsPublicSafe(t *testing.T) {
@@ -104,6 +107,42 @@ func TestListRendezvousSanitizesLegacyEntries(t *testing.T) {
 		default:
 			t.Fatalf("unexpected peer entry: %s", entry.PeerID)
 		}
+	}
+}
+
+func TestAdvertisedAddressEvaluationLoggingIsDeduplicated(t *testing.T) {
+	prevLevel := logging.GetLevel()
+	logging.SetLevel(logging.LevelDebug)
+	t.Cleanup(func() {
+		logging.SetHook(nil)
+		logging.SetLevel(prevLevel)
+	})
+
+	var lines []string
+	logging.SetHook(func(level, msg string) {
+		lines = append(lines, level+" "+msg)
+	})
+
+	rt := New(Config{}, RuntimeModeNode, Callbacks{})
+	factory := rt.addrFactory([]ma.Multiaddr{
+		ma.StringCast("/ip4/34.35.192.27/tcp/4001"),
+		ma.StringCast("/ip4/34.35.192.27/udp/4001/quic-v1"),
+	})
+
+	first := factory(nil)
+	second := factory(nil)
+	if len(first) != 2 || len(second) != 2 {
+		t.Fatalf("expected explicit addresses to be preserved")
+	}
+
+	count := 0
+	for _, line := range lines {
+		if strings.Contains(line, "a2a libp2p: advertised address set evaluated") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one advertised address evaluation log, got %d: %#v", count, lines)
 	}
 }
 
