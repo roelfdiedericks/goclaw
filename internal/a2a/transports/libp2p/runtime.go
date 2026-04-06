@@ -38,6 +38,11 @@ const (
 	RuntimeModeBoth      RuntimeMode = "both"
 )
 
+const (
+	bootstrapConnectedRefreshEvery = 60 * time.Minute
+	rendezvousHealthyQueryEvery    = 5 * time.Minute
+)
+
 type Config struct {
 	IdentityKeyFile      string
 	ListenAddrs          []string
@@ -100,6 +105,13 @@ type Runtime struct {
 
 	rendezvousMu   sync.Mutex
 	rendezvousData map[string]map[string]rendezvousEntry
+
+	bootstrapMu         sync.RWMutex
+	bootstrapEntries    []string
+	bootstrapSource     string
+	bootstrapResolvedAt time.Time
+	bootstrapPeerIDs    map[peer.ID]struct{}
+	lastRendezvousQuery time.Time
 }
 
 type rendezvousEntry struct {
@@ -183,7 +195,7 @@ func (r *Runtime) Warmup(ctx context.Context) error {
 	}
 	var errs []string
 	if r.bootstrapDialEnabled() {
-		if err := r.connectBootstrapPeers(ctx); err != nil {
+		if err := r.connectBootstrapPeers(ctx, true); err != nil {
 			L_warn("a2a libp2p: bootstrap connect pass failed", "error", err)
 			errs = append(errs, err.Error())
 		}
@@ -379,21 +391,23 @@ func (r *Runtime) runBackground(ctx context.Context) {
 			}
 			return
 		case <-bootstrapCh:
-			_ = r.connectBootstrapPeers(ctx)
+			if ok, forceRefresh := r.shouldAttemptBootstrapRefresh(time.Now()); ok {
+				_ = r.connectBootstrapPeers(ctx, forceRefresh)
+			}
 		case <-registerTicker.C:
 			if r.mode == RuntimeModeNode && r.cfg.RendezvousEnabled {
 				r.registerRendezvous(ctx)
 			}
 		case <-queryTicker.C:
-			if r.mode == RuntimeModeNode && r.cfg.RendezvousEnabled {
+			if r.mode == RuntimeModeNode && r.cfg.RendezvousEnabled && r.shouldRunRendezvousQuery(time.Now()) {
 				r.queryRendezvous(ctx)
 			}
 		}
 	}
 }
 
-func (r *Runtime) connectBootstrapPeers(ctx context.Context) error {
-	entries, source, resolutionErr := r.bootstrapPeerEntries()
+func (r *Runtime) connectBootstrapPeers(ctx context.Context, forceRefresh bool) error {
+	entries, source, resolutionErr := r.bootstrapPeerEntries(forceRefresh)
 	if resolutionErr != nil {
 		return resolutionErr
 	}
@@ -428,7 +442,22 @@ func (r *Runtime) bootstrapDialEnabled() bool {
 	return r.mode == RuntimeModeNode
 }
 
-func (r *Runtime) bootstrapPeerEntries() ([]string, string, error) {
+func (r *Runtime) bootstrapPeerEntries(forceRefresh bool) ([]string, string, error) {
+	if !forceRefresh {
+		if entries, source, ok := r.cachedBootstrapPeerEntries(); ok {
+			L_trace("a2a libp2p: using cached bootstrap entries", "source", source, "count", len(entries))
+			return entries, source, nil
+		}
+	}
+	entries, source, err := r.resolveBootstrapPeerEntries()
+	if err != nil {
+		return nil, source, err
+	}
+	r.storeBootstrapPeerEntries(entries, source)
+	return entries, source, nil
+}
+
+func (r *Runtime) resolveBootstrapPeerEntries() ([]string, string, error) {
 	if len(r.cfg.BootstrapPeers) > 0 {
 		return cloneStrings(r.cfg.BootstrapPeers), "config", nil
 	}
@@ -456,6 +485,72 @@ func (r *Runtime) bootstrapPeerEntries() ([]string, string, error) {
 	}
 	L_info("a2a libp2p: bootstrap TXT resolved", "seed", seed, "records", len(txts), "valid", len(valid), "invalid", invalid)
 	return valid, "dns_txt", nil
+}
+
+func (r *Runtime) cachedBootstrapPeerEntries() ([]string, string, bool) {
+	r.bootstrapMu.RLock()
+	defer r.bootstrapMu.RUnlock()
+	if len(r.bootstrapEntries) == 0 {
+		return nil, "", false
+	}
+	return cloneStrings(r.bootstrapEntries), r.bootstrapSource, true
+}
+
+func (r *Runtime) storeBootstrapPeerEntries(entries []string, source string) {
+	peerIDs := make(map[peer.ID]struct{})
+	for _, entry := range entries {
+		info, err := parseAddrInfo(entry)
+		if err != nil {
+			continue
+		}
+		peerIDs[info.ID] = struct{}{}
+	}
+	r.bootstrapMu.Lock()
+	r.bootstrapEntries = cloneStrings(entries)
+	r.bootstrapSource = source
+	r.bootstrapResolvedAt = time.Now()
+	r.bootstrapPeerIDs = peerIDs
+	r.bootstrapMu.Unlock()
+}
+
+func (r *Runtime) shouldAttemptBootstrapRefresh(now time.Time) (bool, bool) {
+	if !r.connectedToBootstrapPeer() {
+		return true, true
+	}
+	r.bootstrapMu.RLock()
+	resolvedAt := r.bootstrapResolvedAt
+	r.bootstrapMu.RUnlock()
+	if resolvedAt.IsZero() || now.Sub(resolvedAt) >= bootstrapConnectedRefreshEvery {
+		return true, true
+	}
+	L_trace("a2a libp2p: bootstrap refresh skipped", "reason", "connected-bootstrap-peer", "nextRefreshIn", bootstrapConnectedRefreshEvery-now.Sub(resolvedAt))
+	return false, false
+}
+
+func (r *Runtime) connectedToBootstrapPeer() bool {
+	if r.host == nil {
+		return false
+	}
+	r.bootstrapMu.RLock()
+	defer r.bootstrapMu.RUnlock()
+	for peerID := range r.bootstrapPeerIDs {
+		if r.host.Network().Connectedness(peerID) == network.Connected {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runtime) shouldRunRendezvousQuery(now time.Time) bool {
+	healthy := r.connectedToBootstrapPeer()
+	r.bootstrapMu.Lock()
+	defer r.bootstrapMu.Unlock()
+	if healthy && !r.lastRendezvousQuery.IsZero() && now.Sub(r.lastRendezvousQuery) < rendezvousHealthyQueryEvery {
+		L_trace("a2a libp2p: rendezvous query skipped", "reason", "healthy-bootstrap-connection", "nextQueryIn", rendezvousHealthyQueryEvery-now.Sub(r.lastRendezvousQuery))
+		return false
+	}
+	r.lastRendezvousQuery = now
+	return true
 }
 
 func (r *Runtime) connectAddrInfo(ctx context.Context, info peer.AddrInfo) error {
@@ -581,7 +676,7 @@ func (r *Runtime) registerRendezvous(ctx context.Context) {
 		PeerID:    r.host.ID().String(),
 		Addrs:     r.AdvertisedAddrs(),
 	}
-	entries, _, err := r.bootstrapPeerEntries()
+	entries, _, err := r.bootstrapPeerEntries(false)
 	if err != nil {
 		L_warn("a2a libp2p: rendezvous bootstrap resolution failed", "error", err)
 		return
@@ -608,7 +703,7 @@ func (r *Runtime) queryRendezvous(ctx context.Context) {
 		Namespace: r.cfg.RendezvousNamespace,
 		PeerID:    r.host.ID().String(),
 	}
-	entries, _, err := r.bootstrapPeerEntries()
+	entries, _, err := r.bootstrapPeerEntries(false)
 	if err != nil {
 		L_warn("a2a libp2p: rendezvous bootstrap resolution failed", "error", err)
 		return
