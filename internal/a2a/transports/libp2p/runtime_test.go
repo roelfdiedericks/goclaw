@@ -1,6 +1,7 @@
 package libp2p
 
 import (
+	"context"
 	"crypto/rand"
 	"strings"
 	"testing"
@@ -143,6 +144,30 @@ func TestAdvertisedAddressEvaluationLoggingIsDeduplicated(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected exactly one advertised address evaluation log, got %d: %#v", count, lines)
+	}
+}
+
+func TestBootstrapRelayPeerSourceUsesBootstrapPeers(t *testing.T) {
+	peerA := mustTestPeerID(t)
+	peerB := mustTestPeerID(t)
+	rt := New(Config{
+		BootstrapPeers: []string{
+			"/ip4/34.35.192.27/tcp/4001/p2p/" + peerA,
+			"/ip4/34.35.192.27/udp/4001/quic-v1/p2p/" + peerB,
+		},
+	}, RuntimeModeNode, Callbacks{})
+
+	source := rt.bootstrapRelayPeerSource()
+	ch := source(context.Background(), 2)
+	var ids []string
+	for info := range ch {
+		ids = append(ids, info.ID.String())
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 bootstrap relay candidates, got %d (%#v)", len(ids), ids)
+	}
+	if ids[0] != peerA || ids[1] != peerB {
+		t.Fatalf("unexpected bootstrap relay candidates: %#v", ids)
 	}
 }
 

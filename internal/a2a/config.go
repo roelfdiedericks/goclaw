@@ -71,7 +71,6 @@ type RelayConfig struct {
 	EnableServer   bool     `json:"enableServer" default:"false"`
 	EnableAutoRelay bool    `json:"enableAutoRelay" default:"true"`
 	EnableHolePunch bool    `json:"enableHolePunch" default:"true"`
-	StaticRelays   []string `json:"staticRelays"`
 }
 
 type ProtocolConfig struct {
@@ -197,9 +196,8 @@ func ConfigFormDef() forms.FormDef {
 				Fields: []forms.Field{
 					{Name: "libp2p.relay.enableClient", Title: "Enable Relay Client", Type: forms.Toggle, Default: true, Desc: "Allow relayed connectivity when direct paths fail."},
 					{Name: "libp2p.relay.enableServer", Title: "Enable Relay Server", Type: forms.Toggle, Default: false, Desc: "Offer relay service from this node."},
-					{Name: "libp2p.relay.enableAutoRelay", Title: "Enable Auto Relay", Type: forms.Toggle, Default: true, Desc: "Advertise relay-reachable addresses when the node is private and static relays are available."},
+					{Name: "libp2p.relay.enableAutoRelay", Title: "Enable Auto Relay", Type: forms.Toggle, Default: true, Desc: "Use bootstrap peers as relay candidates and advertise relay-reachable addresses when the node is private."},
 					{Name: "libp2p.relay.enableHolePunch", Title: "Enable Hole Punching", Type: forms.Toggle, Default: true, Desc: "Attempt direct libp2p hole punching upgrades on top of relay-backed connectivity."},
-					{Name: "libp2p.relay.staticRelays", Title: "Static Relays", Type: forms.StringList, Placeholder: "/dns4/relay.example.com/tcp/4001/p2p/<peerid>", Desc: "Optional relay peers to reserve with explicitly."},
 					{Name: "libp2p.protocol.rpcProtocolId", Title: "RPC Protocol ID", Type: forms.Text, Default: DefaultRPCProtocolID, Desc: "Protocol ID used for A2A traffic."},
 					{Name: "libp2p.protocol.rendezvousProtocolId", Title: "Rendezvous Protocol ID", Type: forms.Text, Default: DefaultRendezvousID, Desc: "Protocol ID used for GoClaw rendezvous."},
 					{Name: "libp2p.protocol.stateRetentionSeconds", Title: "Task State Retention (seconds)", Type: forms.Number, Default: DefaultRetentionSeconds, Desc: "How long completed task snapshots remain resumable."},

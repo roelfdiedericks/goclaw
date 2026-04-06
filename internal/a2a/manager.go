@@ -160,7 +160,6 @@ func (m *Manager) runStartup(ctx context.Context, mode RuntimeMode) {
 		RelayServerEnabled:           m.cfg.Libp2p.Relay.EnableServer,
 		AutoRelayEnabled:             m.cfg.Libp2p.Relay.EnableAutoRelay,
 		HolePunchEnabled:             m.cfg.Libp2p.Relay.EnableHolePunch,
-		StaticRelays:                 m.cfg.Libp2p.Relay.StaticRelays,
 		RPCProtocolID:                m.cfg.Libp2p.Protocol.RPCProtocolID,
 		RendezvousProtocolID:         m.cfg.Libp2p.Protocol.RendezvousProtocolID,
 	}, libp2ptransport.RuntimeMode(mode), libp2ptransport.Callbacks{

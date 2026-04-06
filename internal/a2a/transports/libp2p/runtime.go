@@ -23,6 +23,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
+	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	relayclient "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	relayv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	pingproto "github.com/libp2p/go-libp2p/p2p/protocol/ping"
@@ -65,7 +66,6 @@ type Config struct {
 	RelayServerEnabled          bool
 	AutoRelayEnabled            bool
 	HolePunchEnabled            bool
-	StaticRelays                []string
 	RPCProtocolID               string
 	RendezvousProtocolID        string
 }
@@ -180,11 +180,6 @@ func (r *Runtime) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("parse announce addrs: %w", err)
 	}
-	staticRelayInfos, relayParseErrs := parseAddrInfos(r.cfg.StaticRelays)
-	for _, relayErr := range relayParseErrs {
-		L_warn("a2a libp2p: static relay ignored", "error", relayErr)
-	}
-
 	options := []golibp2p.Option{
 		golibp2p.Identity(priv),
 		golibp2p.ListenAddrs(listenAddrs...),
@@ -197,10 +192,10 @@ func (r *Runtime) Start(ctx context.Context) error {
 	if r.cfg.DisableIdentifyAddrDiscovery {
 		options = append(options, golibp2p.DisableIdentifyAddressDiscovery())
 	}
-	if r.cfg.RelayClientEnabled && r.cfg.AutoRelayEnabled && len(staticRelayInfos) > 0 {
-		options = append(options, golibp2p.EnableAutoRelayWithStaticRelays(staticRelayInfos))
+	if r.mode == RuntimeModeNode && r.cfg.RelayClientEnabled && r.cfg.AutoRelayEnabled {
+		options = append(options, golibp2p.EnableAutoRelayWithPeerSource(r.bootstrapRelayPeerSource()))
 	}
-	if r.cfg.RelayClientEnabled && r.cfg.HolePunchEnabled {
+	if r.mode == RuntimeModeNode && r.cfg.RelayClientEnabled && r.cfg.HolePunchEnabled {
 		options = append(options, golibp2p.EnableHolePunching())
 	}
 
@@ -224,7 +219,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 		"rendezvousAdmissionMode", r.cfg.RendezvousAdmissionMode,
 		"autoRelay", r.cfg.AutoRelayEnabled,
 		"holePunch", r.cfg.HolePunchEnabled,
-		"staticRelays", len(staticRelayInfos),
+		"autoRelayCandidateSource", "bootstrap",
 	)
 
 	if r.mode == RuntimeModeBootstrap || r.mode == RuntimeModeBoth {
@@ -256,8 +251,8 @@ func (r *Runtime) Warmup(ctx context.Context) error {
 	} else {
 		L_info("a2a libp2p: bootstrap connect pass skipped", "mode", r.mode)
 	}
-	if r.cfg.RelayClientEnabled {
-		if err := r.reserveStaticRelays(ctx); err != nil {
+	if r.mode == RuntimeModeNode && r.cfg.RelayClientEnabled {
+		if err := r.reserveBootstrapRelays(ctx); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}
@@ -705,31 +700,86 @@ func (r *Runtime) connectAddrInfo(ctx context.Context, info peer.AddrInfo) error
 	return nil
 }
 
-func (r *Runtime) reserveStaticRelays(ctx context.Context) error {
+func (r *Runtime) reserveBootstrapRelays(ctx context.Context) error {
+	entries, source, err := r.bootstrapPeerEntries(false)
+	if err != nil {
+		return err
+	}
 	var errs []string
-	for _, relayAddr := range r.cfg.StaticRelays {
+	for _, relayAddr := range entries {
 		info, err := parseAddrInfo(relayAddr)
 		if err != nil {
-			L_warn("a2a libp2p: invalid static relay", "addr", relayAddr, "error", err)
+			L_warn("a2a libp2p: invalid bootstrap relay candidate", "source", source, "addr", relayAddr, "error", err)
 			errs = append(errs, err.Error())
 			continue
 		}
+		if r.host != nil && info.ID == r.host.ID() {
+			L_trace("a2a libp2p: skipping self relay candidate", "source", source, "peerID", info.ID)
+			continue
+		}
 		if err := r.connectAddrInfo(ctx, *info); err != nil {
-			L_warn("a2a libp2p: connect static relay failed", "peerID", info.ID, "error", err)
+			L_warn("a2a libp2p: connect bootstrap relay failed", "source", source, "peerID", info.ID, "error", err)
 			errs = append(errs, err.Error())
 			continue
 		}
 		if _, err := relayclient.Reserve(ctx, r.host, *info); err != nil {
-			L_warn("a2a libp2p: relay reservation failed", "peerID", info.ID, "error", err)
+			L_warn("a2a libp2p: bootstrap relay reservation failed", "source", source, "peerID", info.ID, "error", err)
 			errs = append(errs, err.Error())
 			continue
 		}
-		L_info("a2a libp2p: relay reserved", "peerID", info.ID)
+		L_info("a2a libp2p: bootstrap relay reserved", "source", source, "peerID", info.ID)
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf(strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+func (r *Runtime) bootstrapRelayPeerSource() autorelay.PeerSource {
+	return func(ctx context.Context, numPeers int) <-chan peer.AddrInfo {
+		bufSize := numPeers
+		if bufSize < 1 {
+			bufSize = 1
+		}
+		out := make(chan peer.AddrInfo, bufSize)
+		go func() {
+			defer close(out)
+			entries, source, err := r.bootstrapPeerEntries(false)
+			if err != nil {
+				L_warn("a2a libp2p: bootstrap relay candidates unavailable", "error", err)
+				return
+			}
+			sent := 0
+			seen := make(map[peer.ID]struct{})
+			for _, entry := range entries {
+				if numPeers > 0 && sent >= numPeers {
+					break
+				}
+				info, err := parseAddrInfo(entry)
+				if err != nil {
+					L_warn("a2a libp2p: invalid bootstrap relay candidate", "source", source, "addr", entry, "error", err)
+					continue
+				}
+				if r.host != nil && info.ID == r.host.ID() {
+					continue
+				}
+				if _, ok := seen[info.ID]; ok {
+					continue
+				}
+				seen[info.ID] = struct{}{}
+				select {
+				case <-ctx.Done():
+					return
+				case out <- *info:
+					sent++
+				}
+			}
+			if sent > 0 {
+				L_trace("a2a libp2p: bootstrap relay candidates supplied", "source", source, "count", sent)
+			}
+		}()
+		return out
+	}
 }
 
 func (r *Runtime) startMDNS() error {
@@ -802,8 +852,7 @@ func (r *Runtime) handlePeerDisconnected(conn network.Conn) {
 func (r *Runtime) registerRendezvous(ctx context.Context) {
 	advertised := r.AdvertisedAddrs()
 	if len(advertised) == 0 {
-		L_info("a2a libp2p: rendezvous register skipped", "reason", "no-advertised-addresses")
-		return
+		L_info("a2a libp2p: rendezvous register proceeding with empty addresses", "namespace", r.cfg.RendezvousNamespace)
 	}
 	payload := rendezvousRequest{
 		Action:    "register",
@@ -1036,23 +1085,6 @@ func parseAdvertiseMultiaddrs(raw []string) ([]ma.Multiaddr, error) {
 		out = append(out, transport)
 	}
 	return dedupeMultiaddrs(out), nil
-}
-
-func parseAddrInfos(raw []string) ([]peer.AddrInfo, []error) {
-	out := make([]peer.AddrInfo, 0, len(raw))
-	var errs []error
-	for _, item := range raw {
-		if strings.TrimSpace(item) == "" {
-			continue
-		}
-		info, err := parseAddrInfo(item)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", strings.TrimSpace(item), err))
-			continue
-		}
-		out = append(out, *info)
-	}
-	return out, errs
 }
 
 func parseAddrInfo(raw string) (*peer.AddrInfo, error) {
