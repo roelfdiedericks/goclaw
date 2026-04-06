@@ -1717,7 +1717,7 @@ func stepLLMProvider(data *WizardData) forms.WizardStep {
 			if strings.TrimSpace(data.LLMProviderID) == "" {
 				return fmt.Errorf("please select an LLM provider")
 			}
-			if data.LLMProviderID != "custom" && strings.TrimSpace(data.LLMAPIKey) == "" {
+			if !llm.DriverOrEndpointIsLocal(data.LLMDriver, data.LLMBaseURL) && data.LLMProviderID != "custom" && strings.TrimSpace(data.LLMAPIKey) == "" {
 				return fmt.Errorf("api key is required for the selected LLM provider")
 			}
 			return nil
