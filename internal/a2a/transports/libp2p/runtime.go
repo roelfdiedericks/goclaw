@@ -125,6 +125,9 @@ type Runtime struct {
 	stateMu           sync.RWMutex
 	localReachability network.Reachability
 	relayAddrs        []string
+
+	advertiseEvalMu      sync.Mutex
+	lastAdvertiseEvalSig string
 }
 
 type rendezvousEntry struct {
@@ -1122,15 +1125,44 @@ func (r *Runtime) addrFactory(explicit []ma.Multiaddr) func([]ma.Multiaddr) []ma
 		}
 		filtered := make([]ma.Multiaddr, 0, len(source))
 		dropped := 0
+		dropReasons := map[string]int{}
 		for _, addr := range source {
 			if !r.cfg.AnnouncePrivateAddrs && shouldFilterAdvertisedAddr(addr) {
+				reason := advertisedAddrFilterReason(addr)
 				dropped++
-				L_trace("a2a libp2p: advertised address filtered", "addr", addr.String(), "reason", advertisedAddrFilterReason(addr))
+				dropReasons[reason]++
 				continue
 			}
 			filtered = append(filtered, addr)
 		}
 		filtered = dedupeMultiaddrs(filtered)
+		r.logAdvertisedAddressEvaluation(sourceType, source, filtered, dropped, dropReasons)
+		return filtered
+	}
+}
+
+func (r *Runtime) logAdvertisedAddressEvaluation(sourceType string, source, filtered []ma.Multiaddr, dropped int, dropReasons map[string]int) {
+	signature := fmt.Sprintf("source=%s input=%d kept=%d dropped=%d announcePrivate=%t reasons=%s keptAddrs=%s",
+		sourceType,
+		len(source),
+		len(filtered),
+		dropped,
+		r.cfg.AnnouncePrivateAddrs,
+		formatCounts(dropReasons),
+		strings.Join(multiaddrsToStrings(filtered), ","),
+	)
+
+	r.advertiseEvalMu.Lock()
+	changed := signature != r.lastAdvertiseEvalSig
+	if changed {
+		r.lastAdvertiseEvalSig = signature
+	}
+	r.advertiseEvalMu.Unlock()
+
+	if dropped == 0 {
+		if !changed {
+			return
+		}
 		L_debug("a2a libp2p: advertised address set evaluated",
 			"source", sourceType,
 			"input", len(source),
@@ -1138,8 +1170,23 @@ func (r *Runtime) addrFactory(explicit []ma.Multiaddr) func([]ma.Multiaddr) []ma
 			"dropped", dropped,
 			"announcePrivate", r.cfg.AnnouncePrivateAddrs,
 		)
-		return filtered
+		return
 	}
+
+	if !changed {
+		return
+	}
+	for reason, count := range dropReasons {
+		L_trace("a2a libp2p: advertised addresses filtered", "reason", reason, "count", count, "source", sourceType)
+	}
+	L_debug("a2a libp2p: advertised address set evaluated",
+		"source", sourceType,
+		"input", len(source),
+		"kept", len(filtered),
+		"dropped", dropped,
+		"reasons", formatCounts(dropReasons),
+		"announcePrivate", r.cfg.AnnouncePrivateAddrs,
+	)
 }
 
 func (r *Runtime) sanitizeRemoteRegistrationAddrs(peerID string, raw []string) ([]string, int, map[string]int) {
