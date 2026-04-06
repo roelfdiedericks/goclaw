@@ -507,6 +507,8 @@ func a2aStatusResult(status a2a.Status) *CommandResult {
 	text.WriteString(fmt.Sprintf("  Auto relay: %t\n", status.AutoRelayEnabled))
 	text.WriteString(fmt.Sprintf("  Hole punch: %t\n", status.HolePunchEnabled))
 	text.WriteString(fmt.Sprintf("  NAT port map: %t\n", status.NATPortMapEnabled))
+	text.WriteString(fmt.Sprintf("  AutoNATv2: %t\n", status.AutoNATv2Enabled))
+	text.WriteString(fmt.Sprintf("  NAT service: %t\n", status.NATServiceEnabled))
 	text.WriteString(fmt.Sprintf("  Announce private addrs: %t\n", status.AnnouncePrivate))
 	text.WriteString(fmt.Sprintf("  Rendezvous: %t\n", status.RendezvousEnabled))
 	text.WriteString(fmt.Sprintf("  Rendezvous admission mode: %s\n", status.RendezvousAdmissionMode))

@@ -168,6 +168,7 @@ func (m *Manager) statusLocked() Status {
 	status.AutoRelayEnabled = m.cfg.Libp2p.Relay.EnableAutoRelay
 	status.HolePunchEnabled = m.cfg.Libp2p.Relay.EnableHolePunch
 	status.NATPortMapEnabled = m.cfg.Libp2p.NATPortMap
+	status.AutoNATv2Enabled = true
 	status.AnnouncePrivate = m.cfg.Libp2p.AnnouncePrivateAddrs
 	status.RendezvousEnabled = m.cfg.Libp2p.Discovery.RendezvousEnabled
 	status.RendezvousNamespace = m.cfg.Libp2p.Discovery.RendezvousNamespace
@@ -189,6 +190,8 @@ func (m *Manager) statusLocked() Status {
 		status.AdvertisedAddrs = m.runtime.AdvertisedAddrs()
 		status.RelayAddrs = m.runtime.RelayAddrs()
 		status.Reachability = m.runtime.Reachability()
+		status.AutoNATv2Enabled = m.runtime.AutoNATv2Enabled()
+		status.NATServiceEnabled = m.runtime.NATServiceEnabled()
 	}
 	return status
 }

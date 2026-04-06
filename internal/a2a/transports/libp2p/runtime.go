@@ -185,6 +185,10 @@ func (r *Runtime) Start(ctx context.Context) error {
 		golibp2p.ListenAddrs(listenAddrs...),
 		golibp2p.EnableRelay(),
 		golibp2p.AddrsFactory(r.addrFactory(announceAddrs)),
+		golibp2p.EnableAutoNATv2(),
+	}
+	if r.natServiceEnabled() {
+		options = append(options, golibp2p.EnableNATService())
 	}
 	if r.cfg.NATPortMap {
 		options = append(options, golibp2p.NATPortMap())
@@ -217,6 +221,8 @@ func (r *Runtime) Start(ctx context.Context) error {
 		"relayClient", r.cfg.RelayClientEnabled,
 		"relayServer", r.cfg.RelayServerEnabled,
 		"rendezvousAdmissionMode", r.cfg.RendezvousAdmissionMode,
+		"autoNATv2", true,
+		"natService", r.natServiceEnabled(),
 		"autoRelay", r.cfg.AutoRelayEnabled,
 		"holePunch", r.cfg.HolePunchEnabled,
 		"autoRelayCandidateSource", "bootstrap",
@@ -236,6 +242,10 @@ func (r *Runtime) Start(ctx context.Context) error {
 		r.relay = relaySvc
 	}
 	return nil
+}
+
+func (r *Runtime) natServiceEnabled() bool {
+	return r.mode == RuntimeModeBootstrap || r.mode == RuntimeModeRelay || r.mode == RuntimeModeBoth || r.cfg.RelayServerEnabled
 }
 
 func (r *Runtime) Warmup(ctx context.Context) error {
@@ -373,6 +383,14 @@ func (r *Runtime) Reachability() string {
 	r.stateMu.RLock()
 	defer r.stateMu.RUnlock()
 	return strings.ToLower(r.localReachability.String())
+}
+
+func (r *Runtime) AutoNATv2Enabled() bool {
+	return true
+}
+
+func (r *Runtime) NATServiceEnabled() bool {
+	return r.natServiceEnabled()
 }
 
 func (r *Runtime) PingPeer(ctx context.Context, target string, knownPeers []PeerCandidate) (string, time.Duration, string, error) {

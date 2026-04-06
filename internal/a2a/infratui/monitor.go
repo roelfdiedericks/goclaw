@@ -288,6 +288,7 @@ func (m *monitor) renderSummaryLocked() {
 		fmt.Sprintf("[white]Reachability:[-] %s  [white]Listen:[-] %d  [white]Advertised:[-] %d  [white]Relay addrs:[-] %d", emptyDash(status.Reachability), len(status.ListenAddrs), len(status.AdvertisedAddrs), len(status.RelayAddrs)),
 		fmt.Sprintf("[white]Rendezvous policy:[-] %s  [white]Private accepted:[-] %t", emptyDash(status.RendezvousAdmissionMode), status.RendezvousAcceptsPrivate),
 		fmt.Sprintf("[white]Port map:[-] %t  [white]Auto relay:[-] %t  [white]Hole punch:[-] %t", status.NATPortMapEnabled, status.AutoRelayEnabled, status.HolePunchEnabled),
+		fmt.Sprintf("[white]AutoNATv2:[-] %t  [white]NAT service:[-] %t", status.AutoNATv2Enabled, status.NATServiceEnabled),
 	}
 	m.summary.SetText(strings.Join(lines, "\n"))
 }
@@ -422,6 +423,8 @@ func (m *monitor) renderDetailLocked() {
 		fmt.Sprintf("[white]Port map:[-] %t", status.NATPortMapEnabled),
 		fmt.Sprintf("[white]Auto relay:[-] %t", status.AutoRelayEnabled),
 		fmt.Sprintf("[white]Hole punch:[-] %t", status.HolePunchEnabled),
+		fmt.Sprintf("[white]AutoNATv2:[-] %t", status.AutoNATv2Enabled),
+		fmt.Sprintf("[white]NAT service:[-] %t", status.NATServiceEnabled),
 		fmt.Sprintf("[white]Announce private addrs:[-] %t", status.AnnouncePrivate),
 		fmt.Sprintf("[white]Rendezvous admission mode:[-] %s", emptyDash(status.RendezvousAdmissionMode)),
 		fmt.Sprintf("[white]Rendezvous accepts private:[-] %t", status.RendezvousAcceptsPrivate),

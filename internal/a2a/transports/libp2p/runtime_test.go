@@ -171,6 +171,29 @@ func TestBootstrapRelayPeerSourceUsesBootstrapPeers(t *testing.T) {
 	}
 }
 
+func TestNatServiceEnabledByMode(t *testing.T) {
+	tests := []struct {
+		name string
+		mode RuntimeMode
+		cfg  Config
+		want bool
+	}{
+		{name: "node", mode: RuntimeModeNode, want: false},
+		{name: "bootstrap", mode: RuntimeModeBootstrap, want: true},
+		{name: "relay", mode: RuntimeModeRelay, want: true},
+		{name: "both", mode: RuntimeModeBoth, want: true},
+		{name: "node relay server config", mode: RuntimeModeNode, cfg: Config{RelayServerEnabled: true}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := New(tt.cfg, tt.mode, Callbacks{})
+			if got := rt.natServiceEnabled(); got != tt.want {
+				t.Fatalf("natServiceEnabled() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func mustTestPeerID(t *testing.T) string {
 	t.Helper()
 	_, pub, err := crypto.GenerateEd25519Key(rand.Reader)

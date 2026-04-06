@@ -92,6 +92,8 @@ type Status struct {
 	AutoRelayEnabled    bool           `json:"autoRelayEnabled"`
 	HolePunchEnabled    bool           `json:"holePunchEnabled"`
 	NATPortMapEnabled   bool           `json:"natPortMapEnabled"`
+	AutoNATv2Enabled    bool           `json:"autoNATv2Enabled"`
+	NATServiceEnabled   bool           `json:"natServiceEnabled"`
 	AnnouncePrivate     bool           `json:"announcePrivate"`
 	RendezvousEnabled   bool           `json:"rendezvousEnabled"`
 	RendezvousNamespace string         `json:"rendezvousNamespace,omitempty"`
