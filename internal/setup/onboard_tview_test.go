@@ -257,6 +257,14 @@ func TestStepLLMProviderRequiresProviderAndAPIKey(t *testing.T) {
 		t.Fatalf("expected remote provider with API key to pass, got %v", err)
 	}
 
+	data.LLMProviderID = "ollama"
+	data.LLMDriver = "ollama"
+	data.LLMBaseURL = "http://10.0.0.25:11434"
+	data.LLMAPIKey = ""
+	if err := step.OnExit(nil); err != nil {
+		t.Fatalf("expected ollama without API key to pass, got %v", err)
+	}
+
 	data.LLMProviderID = "custom"
 	data.LLMAPIKey = ""
 	if err := step.OnExit(nil); err != nil {

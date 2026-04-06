@@ -764,7 +764,7 @@ func getStepFormDef(stepID string, data *setup.WizardData) *forms.FormDef {
 								{Value: "custom", Label: "Custom/Local"},
 							},
 						},
-						{Name: "LLMAPIKey", Title: "API Key", Type: forms.Secret},
+						{Name: "LLMAPIKey", Title: "API Key (optional for local/self-hosted providers)", Type: forms.Secret},
 						{Name: "LLMBaseURL", Title: "Base URL (optional)", Type: forms.Text, Desc: "For custom endpoints"},
 						modelField,
 					},
@@ -1209,7 +1209,7 @@ func validateStep(stepID string, data *setup.WizardData) map[string]string {
 					baseURL = prov.APIEndpoint
 				}
 			}
-			if !llm.DriverOrEndpointIsLocal(driver, baseURL) {
+			if llm.SetupAPIKeyRequired(driver, baseURL) {
 				errors["LLMAPIKey"] = "API key is required"
 			}
 		}

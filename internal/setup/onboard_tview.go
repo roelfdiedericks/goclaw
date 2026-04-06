@@ -1717,7 +1717,7 @@ func stepLLMProvider(data *WizardData) forms.WizardStep {
 			if strings.TrimSpace(data.LLMProviderID) == "" {
 				return fmt.Errorf("please select an LLM provider")
 			}
-			if !llm.DriverOrEndpointIsLocal(data.LLMDriver, data.LLMBaseURL) && data.LLMProviderID != "custom" && strings.TrimSpace(data.LLMAPIKey) == "" {
+			if data.LLMProviderID != "custom" && llm.SetupAPIKeyRequired(data.LLMDriver, data.LLMBaseURL) && strings.TrimSpace(data.LLMAPIKey) == "" {
 				return fmt.Errorf("api key is required for the selected LLM provider")
 			}
 			return nil
@@ -1871,7 +1871,7 @@ func buildLLMConfigForm(data *WizardData, w *forms.Wizard) tview.Primitive {
 			}
 		}
 
-		form.AddPasswordField("API Key", data.LLMAPIKey, 60, '*', func(text string) {
+		form.AddPasswordField("API Key (optional for local/self-hosted providers)", data.LLMAPIKey, 60, '*', func(text string) {
 			data.LLMAPIKey = text
 			data.MarkDirty("LLMAPIKey")
 		})

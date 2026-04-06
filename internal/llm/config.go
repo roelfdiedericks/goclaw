@@ -115,7 +115,7 @@ func ProviderConfigFormDef(subtypeOptions []forms.Option) forms.FormDef {
 					{
 						Name:  "apiKey",
 						Title: "API Key",
-						Desc:  "API key for authentication",
+						Desc:  "API key for authentication. Leave empty for local or self-hosted providers that do not require one.",
 						Type:  forms.Secret,
 					},
 					{

@@ -67,6 +67,29 @@ func TestValidateStepAgentTypingMaxLength(t *testing.T) {
 	}
 }
 
+func TestValidateStepLLMAPIKeyRequirements(t *testing.T) {
+	data := setup.NewWizardData()
+	data.LLMProviderID = "anthropic"
+	data.LLMAPIKey = ""
+	if errs := validateStep("llm", data); errs["LLMAPIKey"] == "" {
+		t.Fatalf("expected anthropic to require an API key during setup")
+	}
+
+	data = setup.NewWizardData()
+	data.LLMProviderID = "ollama"
+	data.LLMAPIKey = ""
+	if errs := validateStep("llm", data); errs["LLMAPIKey"] != "" {
+		t.Fatalf("expected ollama to allow empty API key during setup, got %#v", errs)
+	}
+
+	data = setup.NewWizardData()
+	data.LLMProviderID = "custom"
+	data.LLMAPIKey = ""
+	if errs := validateStep("llm", data); errs["LLMAPIKey"] != "" {
+		t.Fatalf("expected custom provider to allow empty API key during setup, got %#v", errs)
+	}
+}
+
 func TestApplyWizardFormDefaultsSeedsMissingValuesOnly(t *testing.T) {
 	data := setup.NewWizardData()
 	data.HTTPEnabled = false

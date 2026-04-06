@@ -2164,7 +2164,7 @@
                     html += `<div class="provider-form"><div class="row g-3">`;
                     html += `<div class="col-md-6"><label class="form-label">Alias</label><input type="text" class="form-control form-control-sm" value="${escapeHtml(alias)}" disabled></div>`;
                     html += `<div class="col-md-6"><label class="form-label">Driver</label><select class="form-select form-select-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="driver">${this.renderOptions(this.providerDriverOptions, cfg.driver || '')}</select></div>`;
-                    html += `<div class="col-12"><label class="form-label">API Key</label><div class="input-group input-group-sm"><input type="${showKey ? 'text' : 'password'}" class="form-control js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="apiKey" value="${escapeHtml(cfg.apiKey || '')}" placeholder="Enter API key"><button type="button" class="btn btn-outline-secondary js-provider-toggle-key" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}"><i class="bi ${showKey ? 'bi-eye-slash' : 'bi-eye'}"></i></button></div></div>`;
+                    html += `<div class="col-12"><label class="form-label">API Key (optional for local/self-hosted providers)</label><div class="input-group input-group-sm"><input type="${showKey ? 'text' : 'password'}" class="form-control js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="apiKey" value="${escapeHtml(cfg.apiKey || '')}" placeholder="Leave empty if your provider does not require one"><button type="button" class="btn btn-outline-secondary js-provider-toggle-key" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}"><i class="bi ${showKey ? 'bi-eye-slash' : 'bi-eye'}"></i></button></div></div>`;
                     html += `<div class="col-12"><label class="form-label">Base URL (optional)</label><input type="text" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="baseURL" value="${escapeHtml(baseURL)}" placeholder="Leave empty for default"></div>`;
                     html += `<div class="col-md-6"><div class="form-check form-switch"><input class="form-check-input js-provider-input" type="checkbox" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="promptCaching"${cfg.promptCaching ? ' checked' : ''}><label class="form-check-label">Prompt Caching</label></div></div>`;
                     html += `<div class="col-md-6"><label class="form-label">Thinking Level</label><select class="form-select form-select-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="thinkingLevel">${this.renderOptions(THINKING_LEVEL_OPTIONS, cfg.thinkingLevel || '')}</select></div>`;
@@ -2193,7 +2193,7 @@
                 if (preset) {
                     const cfg = ui.newConfig || {};
                     html += `<div class="p-3"><div class="mb-3"><label class="form-label">Alias *</label><input type="text" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-provider-field="newAlias" value="${escapeHtml(ui.newAlias)}" placeholder="e.g., anthropic"><div class="form-text">A unique name to identify this provider</div></div>`;
-                    html += `<div class="mb-3"><label class="form-label">API Key (optional)</label><input type="password" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-provider-field="newApiKey" value="${escapeHtml(cfg.apiKey || '')}" placeholder="Leave empty if not required"></div>`;
+                    html += `<div class="mb-3"><label class="form-label">API Key (optional for local/self-hosted providers)</label><input type="password" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-provider-field="newApiKey" value="${escapeHtml(cfg.apiKey || '')}" placeholder="Leave empty if your provider does not require one"></div>`;
                     if (preset.driver === 'anthropic') {
                         html += `<div class="mb-3"><div class="form-check form-switch"><input class="form-check-input js-provider-input" type="checkbox" data-field-path="${escapeHtml(fieldPath)}" data-provider-field="newPromptCaching"${cfg.promptCaching ? ' checked' : ''}><label class="form-check-label">Enable Prompt Caching</label></div></div>`;
                     }
@@ -3162,8 +3162,16 @@
             const field = $input.data('peer-field');
             if (!field) return;
             this.a2aPeerForm[field] = $input.is(':checkbox') ? $input.is(':checked') : $input.val();
-            this.renderA2APeersSection();
-            if (this.a2aPeerModal) this.a2aPeerModal.show();
+            if (field === 'addrsText') {
+                delete this.a2aPeerFormErrors.addrs;
+            } else {
+                delete this.a2aPeerFormErrors[field];
+            }
+            $input.removeClass('is-invalid');
+            const $feedback = $input.siblings('.invalid-feedback');
+            if ($feedback.length) {
+                $feedback.text('');
+            }
         }
 
         async saveA2APeer() {

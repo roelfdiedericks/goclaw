@@ -119,3 +119,10 @@ func EndpointIsLocal(endpoint string) bool {
 func DriverOrEndpointIsLocal(driver, endpoint string) bool {
 	return DriverIsLocal(driver) || EndpointIsLocal(endpoint)
 }
+
+// SetupAPIKeyRequired reports whether setup should block progress without an API key.
+// Be permissive here: local/self-hosted drivers and local/private endpoints can often
+// run without auth, so setup should not force a key for those cases.
+func SetupAPIKeyRequired(driver, endpoint string) bool {
+	return !DriverOrEndpointIsLocal(driver, endpoint)
+}
