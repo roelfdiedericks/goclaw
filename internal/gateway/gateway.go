@@ -20,6 +20,7 @@ import (
 	a2aproto "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
 	"github.com/roelfdiedericks/goclaw/internal/a2a"
+	"github.com/roelfdiedericks/goclaw/internal/a2apeers"
 	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/commands"
 	"github.com/roelfdiedericks/goclaw/internal/config"
@@ -265,6 +266,7 @@ type Gateway struct {
 	memoryManager       *memory.Manager
 	memoryGraphManager  *memorygraph.Manager
 	a2aManager          *a2a.Manager
+	a2aPeerRegistry     *a2apeers.Registry
 	commandHandler      *commands.Handler
 	skillManager        *skills.Manager
 	cronService         *cron.Service
@@ -300,7 +302,7 @@ func (a *providerStateAccessor) SetProviderState(providerKey string, state map[s
 }
 
 // New creates a new Gateway instance
-func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, toolsReg *tools.Registry) (*Gateway, error) {
+func New(cfg *config.Config, configPath string, users *user.Registry, registry *llm.Registry, toolsReg *tools.Registry) (*Gateway, error) {
 	// Get agent provider from registry (supports any provider type)
 	agentProvider, err := registry.GetProvider("agent")
 	if err != nil {
@@ -316,6 +318,12 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 		config:    cfg,
 		startTime: time.Now(),
 	}
+
+	a2aPeerRegistry, err := a2apeers.LoadForConfig(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load a2apeers registry: %w", err)
+	}
+	g.a2aPeerRegistry = a2aPeerRegistry
 
 	// Determine store type
 	storeType := cfg.Session.Store
@@ -642,7 +650,7 @@ func New(cfg *config.Config, users *user.Registry, registry *llm.Registry, tools
 		L_info("skills: disabled by configuration")
 	}
 
-	g.a2aManager = a2a.NewManager(cfg.A2A, users)
+	g.a2aManager = a2a.NewManager(cfg.A2A, users, g.a2aPeerRegistry)
 	g.a2aManager.SetExecutor(g)
 
 	return g, nil
@@ -3978,6 +3986,16 @@ func (g *Gateway) GetA2APairingPayload() a2a.PairingPayload {
 		return a2a.PairingPayload{}
 	}
 	return g.a2aManager.PairingPayload()
+}
+
+func (g *Gateway) A2APeerRegistry() *a2apeers.Registry {
+	return g.a2aPeerRegistry
+}
+
+func (g *Gateway) RefreshA2ATrustedPeers() {
+	if g.a2aManager != nil {
+		g.a2aManager.RefreshTrustedPeers()
+	}
 }
 
 func (g *Gateway) PingA2APeer(ctx context.Context, target string) (a2a.PingResult, error) {

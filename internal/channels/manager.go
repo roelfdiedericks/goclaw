@@ -386,7 +386,7 @@ func (m *Manager) startHTTP(ctx context.Context, cfg *httpconfig.Config) error {
 
 	// Register setup wizard routes (owner-only)
 	configPath := config.GetLoadedConfigPath()
-	if err := setupweb.RegisterSetupRoutes(srv, configPath); err != nil {
+	if err := setupweb.RegisterSetupRoutes(srv, configPath, m.gw); err != nil {
 		logging.L_error("http: failed to register setup routes", "error", err)
 		return err
 	}

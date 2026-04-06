@@ -75,6 +75,20 @@
         return value.join(', ');
     }
 
+    function parseLineList(value) {
+        return String(value || '')
+            .split('\n')
+            .map(s => s.trim())
+            .filter(Boolean);
+    }
+
+    function formatDateTime(value) {
+        if (!value) return '-';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '-';
+        return date.toLocaleString();
+    }
+
     function parseShowWhen(expr) {
         const raw = String(expr || '').trim();
         if (!raw) return [];
@@ -275,6 +289,23 @@
             this.userDeleteUsername = '';
             this.userModal = null;
             this.userDeleteModal = null;
+            this.a2aPeers = [];
+            this.a2aPeerUsers = [];
+            this.a2aRuntimePeers = [];
+            this.a2aRuntimeStatus = {};
+            this.a2aPairing = {};
+            this.a2aPeersLoading = false;
+            this.a2aPeersError = '';
+            this.a2aPeersSuccess = '';
+            this.a2aPeerForm = {};
+            this.a2aPeerFormErrors = {};
+            this.a2aPeerEditing = false;
+            this.a2aPeerDeleting = false;
+            this.a2aPeerDeleteID = '';
+            this.a2aPeerModal = null;
+            this.a2aPeerDeleteModal = null;
+            this.a2aPingTarget = '';
+            this.a2aPingResult = null;
             this.pendingOwnerPairings = {};
             this.editorPairingStatus = {};
             this.editorPairingPollers = {};
@@ -504,6 +535,8 @@
                     this.$usersContent.removeClass('d-none');
                     if (sectionId === 'users') {
                         await this.loadUsers();
+                    } else if (sectionId === 'a2a-peers') {
+                        await this.loadA2APeers();
                     }
                 } else {
                     const serverConfig = data.data.config || {};
@@ -2854,6 +2887,359 @@
                 this.renderUsersSection();
             } finally {
                 this.userDeleting = false;
+            }
+        }
+
+        async loadA2APeers() {
+            this.a2aPeersLoading = true;
+            this.a2aPeersError = '';
+            this.a2aPeersSuccess = '';
+            this.renderA2APeersSection();
+            try {
+                const [configResp, runtimeResp, pairingResp] = await Promise.all([
+                    fetch('/setup/api/a2a/peers/config', { cache: 'no-store' }),
+                    fetch('/setup/api/a2a/peers/runtime', { cache: 'no-store' }),
+                    fetch('/setup/api/a2a/peers/pairing', { cache: 'no-store' })
+                ]);
+                const [configData, runtimeData, pairingData] = await Promise.all([
+                    configResp.json(),
+                    runtimeResp.json(),
+                    pairingResp.json()
+                ]);
+                if (!configData.success) throw new Error(configData.message || 'Failed to load A2A peers');
+                if (!runtimeData.success) throw new Error(runtimeData.message || 'Failed to load A2A runtime');
+                if (!pairingData.success) throw new Error(pairingData.message || 'Failed to load A2A pairing');
+
+                this.a2aPeers = Array.isArray(configData.data && configData.data.peers) ? configData.data.peers : [];
+                this.a2aPeerUsers = Array.isArray(configData.data && configData.data.users) ? configData.data.users : [];
+                this.a2aRuntimeStatus = (runtimeData.data && runtimeData.data.status) || {};
+                this.a2aRuntimePeers = Array.isArray(runtimeData.data && runtimeData.data.peers) ? runtimeData.data.peers : [];
+                this.a2aPairing = pairingData.data || {};
+            } catch (err) {
+                this.a2aPeersError = err.message || 'Failed to load A2A peers';
+            } finally {
+                this.a2aPeersLoading = false;
+                this.renderA2APeersSection();
+            }
+        }
+
+        renderA2APeersSection() {
+            const runtimeByPeerID = {};
+            this.a2aRuntimePeers.forEach(peer => {
+                if (peer && peer.peerId) runtimeByPeerID[peer.peerId] = peer;
+            });
+
+            const status = this.a2aRuntimeStatus || {};
+            const peerRows = this.a2aPeers.map(peer => {
+                const runtime = runtimeByPeerID[peer.peerId] || {};
+                const state = runtime.state || (peer.enabled ? 'trusted-configured' : 'disabled');
+                const addrCount = Array.isArray(peer.addrs) ? peer.addrs.length : 0;
+                return `<tr>
+                    <td><span class="badge text-bg-secondary">${escapeHtml(peer.type || 'libp2p')}</span></td>
+                    <td>${escapeHtml(peer.alias || '-')}</td>
+                    <td><code>${escapeHtml(peer.peerId || '')}</code></td>
+                    <td>${escapeHtml(peer.localUser || '-')}</td>
+                    <td><span class="badge ${this.a2aStateBadgeClass(state)}">${escapeHtml(state)}</span></td>
+                    <td>${peer.enabled ? '<span class="badge text-bg-success">enabled</span>' : '<span class="badge text-bg-secondary">disabled</span>'}</td>
+                    <td>${addrCount}</td>
+                    <td class="text-end">
+                        <button class="btn btn-sm btn-outline-secondary js-a2a-peer-ping" data-peer-id="${escapeHtml(peer.peerId)}" title="Ping"><i class="bi bi-broadcast"></i></button>
+                        <button class="btn btn-sm btn-outline-primary js-a2a-peer-edit" data-peer-id="${escapeHtml(peer.peerId)}" title="Edit"><i class="bi bi-pencil"></i></button>
+                        <button class="btn btn-sm btn-outline-danger js-a2a-peer-delete-open" data-peer-id="${escapeHtml(peer.peerId)}" title="Delete"><i class="bi bi-trash"></i></button>
+                    </td>
+                </tr>`;
+            }).join('');
+
+            const userOptions = ['<option value="">(none)</option>']
+                .concat(this.a2aPeerUsers.map(username => `<option value="${escapeHtml(username)}"${this.a2aPeerForm.localUser === username ? ' selected' : ''}>${escapeHtml(username)}</option>`))
+                .join('');
+            const runtimeSummary = `
+                <div class="row g-3 mb-4">
+                    <div class="col-12 col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><div class="text-muted small">Lifecycle</div><div class="fw-semibold">${escapeHtml(status.lifecycleState || '-')}</div></div></div></div>
+                    <div class="col-12 col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><div class="text-muted small">Ready</div><div class="fw-semibold">${status.ready ? 'yes' : 'no'}</div></div></div></div>
+                    <div class="col-12 col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><div class="text-muted small">Known peers</div><div class="fw-semibold">${escapeHtml(String(status.knownPeers || 0))}</div></div></div></div>
+                    <div class="col-12 col-md-6 col-xl-3"><div class="card h-100"><div class="card-body"><div class="text-muted small">Connected peers</div><div class="fw-semibold">${escapeHtml(String(status.connectedPeers || 0))}</div></div></div></div>
+                </div>`;
+            const pairingAddrs = Array.isArray(this.a2aPairing.addrs) && this.a2aPairing.addrs.length
+                ? this.a2aPairing.addrs.map(addr => `<code class="d-block mb-1">${escapeHtml(addr)}</code>`).join('')
+                : '<span class="text-muted">Runtime not ready yet.</span>';
+            const pingAlert = this.a2aPingResult
+                ? `<div class="alert ${this.a2aPingResult.success ? 'alert-success' : 'alert-danger'} mb-0">Ping <code>${escapeHtml(this.a2aPingResult.peerId || this.a2aPingTarget || '')}</code>: ${escapeHtml(this.a2aPingResult.message || (this.a2aPingResult.success ? 'success' : 'failed'))}</div>`
+                : '<div class="text-muted small">Use Ping on a configured peer to test live connectivity.</div>';
+
+            this.$usersContent.html(`
+                ${runtimeSummary}
+                <div class="row g-4">
+                    <div class="col-12 col-xl-8">
+                        <div class="card mb-4">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <span>Trusted A2A Peers</span>
+                                <div class="d-flex gap-2">
+                                    <button class="btn btn-sm btn-outline-secondary js-a2a-peers-refresh"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+                                    <button class="btn btn-sm btn-primary js-a2a-peer-add"><i class="bi bi-plus-lg"></i> Add Peer</button>
+                                </div>
+                            </div>
+                            <div class="card-body p-0">
+                                ${this.a2aPeersLoading ? '<div class="text-center py-4"><div class="spinner-border spinner-border-sm"></div></div>' : `
+                                <table class="table table-hover mb-0">
+                                    <thead><tr><th>Type</th><th>Alias</th><th>Peer ID</th><th>Local User</th><th>Runtime State</th><th>Trust</th><th>Addrs</th><th class="text-end">Actions</th></tr></thead>
+                                    <tbody>${peerRows || '<tr><td colspan="8" class="text-center text-muted py-4">No A2A peers configured</td></tr>'}</tbody>
+                                </table>`}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-12 col-xl-4">
+                        <div class="card mb-4">
+                            <div class="card-header">Local Pairing Payload</div>
+                            <div class="card-body">
+                                <div class="mb-2"><span class="text-muted small d-block">Peer ID</span><code>${escapeHtml(this.a2aPairing.peerId || '-')}</code></div>
+                                <div><span class="text-muted small d-block mb-2">Advertised Addresses</span>${pairingAddrs}</div>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-header">Ping Result</div>
+                            <div class="card-body">${pingAlert}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="alert alert-danger alert-dismissible ${this.a2aPeersError ? '' : 'd-none'}" id="a2a-peers-error-alert"><span class="js-alert-text">${escapeHtml(this.a2aPeersError)}</span><button type="button" class="btn-close" aria-label="Close"></button></div>
+                <div class="alert alert-success alert-dismissible ${this.a2aPeersSuccess ? '' : 'd-none'}" id="a2a-peers-success-alert"><span class="js-alert-text">${escapeHtml(this.a2aPeersSuccess)}</span><button type="button" class="btn-close" aria-label="Close"></button></div>
+
+                <div class="modal fade" id="a2aPeerModal" tabindex="-1">
+                    <div class="modal-dialog modal-lg">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title">${this.a2aPeerEditing ? 'Edit A2A Peer' : 'Add A2A Peer'}</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="row g-3">
+                                    <div class="col-12 col-md-4">
+                                        <label class="form-label">Type</label>
+                                        <select class="form-select js-a2a-peer-form-field${this.a2aPeerFormErrors.type ? ' is-invalid' : ''}" data-peer-field="type" ${this.a2aPeerEditing ? 'disabled' : ''}>
+                                            <option value="libp2p"${(this.a2aPeerForm.type || 'libp2p') === 'libp2p' ? ' selected' : ''}>libp2p</option>
+                                        </select>
+                                        <div class="invalid-feedback">${escapeHtml(this.a2aPeerFormErrors.type || '')}</div>
+                                    </div>
+                                    <div class="col-12 col-md-8">
+                                        <label class="form-label">Alias</label>
+                                        <input type="text" class="form-control js-a2a-peer-form-field" data-peer-field="alias" value="${escapeHtml(this.a2aPeerForm.alias || '')}">
+                                    </div>
+                                    <div class="col-12">
+                                        <label class="form-label">Peer ID</label>
+                                        <input type="text" class="form-control js-a2a-peer-form-field${this.a2aPeerFormErrors.peerId ? ' is-invalid' : ''}" data-peer-field="peerId" value="${escapeHtml(this.a2aPeerForm.peerId || '')}" ${this.a2aPeerEditing ? 'disabled' : ''}>
+                                        <div class="invalid-feedback">${escapeHtml(this.a2aPeerFormErrors.peerId || '')}</div>
+                                    </div>
+                                    <div class="col-12">
+                                        <label class="form-label">Multiaddrs</label>
+                                        <textarea class="form-control js-a2a-peer-form-field${this.a2aPeerFormErrors.addrs ? ' is-invalid' : ''}" data-peer-field="addrsText" rows="4" placeholder="/dns4/example.org/tcp/4001/p2p/...">${escapeHtml(this.a2aPeerForm.addrsText || '')}</textarea>
+                                        <div class="invalid-feedback">${escapeHtml(this.a2aPeerFormErrors.addrs || '')}</div>
+                                        <div class="form-text">One multiaddr per line.</div>
+                                    </div>
+                                    <div class="col-12 col-md-6">
+                                        <label class="form-label">Local User</label>
+                                        <select class="form-select js-a2a-peer-form-field${this.a2aPeerFormErrors.localUser ? ' is-invalid' : ''}" data-peer-field="localUser">${userOptions}</select>
+                                        <div class="invalid-feedback">${escapeHtml(this.a2aPeerFormErrors.localUser || '')}</div>
+                                    </div>
+                                    <div class="col-12 col-md-6 d-flex align-items-end">
+                                        <div class="form-check mb-2">
+                                            <input class="form-check-input js-a2a-peer-form-field" type="checkbox" data-peer-field="enabled" id="a2aPeerEnabled"${this.a2aPeerForm.enabled ? ' checked' : ''}>
+                                            <label class="form-check-label" for="a2aPeerEnabled">Enabled</label>
+                                        </div>
+                                    </div>
+                                    <div class="col-12">
+                                        <label class="form-label">Notes</label>
+                                        <textarea class="form-control js-a2a-peer-form-field" data-peer-field="notes" rows="3">${escapeHtml(this.a2aPeerForm.notes || '')}</textarea>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                <button type="button" class="btn btn-primary js-a2a-peer-save">${this.a2aPeerEditing ? 'Update' : 'Create'}</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal fade" id="a2aPeerDeleteModal" tabindex="-1">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title">Delete A2A Peer</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body">
+                                <p>Delete peer <code>${escapeHtml(this.a2aPeerDeleteID || '')}</code>?</p>
+                                <p class="text-danger small mb-0">This removes the local trust record immediately.</p>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                <button type="button" class="btn btn-danger js-a2a-peer-delete-confirm"${this.a2aPeerDeleting ? ' disabled' : ''}>Delete</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `);
+
+            this.$usersContent.find('#a2a-peers-error-alert .btn-close').on('click', () => {
+                this.a2aPeersError = '';
+                this.renderA2APeersSection();
+            });
+            this.$usersContent.find('#a2a-peers-success-alert .btn-close').on('click', () => {
+                this.a2aPeersSuccess = '';
+                this.renderA2APeersSection();
+            });
+
+            this.$usersContent.off('click.a2aPeers');
+            this.$usersContent.off('input.a2aPeers change.a2aPeers');
+            this.$usersContent.on('click.a2aPeers', '.js-a2a-peers-refresh', () => this.loadA2APeers());
+            this.$usersContent.on('click.a2aPeers', '.js-a2a-peer-add', () => this.openA2APeerModal(false));
+            this.$usersContent.on('click.a2aPeers', '.js-a2a-peer-edit', (event) => this.openA2APeerModal(true, $(event.currentTarget).data('peer-id')));
+            this.$usersContent.on('click.a2aPeers', '.js-a2a-peer-delete-open', (event) => this.openDeleteA2APeerModal($(event.currentTarget).data('peer-id')));
+            this.$usersContent.on('click.a2aPeers', '.js-a2a-peer-save', () => this.saveA2APeer());
+            this.$usersContent.on('click.a2aPeers', '.js-a2a-peer-delete-confirm', () => this.deleteA2APeer());
+            this.$usersContent.on('click.a2aPeers', '.js-a2a-peer-ping', (event) => this.pingA2APeer($(event.currentTarget).data('peer-id')));
+            this.$usersContent.on('input.a2aPeers change.a2aPeers', '.js-a2a-peer-form-field', (event) => this.handleA2APeerFormInput(event));
+        }
+
+        a2aStateBadgeClass(state) {
+            switch (state) {
+                case 'connected-authorized':
+                    return 'text-bg-success';
+                case 'connected-relayed':
+                    return 'text-bg-info';
+                case 'trusted-configured':
+                    return 'text-bg-primary';
+                case 'discovered-untrusted':
+                    return 'text-bg-warning';
+                case 'disconnected':
+                    return 'text-bg-secondary';
+                default:
+                    return 'text-bg-light';
+            }
+        }
+
+        openA2APeerModal(editing, peerID) {
+            this.a2aPeerEditing = editing;
+            this.a2aPeerFormErrors = {};
+            if (editing) {
+                const peer = this.a2aPeers.find(item => item.peerId === peerID);
+                if (!peer) return;
+                this.a2aPeerForm = {
+                    type: peer.type || 'libp2p',
+                    alias: peer.alias || '',
+                    peerId: peer.peerId || '',
+                    addrsText: Array.isArray(peer.addrs) ? peer.addrs.join('\n') : '',
+                    localUser: peer.localUser || '',
+                    enabled: !!peer.enabled,
+                    notes: peer.notes || ''
+                };
+            } else {
+                this.a2aPeerForm = {
+                    type: 'libp2p',
+                    alias: '',
+                    peerId: '',
+                    addrsText: '',
+                    localUser: '',
+                    enabled: true,
+                    notes: ''
+                };
+            }
+            this.renderA2APeersSection();
+            this.a2aPeerModal = new bootstrap.Modal(document.getElementById('a2aPeerModal'));
+            this.a2aPeerModal.show();
+        }
+
+        openDeleteA2APeerModal(peerID) {
+            this.a2aPeerDeleteID = peerID;
+            this.renderA2APeersSection();
+            this.a2aPeerDeleteModal = new bootstrap.Modal(document.getElementById('a2aPeerDeleteModal'));
+            this.a2aPeerDeleteModal.show();
+        }
+
+        handleA2APeerFormInput(event) {
+            const $input = $(event.currentTarget);
+            const field = $input.data('peer-field');
+            if (!field) return;
+            this.a2aPeerForm[field] = $input.is(':checkbox') ? $input.is(':checked') : $input.val();
+            this.renderA2APeersSection();
+            if (this.a2aPeerModal) this.a2aPeerModal.show();
+        }
+
+        async saveA2APeer() {
+            this.a2aPeerFormErrors = {};
+            this.a2aPeersError = '';
+            this.a2aPeersSuccess = '';
+            try {
+                const peerID = this.a2aPeerForm.peerId || '';
+                const payload = {
+                    type: this.a2aPeerForm.type || 'libp2p',
+                    alias: this.a2aPeerForm.alias || '',
+                    peerId: peerID,
+                    addrs: parseLineList(this.a2aPeerForm.addrsText),
+                    localUser: this.a2aPeerForm.localUser || '',
+                    enabled: !!this.a2aPeerForm.enabled,
+                    notes: this.a2aPeerForm.notes || ''
+                };
+                const url = this.a2aPeerEditing ? `/setup/api/a2a/peers/${encodeURIComponent(peerID)}` : '/setup/api/a2a/peers';
+                const method = this.a2aPeerEditing ? 'PUT' : 'POST';
+                const resp = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json();
+                if (!data.success) {
+                    if (data.errors) {
+                        this.a2aPeerFormErrors = data.errors;
+                        this.renderA2APeersSection();
+                        if (this.a2aPeerModal) this.a2aPeerModal.show();
+                        return;
+                    }
+                    throw new Error(data.message || 'Failed to save A2A peer');
+                }
+                if (this.a2aPeerModal) this.a2aPeerModal.hide();
+                this.a2aPeersSuccess = this.a2aPeerEditing ? 'Peer updated' : 'Peer created';
+                await this.loadA2APeers();
+            } catch (err) {
+                this.a2aPeersError = err.message || 'Failed to save A2A peer';
+                this.renderA2APeersSection();
+            }
+        }
+
+        async deleteA2APeer() {
+            this.a2aPeerDeleting = true;
+            try {
+                const resp = await fetch(`/setup/api/a2a/peers/${encodeURIComponent(this.a2aPeerDeleteID)}`, { method: 'DELETE' });
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || 'Failed to delete A2A peer');
+                if (this.a2aPeerDeleteModal) this.a2aPeerDeleteModal.hide();
+                this.a2aPeersSuccess = 'Peer deleted';
+                await this.loadA2APeers();
+            } catch (err) {
+                this.a2aPeersError = err.message || 'Failed to delete A2A peer';
+                this.renderA2APeersSection();
+            } finally {
+                this.a2aPeerDeleting = false;
+            }
+        }
+
+        async pingA2APeer(peerID) {
+            this.a2aPeersError = '';
+            this.a2aPingTarget = peerID || '';
+            try {
+                const resp = await fetch('/setup/api/a2a/ping', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ peerId: peerID })
+                });
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || 'Ping failed');
+                this.a2aPingResult = data.data || { success: true, message: data.message || 'success', peerId };
+                this.renderA2APeersSection();
+            } catch (err) {
+                this.a2aPingResult = { success: false, message: err.message || 'Ping failed', peerId };
+                this.renderA2APeersSection();
             }
         }
     }

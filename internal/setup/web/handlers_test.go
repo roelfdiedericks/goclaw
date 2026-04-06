@@ -10,7 +10,7 @@ import (
 )
 
 func TestHandleWizardRendersStatusNoteHooks(t *testing.T) {
-	handlers, err := NewHandlers(true)
+	handlers, err := NewHandlers(true, false)
 	if err != nil {
 		t.Fatalf("new handlers: %v", err)
 	}

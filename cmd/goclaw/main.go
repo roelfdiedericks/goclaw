@@ -24,6 +24,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/roelfdiedericks/goclaw/internal/a2a"
+	"github.com/roelfdiedericks/goclaw/internal/a2apeers"
 	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/auth"
 	"github.com/roelfdiedericks/goclaw/internal/browser"
@@ -320,7 +321,11 @@ func (c *A2AStatusCmd) Run(ctx *Context) error {
 		return err
 	}
 	loadResult.Config.A2A.Normalize()
-	status := a2a.NewManager(loadResult.Config.A2A, nil).Status()
+	peerRegistry, err := a2apeers.LoadForConfig(loadResult.SourcePath)
+	if err != nil {
+		return err
+	}
+	status := a2a.NewManager(loadResult.Config.A2A, nil, peerRegistry).Status()
 	L_info("a2a status",
 		"enabled", status.Enabled,
 		"transport", status.ActiveTransport,
@@ -367,7 +372,11 @@ func runA2AInfra(ctx *Context, mode a2a.RuntimeMode, port int) error {
 	loadResult.Config.A2A.Enabled = true
 	loadResult.Config.A2A.Libp2p.Enabled = true
 	overrideInfraListenAddrs(&loadResult.Config.A2A, port)
-	manager := a2a.NewManager(loadResult.Config.A2A, nil)
+	peerRegistry, err := a2apeers.LoadForConfig(loadResult.SourcePath)
+	if err != nil {
+		return err
+	}
+	manager := a2a.NewManager(loadResult.Config.A2A, nil, peerRegistry)
 	runCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	if err := manager.StartInfra(runCtx, mode); err != nil {
@@ -3060,7 +3069,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	toolsReg := tools.NewRegistry()
 
 	// Create gateway (creates MediaStore internally)
-	gw, err := gateway.New(cfg, users, llmRegistry, toolsReg)
+	gw, err := gateway.New(cfg, loadResult.SourcePath, users, llmRegistry, toolsReg)
 	if err != nil {
 		L_error("failed to create gateway", "error", err)
 		return fmt.Errorf("failed to create gateway: %w", err)

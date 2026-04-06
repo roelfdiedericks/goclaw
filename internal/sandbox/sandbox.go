@@ -18,6 +18,7 @@ var unicodeSpaces = regexp.MustCompile(`[\x{00A0}\x{2000}-\x{200A}\x{202F}\x{205
 
 // Denied files - blocked even within the sandbox.
 var deniedFiles = []string{
+	"a2apeers.json",
 	"users.json",
 	"goclaw.json",
 	"openclaw.json",

@@ -30,14 +30,13 @@ type Config struct {
 }
 
 type Libp2pConfig struct {
-	Enabled        bool                `json:"enabled" default:"false"`
-	Identity       IdentityConfig      `json:"identity"`
-	ListenAddrs    []string            `json:"listenAddrs"`
-	BootstrapPeers []string            `json:"bootstrapPeers"`
-	Discovery      DiscoveryConfig     `json:"discovery"`
-	Relay          RelayConfig         `json:"relay"`
-	TrustedPeers   []TrustedPeerConfig `json:"trustedPeers"`
-	Protocol       ProtocolConfig      `json:"protocol"`
+	Enabled        bool            `json:"enabled" default:"false"`
+	Identity       IdentityConfig  `json:"identity"`
+	ListenAddrs    []string        `json:"listenAddrs"`
+	BootstrapPeers []string        `json:"bootstrapPeers"`
+	Discovery      DiscoveryConfig `json:"discovery"`
+	Relay          RelayConfig     `json:"relay"`
+	Protocol       ProtocolConfig  `json:"protocol"`
 }
 
 type IdentityConfig struct {
@@ -66,15 +65,6 @@ type ProtocolConfig struct {
 	RPCProtocolID        string `json:"rpcProtocolId" default:"/goclaw/a2a/rpc/1.0.0"`
 	RendezvousProtocolID string `json:"rendezvousProtocolId" default:"/goclaw/a2a/rendezvous/1.0.0"`
 	StateRetentionSecs   int    `json:"stateRetentionSeconds" default:"3600"`
-}
-
-type TrustedPeerConfig struct {
-	Alias     string   `json:"alias"`
-	PeerID    string   `json:"peerId"`
-	Addrs     []string `json:"addrs,omitempty"`
-	LocalUser string   `json:"localUser"`
-	Enabled   bool     `json:"enabled"`
-	Notes     string   `json:"notes,omitempty"`
 }
 
 func (c *Config) Normalize() {
@@ -113,11 +103,6 @@ func (c *Config) Normalize() {
 	}
 	if c.Libp2p.Protocol.StateRetentionSecs <= 0 {
 		c.Libp2p.Protocol.StateRetentionSecs = DefaultRetentionSeconds
-	}
-	for i := range c.Libp2p.TrustedPeers {
-		if !c.Libp2p.TrustedPeers[i].Enabled {
-			continue
-		}
 	}
 }
 
@@ -216,7 +201,6 @@ func handleApply(cmd bus.Command) bus.CommandResult {
 		"defaultTransport", cfg.DefaultTransport,
 		"libp2pEnabled", cfg.Libp2p.Enabled,
 		"bootstrapPeers", len(cfg.Libp2p.BootstrapPeers),
-		"trustedPeers", len(cfg.Libp2p.TrustedPeers),
 	)
 	bus.PublishEvent(configPath+".config.applied", &cfg)
 	return bus.CommandResult{

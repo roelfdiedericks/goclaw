@@ -26,7 +26,8 @@ type SectionCategory struct {
 	Items []SectionItem `json:"items"`
 }
 
-// EditorSections defines the sidebar structure for the configuration editor
+// EditorSections defines the full sidebar structure for the configuration editor.
+// Some sections may be filtered out at runtime based on mode/capabilities.
 var EditorSections = []SectionCategory{
 	{
 		Title: "Configuration",
@@ -64,6 +65,7 @@ var EditorSections = []SectionCategory{
 		Items: []SectionItem{
 			{ID: "sandbox", Label: "Sandbox", ConfigPath: "/sandbox", Type: SectionTypeFormDef},
 			{ID: "auth", Label: "Auth", ConfigPath: "/auth", Type: SectionTypeFormDef},
+			{ID: "a2a-peers", Label: "A2A Peers", ConfigPath: "/a2a", Type: SectionTypeCustom},
 			{ID: "users", Label: "Users", ConfigPath: "/", Type: SectionTypeCustom},
 			{ID: "roles", Label: "Roles", ConfigPath: "/roles", Type: SectionTypeFormDef},
 			{ID: "media", Label: "Media", ConfigPath: "/media", Type: SectionTypeFormDef},
@@ -71,9 +73,30 @@ var EditorSections = []SectionCategory{
 	},
 }
 
-// FindSection looks up a section by ID across all categories
-func FindSection(id string) *SectionItem {
+func EditorSectionsForMode(enableA2APeers bool) []SectionCategory {
+	categories := make([]SectionCategory, 0, len(EditorSections))
 	for _, cat := range EditorSections {
+		items := make([]SectionItem, 0, len(cat.Items))
+		for _, item := range cat.Items {
+			if item.ID == "a2a-peers" && !enableA2APeers {
+				continue
+			}
+			items = append(items, item)
+		}
+		if len(items) == 0 {
+			continue
+		}
+		categories = append(categories, SectionCategory{
+			Title: cat.Title,
+			Items: items,
+		})
+	}
+	return categories
+}
+
+// FindSection looks up a section by ID across all categories.
+func FindSection(categories []SectionCategory, id string) *SectionItem {
+	for _, cat := range categories {
 		for i := range cat.Items {
 			if cat.Items[i].ID == id {
 				return &cat.Items[i]
@@ -84,6 +107,6 @@ func FindSection(id string) *SectionItem {
 }
 
 // GetSectionsJSON returns the sections structure for JavaScript consumption
-func GetSectionsJSON() []SectionCategory {
-	return EditorSections
+func GetSectionsJSON(enableA2APeers bool) []SectionCategory {
+	return EditorSectionsForMode(enableA2APeers)
 }

@@ -41,7 +41,7 @@ func NewServer(configPath string) (*Server, error) {
 	mux := http.NewServeMux()
 
 	// Setup handlers (setupMode = true)
-	handlers, err := NewHandlers(true)
+	handlers, err := NewHandlers(true, false)
 	if err != nil {
 		if closeErr := listener.Close(); closeErr != nil {
 			L_warn("web: failed to close listener after handler init error", "error", closeErr)

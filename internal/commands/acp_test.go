@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/roelfdiedericks/goclaw/internal/a2a"
 	"github.com/roelfdiedericks/goclaw/internal/acp"
 	"github.com/roelfdiedericks/goclaw/internal/session"
 )
@@ -72,6 +73,22 @@ func (s *acpProviderStub) ACPSteer(ctx context.Context, sessionKey string, text 
 	return &acp.PromptResult{FinalText: "ok"}, nil
 }
 func (s *acpProviderStub) ACPCancel(ctx context.Context, sessionKey string) error { return nil }
+func (s *acpProviderStub) GetA2AStatus() a2a.Status                                 { return a2a.Status{} }
+func (s *acpProviderStub) ListA2APeers(filter string) []a2a.PeerRecord              { return nil }
+func (s *acpProviderStub) ListA2ATasks(filter string, peer string) []a2a.TaskSummary { return nil }
+func (s *acpProviderStub) GetA2APairingPayload() a2a.PairingPayload                 { return a2a.PairingPayload{} }
+func (s *acpProviderStub) PingA2APeer(ctx context.Context, target string) (a2a.PingResult, error) {
+	return a2a.PingResult{}, nil
+}
+func (s *acpProviderStub) SubmitA2ATask(ctx context.Context, target string, input string) (string, <-chan a2a.TaskSnapshot, error) {
+	return "", nil, nil
+}
+func (s *acpProviderStub) ResumeA2ATask(ctx context.Context, target string, taskID string) (<-chan a2a.TaskSnapshot, error) {
+	return nil, nil
+}
+func (s *acpProviderStub) CancelA2ATask(ctx context.Context, target string, taskID string) (a2a.TaskSnapshot, error) {
+	return a2a.TaskSnapshot{}, nil
+}
 func (s *acpProviderStub) ACPAttach(ctx context.Context, sessionKey string, userID string, driver string, cwd string, mode string, sessionID string) (*acp.AttachmentInfo, error) {
 	s.attachCalled = true
 	s.attachDriver = driver

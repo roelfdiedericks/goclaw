@@ -36,7 +36,7 @@ func TestSetConfigPathRootMergeIsNonDestructive(t *testing.T) {
 }
 
 func TestValidateRootPayloadRejectsUnknownKeys(t *testing.T) {
-	section := FindSection("gateway")
+	section := FindSection(EditorSectionsForMode(false), "gateway")
 	if section == nil {
 		t.Fatalf("gateway section not found")
 	}
@@ -57,7 +57,7 @@ func TestValidateRootPayloadRejectsUnknownKeys(t *testing.T) {
 }
 
 func TestValidateSectionPayloadAgainstSchemaRejectsUnknownFields(t *testing.T) {
-	section := FindSection("llm")
+	section := FindSection(EditorSectionsForMode(false), "llm")
 	if section == nil {
 		t.Fatalf("llm section not found")
 	}
@@ -83,7 +83,7 @@ func TestValidateSectionPayloadAgainstSchemaRejectsUnknownFields(t *testing.T) {
 }
 
 func TestValidateSectionPayloadProviderListAndRolesAndModelChain(t *testing.T) {
-	llmProviders := FindSection("llm-providers")
+	llmProviders := FindSection(EditorSectionsForMode(false), "llm-providers")
 	if llmProviders == nil {
 		t.Fatalf("llm-providers section not found")
 	}
@@ -104,7 +104,7 @@ func TestValidateSectionPayloadProviderListAndRolesAndModelChain(t *testing.T) {
 		t.Fatalf("expected llm-providers payload to be valid, got %v", err)
 	}
 
-	roles := FindSection("roles")
+	roles := FindSection(EditorSectionsForMode(false), "roles")
 	if roles == nil {
 		t.Fatalf("roles section not found")
 	}
@@ -121,7 +121,7 @@ func TestValidateSectionPayloadProviderListAndRolesAndModelChain(t *testing.T) {
 		t.Fatalf("expected roles payload to be valid, got %v", err)
 	}
 
-	llm := FindSection("llm")
+	llm := FindSection(EditorSectionsForMode(false), "llm")
 	if llm == nil {
 		t.Fatalf("llm section not found")
 	}
@@ -139,7 +139,7 @@ func TestValidateSectionPayloadProviderListAndRolesAndModelChain(t *testing.T) {
 }
 
 func TestAPILoadConfigSeedsDefaultsWhenConfigMissing(t *testing.T) {
-	api := NewAPI(filepath.Join(t.TempDir(), "missing-goclaw.json"), configapply.CallerWebStandalone)
+	api := NewAPI(filepath.Join(t.TempDir(), "missing-goclaw.json"), configapply.CallerWebStandalone, EditorSectionsForMode(false))
 
 	result, err := api.loadConfig()
 	if err != nil {
@@ -161,7 +161,7 @@ func TestAPILoadConfigSeedsDefaultsWhenConfigMissing(t *testing.T) {
 
 func TestAPIResolveSavePathFallsBackToExplicitPath(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "goclaw.json")
-	api := NewAPI(target, configapply.CallerWebStandalone)
+	api := NewAPI(target, configapply.CallerWebStandalone, EditorSectionsForMode(false))
 
 	path := api.resolveSavePath(&config.LoadResult{})
 	if path != target {
@@ -180,7 +180,7 @@ func TestAPIResolveSavePathFallsBackToLoadedDefaultPath(t *testing.T) {
 	}
 	defer os.Chdir(cwd)
 
-	api := NewAPI("", configapply.CallerWebStandalone)
+	api := NewAPI("", configapply.CallerWebStandalone, EditorSectionsForMode(false))
 	path := api.resolveSavePath(&config.LoadResult{})
 	if filepath.Base(path) != "goclaw.json" {
 		t.Fatalf("expected fallback goclaw.json path, got %q", path)
@@ -188,7 +188,7 @@ func TestAPIResolveSavePathFallsBackToLoadedDefaultPath(t *testing.T) {
 }
 
 func TestHandleSectionActionInvokesCommand(t *testing.T) {
-	api := NewAPI(filepath.Join(t.TempDir(), "missing-goclaw.json"), configapply.CallerWebStandalone)
+	api := NewAPI(filepath.Join(t.TempDir(), "missing-goclaw.json"), configapply.CallerWebStandalone, EditorSectionsForMode(false))
 	bus.RegisterCommand("media", "stats", func(cmd bus.Command) bus.CommandResult {
 		return bus.CommandResult{
 			Success: true,

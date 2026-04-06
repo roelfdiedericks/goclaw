@@ -69,6 +69,15 @@ func UsersPath(configPath string) (string, error) {
 	return filepath.Join(filepath.Dir(configPath), "users.json"), nil
 }
 
+// A2APeersPath returns the a2apeers.json path (alongside config).
+// If configPath is empty, returns the default location.
+func A2APeersPath(configPath string) (string, error) {
+	if configPath == "" {
+		return DataPath("a2apeers.json")
+	}
+	return filepath.Join(filepath.Dir(configPath), "a2apeers.json"), nil
+}
+
 // DefaultWorkspace returns the default workspace path (~/.goclaw/workspace).
 func DefaultWorkspace() (string, error) {
 	return DataPath("workspace")

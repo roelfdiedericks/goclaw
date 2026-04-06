@@ -504,9 +504,6 @@ func applyRuntimeDefaults(cfg *Config, goclawDir, home string) {
 	if cfg.A2A.Libp2p.Relay.StaticRelays == nil {
 		cfg.A2A.Libp2p.Relay.StaticRelays = []string{}
 	}
-	if cfg.A2A.Libp2p.TrustedPeers == nil {
-		cfg.A2A.Libp2p.TrustedPeers = []a2a.TrustedPeerConfig{}
-	}
 	if cfg.A2A.Libp2p.Discovery.ServiceName == "" {
 		cfg.A2A.Libp2p.Discovery.ServiceName = a2a.DefaultRendezvousNS
 	}
@@ -901,7 +898,6 @@ func DefaultConfig() *DefaultConfigTemplate {
 					EnableServer: false,
 					StaticRelays: []string{},
 				},
-				TrustedPeers: []a2a.TrustedPeerConfig{},
 				Protocol: a2a.ProtocolConfig{
 					RPCProtocolID:        a2a.DefaultRPCProtocolID,
 					RendezvousProtocolID: a2a.DefaultRendezvousID,

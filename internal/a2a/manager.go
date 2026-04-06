@@ -10,6 +10,7 @@ import (
 	"time"
 
 	a2aproto "github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/roelfdiedericks/goclaw/internal/a2apeers"
 	libp2ptransport "github.com/roelfdiedericks/goclaw/internal/a2a/transports/libp2p"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/user"
@@ -19,6 +20,7 @@ type Manager struct {
 	mu       sync.RWMutex
 	cfg      Config
 	users    *user.Registry
+	peerRegistry *a2apeers.Registry
 	executor Executor
 	adapter  ExecutionAdapter
 	runtime  *libp2ptransport.Runtime
@@ -59,36 +61,19 @@ type TaskSnapshot struct {
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
-func NewManager(cfg Config, users *user.Registry) *Manager {
+func NewManager(cfg Config, users *user.Registry, peerRegistry *a2apeers.Registry) *Manager {
 	cfg.Normalize()
 	m := &Manager{
-		cfg:          cfg,
-		users:        users,
+		cfg:           cfg,
+		users:         users,
+		peerRegistry:  peerRegistry,
 		lifecycleState: LifecycleStateIdle,
-		runtimeMode:  RuntimeModeNode,
-		peers:        make(map[string]*PeerRecord),
-		tasks:        make(map[string]*taskRuntime),
-		expiredTasks: make(map[string]time.Time),
+		runtimeMode:   RuntimeModeNode,
+		peers:         make(map[string]*PeerRecord),
+		tasks:         make(map[string]*taskRuntime),
+		expiredTasks:  make(map[string]time.Time),
 	}
-	for _, trusted := range cfg.Libp2p.TrustedPeers {
-		if strings.TrimSpace(trusted.PeerID) == "" {
-			continue
-		}
-		state := PeerStateTrustedConfigured
-		if !trusted.Enabled {
-			state = PeerStateDisconnected
-		}
-		m.peers[trusted.PeerID] = &PeerRecord{
-			PeerID:     trusted.PeerID,
-			Alias:      trusted.Alias,
-			LocalUser:  trusted.LocalUser,
-			State:      state,
-			Trusted:    trusted.Enabled,
-			Authorized: trusted.Enabled && strings.TrimSpace(trusted.LocalUser) != "",
-			Addrs:      slices.Clone(trusted.Addrs),
-			Notes:      trusted.Notes,
-		}
-	}
+	m.seedTrustedPeers()
 	return m
 }
 
@@ -97,6 +82,12 @@ func (m *Manager) SetExecutor(executor Executor) {
 	defer m.mu.Unlock()
 	m.executor = executor
 	m.adapter = NewGatewayAdapter(executor)
+}
+
+func (m *Manager) RefreshTrustedPeers() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.refreshTrustedPeersLocked()
 }
 
 func (m *Manager) Start(ctx context.Context) error {
@@ -249,7 +240,7 @@ func (m *Manager) Status() Status {
 		WarmupComplete:     m.warmupComplete,
 		RuntimeMode:        m.runtimeMode,
 		BootstrapPeers:     len(m.cfg.Libp2p.BootstrapPeers),
-		TrustedPeers:       len(m.cfg.Libp2p.TrustedPeers),
+		TrustedPeers:       m.trustedPeerCountLocked(),
 		KnownPeers:         len(m.peers),
 		PeerStateCounts:    make(map[string]int),
 		LastError:          m.lastError,
@@ -482,24 +473,25 @@ func (m *Manager) BuildPeerRecord(peerID string, addrs []string, connected, rela
 	return record
 }
 
-func (m *Manager) resolveTrustedPeer(peerID string) (*TrustedPeerConfig, *user.User, error) {
-	for _, trusted := range m.cfg.Libp2p.TrustedPeers {
-		if trusted.PeerID != peerID || !trusted.Enabled {
-			continue
-		}
-		if strings.TrimSpace(trusted.LocalUser) == "" {
-			return nil, nil, fmt.Errorf("trusted peer %s has no local user mapping", peerID)
-		}
-		if m.users == nil {
-			return nil, nil, fmt.Errorf("user registry unavailable")
-		}
-		localUser := m.users.Get(trusted.LocalUser)
-		if localUser == nil {
-			return nil, nil, fmt.Errorf("trusted peer %s maps to unknown user %s", peerID, trusted.LocalUser)
-		}
-		return &trusted, localUser, nil
+func (m *Manager) resolveTrustedPeer(peerID string) (*a2apeers.Peer, *user.User, error) {
+	if m.peerRegistry == nil {
+		return nil, nil, fmt.Errorf("peer registry unavailable")
 	}
-	return nil, nil, fmt.Errorf("peer %s is not trusted", peerID)
+	trusted, ok := m.peerRegistry.GetLibp2p(peerID)
+	if !ok || trusted == nil || !trusted.Enabled {
+		return nil, nil, fmt.Errorf("peer %s is not trusted", peerID)
+	}
+	if strings.TrimSpace(trusted.LocalUser) == "" {
+		return nil, nil, fmt.Errorf("trusted peer %s has no local user mapping", peerID)
+	}
+	if m.users == nil {
+		return nil, nil, fmt.Errorf("user registry unavailable")
+	}
+	localUser := m.users.Get(trusted.LocalUser)
+	if localUser == nil {
+		return nil, nil, fmt.Errorf("trusted peer %s maps to unknown user %s", peerID, trusted.LocalUser)
+	}
+	return trusted, localUser, nil
 }
 
 func taskKey(peerID, taskID string) string {
@@ -552,6 +544,90 @@ func (m *Manager) currentLifecycleStateLocked() LifecycleState {
 		return LifecycleStateIdle
 	}
 	return m.lifecycleState
+}
+
+func (m *Manager) trustedPeerCountLocked() int {
+	if m.peerRegistry == nil {
+		return 0
+	}
+	return m.peerRegistry.Count()
+}
+
+func (m *Manager) seedTrustedPeers() {
+	m.refreshTrustedPeersLocked()
+}
+
+func (m *Manager) refreshTrustedPeersLocked() {
+	if m.peerRegistry == nil {
+		return
+	}
+	trustedByPeerID := make(map[string]a2apeers.Peer)
+	for _, trusted := range m.peerRegistry.List() {
+		if trusted.Type != a2apeers.TypeLibp2p || strings.TrimSpace(trusted.PeerID) == "" {
+			continue
+		}
+		trustedByPeerID[trusted.PeerID] = trusted
+	}
+
+	for peerID, rec := range m.peers {
+		trusted, ok := trustedByPeerID[peerID]
+		if !ok {
+			rec.Trusted = false
+			rec.Authorized = false
+			rec.LocalUser = ""
+			rec.Notes = ""
+			if rec.Connected {
+				if rec.Relayed {
+					rec.State = PeerStateConnectedRelayed
+				} else {
+					rec.State = PeerStateDiscoveredUntrusted
+				}
+			} else {
+				rec.State = PeerStateDiscoveredUntrusted
+			}
+			continue
+		}
+		rec.Alias = trusted.Alias
+		rec.LocalUser = trusted.LocalUser
+		rec.Addrs = slices.Clone(trusted.Addrs)
+		rec.Notes = trusted.Notes
+		rec.Trusted = trusted.Enabled
+		rec.Authorized = trusted.Enabled && strings.TrimSpace(trusted.LocalUser) != ""
+		if rec.Connected {
+			switch {
+			case rec.Relayed:
+				rec.State = PeerStateConnectedRelayed
+			case rec.Trusted:
+				rec.State = PeerStateConnectedAuthorized
+			default:
+				rec.State = PeerStateDiscoveredUntrusted
+			}
+		} else if rec.Trusted {
+			rec.State = PeerStateTrustedConfigured
+		} else {
+			rec.State = PeerStateDisconnected
+		}
+	}
+
+	for peerID, trusted := range trustedByPeerID {
+		if _, ok := m.peers[peerID]; ok {
+			continue
+		}
+		state := PeerStateTrustedConfigured
+		if !trusted.Enabled {
+			state = PeerStateDisconnected
+		}
+		m.peers[trusted.PeerID] = &PeerRecord{
+			PeerID:     trusted.PeerID,
+			Alias:      trusted.Alias,
+			LocalUser:  trusted.LocalUser,
+			State:      state,
+			Trusted:    trusted.Enabled,
+			Authorized: trusted.Enabled && strings.TrimSpace(trusted.LocalUser) != "",
+			Addrs:      slices.Clone(trusted.Addrs),
+			Notes:      trusted.Notes,
+		}
+	}
 }
 
 func (m *Manager) readyRuntime() (*libp2ptransport.Runtime, error) {

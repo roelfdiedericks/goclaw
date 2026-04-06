@@ -23,10 +23,11 @@ type Handlers struct {
 	wizardTmpl *template.Template
 	editTmpl   *template.Template
 	setupMode  bool // true for standalone wizard (no auth, minimal nav)
+	categories []SectionCategory
 }
 
 // NewHandlers creates new setup handlers
-func NewHandlers(setupMode bool) (*Handlers, error) {
+func NewHandlers(setupMode bool, enableA2APeers bool) (*Handlers, error) {
 	// Parse templates separately to avoid namespace collisions
 	// (both define "content" block, last one wins if parsed together)
 	wizardTmpl, err := template.ParseFS(templatesFS, "templates/base.html", "templates/wizard.html")
@@ -41,6 +42,7 @@ func NewHandlers(setupMode bool) (*Handlers, error) {
 		wizardTmpl: wizardTmpl,
 		editTmpl:   editTmpl,
 		setupMode:  setupMode,
+		categories: EditorSectionsForMode(enableA2APeers),
 	}, nil
 }
 
@@ -81,7 +83,7 @@ func (h *Handlers) HandleEdit(w http.ResponseWriter, r *http.Request) {
 		WizardMode:     false,
 		EditMode:       true,
 		Title:          "Configuration Editor",
-		Categories:     EditorSections,
+		Categories:     h.categories,
 		CurrentNav:     "edit",
 		AssetVersion:   setupAssetVersion(),
 	}

@@ -12,6 +12,7 @@ type mountOptions struct {
 	wrap           func(http.HandlerFunc) http.HandlerFunc
 	handlers       *Handlers
 	applyCaller    configapply.Caller
+	a2aRuntime     A2ARuntimeProvider
 	enableShutdown bool
 	shutdown       http.HandlerFunc
 }
@@ -33,10 +34,15 @@ func mountSetup(mux *http.ServeMux, opts mountOptions) {
 		}))
 	}
 
-	api := NewAPI(opts.configPath, opts.applyCaller)
+	sections := EditorSectionsForMode(opts.a2aRuntime != nil)
+	api := NewAPI(opts.configPath, opts.applyCaller, sections)
 	usersAPI := NewUsersAPI(opts.configPath)
 	wizardAPI := NewWizardAPI(opts.configPath, opts.applyCaller)
 	pairingAPI := NewPairingAPI()
+	var a2aPeersAPI *A2APeersAPI
+	if opts.a2aRuntime != nil {
+		a2aPeersAPI = NewA2APeersAPI(opts.configPath, opts.a2aRuntime)
+	}
 
 	if opts.handlers != nil {
 		mux.HandleFunc("/setup/wizard", wrap(func(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +84,15 @@ func mountSetup(mux *http.ServeMux, opts mountOptions) {
 	mux.HandleFunc("/setup/api/wizard/models/", wrap(wizardAPI.HandleGetModels))
 	mux.HandleFunc("/setup/api/wizard/pairing/", wrap(wizardAPI.HandlePairingAction))
 	mux.HandleFunc("/setup/api/pairing/", wrap(pairingAPI.HandleAction))
+
+	if a2aPeersAPI != nil {
+		mux.HandleFunc("/setup/api/a2a/peers/config", wrap(a2aPeersAPI.HandleConfig))
+		mux.HandleFunc("/setup/api/a2a/peers/runtime", wrap(a2aPeersAPI.HandleRuntime))
+		mux.HandleFunc("/setup/api/a2a/peers/pairing", wrap(a2aPeersAPI.HandlePairing))
+		mux.HandleFunc("/setup/api/a2a/ping", wrap(a2aPeersAPI.HandlePing))
+		mux.HandleFunc("/setup/api/a2a/peers", wrap(a2aPeersAPI.HandlePeers))
+		mux.HandleFunc("/setup/api/a2a/peers/", wrap(a2aPeersAPI.HandlePeer))
+	}
 
 	if opts.enableShutdown && opts.shutdown != nil {
 		mux.HandleFunc("/setup/api/shutdown", opts.shutdown)

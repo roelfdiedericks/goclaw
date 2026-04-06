@@ -27,15 +27,17 @@ type API struct {
 	configPath  string
 	applyCaller configapply.Caller
 	contractErr error
+	sections    []SectionCategory
 }
 
 // NewAPI creates a new API handler
-func NewAPI(configPath string, applyCaller configapply.Caller) *API {
+func NewAPI(configPath string, applyCaller configapply.Caller, sections []SectionCategory) *API {
 	registerWebActionCommands()
 	return &API{
 		configPath:  configPath,
 		applyCaller: applyCaller,
 		contractErr: ValidateAllSectionContractsStrict(),
+		sections:    sections,
 	}
 }
 
@@ -64,7 +66,7 @@ func (a *API) HandleSectionAction(w http.ResponseWriter, r *http.Request) {
 	sectionID := parts[0]
 	actionName := parts[1]
 
-	section := FindSection(sectionID)
+	section := FindSection(a.sections, sectionID)
 	if section == nil {
 		writeJSON(w, http.StatusNotFound, APIResponse{
 			Success: false,
@@ -188,7 +190,7 @@ func (a *API) HandleGetSections(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, cat := range EditorSections {
+	for _, cat := range a.sections {
 		for _, item := range cat.Items {
 			if err := forms.ValidateJSONPointer(item.ConfigPath); err != nil {
 				writeJSON(w, http.StatusInternalServerError, APIResponse{
@@ -212,7 +214,7 @@ func (a *API) HandleGetSections(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, APIResponse{
 		Success: true,
-		Data:    EditorSections,
+		Data:    a.sections,
 	})
 }
 
@@ -233,7 +235,7 @@ func (a *API) HandleSection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	section := FindSection(sectionID)
+	section := FindSection(a.sections, sectionID)
 	if section == nil {
 		writeJSON(w, http.StatusNotFound, APIResponse{
 			Success: false,

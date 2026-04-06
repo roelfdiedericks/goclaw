@@ -19,7 +19,7 @@ type HTTPServer interface {
 }
 
 // RegisterSetupRoutes registers setup wizard and editor routes on the main HTTP server
-func RegisterSetupRoutes(srv HTTPServer, configPath string) error {
+func RegisterSetupRoutes(srv HTTPServer, configPath string, a2aRuntime A2ARuntimeProvider) error {
 	L_info("web: registering setup routes")
 	if err := ValidateAllSectionContractsStrict(); err != nil {
 		L_error("web: strict contract validation failed", "error", err)
@@ -27,7 +27,7 @@ func RegisterSetupRoutes(srv HTTPServer, configPath string) error {
 	}
 
 	// Create handlers (setupMode = false since integrated with main server)
-	handlers, err := NewHandlers(false)
+	handlers, err := NewHandlers(false, a2aRuntime != nil)
 	if err != nil {
 		return err
 	}
@@ -52,6 +52,7 @@ func RegisterSetupRoutes(srv HTTPServer, configPath string) error {
 		handlers:    handlers,
 		wrap:        ownerOnly,
 		applyCaller: configapply.CallerWebIntegrated,
+		a2aRuntime:  a2aRuntime,
 	})
 
 	L_info("web: setup routes registered")
