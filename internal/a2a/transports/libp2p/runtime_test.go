@@ -291,6 +291,33 @@ func TestHolePunchTracerLogsEvents(t *testing.T) {
 	}
 }
 
+func TestReserveRendezvousRegisterSlotRespectsMinInterval(t *testing.T) {
+	rt := New(Config{RendezvousEnabled: true}, RuntimeModeNode, Callbacks{})
+	now := time.Now()
+	if ok := rt.reserveRendezvousRegisterSlot(now, 0, "warmup"); !ok {
+		t.Fatal("expected first register slot reservation to succeed")
+	}
+	if ok := rt.reserveRendezvousRegisterSlot(now.Add(500*time.Millisecond), 2*time.Second, "relay-addrs-updated"); ok {
+		t.Fatal("expected second register slot reservation inside min interval to be skipped")
+	}
+	if ok := rt.reserveRendezvousRegisterSlot(now.Add(3*time.Second), 2*time.Second, "relay-addrs-updated"); !ok {
+		t.Fatal("expected register slot reservation after min interval to succeed")
+	}
+}
+
+func TestReserveRendezvousQuerySlotRespectsMinIntervalAndBypass(t *testing.T) {
+	rt := New(Config{RendezvousEnabled: true}, RuntimeModeNode, Callbacks{})
+	now := time.Now()
+	rt.lastRendezvousQuery = now
+
+	if ok := rt.reserveRendezvousQuerySlot(now.Add(10*time.Second), 30*time.Second, "ticker", false); ok {
+		t.Fatal("expected query reservation inside min interval to be skipped")
+	}
+	if ok := rt.reserveRendezvousQuerySlot(now.Add(10*time.Second), 0, "warmup", true); !ok {
+		t.Fatal("expected bypass query reservation to succeed")
+	}
+}
+
 func mustTestPeerID(t *testing.T) string {
 	t.Helper()
 	_, pub, err := crypto.GenerateEd25519Key(rand.Reader)

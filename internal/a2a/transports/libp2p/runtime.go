@@ -45,6 +45,7 @@ const (
 const (
 	bootstrapConnectedRefreshEvery = 60 * time.Minute
 	rendezvousHealthyQueryEvery    = 5 * time.Minute
+	rendezvousTriggerMinInterval   = 2 * time.Second
 )
 
 type Config struct {
@@ -134,6 +135,7 @@ type Runtime struct {
 	bootstrapSource     string
 	bootstrapResolvedAt time.Time
 	bootstrapPeerIDs    map[peer.ID]struct{}
+	lastRendezvousRegister time.Time
 	lastRendezvousQuery time.Time
 
 	stateMu           sync.RWMutex
@@ -299,6 +301,7 @@ func (r *Runtime) Warmup(ctx context.Context) error {
 			errs = append(errs, err.Error())
 		}
 	}
+	r.runImmediateRendezvousPass(ctx, "warmup")
 	if len(errs) > 0 {
 		return fmt.Errorf(strings.Join(errs, "; "))
 	}
@@ -375,6 +378,9 @@ func (r *Runtime) watchReachability(ctx context.Context, sub eventSubscription) 
 			r.stateMu.Unlock()
 			if changed {
 				L_info("a2a libp2p: reachability changed", "reachability", strings.ToLower(reachability.String()))
+				if reachability != network.ReachabilityUnknown {
+					go r.triggerRendezvousRegister(ctx, "reachability-changed")
+				}
 			}
 		}
 	}
@@ -392,11 +398,15 @@ func (r *Runtime) watchAutoRelayAddrs(ctx context.Context, sub eventSubscription
 			}
 			relayAddrs := multiaddrsWithPeerIDToStrings(evt.(event.EvtAutoRelayAddrsUpdated).RelayAddrs, r.host.ID())
 			r.stateMu.Lock()
+			prevRelayAddrs := cloneStrings(r.relayAddrs)
 			r.relayAddrs = relayAddrs
 			r.stateMu.Unlock()
 			L_info("a2a libp2p: relay addresses updated", "count", len(relayAddrs))
 			for _, addr := range relayAddrs {
 				L_trace("a2a libp2p: relay advertised address", "addr", addr)
+			}
+			if !sameStrings(prevRelayAddrs, relayAddrs) && len(relayAddrs) > 0 {
+				go r.triggerRendezvousRegister(ctx, "relay-addrs-updated")
 			}
 		}
 	}
@@ -766,13 +776,9 @@ func (r *Runtime) runBackground(ctx context.Context) {
 				_ = r.connectBootstrapPeers(ctx, forceRefresh)
 			}
 		case <-registerTicker.C:
-			if r.mode == RuntimeModeNode && r.cfg.RendezvousEnabled {
-				r.registerRendezvous(ctx)
-			}
+			r.maybeRegisterRendezvous(ctx, "ticker", registerEvery)
 		case <-queryTicker.C:
-			if r.mode == RuntimeModeNode && r.cfg.RendezvousEnabled && r.shouldRunRendezvousQuery(time.Now()) {
-				r.queryRendezvous(ctx)
-			}
+			r.maybeQueryRendezvous(ctx, "ticker", queryEvery, false)
 		}
 	}
 }
@@ -926,6 +932,81 @@ func (r *Runtime) shouldRunRendezvousQuery(now time.Time) bool {
 	defer r.bootstrapMu.Unlock()
 	if healthy && !r.lastRendezvousQuery.IsZero() && now.Sub(r.lastRendezvousQuery) < rendezvousHealthyQueryEvery {
 		L_trace("a2a libp2p: rendezvous query skipped", "reason", "healthy-bootstrap-connection", "nextQueryIn", rendezvousHealthyQueryEvery-now.Sub(r.lastRendezvousQuery))
+		return false
+	}
+	r.lastRendezvousQuery = now
+	return true
+}
+
+func (r *Runtime) runImmediateRendezvousPass(ctx context.Context, reason string) {
+	if !r.rendezvousEnabledForNode() {
+		return
+	}
+	r.maybeRegisterRendezvous(ctx, reason, 0)
+	r.maybeQueryRendezvous(ctx, reason, 0, true)
+}
+
+func (r *Runtime) triggerRendezvousRegister(ctx context.Context, reason string) {
+	if !r.rendezvousEnabledForNode() {
+		return
+	}
+	r.maybeRegisterRendezvous(ctx, reason, rendezvousTriggerMinInterval)
+}
+
+func (r *Runtime) rendezvousEnabledForNode() bool {
+	return r.mode == RuntimeModeNode && r.cfg.RendezvousEnabled
+}
+
+func (r *Runtime) maybeRegisterRendezvous(ctx context.Context, trigger string, minInterval time.Duration) bool {
+	if !r.rendezvousEnabledForNode() {
+		return false
+	}
+	now := time.Now()
+	if !r.reserveRendezvousRegisterSlot(now, minInterval, trigger) {
+		return false
+	}
+	r.registerRendezvous(ctx)
+	return true
+}
+
+func (r *Runtime) maybeQueryRendezvous(ctx context.Context, trigger string, minInterval time.Duration, bypassHealthyInterval bool) bool {
+	if !r.rendezvousEnabledForNode() {
+		return false
+	}
+	now := time.Now()
+	if !r.reserveRendezvousQuerySlot(now, minInterval, trigger, bypassHealthyInterval) {
+		return false
+	}
+	r.queryRendezvous(ctx)
+	return true
+}
+
+func (r *Runtime) reserveRendezvousRegisterSlot(now time.Time, minInterval time.Duration, trigger string) bool {
+	r.bootstrapMu.Lock()
+	defer r.bootstrapMu.Unlock()
+	if minInterval > 0 && !r.lastRendezvousRegister.IsZero() && now.Sub(r.lastRendezvousRegister) < minInterval {
+		L_trace("a2a libp2p: rendezvous register skipped", "reason", "recent-register", "trigger", trigger, "nextRegisterIn", minInterval-now.Sub(r.lastRendezvousRegister))
+		return false
+	}
+	r.lastRendezvousRegister = now
+	return true
+}
+
+func (r *Runtime) reserveRendezvousQuerySlot(now time.Time, minInterval time.Duration, trigger string, bypassHealthyInterval bool) bool {
+	healthy := r.connectedToBootstrapPeer()
+	r.bootstrapMu.Lock()
+	defer r.bootstrapMu.Unlock()
+
+	effectiveInterval := minInterval
+	if healthy && !bypassHealthyInterval && rendezvousHealthyQueryEvery > effectiveInterval {
+		effectiveInterval = rendezvousHealthyQueryEvery
+	}
+	if effectiveInterval > 0 && !r.lastRendezvousQuery.IsZero() && now.Sub(r.lastRendezvousQuery) < effectiveInterval {
+		reason := "recent-query"
+		if healthy && !bypassHealthyInterval && effectiveInterval == rendezvousHealthyQueryEvery {
+			reason = "healthy-bootstrap-connection"
+		}
+		L_trace("a2a libp2p: rendezvous query skipped", "reason", reason, "trigger", trigger, "nextQueryIn", effectiveInterval-now.Sub(r.lastRendezvousQuery))
 		return false
 	}
 	r.lastRendezvousQuery = now
@@ -1985,6 +2066,18 @@ func cloneStrings(in []string) []string {
 	out := make([]string, len(in))
 	copy(out, in)
 	return out
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func readRemoteUpdates(stream network.Stream, updates chan<- TaskUpdate) {
