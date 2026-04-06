@@ -26,6 +26,7 @@ import (
 	autorelay "github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	relayclient "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	relayv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
+	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	pingproto "github.com/libp2p/go-libp2p/p2p/protocol/ping"
 	ma "github.com/multiformats/go-multiaddr"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -102,6 +103,19 @@ type Callbacks struct {
 	OnInboundCancel func(peerID, taskID string) error
 }
 
+type peerPathSnapshot struct {
+	Mode      string
+	Signature string
+}
+
+type peerConnectionSummary struct {
+	Total      int
+	Direct     int
+	Relayed    int
+	Transports map[string]int
+	Addrs      []string
+}
+
 type Runtime struct {
 	cfg       Config
 	mode      RuntimeMode
@@ -125,6 +139,7 @@ type Runtime struct {
 	stateMu           sync.RWMutex
 	localReachability network.Reachability
 	relayAddrs        []string
+	peerPathState     map[string]peerPathSnapshot
 
 	advertiseEvalMu      sync.Mutex
 	lastAdvertiseEvalSig string
@@ -164,6 +179,7 @@ func New(cfg Config, mode RuntimeMode, callbacks Callbacks) *Runtime {
 		callbacks:         callbacks,
 		rendezvousData:    make(map[string]map[string]rendezvousEntry),
 		localReachability: network.ReachabilityUnknown,
+		peerPathState:     make(map[string]peerPathSnapshot),
 	}
 }
 
@@ -208,7 +224,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 		))
 	}
 	if r.mode == RuntimeModeNode && r.cfg.RelayClientEnabled && r.cfg.HolePunchEnabled {
-		options = append(options, golibp2p.EnableHolePunching())
+		options = append(options, golibp2p.EnableHolePunching(holepunch.WithTracer(r)))
 	}
 
 	h, err := golibp2p.New(options...)
@@ -305,12 +321,44 @@ func (r *Runtime) startEventWatchers(ctx context.Context) {
 	} else {
 		go r.watchAutoRelayAddrs(ctx, relaySub)
 	}
+	identifySub, err := r.host.EventBus().Subscribe(new(event.EvtPeerIdentificationCompleted))
+	if err != nil {
+		L_warn("a2a libp2p: identify completion subscription failed", "error", err)
+	} else {
+		go r.watchPeerIdentificationCompleted(ctx, identifySub)
+	}
+	identifyFailedSub, err := r.host.EventBus().Subscribe(new(event.EvtPeerIdentificationFailed))
+	if err != nil {
+		L_warn("a2a libp2p: identify failure subscription failed", "error", err)
+	} else {
+		go r.watchPeerIdentificationFailed(ctx, identifyFailedSub)
+	}
+	connectednessSub, err := r.host.EventBus().Subscribe(new(event.EvtPeerConnectednessChanged))
+	if err != nil {
+		L_warn("a2a libp2p: connectedness subscription failed", "error", err)
+	} else {
+		go r.watchPeerConnectedness(ctx, connectednessSub)
+	}
+	localAddrsSub, err := r.host.EventBus().Subscribe(new(event.EvtLocalAddressesUpdated))
+	if err != nil {
+		L_warn("a2a libp2p: local address subscription failed", "error", err)
+	} else {
+		go r.watchLocalAddresses(ctx, localAddrsSub)
+	}
+	protocolsSub, err := r.host.EventBus().Subscribe(new(event.EvtPeerProtocolsUpdated))
+	if err != nil {
+		L_warn("a2a libp2p: peer protocol subscription failed", "error", err)
+	} else {
+		go r.watchPeerProtocols(ctx, protocolsSub)
+	}
 }
 
-func (r *Runtime) watchReachability(ctx context.Context, sub interface {
+type eventSubscription interface {
 	Out() <-chan interface{}
 	Close() error
-}) {
+}
+
+func (r *Runtime) watchReachability(ctx context.Context, sub eventSubscription) {
 	defer sub.Close()
 	for {
 		select {
@@ -332,10 +380,7 @@ func (r *Runtime) watchReachability(ctx context.Context, sub interface {
 	}
 }
 
-func (r *Runtime) watchAutoRelayAddrs(ctx context.Context, sub interface {
-	Out() <-chan interface{}
-	Close() error
-}) {
+func (r *Runtime) watchAutoRelayAddrs(ctx context.Context, sub eventSubscription) {
 	defer sub.Close()
 	for {
 		select {
@@ -352,6 +397,177 @@ func (r *Runtime) watchAutoRelayAddrs(ctx context.Context, sub interface {
 			L_info("a2a libp2p: relay addresses updated", "count", len(relayAddrs))
 			for _, addr := range relayAddrs {
 				L_trace("a2a libp2p: relay advertised address", "addr", addr)
+			}
+		}
+	}
+}
+
+func (r *Runtime) watchPeerIdentificationCompleted(ctx context.Context, sub eventSubscription) {
+	defer sub.Close()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-sub.Out():
+			if !ok {
+				return
+			}
+			completed := evt.(event.EvtPeerIdentificationCompleted)
+			remoteAddr := ""
+			localAddr := ""
+			observedAddr := ""
+			relayed := false
+			transport := "unknown"
+			security := ""
+			muxer := ""
+			if completed.Conn != nil {
+				if completed.Conn.RemoteMultiaddr() != nil {
+					remoteAddr = completed.Conn.RemoteMultiaddr().String()
+				}
+				if completed.Conn.LocalMultiaddr() != nil {
+					localAddr = completed.Conn.LocalMultiaddr().String()
+				}
+				relayed = isRelayedConn(completed.Conn)
+				state := completed.Conn.ConnState()
+				transport = connTransportLabel(completed.Conn)
+				security = string(state.Security)
+				muxer = string(state.StreamMultiplexer)
+			}
+			if completed.ObservedAddr != nil {
+				observedAddr = completed.ObservedAddr.String()
+			}
+			L_info("a2a libp2p: peer identified",
+				"peerID", completed.Peer,
+				"remoteAddr", remoteAddr,
+				"localAddr", localAddr,
+				"observedAddr", observedAddr,
+				"listenAddrs", len(completed.ListenAddrs),
+				"protocols", len(completed.Protocols),
+				"agentVersion", completed.AgentVersion,
+				"protocolVersion", completed.ProtocolVersion,
+				"relayed", relayed,
+				"transport", transport,
+				"security", security,
+				"muxer", muxer,
+			)
+			if len(completed.ListenAddrs) > 0 {
+				L_trace("a2a libp2p: peer identify listen addrs", "peerID", completed.Peer, "addrs", strings.Join(multiaddrsToStrings(completed.ListenAddrs), ", "))
+			}
+			if len(completed.Protocols) > 0 {
+				L_trace("a2a libp2p: peer identify protocols", "peerID", completed.Peer, "protocols", strings.Join(protocolIDsToStrings(completed.Protocols), ", "))
+			}
+			r.logPeerPathState(completed.Peer, "identify-complete")
+		}
+	}
+}
+
+func (r *Runtime) watchPeerIdentificationFailed(ctx context.Context, sub eventSubscription) {
+	defer sub.Close()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-sub.Out():
+			if !ok {
+				return
+			}
+			failed := evt.(event.EvtPeerIdentificationFailed)
+			L_warn("a2a libp2p: peer identification failed", "peerID", failed.Peer, "error", failed.Reason)
+			r.logPeerPathState(failed.Peer, "identify-failed")
+		}
+	}
+}
+
+func (r *Runtime) watchPeerConnectedness(ctx context.Context, sub eventSubscription) {
+	defer sub.Close()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-sub.Out():
+			if !ok {
+				return
+			}
+			changed := evt.(event.EvtPeerConnectednessChanged)
+			L_info("a2a libp2p: peer connectedness changed",
+				"peerID", changed.Peer,
+				"connectedness", strings.ToLower(changed.Connectedness.String()),
+				"activeConnections", len(r.host.Network().ConnsToPeer(changed.Peer)),
+			)
+			r.logPeerPathState(changed.Peer, "connectedness")
+		}
+	}
+}
+
+func (r *Runtime) watchLocalAddresses(ctx context.Context, sub eventSubscription) {
+	defer sub.Close()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-sub.Out():
+			if !ok {
+				return
+			}
+			updated := evt.(event.EvtLocalAddressesUpdated)
+			added := 0
+			maintained := 0
+			unknown := 0
+			for _, current := range updated.Current {
+				switch current.Action {
+				case event.Added:
+					added++
+				case event.Maintained:
+					maintained++
+				default:
+					unknown++
+				}
+			}
+			L_info("a2a libp2p: local addresses updated",
+				"diffs", updated.Diffs,
+				"current", len(updated.Current),
+				"removed", len(updated.Removed),
+				"added", added,
+				"maintained", maintained,
+				"unknown", unknown,
+			)
+			for _, current := range updated.Current {
+				if current.Address == nil {
+					continue
+				}
+				L_trace("a2a libp2p: local address current", "action", addrActionLabel(current.Action), "addr", current.Address.String())
+			}
+			for _, removed := range updated.Removed {
+				if removed.Address == nil {
+					continue
+				}
+				L_trace("a2a libp2p: local address removed", "action", addrActionLabel(removed.Action), "addr", removed.Address.String())
+			}
+		}
+	}
+}
+
+func (r *Runtime) watchPeerProtocols(ctx context.Context, sub eventSubscription) {
+	defer sub.Close()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-sub.Out():
+			if !ok {
+				return
+			}
+			updated := evt.(event.EvtPeerProtocolsUpdated)
+			L_debug("a2a libp2p: peer protocols updated",
+				"peerID", updated.Peer,
+				"added", len(updated.Added),
+				"removed", len(updated.Removed),
+			)
+			if len(updated.Added) > 0 {
+				L_trace("a2a libp2p: peer protocols added", "peerID", updated.Peer, "protocols", strings.Join(protocolIDsToStrings(updated.Added), ", "))
+			}
+			if len(updated.Removed) > 0 {
+				L_trace("a2a libp2p: peer protocols removed", "peerID", updated.Peer, "protocols", strings.Join(protocolIDsToStrings(updated.Removed), ", "))
 			}
 		}
 	}
@@ -864,27 +1080,55 @@ func (r *Runtime) observePeer(observation PeerObservation) {
 }
 
 func (r *Runtime) handlePeerConnected(conn network.Conn) {
-	L_info("a2a libp2p: peer connected", "peerID", conn.RemotePeer(), "addr", conn.RemoteMultiaddr(), "relayed", conn.Stat().Limited)
+	transport := connTransportLabel(conn)
+	state := conn.ConnState()
+	relayed := isRelayedConn(conn)
+	L_info("a2a libp2p: peer connected",
+		"peerID", conn.RemotePeer(),
+		"connID", conn.ID(),
+		"remoteAddr", conn.RemoteMultiaddr(),
+		"localAddr", conn.LocalMultiaddr(),
+		"path", connectionPathLabel(relayed),
+		"relayed", relayed,
+		"transport", transport,
+		"security", state.Security,
+		"muxer", state.StreamMultiplexer,
+	)
 	r.observePeer(PeerObservation{
 		PeerID:          conn.RemotePeer().String(),
 		Addrs:           multiaddrsToStrings([]ma.Multiaddr{conn.RemoteMultiaddr()}),
 		Connected:       true,
-		Relayed:         conn.Stat().Limited,
+		Relayed:         relayed,
 		LastSeen:        time.Now(),
 		LastConnectedAt: time.Now(),
 	})
+	r.logPeerPathState(conn.RemotePeer(), "conn-open")
 }
 
 func (r *Runtime) handlePeerDisconnected(conn network.Conn) {
-	L_info("a2a libp2p: peer disconnected", "peerID", conn.RemotePeer(), "addr", conn.RemoteMultiaddr(), "relayed", conn.Stat().Limited)
+	transport := connTransportLabel(conn)
+	state := conn.ConnState()
+	relayed := isRelayedConn(conn)
+	L_info("a2a libp2p: peer disconnected",
+		"peerID", conn.RemotePeer(),
+		"connID", conn.ID(),
+		"remoteAddr", conn.RemoteMultiaddr(),
+		"localAddr", conn.LocalMultiaddr(),
+		"path", connectionPathLabel(relayed),
+		"relayed", relayed,
+		"transport", transport,
+		"security", state.Security,
+		"muxer", state.StreamMultiplexer,
+	)
 	r.observePeer(PeerObservation{
 		PeerID:           conn.RemotePeer().String(),
 		Addrs:            multiaddrsToStrings([]ma.Multiaddr{conn.RemoteMultiaddr()}),
 		Connected:        false,
-		Relayed:          conn.Stat().Limited,
+		Relayed:          relayed,
 		LastSeen:         time.Now(),
 		LastDisconnectAt: time.Now(),
 	})
+	r.logPeerPathState(conn.RemotePeer(), "conn-close")
 }
 
 func (r *Runtime) registerRendezvous(ctx context.Context) {
@@ -1210,6 +1454,15 @@ func preferredTransportLabel(addrs []ma.Multiaddr) string {
 	return best
 }
 
+func protocolIDsToStrings(ids []protocol.ID) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, string(id))
+	}
+	sort.Strings(out)
+	return out
+}
+
 func hasProtocol(addr ma.Multiaddr, code int) bool {
 	if addr == nil {
 		return false
@@ -1337,6 +1590,19 @@ func (r *Runtime) logAdvertisedAddressEvaluation(sourceType string, source, filt
 		"reasons", formatCounts(dropReasons),
 		"announcePrivate", r.cfg.AnnouncePrivateAddrs,
 	)
+}
+
+func addrActionLabel(action event.AddrAction) string {
+	switch action {
+	case event.Added:
+		return "added"
+	case event.Maintained:
+		return "maintained"
+	case event.Removed:
+		return "removed"
+	default:
+		return "unknown"
+	}
 }
 
 func (r *Runtime) sanitizeRemoteRegistrationAddrs(peerID string, raw []string) ([]string, int, map[string]int) {
@@ -1474,6 +1740,192 @@ func hasRelayedAddr(addrs []ma.Multiaddr) bool {
 		}
 	}
 	return false
+}
+
+func isRelayedConn(conn network.Conn) bool {
+	if conn == nil {
+		return false
+	}
+	if conn.Stat().Limited {
+		return true
+	}
+	if conn.RemoteMultiaddr() != nil && strings.Contains(conn.RemoteMultiaddr().String(), "/p2p-circuit") {
+		return true
+	}
+	if conn.LocalMultiaddr() != nil && strings.Contains(conn.LocalMultiaddr().String(), "/p2p-circuit") {
+		return true
+	}
+	return false
+}
+
+func connectionPathLabel(relayed bool) string {
+	if relayed {
+		return "relayed"
+	}
+	return "direct"
+}
+
+func connTransportLabel(conn network.Conn) string {
+	if conn == nil {
+		return "unknown"
+	}
+	transport := strings.TrimSpace(conn.ConnState().Transport)
+	if transport != "" {
+		return transport
+	}
+	switch {
+	case hasProtocol(conn.RemoteMultiaddr(), ma.P_QUIC_V1), hasProtocol(conn.RemoteMultiaddr(), ma.P_QUIC):
+		return "quic"
+	case hasProtocol(conn.RemoteMultiaddr(), ma.P_TCP):
+		return "tcp"
+	default:
+		return "other"
+	}
+}
+
+func peerPathMode(total, direct, relayed int) string {
+	switch {
+	case total == 0:
+		return "disconnected"
+	case direct > 0 && relayed > 0:
+		return "mixed"
+	case direct > 0:
+		return "direct-only"
+	case relayed > 0:
+		return "relay-only"
+	default:
+		return "unknown"
+	}
+}
+
+func summarizePeerConnections(conns []network.Conn) peerConnectionSummary {
+	summary := peerConnectionSummary{
+		Transports: make(map[string]int),
+	}
+	if len(conns) == 0 {
+		return summary
+	}
+	addrs := make([]string, 0, len(conns))
+	for _, conn := range conns {
+		if conn == nil {
+			continue
+		}
+		summary.Total++
+		if isRelayedConn(conn) {
+			summary.Relayed++
+		} else {
+			summary.Direct++
+		}
+		summary.Transports[connTransportLabel(conn)]++
+		if conn.RemoteMultiaddr() != nil {
+			addrs = append(addrs, conn.RemoteMultiaddr().String())
+		}
+	}
+	sort.Strings(addrs)
+	summary.Addrs = addrs
+	return summary
+}
+
+func (r *Runtime) logPeerPathState(peerID peer.ID, trigger string) {
+	if r.host == nil || peerID == "" {
+		return
+	}
+	summary := summarizePeerConnections(r.host.Network().ConnsToPeer(peerID))
+	mode := peerPathMode(summary.Total, summary.Direct, summary.Relayed)
+	signature := fmt.Sprintf("mode=%s total=%d direct=%d relayed=%d transports=%s addrs=%s",
+		mode,
+		summary.Total,
+		summary.Direct,
+		summary.Relayed,
+		formatCounts(summary.Transports),
+		strings.Join(summary.Addrs, ","),
+	)
+
+	r.stateMu.Lock()
+	prev := r.peerPathState[peerID.String()]
+	changed := prev.Signature != signature
+	if changed {
+		r.peerPathState[peerID.String()] = peerPathSnapshot{
+			Mode:      mode,
+			Signature: signature,
+		}
+	}
+	r.stateMu.Unlock()
+
+	if !changed {
+		return
+	}
+	L_info("a2a libp2p: peer path state changed",
+		"peerID", peerID,
+		"trigger", trigger,
+		"mode", mode,
+		"total", summary.Total,
+		"direct", summary.Direct,
+		"relayed", summary.Relayed,
+		"transports", formatCounts(summary.Transports),
+		"addrs", strings.Join(summary.Addrs, ", "),
+	)
+	switch {
+	case prev.Mode == "relay-only" && summary.Direct > 0:
+		L_info("a2a libp2p: peer direct upgrade observed", "peerID", peerID, "trigger", trigger, "mode", mode)
+	case prev.Mode != "" && (prev.Mode == "direct-only" || prev.Mode == "mixed") && mode == "relay-only":
+		L_warn("a2a libp2p: peer direct path lost", "peerID", peerID, "trigger", trigger, "previousMode", prev.Mode, "mode", mode)
+	}
+}
+
+func (r *Runtime) Trace(evt *holepunch.Event) {
+	if evt == nil {
+		return
+	}
+	switch evt.Type {
+	case holepunch.DirectDialEvtT:
+		directDial, _ := evt.Evt.(*holepunch.DirectDialEvt)
+		if directDial == nil {
+			L_warn("a2a libp2p: hole punch direct dial event missing payload", "peerID", evt.Remote)
+			return
+		}
+		if directDial.Success {
+			L_info("a2a libp2p: hole punch direct dial succeeded", "peerID", evt.Remote, "elapsed", directDial.EllapsedTime)
+		} else {
+			L_warn("a2a libp2p: hole punch direct dial failed", "peerID", evt.Remote, "elapsed", directDial.EllapsedTime, "error", directDial.Error)
+		}
+		r.logPeerPathState(evt.Remote, "holepunch-direct-dial")
+	case holepunch.ProtocolErrorEvtT:
+		protocolErr, _ := evt.Evt.(*holepunch.ProtocolErrorEvt)
+		if protocolErr == nil {
+			L_warn("a2a libp2p: hole punch protocol error missing payload", "peerID", evt.Remote)
+			return
+		}
+		L_warn("a2a libp2p: hole punch protocol error", "peerID", evt.Remote, "error", protocolErr.Error)
+	case holepunch.StartHolePunchEvtT:
+		start, _ := evt.Evt.(*holepunch.StartHolePunchEvt)
+		if start == nil {
+			L_warn("a2a libp2p: hole punch start missing payload", "peerID", evt.Remote)
+			return
+		}
+		L_info("a2a libp2p: hole punch started", "peerID", evt.Remote, "rtt", start.RTT, "remoteAddrs", strings.Join(start.RemoteAddrs, ", "))
+	case holepunch.EndHolePunchEvtT:
+		end, _ := evt.Evt.(*holepunch.EndHolePunchEvt)
+		if end == nil {
+			L_warn("a2a libp2p: hole punch end missing payload", "peerID", evt.Remote)
+			return
+		}
+		if end.Success {
+			L_info("a2a libp2p: hole punch succeeded", "peerID", evt.Remote, "elapsed", end.EllapsedTime)
+		} else {
+			L_warn("a2a libp2p: hole punch failed", "peerID", evt.Remote, "elapsed", end.EllapsedTime, "error", end.Error)
+		}
+		r.logPeerPathState(evt.Remote, "holepunch-end")
+	case holepunch.HolePunchAttemptEvtT:
+		attempt, _ := evt.Evt.(*holepunch.HolePunchAttemptEvt)
+		if attempt == nil {
+			L_warn("a2a libp2p: hole punch attempt missing payload", "peerID", evt.Remote)
+			return
+		}
+		L_trace("a2a libp2p: hole punch attempt", "peerID", evt.Remote, "attempt", attempt.Attempt)
+	default:
+		L_debug("a2a libp2p: hole punch event", "peerID", evt.Remote, "type", evt.Type)
+	}
 }
 
 func loadOrCreateIdentity(keyFile string) (crypto.PrivKey, error) {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	"github.com/roelfdiedericks/goclaw/internal/logging"
 	ma "github.com/multiformats/go-multiaddr"
 )
@@ -205,6 +206,88 @@ func TestNatServiceEnabledByMode(t *testing.T) {
 				t.Fatalf("natServiceEnabled() = %t, want %t", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPeerPathMode(t *testing.T) {
+	tests := []struct {
+		name    string
+		total   int
+		direct  int
+		relayed int
+		want    string
+	}{
+		{name: "disconnected", want: "disconnected"},
+		{name: "relay only", total: 1, relayed: 1, want: "relay-only"},
+		{name: "direct only", total: 1, direct: 1, want: "direct-only"},
+		{name: "mixed", total: 2, direct: 1, relayed: 1, want: "mixed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := peerPathMode(tt.total, tt.direct, tt.relayed); got != tt.want {
+				t.Fatalf("peerPathMode() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHolePunchTracerLogsEvents(t *testing.T) {
+	prevLevel := logging.GetLevel()
+	logging.SetLevel(logging.LevelTrace)
+	t.Cleanup(func() {
+		logging.SetHook(nil)
+		logging.SetLevel(prevLevel)
+	})
+
+	var lines []string
+	logging.SetHook(func(level, msg string) {
+		lines = append(lines, level+" "+msg)
+	})
+
+	rt := New(Config{}, RuntimeModeNode, Callbacks{})
+	peerID := peer.ID(mustTestPeerID(t))
+	rt.Trace(&holepunch.Event{
+		Remote: peerID,
+		Type:   holepunch.StartHolePunchEvtT,
+		Evt: &holepunch.StartHolePunchEvt{
+			RemoteAddrs: []string{"/ip4/34.35.192.27/udp/4001/quic-v1"},
+			RTT:         25 * time.Millisecond,
+		},
+	})
+	rt.Trace(&holepunch.Event{
+		Remote: peerID,
+		Type:   holepunch.DirectDialEvtT,
+		Evt: &holepunch.DirectDialEvt{
+			Success:      false,
+			EllapsedTime: 300 * time.Millisecond,
+			Error:        "dial timeout",
+		},
+	})
+	rt.Trace(&holepunch.Event{
+		Remote: peerID,
+		Type:   holepunch.EndHolePunchEvtT,
+		Evt: &holepunch.EndHolePunchEvt{
+			Success:      true,
+			EllapsedTime: 450 * time.Millisecond,
+		},
+	})
+
+	mustContain := []string{
+		"a2a libp2p: hole punch started",
+		"a2a libp2p: hole punch direct dial failed",
+		"a2a libp2p: hole punch succeeded",
+	}
+	for _, want := range mustContain {
+		found := false
+		for _, line := range lines {
+			if strings.Contains(line, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected log containing %q, got %#v", want, lines)
+		}
 	}
 }
 
