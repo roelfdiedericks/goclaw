@@ -199,11 +199,11 @@ func TestRegisterSelfRendezvousEntryOverwritesInfraSeededRow(t *testing.T) {
 	}, RuntimeModeBootstrap, Callbacks{})
 
 	peerID := mustTestPeerID(t)
-	namespace, _, _, _, previousSource := rt.registerSelfRendezvousEntry("test-ns", peerID, []string{
+	namespace, _, _, _, previousSource, preservedInfra := rt.registerSelfRendezvousEntry("test-ns", peerID, []string{
 		"/ip4/155.93.137.191/tcp/4001/p2p/" + peerID,
 	})
-	if namespace != "test-ns" || previousSource != "" {
-		t.Fatalf("unexpected initial self register result namespace=%q previousSource=%q", namespace, previousSource)
+	if namespace != "test-ns" || previousSource != "" || preservedInfra {
+		t.Fatalf("unexpected initial self register result namespace=%q previousSource=%q preserved=%t", namespace, previousSource, preservedInfra)
 	}
 
 	rt.rendezvousData["test-ns"][peerID] = rendezvousEntry{
@@ -214,11 +214,14 @@ func TestRegisterSelfRendezvousEntryOverwritesInfraSeededRow(t *testing.T) {
 	}
 
 	var sanitized []string
-	namespace, sanitized, _, _, previousSource = rt.registerSelfRendezvousEntry("test-ns", peerID, []string{
+	namespace, sanitized, _, _, previousSource, preservedInfra = rt.registerSelfRendezvousEntry("test-ns", peerID, []string{
 		"/ip4/155.93.137.191/tcp/4001/p2p/" + peerID,
 	})
 	if namespace != "test-ns" {
 		t.Fatalf("unexpected namespace: %q", namespace)
+	}
+	if preservedInfra {
+		t.Fatal("did not expect non-empty self registration to preserve infra row")
 	}
 	if previousSource != rendezvousEntrySourceInfra {
 		t.Fatalf("expected previous infra source, got %q", previousSource)
@@ -246,7 +249,7 @@ func TestSeedInfraRelayRendezvousEntryDoesNotOverwriteSelfOwnedRow(t *testing.T)
 	rt.host = host
 
 	targetID := mustTestPeerID(t)
-	_, _, _, _, _ = rt.registerSelfRendezvousEntry("test-ns", targetID, []string{
+	_, _, _, _, _, _ = rt.registerSelfRendezvousEntry("test-ns", targetID, []string{
 		"/ip4/155.93.137.191/tcp/4001/p2p/" + targetID,
 	})
 
@@ -262,6 +265,45 @@ func TestSeedInfraRelayRendezvousEntryDoesNotOverwriteSelfOwnedRow(t *testing.T)
 	}
 	if len(entry.Addrs) != 1 || entry.Addrs[0] != "/ip4/155.93.137.191/tcp/4001/p2p/"+targetID {
 		t.Fatalf("unexpected self-owned entry after infra seed attempt: %#v", entry.Addrs)
+	}
+}
+
+func TestRegisterSelfRendezvousEntryEmptyPreservesInfraSeededRow(t *testing.T) {
+	rt := New(Config{
+		RendezvousNamespace:     "test-ns",
+		RendezvousAdmissionMode: "public-safe",
+	}, RuntimeModeBootstrap, Callbacks{})
+
+	peerID := mustTestPeerID(t)
+	relayAddr := "/ip4/34.35.192.27/udp/4001/quic-v1/p2p/" + mustTestPeerID(t)
+	rt.rendezvousData["test-ns"] = map[string]rendezvousEntry{
+		peerID: {
+			PeerID:    peerID,
+			Addrs:     []string{relayAddr},
+			ExpiresAt: time.Now().Add(time.Minute),
+			Source:    rendezvousEntrySourceInfra,
+		},
+	}
+
+	namespace, effectiveAddrs, _, _, previousSource, preservedInfra := rt.registerSelfRendezvousEntry("test-ns", peerID, nil)
+	if namespace != "test-ns" {
+		t.Fatalf("unexpected namespace: %q", namespace)
+	}
+	if previousSource != rendezvousEntrySourceInfra {
+		t.Fatalf("expected previous infra source, got %q", previousSource)
+	}
+	if !preservedInfra {
+		t.Fatal("expected empty self registration to preserve infra row")
+	}
+	entry := rt.rendezvousData["test-ns"][peerID]
+	if entry.Source != rendezvousEntrySourceInfra {
+		t.Fatalf("expected infra source to remain, got %q", entry.Source)
+	}
+	if len(entry.Addrs) != 1 || entry.Addrs[0] != relayAddr {
+		t.Fatalf("expected preserved relay addrs, got %#v", entry.Addrs)
+	}
+	if len(effectiveAddrs) != 1 || effectiveAddrs[0] != relayAddr {
+		t.Fatalf("expected effective addrs to reflect preserved relay row, got %#v", effectiveAddrs)
 	}
 }
 

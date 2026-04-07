@@ -1486,25 +1486,31 @@ func (r *Runtime) handleRendezvousStream(stream network.Stream) {
 	resp := rendezvousResponse{}
 	switch req.Action {
 	case "register":
-		namespace, sanitized, dropped, reasons, previousSource := r.registerSelfRendezvousEntry(req.Namespace, req.PeerID, req.Addrs)
+		namespace, effectiveAddrs, dropped, reasons, previousSource, preservedInfra := r.registerSelfRendezvousEntry(req.Namespace, req.PeerID, req.Addrs)
 		if dropped > 0 {
 			L_info("a2a libp2p: rendezvous registration sanitized",
 				"peerID", req.PeerID,
 				"namespace", namespace,
-				"kept", len(sanitized),
+				"kept", len(effectiveAddrs),
 				"dropped", dropped,
 				"reasons", formatCounts(reasons),
 				"mode", r.cfg.RendezvousAdmissionMode,
 			)
 		}
-		if previousSource == rendezvousEntrySourceInfra {
+		if preservedInfra {
+			L_info("a2a libp2p: self registration preserved infra provisional rendezvous entry",
+				"peerID", req.PeerID,
+				"namespace", namespace,
+				"addrs", len(effectiveAddrs),
+			)
+		} else if previousSource == rendezvousEntrySourceInfra {
 			L_info("a2a libp2p: self registration replaced infra provisional rendezvous entry",
 				"peerID", req.PeerID,
 				"namespace", namespace,
-				"addrs", len(sanitized),
+				"addrs", len(effectiveAddrs),
 			)
 		}
-		L_trace("a2a libp2p: rendezvous peer registered", "peerID", req.PeerID, "namespace", namespace, "addrs", len(sanitized))
+		L_trace("a2a libp2p: rendezvous peer registered", "peerID", req.PeerID, "namespace", namespace, "addrs", len(effectiveAddrs))
 	case "list":
 		resp.Entries = r.listRendezvous(req.Namespace, req.PeerID)
 		L_info("a2a libp2p: rendezvous list served", "requester", req.PeerID, "namespace", req.Namespace, "entries", len(resp.Entries))
@@ -1577,22 +1583,29 @@ func (r *Runtime) putRendezvousEntryLocked(namespace string, entry rendezvousEnt
 	return prev, ok
 }
 
-func (r *Runtime) registerSelfRendezvousEntry(namespace, peerID string, addrs []string) (string, []string, int, map[string]int, string) {
+func (r *Runtime) registerSelfRendezvousEntry(namespace, peerID string, addrs []string) (string, []string, int, map[string]int, string, bool) {
 	namespace = r.normalizeRendezvousNamespace(namespace)
 	sanitized, dropped, reasons := r.sanitizeRemoteRegistrationAddrs(peerID, addrs)
+	r.rendezvousMu.Lock()
+	prev, hadPrev := r.rendezvousBucketLocked(namespace)[peerID]
+	if hadPrev && prev.Source == rendezvousEntrySourceInfra && len(prev.Addrs) > 0 && len(sanitized) == 0 {
+		prev.ExpiresAt = time.Now().Add(2 * time.Minute)
+		r.rendezvousBucketLocked(namespace)[peerID] = prev
+		r.rendezvousMu.Unlock()
+		return namespace, cloneStrings(prev.Addrs), dropped, reasons, prev.Source, true
+	}
 	entry := rendezvousEntry{
 		PeerID:    peerID,
 		Addrs:     sanitized,
 		ExpiresAt: time.Now().Add(2 * time.Minute),
 		Source:    rendezvousEntrySourceSelf,
 	}
-	r.rendezvousMu.Lock()
-	prev, hadPrev := r.putRendezvousEntryLocked(namespace, entry)
+	prev, hadPrev = r.putRendezvousEntryLocked(namespace, entry)
 	r.rendezvousMu.Unlock()
 	if hadPrev {
-		return namespace, sanitized, dropped, reasons, prev.Source
+		return namespace, sanitized, dropped, reasons, prev.Source, false
 	}
-	return namespace, sanitized, dropped, reasons, ""
+	return namespace, sanitized, dropped, reasons, "", false
 }
 
 func (r *Runtime) localRelayCircuitAddrs(target peer.ID) []string {
