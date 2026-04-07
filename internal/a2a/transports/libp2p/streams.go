@@ -13,7 +13,7 @@ import (
 func (r *Runtime) handleRPCStream(stream network.Stream) {
 	defer stream.Close()
 	remotePeer := stream.Conn().RemotePeer().String()
-	L_trace("a2a libp2p: rpc stream opened", "peerID", remotePeer)
+	L_info("a2a libp2p: inbound rpc stream opened", "peerID", remotePeer, "protocol", stream.Protocol())
 
 	var first rpcEnvelope
 	if err := json.NewDecoder(stream).Decode(&first); err != nil {
@@ -21,7 +21,7 @@ func (r *Runtime) handleRPCStream(stream network.Stream) {
 		_ = json.NewEncoder(stream).Encode(rpcEnvelope{Kind: "error", Error: err.Error()})
 		return
 	}
-	L_trace("a2a libp2p: rpc envelope received", "peerID", remotePeer, "kind", first.Kind, "taskID", first.TaskID)
+	L_debug("a2a libp2p: inbound rpc envelope received", "peerID", remotePeer, "kind", first.Kind, "taskID", first.TaskID)
 	switch first.Kind {
 	case "submit":
 		if r.callbacks.OnInboundSubmit == nil {
@@ -65,13 +65,13 @@ func (r *Runtime) handleRPCStream(stream network.Stream) {
 		}
 		_ = json.NewEncoder(stream).Encode(env)
 	case "ping":
-		L_trace("a2a libp2p: inbound ping received", "peerID", remotePeer)
+		L_info("a2a libp2p: inbound rpc ping received", "peerID", remotePeer)
 		_ = json.NewEncoder(stream).Encode(rpcEnvelope{Kind: "pong", Message: "pong"})
 	default:
 		L_warn("a2a libp2p: unknown rpc kind", "peerID", remotePeer, "kind", first.Kind, "taskID", first.TaskID)
 		_ = json.NewEncoder(stream).Encode(rpcEnvelope{Kind: "error", Error: "unknown rpc kind"})
 	}
-	L_trace("a2a libp2p: rpc stream closed", "peerID", remotePeer, "kind", first.Kind, "taskID", first.TaskID)
+	L_debug("a2a libp2p: inbound rpc stream closed", "peerID", remotePeer, "kind", first.Kind, "taskID", first.TaskID)
 }
 
 func (r *Runtime) streamTaskUpdates(stream network.Stream, updates <-chan TaskUpdate) {

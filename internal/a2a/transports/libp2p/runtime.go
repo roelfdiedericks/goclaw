@@ -651,10 +651,16 @@ func (r *Runtime) PingPeer(ctx context.Context, target string, knownPeers []Peer
 	if r.host == nil {
 		return "", 0, "", fmt.Errorf("host not started")
 	}
-	info, _, err := r.prepareTargetPeer(ctx, target, knownPeers, true)
+	info, sources, err := r.prepareTargetPeer(ctx, target, knownPeers, true)
 	if err != nil {
 		return "", 0, "", err
 	}
+	L_info("a2a libp2p: outbound ping starting",
+		"target", target,
+		"peerID", info.ID,
+		"sources", strings.Join(sources, ", "),
+		"addrs", strings.Join(multiaddrsToStrings(info.Addrs), ", "),
+	)
 	if err := r.ensureConnectedPeer(ctx, *info); err != nil {
 		L_debug("a2a libp2p: ping connect best effort failed", "peerID", info.ID, "error", err)
 	}
@@ -662,25 +668,36 @@ func (r *Runtime) PingPeer(ctx context.Context, target string, knownPeers []Peer
 	select {
 	case result := <-results:
 		if result.Error != nil {
+			L_warn("a2a libp2p: outbound ping failed", "peerID", info.ID, "error", result.Error)
 			return "", 0, "", result.Error
 		}
+		L_info("a2a libp2p: outbound ping result", "peerID", info.ID, "latency", result.RTT)
 		return info.ID.String(), result.RTT, "pong", nil
 	case <-ctx.Done():
+		L_warn("a2a libp2p: outbound ping context done", "peerID", info.ID, "error", ctx.Err())
 		return "", 0, "", ctx.Err()
 	}
 }
 
 func (r *Runtime) SubmitRemoteTask(ctx context.Context, target, taskID, input string, knownPeers []PeerCandidate) (<-chan TaskUpdate, error) {
-	info, _, err := r.prepareTargetPeer(ctx, target, knownPeers, true)
+	info, sources, err := r.prepareTargetPeer(ctx, target, knownPeers, true)
 	if err != nil {
 		return nil, err
 	}
+	L_info("a2a libp2p: outbound submit starting",
+		"target", target,
+		"peerID", info.ID,
+		"taskID", taskID,
+		"sources", strings.Join(sources, ", "),
+		"addrs", strings.Join(multiaddrsToStrings(info.Addrs), ", "),
+		"inputLength", len(input),
+	)
 	if err := r.ensureConnectedPeer(ctx, *info); err != nil {
 		return nil, err
 	}
-	stream, err := r.host.NewStream(ctx, info.ID, protocol.ID(r.cfg.RPCProtocolID))
+	stream, err := r.openRPCStream(ctx, info.ID, "submit", taskID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open stream: %w", err)
 	}
 	writer := bufio.NewWriter(stream)
 	if err := json.NewEncoder(writer).Encode(rpcEnvelope{Kind: "submit", TaskID: taskID, Input: input}); err != nil {
@@ -697,16 +714,23 @@ func (r *Runtime) SubmitRemoteTask(ctx context.Context, target, taskID, input st
 }
 
 func (r *Runtime) ResumeRemoteTask(ctx context.Context, target, taskID string, knownPeers []PeerCandidate) (<-chan TaskUpdate, error) {
-	info, _, err := r.prepareTargetPeer(ctx, target, knownPeers, true)
+	info, sources, err := r.prepareTargetPeer(ctx, target, knownPeers, true)
 	if err != nil {
 		return nil, err
 	}
+	L_info("a2a libp2p: outbound resume starting",
+		"target", target,
+		"peerID", info.ID,
+		"taskID", taskID,
+		"sources", strings.Join(sources, ", "),
+		"addrs", strings.Join(multiaddrsToStrings(info.Addrs), ", "),
+	)
 	if err := r.ensureConnectedPeer(ctx, *info); err != nil {
 		return nil, err
 	}
-	stream, err := r.host.NewStream(ctx, info.ID, protocol.ID(r.cfg.RPCProtocolID))
+	stream, err := r.openRPCStream(ctx, info.ID, "resume", taskID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open stream: %w", err)
 	}
 	writer := bufio.NewWriter(stream)
 	if err := json.NewEncoder(writer).Encode(rpcEnvelope{Kind: "resume", TaskID: taskID}); err != nil {
@@ -723,16 +747,23 @@ func (r *Runtime) ResumeRemoteTask(ctx context.Context, target, taskID string, k
 }
 
 func (r *Runtime) CancelRemoteTask(ctx context.Context, target, taskID string, knownPeers []PeerCandidate) (TaskUpdate, error) {
-	info, _, err := r.prepareTargetPeer(ctx, target, knownPeers, true)
+	info, sources, err := r.prepareTargetPeer(ctx, target, knownPeers, true)
 	if err != nil {
 		return TaskUpdate{}, err
 	}
+	L_info("a2a libp2p: outbound cancel starting",
+		"target", target,
+		"peerID", info.ID,
+		"taskID", taskID,
+		"sources", strings.Join(sources, ", "),
+		"addrs", strings.Join(multiaddrsToStrings(info.Addrs), ", "),
+	)
 	if err := r.ensureConnectedPeer(ctx, *info); err != nil {
 		return TaskUpdate{}, err
 	}
-	stream, err := r.host.NewStream(ctx, info.ID, protocol.ID(r.cfg.RPCProtocolID))
+	stream, err := r.openRPCStream(ctx, info.ID, "cancel", taskID)
 	if err != nil {
-		return TaskUpdate{}, err
+		return TaskUpdate{}, fmt.Errorf("failed to open stream: %w", err)
 	}
 	defer stream.Close()
 
@@ -1070,6 +1101,22 @@ func (r *Runtime) ensureConnectedPeer(ctx context.Context, info peer.AddrInfo) e
 		return nil
 	}
 	return r.connectAddrInfo(ctx, info)
+}
+
+func (r *Runtime) openRPCStream(ctx context.Context, peerID peer.ID, kind, taskID string) (network.Stream, error) {
+	if r.host == nil {
+		return nil, fmt.Errorf("host not started")
+	}
+	streamCtx := network.WithAllowLimitedConn(ctx, "a2a-rpc-"+kind)
+	started := time.Now()
+	L_info("a2a libp2p: opening rpc stream", "peerID", peerID, "kind", kind, "taskID", taskID, "protocol", r.cfg.RPCProtocolID)
+	stream, err := r.host.NewStream(streamCtx, peerID, protocol.ID(r.cfg.RPCProtocolID))
+	if err != nil {
+		L_warn("a2a libp2p: open rpc stream failed", "peerID", peerID, "kind", kind, "taskID", taskID, "elapsed", time.Since(started), "error", err)
+		return nil, err
+	}
+	L_info("a2a libp2p: rpc stream opened", "peerID", peerID, "kind", kind, "taskID", taskID, "elapsed", time.Since(started), "protocol", stream.Protocol())
+	return stream, nil
 }
 
 func (r *Runtime) hasLivePeerConnection(peerID peer.ID) bool {
