@@ -113,6 +113,160 @@ func TestListRendezvousSanitizesLegacyEntries(t *testing.T) {
 	}
 }
 
+func TestSeedInfraRelayRendezvousEntryCreatesInfraOwnedRow(t *testing.T) {
+	host, err := golibp2p.New(golibp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create host: %v", err)
+	}
+	t.Cleanup(func() { _ = host.Close() })
+
+	rt := New(Config{
+		RendezvousNamespace: "test-ns",
+	}, RuntimeModeBootstrap, Callbacks{})
+	rt.host = host
+
+	targetID := mustTestPeerID(t)
+	decodedTarget, err := peer.Decode(targetID)
+	if err != nil {
+		t.Fatalf("decode target peer id: %v", err)
+	}
+
+	rt.seedInfraRelayRendezvousEntry(decodedTarget)
+
+	entry, ok := rt.rendezvousData["test-ns"][targetID]
+	if !ok {
+		t.Fatal("expected infra-seeded rendezvous entry")
+	}
+	if entry.Source != rendezvousEntrySourceInfra {
+		t.Fatalf("expected infra source, got %q", entry.Source)
+	}
+	if len(entry.Addrs) == 0 {
+		t.Fatal("expected relay addresses in infra-seeded entry")
+	}
+	if !strings.Contains(entry.Addrs[0], "/p2p/"+host.ID().String()+"/p2p-circuit/p2p/"+targetID) {
+		t.Fatalf("unexpected relay address: %s", entry.Addrs[0])
+	}
+}
+
+func TestRegisterSelfRendezvousEntryOverwritesInfraSeededRow(t *testing.T) {
+	rt := New(Config{
+		RendezvousNamespace:     "test-ns",
+		RendezvousAdmissionMode: "public-safe",
+	}, RuntimeModeBootstrap, Callbacks{})
+
+	peerID := mustTestPeerID(t)
+	namespace, _, _, _, previousSource := rt.registerSelfRendezvousEntry("test-ns", peerID, []string{
+		"/ip4/155.93.137.191/tcp/4001/p2p/" + peerID,
+	})
+	if namespace != "test-ns" || previousSource != "" {
+		t.Fatalf("unexpected initial self register result namespace=%q previousSource=%q", namespace, previousSource)
+	}
+
+	rt.rendezvousData["test-ns"][peerID] = rendezvousEntry{
+		PeerID:    peerID,
+		Addrs:     []string{"/ip4/34.35.192.27/udp/4001/quic-v1/p2p/" + mustTestPeerID(t)},
+		ExpiresAt: time.Now().Add(time.Minute),
+		Source:    rendezvousEntrySourceInfra,
+	}
+
+	var sanitized []string
+	namespace, sanitized, _, _, previousSource = rt.registerSelfRendezvousEntry("test-ns", peerID, []string{
+		"/ip4/155.93.137.191/tcp/4001/p2p/" + peerID,
+	})
+	if namespace != "test-ns" {
+		t.Fatalf("unexpected namespace: %q", namespace)
+	}
+	if previousSource != rendezvousEntrySourceInfra {
+		t.Fatalf("expected previous infra source, got %q", previousSource)
+	}
+	entry := rt.rendezvousData["test-ns"][peerID]
+	if entry.Source != rendezvousEntrySourceSelf {
+		t.Fatalf("expected self source after overwrite, got %q", entry.Source)
+	}
+	if len(entry.Addrs) != len(sanitized) || len(entry.Addrs) != 1 {
+		t.Fatalf("unexpected self-register addrs: %#v", entry.Addrs)
+	}
+}
+
+func TestSeedInfraRelayRendezvousEntryDoesNotOverwriteSelfOwnedRow(t *testing.T) {
+	host, err := golibp2p.New(golibp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create host: %v", err)
+	}
+	t.Cleanup(func() { _ = host.Close() })
+
+	rt := New(Config{
+		RendezvousNamespace:     "test-ns",
+		RendezvousAdmissionMode: "public-safe",
+	}, RuntimeModeBootstrap, Callbacks{})
+	rt.host = host
+
+	targetID := mustTestPeerID(t)
+	_, _, _, _, _ = rt.registerSelfRendezvousEntry("test-ns", targetID, []string{
+		"/ip4/155.93.137.191/tcp/4001/p2p/" + targetID,
+	})
+
+	decodedTarget, err := peer.Decode(targetID)
+	if err != nil {
+		t.Fatalf("decode target peer id: %v", err)
+	}
+	rt.seedInfraRelayRendezvousEntry(decodedTarget)
+
+	entry := rt.rendezvousData["test-ns"][targetID]
+	if entry.Source != rendezvousEntrySourceSelf {
+		t.Fatalf("expected self source to be preserved, got %q", entry.Source)
+	}
+	if len(entry.Addrs) != 1 || entry.Addrs[0] != "/ip4/155.93.137.191/tcp/4001/p2p/"+targetID {
+		t.Fatalf("unexpected self-owned entry after infra seed attempt: %#v", entry.Addrs)
+	}
+}
+
+func TestRemoveInfraOwnedRendezvousEntry(t *testing.T) {
+	rt := New(Config{
+		RendezvousNamespace: "test-ns",
+	}, RuntimeModeBootstrap, Callbacks{})
+
+	peerID := mustTestPeerID(t)
+	rt.rendezvousData["test-ns"] = map[string]rendezvousEntry{
+		peerID: {
+			PeerID:    peerID,
+			Addrs:     []string{"/ip4/34.35.192.27/udp/4001/quic-v1/p2p/" + peerID},
+			ExpiresAt: time.Now().Add(time.Minute),
+			Source:    rendezvousEntrySourceInfra,
+		},
+	}
+
+	if removed := rt.removeInfraOwnedRendezvousEntry("test-ns", peerID); !removed {
+		t.Fatal("expected infra-owned entry to be removed")
+	}
+	if _, ok := rt.rendezvousData["test-ns"]; ok {
+		t.Fatalf("expected empty namespace bucket to be deleted, got %#v", rt.rendezvousData["test-ns"])
+	}
+}
+
+func TestRemoveInfraOwnedRendezvousEntryDoesNotRemoveSelfOwnedRow(t *testing.T) {
+	rt := New(Config{
+		RendezvousNamespace: "test-ns",
+	}, RuntimeModeBootstrap, Callbacks{})
+
+	peerID := mustTestPeerID(t)
+	rt.rendezvousData["test-ns"] = map[string]rendezvousEntry{
+		peerID: {
+			PeerID:    peerID,
+			Addrs:     []string{"/ip4/155.93.137.191/tcp/4001/p2p/" + peerID},
+			ExpiresAt: time.Now().Add(time.Minute),
+			Source:    rendezvousEntrySourceSelf,
+		},
+	}
+
+	if removed := rt.removeInfraOwnedRendezvousEntry("test-ns", peerID); removed {
+		t.Fatal("expected self-owned entry to be preserved")
+	}
+	if _, ok := rt.rendezvousData["test-ns"][peerID]; !ok {
+		t.Fatal("expected self-owned entry to remain present")
+	}
+}
+
 func TestAdvertisedAddressEvaluationLoggingIsDeduplicated(t *testing.T) {
 	prevLevel := logging.GetLevel()
 	logging.SetLevel(logging.LevelDebug)

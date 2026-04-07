@@ -48,6 +48,11 @@ const (
 	rendezvousTriggerMinInterval   = 2 * time.Second
 )
 
+const (
+	rendezvousEntrySourceSelf  = "self"
+	rendezvousEntrySourceInfra = "infra"
+)
+
 type Config struct {
 	IdentityKeyFile             string
 	ListenAddrs                 []string
@@ -151,6 +156,7 @@ type rendezvousEntry struct {
 	PeerID    string    `json:"peerId"`
 	Addrs     []string  `json:"addrs"`
 	ExpiresAt time.Time `json:"expiresAt"`
+	Source    string    `json:"-"`
 }
 
 type rendezvousRequest struct {
@@ -1304,6 +1310,9 @@ func (r *Runtime) handlePeerConnected(conn network.Conn) {
 		LastSeen:        time.Now(),
 		LastConnectedAt: time.Now(),
 	})
+	if relayed {
+		r.seedInfraRelayRendezvousEntry(conn.RemotePeer())
+	}
 	r.logPeerPathState(conn.RemotePeer(), "conn-open")
 }
 
@@ -1330,6 +1339,14 @@ func (r *Runtime) handlePeerDisconnected(conn network.Conn) {
 		LastSeen:         time.Now(),
 		LastDisconnectAt: time.Now(),
 	})
+	if relayed && !r.hasLiveRelayedPeerConnection(conn.RemotePeer()) {
+		if removed := r.removeInfraOwnedRendezvousEntry(r.cfg.RendezvousNamespace, conn.RemotePeer().String()); removed {
+			L_info("a2a libp2p: infra provisional rendezvous entry removed",
+				"peerID", conn.RemotePeer(),
+				"namespace", r.normalizeRendezvousNamespace(r.cfg.RendezvousNamespace),
+			)
+		}
+	}
 	r.logPeerPathState(conn.RemotePeer(), "conn-close")
 }
 
@@ -1454,23 +1471,7 @@ func (r *Runtime) handleRendezvousStream(stream network.Stream) {
 	resp := rendezvousResponse{}
 	switch req.Action {
 	case "register":
-		r.rendezvousMu.Lock()
-		namespace := strings.TrimSpace(req.Namespace)
-		if namespace == "" {
-			namespace = r.cfg.RendezvousNamespace
-		}
-		bucket := r.rendezvousData[namespace]
-		if bucket == nil {
-			bucket = make(map[string]rendezvousEntry)
-			r.rendezvousData[namespace] = bucket
-		}
-		sanitized, dropped, reasons := r.sanitizeRemoteRegistrationAddrs(req.PeerID, req.Addrs)
-		bucket[req.PeerID] = rendezvousEntry{
-			PeerID:    req.PeerID,
-			Addrs:     sanitized,
-			ExpiresAt: time.Now().Add(2 * time.Minute),
-		}
-		r.rendezvousMu.Unlock()
+		namespace, sanitized, dropped, reasons, previousSource := r.registerSelfRendezvousEntry(req.Namespace, req.PeerID, req.Addrs)
 		if dropped > 0 {
 			L_info("a2a libp2p: rendezvous registration sanitized",
 				"peerID", req.PeerID,
@@ -1479,6 +1480,13 @@ func (r *Runtime) handleRendezvousStream(stream network.Stream) {
 				"dropped", dropped,
 				"reasons", formatCounts(reasons),
 				"mode", r.cfg.RendezvousAdmissionMode,
+			)
+		}
+		if previousSource == rendezvousEntrySourceInfra {
+			L_info("a2a libp2p: self registration replaced infra provisional rendezvous entry",
+				"peerID", req.PeerID,
+				"namespace", namespace,
+				"addrs", len(sanitized),
 			)
 		}
 		L_trace("a2a libp2p: rendezvous peer registered", "peerID", req.PeerID, "namespace", namespace, "addrs", len(sanitized))
@@ -1496,9 +1504,7 @@ func (r *Runtime) handleRendezvousStream(stream network.Stream) {
 func (r *Runtime) listRendezvous(namespace, requester string) []rendezvousEntry {
 	r.rendezvousMu.Lock()
 	defer r.rendezvousMu.Unlock()
-	if strings.TrimSpace(namespace) == "" {
-		namespace = r.cfg.RendezvousNamespace
-	}
+	namespace = r.normalizeRendezvousNamespace(namespace)
 	now := time.Now()
 	bucket := r.rendezvousData[namespace]
 	if bucket == nil {
@@ -1521,6 +1527,147 @@ func (r *Runtime) listRendezvous(namespace, requester string) []rendezvousEntry 
 		})
 	}
 	return out
+}
+
+func (r *Runtime) normalizeRendezvousNamespace(namespace string) string {
+	namespace = strings.TrimSpace(namespace)
+	if namespace == "" {
+		return r.cfg.RendezvousNamespace
+	}
+	return namespace
+}
+
+func (r *Runtime) rendezvousServerEnabled() bool {
+	return r.mode == RuntimeModeBootstrap || r.mode == RuntimeModeBoth
+}
+
+func (r *Runtime) rendezvousBucketLocked(namespace string) map[string]rendezvousEntry {
+	namespace = r.normalizeRendezvousNamespace(namespace)
+	bucket := r.rendezvousData[namespace]
+	if bucket == nil {
+		bucket = make(map[string]rendezvousEntry)
+		r.rendezvousData[namespace] = bucket
+	}
+	return bucket
+}
+
+func (r *Runtime) putRendezvousEntryLocked(namespace string, entry rendezvousEntry) (rendezvousEntry, bool) {
+	bucket := r.rendezvousBucketLocked(namespace)
+	prev, ok := bucket[entry.PeerID]
+	bucket[entry.PeerID] = entry
+	return prev, ok
+}
+
+func (r *Runtime) registerSelfRendezvousEntry(namespace, peerID string, addrs []string) (string, []string, int, map[string]int, string) {
+	namespace = r.normalizeRendezvousNamespace(namespace)
+	sanitized, dropped, reasons := r.sanitizeRemoteRegistrationAddrs(peerID, addrs)
+	entry := rendezvousEntry{
+		PeerID:    peerID,
+		Addrs:     sanitized,
+		ExpiresAt: time.Now().Add(2 * time.Minute),
+		Source:    rendezvousEntrySourceSelf,
+	}
+	r.rendezvousMu.Lock()
+	prev, hadPrev := r.putRendezvousEntryLocked(namespace, entry)
+	r.rendezvousMu.Unlock()
+	if hadPrev {
+		return namespace, sanitized, dropped, reasons, prev.Source
+	}
+	return namespace, sanitized, dropped, reasons, ""
+}
+
+func (r *Runtime) hasLiveRelayedPeerConnection(peerID peer.ID) bool {
+	if r.host == nil {
+		return false
+	}
+	for _, conn := range r.host.Network().ConnsToPeer(peerID) {
+		if conn != nil && isRelayedConn(conn) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runtime) localRelayCircuitAddrs(target peer.ID) []string {
+	if r.host == nil || target == "" {
+		return nil
+	}
+	relayBaseAddrs := dedupeMultiaddrs(r.host.Addrs())
+	out := make([]ma.Multiaddr, 0, len(relayBaseAddrs))
+	for _, relayBase := range relayBaseAddrs {
+		if relayBase == nil || strings.Contains(relayBase.String(), "/p2p-circuit") {
+			continue
+		}
+		out = append(out, buildRelayCircuitAddr(relayBase, r.host.ID(), target))
+	}
+	return multiaddrsToStrings(dedupeMultiaddrs(out))
+}
+
+func (r *Runtime) seedInfraRelayRendezvousEntry(peerID peer.ID) {
+	if !r.rendezvousServerEnabled() || r.host == nil || peerID == "" {
+		return
+	}
+	addrs := r.localRelayCircuitAddrs(peerID)
+	if len(addrs) == 0 {
+		L_debug("a2a libp2p: infra relay rendezvous seed skipped", "peerID", peerID, "reason", "no-relay-addrs")
+		return
+	}
+	namespace := r.normalizeRendezvousNamespace(r.cfg.RendezvousNamespace)
+	sanitized, dropped, reasons := r.sanitizeRemoteRegistrationAddrs(peerID.String(), addrs)
+	entry := rendezvousEntry{
+		PeerID:    peerID.String(),
+		Addrs:     sanitized,
+		ExpiresAt: time.Now().Add(2 * time.Minute),
+		Source:    rendezvousEntrySourceInfra,
+	}
+	r.rendezvousMu.Lock()
+	bucket := r.rendezvousBucketLocked(namespace)
+	if existing, ok := bucket[peerID.String()]; ok && existing.Source == rendezvousEntrySourceSelf {
+		r.rendezvousMu.Unlock()
+		L_trace("a2a libp2p: infra relay rendezvous seed skipped", "peerID", peerID, "namespace", namespace, "reason", "self-owned-entry")
+		return
+	}
+	prev, hadPrev := r.putRendezvousEntryLocked(namespace, entry)
+	r.rendezvousMu.Unlock()
+	if dropped > 0 {
+		L_info("a2a libp2p: infra relay rendezvous seed sanitized",
+			"peerID", peerID,
+			"namespace", namespace,
+			"kept", len(sanitized),
+			"dropped", dropped,
+			"reasons", formatCounts(reasons),
+		)
+	}
+	action := "created"
+	if hadPrev {
+		action = "refreshed"
+	}
+	L_info("a2a libp2p: infra relay rendezvous seeded",
+		"peerID", peerID,
+		"namespace", namespace,
+		"action", action,
+		"previousSource", prev.Source,
+		"addrs", strings.Join(sanitized, ", "),
+	)
+}
+
+func (r *Runtime) removeInfraOwnedRendezvousEntry(namespace, peerID string) bool {
+	namespace = r.normalizeRendezvousNamespace(namespace)
+	r.rendezvousMu.Lock()
+	defer r.rendezvousMu.Unlock()
+	bucket := r.rendezvousData[namespace]
+	if bucket == nil {
+		return false
+	}
+	entry, ok := bucket[peerID]
+	if !ok || entry.Source != rendezvousEntrySourceInfra {
+		return false
+	}
+	delete(bucket, peerID)
+	if len(bucket) == 0 {
+		delete(r.rendezvousData, namespace)
+	}
+	return true
 }
 
 func (r *Runtime) resolveTargetPeer(target string, knownPeers []PeerCandidate) (*peer.AddrInfo, []string, error) {
