@@ -62,6 +62,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/stt"
 	"github.com/roelfdiedericks/goclaw/internal/supervisor"
 	"github.com/roelfdiedericks/goclaw/internal/tools"
+	toola2a "github.com/roelfdiedericks/goclaw/internal/tools/a2a"
 	toolacpcontrol "github.com/roelfdiedericks/goclaw/internal/tools/acp_control"
 	toolacpinspect "github.com/roelfdiedericks/goclaw/internal/tools/acp_inspect"
 	toolcron "github.com/roelfdiedericks/goclaw/internal/tools/cron"
@@ -3625,6 +3626,7 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 
 	// Cron tool
 	reg.Register(toolcron.NewTool())
+	reg.Register(toola2a.NewTool(gw))
 	reg.Register(toolacpcontrol.NewTool())
 	reg.Register(toolacpinspect.NewTool())
 	if cfg.Tools.Subagent.Enabled && cfg.Gateway.DelegatedRuns.Enabled {
