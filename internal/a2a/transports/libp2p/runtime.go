@@ -1310,8 +1310,23 @@ func (r *Runtime) handlePeerConnected(conn network.Conn) {
 		LastSeen:        time.Now(),
 		LastConnectedAt: time.Now(),
 	})
-	if relayed {
+	if r.relayRendezvousSeedingEnabled() {
+		L_info("a2a libp2p: infra relay rendezvous seed eligible",
+			"peerID", conn.RemotePeer(),
+			"namespace", r.normalizeRendezvousNamespace(r.cfg.RendezvousNamespace),
+			"reason", "peer-connected-to-infra",
+			"path", connectionPathLabel(relayed),
+			"remoteAddr", conn.RemoteMultiaddr(),
+		)
 		r.seedInfraRelayRendezvousEntry(conn.RemotePeer())
+	} else if r.rendezvousServerEnabled() {
+		L_info("a2a libp2p: infra relay rendezvous seed skipped",
+			"peerID", conn.RemotePeer(),
+			"namespace", r.normalizeRendezvousNamespace(r.cfg.RendezvousNamespace),
+			"reason", "relay-seeding-disabled",
+			"path", connectionPathLabel(relayed),
+			"remoteAddr", conn.RemoteMultiaddr(),
+		)
 	}
 	r.logPeerPathState(conn.RemotePeer(), "conn-open")
 }
@@ -1339,7 +1354,7 @@ func (r *Runtime) handlePeerDisconnected(conn network.Conn) {
 		LastSeen:         time.Now(),
 		LastDisconnectAt: time.Now(),
 	})
-	if relayed && !r.hasLiveRelayedPeerConnection(conn.RemotePeer()) {
+	if !r.hasLivePeerConnection(conn.RemotePeer()) {
 		if removed := r.removeInfraOwnedRendezvousEntry(r.cfg.RendezvousNamespace, conn.RemotePeer().String()); removed {
 			L_info("a2a libp2p: infra provisional rendezvous entry removed",
 				"peerID", conn.RemotePeer(),
@@ -1541,6 +1556,10 @@ func (r *Runtime) rendezvousServerEnabled() bool {
 	return r.mode == RuntimeModeBootstrap || r.mode == RuntimeModeBoth
 }
 
+func (r *Runtime) relayRendezvousSeedingEnabled() bool {
+	return r.rendezvousServerEnabled() && (r.mode == RuntimeModeBoth || r.cfg.RelayServerEnabled || r.relay != nil)
+}
+
 func (r *Runtime) rendezvousBucketLocked(namespace string) map[string]rendezvousEntry {
 	namespace = r.normalizeRendezvousNamespace(namespace)
 	bucket := r.rendezvousData[namespace]
@@ -1576,18 +1595,6 @@ func (r *Runtime) registerSelfRendezvousEntry(namespace, peerID string, addrs []
 	return namespace, sanitized, dropped, reasons, ""
 }
 
-func (r *Runtime) hasLiveRelayedPeerConnection(peerID peer.ID) bool {
-	if r.host == nil {
-		return false
-	}
-	for _, conn := range r.host.Network().ConnsToPeer(peerID) {
-		if conn != nil && isRelayedConn(conn) {
-			return true
-		}
-	}
-	return false
-}
-
 func (r *Runtime) localRelayCircuitAddrs(target peer.ID) []string {
 	if r.host == nil || target == "" {
 		return nil
@@ -1604,7 +1611,20 @@ func (r *Runtime) localRelayCircuitAddrs(target peer.ID) []string {
 }
 
 func (r *Runtime) seedInfraRelayRendezvousEntry(peerID peer.ID) {
-	if !r.rendezvousServerEnabled() || r.host == nil || peerID == "" {
+	if !r.rendezvousServerEnabled() {
+		L_debug("a2a libp2p: infra relay rendezvous seed skipped", "peerID", peerID, "reason", "rendezvous-server-disabled", "mode", r.mode)
+		return
+	}
+	if !r.relayRendezvousSeedingEnabled() {
+		L_debug("a2a libp2p: infra relay rendezvous seed skipped", "peerID", peerID, "reason", "relay-seeding-disabled", "mode", r.mode, "relayServer", r.cfg.RelayServerEnabled, "relayReady", r.relay != nil)
+		return
+	}
+	if r.host == nil {
+		L_debug("a2a libp2p: infra relay rendezvous seed skipped", "peerID", peerID, "reason", "host-not-started")
+		return
+	}
+	if peerID == "" {
+		L_debug("a2a libp2p: infra relay rendezvous seed skipped", "reason", "empty-peer-id")
 		return
 	}
 	addrs := r.localRelayCircuitAddrs(peerID)
@@ -1613,6 +1633,11 @@ func (r *Runtime) seedInfraRelayRendezvousEntry(peerID peer.ID) {
 		return
 	}
 	namespace := r.normalizeRendezvousNamespace(r.cfg.RendezvousNamespace)
+	L_info("a2a libp2p: infra relay rendezvous seed attempting",
+		"peerID", peerID,
+		"namespace", namespace,
+		"candidateAddrs", strings.Join(addrs, ", "),
+	)
 	sanitized, dropped, reasons := r.sanitizeRemoteRegistrationAddrs(peerID.String(), addrs)
 	entry := rendezvousEntry{
 		PeerID:    peerID.String(),
@@ -1624,7 +1649,7 @@ func (r *Runtime) seedInfraRelayRendezvousEntry(peerID peer.ID) {
 	bucket := r.rendezvousBucketLocked(namespace)
 	if existing, ok := bucket[peerID.String()]; ok && existing.Source == rendezvousEntrySourceSelf {
 		r.rendezvousMu.Unlock()
-		L_trace("a2a libp2p: infra relay rendezvous seed skipped", "peerID", peerID, "namespace", namespace, "reason", "self-owned-entry")
+		L_info("a2a libp2p: infra relay rendezvous seed skipped", "peerID", peerID, "namespace", namespace, "reason", "self-owned-entry")
 		return
 	}
 	prev, hadPrev := r.putRendezvousEntryLocked(namespace, entry)

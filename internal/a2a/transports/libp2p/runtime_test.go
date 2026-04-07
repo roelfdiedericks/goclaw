@@ -122,7 +122,7 @@ func TestSeedInfraRelayRendezvousEntryCreatesInfraOwnedRow(t *testing.T) {
 
 	rt := New(Config{
 		RendezvousNamespace: "test-ns",
-	}, RuntimeModeBootstrap, Callbacks{})
+	}, RuntimeModeBoth, Callbacks{})
 	rt.host = host
 
 	targetID := mustTestPeerID(t)
@@ -145,6 +145,50 @@ func TestSeedInfraRelayRendezvousEntryCreatesInfraOwnedRow(t *testing.T) {
 	}
 	if !strings.Contains(entry.Addrs[0], "/p2p/"+host.ID().String()+"/p2p-circuit/p2p/"+targetID) {
 		t.Fatalf("unexpected relay address: %s", entry.Addrs[0])
+	}
+}
+
+func TestHandlePeerConnectedSeedsRelayEntryForDirectInfraConnection(t *testing.T) {
+	ctx := context.Background()
+	host, err := golibp2p.New(golibp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create infra host: %v", err)
+	}
+	t.Cleanup(func() { _ = host.Close() })
+	peerHost, err := golibp2p.New(golibp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create peer host: %v", err)
+	}
+	t.Cleanup(func() { _ = peerHost.Close() })
+
+	if err := host.Connect(ctx, peer.AddrInfo{ID: peerHost.ID(), Addrs: peerHost.Addrs()}); err != nil {
+		t.Fatalf("connect peer host: %v", err)
+	}
+
+	rt := New(Config{
+		RendezvousNamespace: "test-ns",
+	}, RuntimeModeBoth, Callbacks{})
+	rt.host = host
+
+	conns := host.Network().ConnsToPeer(peerHost.ID())
+	if len(conns) == 0 {
+		t.Fatal("expected active direct connection to peer host")
+	}
+
+	rt.handlePeerConnected(conns[0])
+
+	entry, ok := rt.rendezvousData["test-ns"][peerHost.ID().String()]
+	if !ok {
+		t.Fatal("expected relay rendezvous entry to be seeded from direct infra connection")
+	}
+	if entry.Source != rendezvousEntrySourceInfra {
+		t.Fatalf("expected infra source, got %q", entry.Source)
+	}
+	if len(entry.Addrs) == 0 {
+		t.Fatal("expected relay circuit addrs in seeded entry")
+	}
+	if !strings.Contains(entry.Addrs[0], "/p2p/"+host.ID().String()+"/p2p-circuit/p2p/"+peerHost.ID().String()) {
+		t.Fatalf("unexpected seeded relay address: %s", entry.Addrs[0])
 	}
 }
 
