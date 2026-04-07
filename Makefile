@@ -65,7 +65,7 @@ $(TEMPLATE_MANIFEST): $(TEMPLATE_SOURCES) $(TEMPLATE_MANIFEST_GEN_SOURCES)
 template-manifest: $(TEMPLATE_MANIFEST)
 
 build: $(BUILD_DEPS_CHECK) $(TEMPLATE_MANIFEST)
-	go build -o $(BINARY) ./cmd/goclaw
+	go build -x -v -o $(BINARY) ./cmd/goclaw
 
 embtest:
 	go build -o embtest ./cmd/embtest
