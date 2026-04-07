@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	golibp2p "github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
@@ -315,6 +316,81 @@ func TestReserveRendezvousQuerySlotRespectsMinIntervalAndBypass(t *testing.T) {
 	}
 	if ok := rt.reserveRendezvousQuerySlot(now.Add(10*time.Second), 0, "warmup", true); !ok {
 		t.Fatal("expected bypass query reservation to succeed")
+	}
+}
+
+func TestResolveTargetPeerMergesKnownPeersAndPeerstore(t *testing.T) {
+	host, err := golibp2p.New(golibp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create host: %v", err)
+	}
+	t.Cleanup(func() { _ = host.Close() })
+
+	peerID := mustTestPeerID(t)
+	id, err := peer.Decode(peerID)
+	if err != nil {
+		t.Fatalf("decode peer id: %v", err)
+	}
+	host.Peerstore().AddAddrs(id, []ma.Multiaddr{
+		ma.StringCast("/ip4/34.35.192.27/udp/4001/quic-v1"),
+	}, time.Hour)
+
+	rt := New(Config{}, RuntimeModeNode, Callbacks{})
+	rt.host = host
+	info, sources, err := rt.resolveTargetPeer("friend", []PeerCandidate{{
+		PeerID: peerID,
+		Alias:  "friend",
+		Addrs:  []string{"/ip4/34.35.192.27/tcp/4001"},
+	}})
+	if err != nil {
+		t.Fatalf("resolve target peer: %v", err)
+	}
+	if len(info.Addrs) != 2 {
+		t.Fatalf("expected merged addrs from known peers and peerstore, got %d: %#v", len(info.Addrs), multiaddrsToStrings(info.Addrs))
+	}
+	if !strings.Contains(strings.Join(sources, ","), "peerstore") || !strings.Contains(strings.Join(sources, ","), "known-peers") {
+		t.Fatalf("expected sources to include peerstore and known-peers, got %#v", sources)
+	}
+}
+
+func TestPrepareTargetPeerSynthesizesRelayFallback(t *testing.T) {
+	ctx := context.Background()
+	host, err := golibp2p.New(golibp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create local host: %v", err)
+	}
+	t.Cleanup(func() { _ = host.Close() })
+	relayHost, err := golibp2p.New(golibp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	if err != nil {
+		t.Fatalf("create relay host: %v", err)
+	}
+	t.Cleanup(func() { _ = relayHost.Close() })
+
+	if err := host.Connect(ctx, peer.AddrInfo{ID: relayHost.ID(), Addrs: relayHost.Addrs()}); err != nil {
+		t.Fatalf("connect bootstrap relay host: %v", err)
+	}
+
+	rt := New(Config{}, RuntimeModeNode, Callbacks{})
+	rt.host = host
+	rt.bootstrapEntries = []string{
+		relayHost.Addrs()[0].Encapsulate(ma.StringCast("/p2p/" + relayHost.ID().String())).String(),
+	}
+	rt.bootstrapPeerIDs[relayHost.ID()] = struct{}{}
+
+	targetID := mustTestPeerID(t)
+	info, sources, err := rt.prepareTargetPeer(ctx, targetID, nil, false)
+	if err != nil {
+		t.Fatalf("prepare target peer: %v", err)
+	}
+	if len(info.Addrs) == 0 {
+		t.Fatal("expected synthesized relay fallback addresses")
+	}
+	if !strings.Contains(strings.Join(sources, ","), "synthesized-relay") {
+		t.Fatalf("expected synthesized-relay source, got %#v", sources)
+	}
+	got := info.Addrs[0].String()
+	if !strings.Contains(got, "/p2p/"+relayHost.ID().String()+"/p2p-circuit/p2p/"+targetID) {
+		t.Fatalf("unexpected synthesized relay address: %s", got)
 	}
 }
 

@@ -180,6 +180,7 @@ func New(cfg Config, mode RuntimeMode, callbacks Callbacks) *Runtime {
 		mode:              mode,
 		callbacks:         callbacks,
 		rendezvousData:    make(map[string]map[string]rendezvousEntry),
+		bootstrapPeerIDs:  make(map[peer.ID]struct{}),
 		localReachability: network.ReachabilityUnknown,
 		peerPathState:     make(map[string]peerPathSnapshot),
 	}
@@ -380,6 +381,7 @@ func (r *Runtime) watchReachability(ctx context.Context, sub eventSubscription) 
 				L_info("a2a libp2p: reachability changed", "reachability", strings.ToLower(reachability.String()))
 				if reachability != network.ReachabilityUnknown {
 					go r.triggerRendezvousRegister(ctx, "reachability-changed")
+					go r.maybeQueryRendezvous(ctx, "reachability-changed", rendezvousTriggerMinInterval, true)
 				}
 			}
 		}
@@ -407,6 +409,7 @@ func (r *Runtime) watchAutoRelayAddrs(ctx context.Context, sub eventSubscription
 			}
 			if !sameStrings(prevRelayAddrs, relayAddrs) && len(relayAddrs) > 0 {
 				go r.triggerRendezvousRegister(ctx, "relay-addrs-updated")
+				go r.maybeQueryRendezvous(ctx, "relay-addrs-updated", rendezvousTriggerMinInterval, true)
 			}
 		}
 	}
@@ -553,6 +556,10 @@ func (r *Runtime) watchLocalAddresses(ctx context.Context, sub eventSubscription
 				}
 				L_trace("a2a libp2p: local address removed", "action", addrActionLabel(removed.Action), "addr", removed.Address.String())
 			}
+			if len(updated.Current) > 0 {
+				go r.triggerRendezvousRegister(ctx, "local-addresses-updated")
+				go r.maybeQueryRendezvous(ctx, "local-addresses-updated", rendezvousTriggerMinInterval, true)
+			}
 		}
 	}
 }
@@ -635,11 +642,11 @@ func (r *Runtime) PingPeer(ctx context.Context, target string, knownPeers []Peer
 	if r.host == nil {
 		return "", 0, "", fmt.Errorf("host not started")
 	}
-	info, err := r.resolveTargetPeer(target, knownPeers)
+	info, _, err := r.prepareTargetPeer(ctx, target, knownPeers, true)
 	if err != nil {
 		return "", 0, "", err
 	}
-	if err := r.connectAddrInfo(ctx, *info); err != nil {
+	if err := r.ensureConnectedPeer(ctx, *info); err != nil {
 		L_debug("a2a libp2p: ping connect best effort failed", "peerID", info.ID, "error", err)
 	}
 	results := r.ping.Ping(ctx, info.ID)
@@ -655,11 +662,11 @@ func (r *Runtime) PingPeer(ctx context.Context, target string, knownPeers []Peer
 }
 
 func (r *Runtime) SubmitRemoteTask(ctx context.Context, target, taskID, input string, knownPeers []PeerCandidate) (<-chan TaskUpdate, error) {
-	info, err := r.resolveTargetPeer(target, knownPeers)
+	info, _, err := r.prepareTargetPeer(ctx, target, knownPeers, true)
 	if err != nil {
 		return nil, err
 	}
-	if err := r.connectAddrInfo(ctx, *info); err != nil {
+	if err := r.ensureConnectedPeer(ctx, *info); err != nil {
 		return nil, err
 	}
 	stream, err := r.host.NewStream(ctx, info.ID, protocol.ID(r.cfg.RPCProtocolID))
@@ -681,11 +688,11 @@ func (r *Runtime) SubmitRemoteTask(ctx context.Context, target, taskID, input st
 }
 
 func (r *Runtime) ResumeRemoteTask(ctx context.Context, target, taskID string, knownPeers []PeerCandidate) (<-chan TaskUpdate, error) {
-	info, err := r.resolveTargetPeer(target, knownPeers)
+	info, _, err := r.prepareTargetPeer(ctx, target, knownPeers, true)
 	if err != nil {
 		return nil, err
 	}
-	if err := r.connectAddrInfo(ctx, *info); err != nil {
+	if err := r.ensureConnectedPeer(ctx, *info); err != nil {
 		return nil, err
 	}
 	stream, err := r.host.NewStream(ctx, info.ID, protocol.ID(r.cfg.RPCProtocolID))
@@ -707,11 +714,11 @@ func (r *Runtime) ResumeRemoteTask(ctx context.Context, target, taskID string, k
 }
 
 func (r *Runtime) CancelRemoteTask(ctx context.Context, target, taskID string, knownPeers []PeerCandidate) (TaskUpdate, error) {
-	info, err := r.resolveTargetPeer(target, knownPeers)
+	info, _, err := r.prepareTargetPeer(ctx, target, knownPeers, true)
 	if err != nil {
 		return TaskUpdate{}, err
 	}
-	if err := r.connectAddrInfo(ctx, *info); err != nil {
+	if err := r.ensureConnectedPeer(ctx, *info); err != nil {
 		return TaskUpdate{}, err
 	}
 	stream, err := r.host.NewStream(ctx, info.ID, protocol.ID(r.cfg.RPCProtocolID))
@@ -1013,9 +1020,63 @@ func (r *Runtime) reserveRendezvousQuerySlot(now time.Time, minInterval time.Dur
 	return true
 }
 
+func (r *Runtime) prepareTargetPeer(ctx context.Context, target string, knownPeers []PeerCandidate, allowQuery bool) (*peer.AddrInfo, []string, error) {
+	info, sources, err := r.resolveTargetPeer(target, knownPeers)
+	if err != nil {
+		return nil, nil, err
+	}
+	if r.hasLivePeerConnection(info.ID) {
+		return info, sources, nil
+	}
+	if len(info.Addrs) == 0 && allowQuery {
+		if r.maybeQueryRendezvous(ctx, "user-no-address", rendezvousTriggerMinInterval, true) {
+			refreshed, refreshedSources, refreshErr := r.resolveTargetPeer(target, knownPeers)
+			if refreshErr == nil {
+				info = refreshed
+				sources = refreshedSources
+			}
+		}
+	}
+	if len(info.Addrs) == 0 {
+		synthesized := r.synthesizeRelayFallbackAddrs(info.ID)
+		if len(synthesized) > 0 {
+			info.Addrs = dedupeMultiaddrs(append(info.Addrs, synthesized...))
+			sources = append(sources, "synthesized-relay")
+			L_info("a2a libp2p: synthesized relay fallback candidates",
+				"peerID", info.ID,
+				"count", len(synthesized),
+				"addrs", strings.Join(multiaddrsToStrings(synthesized), ", "),
+			)
+		}
+	}
+	sources = uniqueStrings(sources)
+	if len(info.Addrs) == 0 {
+		L_debug("a2a libp2p: target resolved without dial addresses", "target", target, "peerID", info.ID, "sources", strings.Join(sources, ", "))
+	}
+	return info, sources, nil
+}
+
+func (r *Runtime) ensureConnectedPeer(ctx context.Context, info peer.AddrInfo) error {
+	if r.hasLivePeerConnection(info.ID) {
+		return nil
+	}
+	return r.connectAddrInfo(ctx, info)
+}
+
+func (r *Runtime) hasLivePeerConnection(peerID peer.ID) bool {
+	return r.host != nil && len(r.host.Network().ConnsToPeer(peerID)) > 0
+}
+
 func (r *Runtime) connectAddrInfo(ctx context.Context, info peer.AddrInfo) error {
 	if r.host == nil {
 		return fmt.Errorf("host not started")
+	}
+	if r.hasLivePeerConnection(info.ID) {
+		return nil
+	}
+	info.Addrs = dedupeMultiaddrs(append(info.Addrs, r.host.Peerstore().Addrs(info.ID)...))
+	if len(info.Addrs) == 0 {
+		return fmt.Errorf("connect %s: no addresses", info.ID)
 	}
 	L_info("a2a libp2p: dialing peer", "peerID", info.ID, "addrs", strings.Join(multiaddrsToStrings(info.Addrs), ", "), "preferredTransport", preferredTransportLabel(info.Addrs))
 	r.host.Peerstore().AddAddrs(info.ID, info.Addrs, time.Hour)
@@ -1140,6 +1201,10 @@ func (r *Runtime) observeDiscoveredPeer(info peer.AddrInfo) {
 		Relayed:   hasRelayedAddr(info.Addrs),
 		LastSeen:  time.Now(),
 	})
+	if len(info.Addrs) == 0 {
+		L_debug("a2a libp2p: discovered peer has no dial addresses yet", "peerID", info.ID)
+		return
+	}
 	if err := r.host.Connect(context.Background(), info); err == nil {
 		r.observePeer(PeerObservation{
 			PeerID:          info.ID.String(),
@@ -1395,28 +1460,57 @@ func (r *Runtime) listRendezvous(namespace, requester string) []rendezvousEntry 
 	return out
 }
 
-func (r *Runtime) resolveTargetPeer(target string, knownPeers []PeerCandidate) (*peer.AddrInfo, error) {
+func (r *Runtime) resolveTargetPeer(target string, knownPeers []PeerCandidate) (*peer.AddrInfo, []string, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
-		return nil, fmt.Errorf("peer target is required")
+		return nil, nil, fmt.Errorf("peer target is required")
 	}
-	if id, err := peer.Decode(target); err == nil {
-		return &peer.AddrInfo{ID: id, Addrs: r.host.Peerstore().Addrs(id)}, nil
-	}
-	for _, candidate := range knownPeers {
-		if candidate.PeerID == target || candidate.Alias == target {
-			info, err := addrInfoFromStrings(candidate.PeerID, candidate.Addrs)
-			if err != nil {
-				id, decodeErr := peer.Decode(candidate.PeerID)
-				if decodeErr != nil {
-					return nil, decodeErr
-				}
-				return &peer.AddrInfo{ID: id, Addrs: r.host.Peerstore().Addrs(id)}, nil
+	var (
+		id            peer.ID
+		candidateAddrs []string
+		sources       []string
+	)
+	if decoded, err := peer.Decode(target); err == nil {
+		id = decoded
+		sources = append(sources, "peer-id")
+	} else {
+		found := false
+		for _, candidate := range knownPeers {
+			if candidate.PeerID != target && candidate.Alias != target {
+				continue
 			}
-			return info, nil
+			decodedID, decodeErr := peer.Decode(candidate.PeerID)
+			if decodeErr != nil {
+				return nil, nil, decodeErr
+			}
+			id = decodedID
+			candidateAddrs = append(candidateAddrs, candidate.Addrs...)
+			if candidate.Alias == target && candidate.Alias != "" {
+				sources = append(sources, "alias")
+			}
+			sources = append(sources, "known-peers")
+			found = true
+			break
+		}
+		if !found {
+			return nil, nil, fmt.Errorf("peer %s not found", target)
 		}
 	}
-	return nil, fmt.Errorf("peer %s not found", target)
+	candidateMultiaddrs, invalid := parseMultiaddrsLenient(candidateAddrs)
+	if invalid > 0 {
+		L_warn("a2a libp2p: target candidate addresses ignored", "peerID", id, "invalid", invalid)
+	}
+	peerstoreAddrs := []ma.Multiaddr(nil)
+	if r.host != nil {
+		peerstoreAddrs = r.host.Peerstore().Addrs(id)
+	}
+	if len(peerstoreAddrs) > 0 {
+		sources = append(sources, "peerstore")
+	}
+	return &peer.AddrInfo{
+		ID:    id,
+		Addrs: dedupeMultiaddrs(append(candidateMultiaddrs, peerstoreAddrs...)),
+	}, uniqueStrings(sources), nil
 }
 
 func parseMultiaddrs(raw []string) ([]ma.Multiaddr, error) {
@@ -1468,6 +1562,69 @@ func addrInfoFromStrings(peerID string, raw []string) (*peer.AddrInfo, error) {
 		return nil, err
 	}
 	return &peer.AddrInfo{ID: id, Addrs: addrs}, nil
+}
+
+func parseMultiaddrsLenient(raw []string) ([]ma.Multiaddr, int) {
+	out := make([]ma.Multiaddr, 0, len(raw))
+	invalid := 0
+	for _, item := range raw {
+		if strings.TrimSpace(item) == "" {
+			continue
+		}
+		addr, err := ma.NewMultiaddr(strings.TrimSpace(item))
+		if err != nil {
+			invalid++
+			continue
+		}
+		out = append(out, addr)
+	}
+	return out, invalid
+}
+
+func (r *Runtime) synthesizeRelayFallbackAddrs(target peer.ID) []ma.Multiaddr {
+	if r.host == nil || target == "" || target == r.host.ID() {
+		return nil
+	}
+	r.bootstrapMu.RLock()
+	bootstrapEntries := cloneStrings(r.bootstrapEntries)
+	bootstrapPeerIDs := make([]peer.ID, 0, len(r.bootstrapPeerIDs))
+	for peerID := range r.bootstrapPeerIDs {
+		bootstrapPeerIDs = append(bootstrapPeerIDs, peerID)
+	}
+	r.bootstrapMu.RUnlock()
+
+	baseByPeer := make(map[peer.ID][]ma.Multiaddr)
+	for _, peerID := range bootstrapPeerIDs {
+		if peerID == target || !r.hasLivePeerConnection(peerID) {
+			continue
+		}
+		baseByPeer[peerID] = append(baseByPeer[peerID], r.host.Peerstore().Addrs(peerID)...)
+	}
+	for _, entry := range bootstrapEntries {
+		info, err := parseAddrInfo(entry)
+		if err != nil || info == nil || info.ID == target || !r.hasLivePeerConnection(info.ID) {
+			continue
+		}
+		baseByPeer[info.ID] = append(baseByPeer[info.ID], info.Addrs...)
+	}
+
+	out := make([]ma.Multiaddr, 0)
+	for relayPeerID, baseAddrs := range baseByPeer {
+		for _, baseAddr := range dedupeMultiaddrs(baseAddrs) {
+			if baseAddr == nil || strings.Contains(baseAddr.String(), "/p2p-circuit") {
+				continue
+			}
+			out = append(out, buildRelayCircuitAddr(baseAddr, relayPeerID, target))
+		}
+	}
+	return dedupeMultiaddrs(out)
+}
+
+func buildRelayCircuitAddr(relayBase ma.Multiaddr, relayPeerID, target peer.ID) ma.Multiaddr {
+	return relayBase.
+		Encapsulate(ma.StringCast("/p2p/" + relayPeerID.String())).
+		Encapsulate(ma.StringCast("/p2p-circuit")).
+		Encapsulate(ma.StringCast("/p2p/" + target.String()))
 }
 
 func normalizeBootstrapEntries(entries []string) []string {
@@ -2078,6 +2235,27 @@ func sameStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func uniqueStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func readRemoteUpdates(stream network.Stream, updates chan<- TaskUpdate) {

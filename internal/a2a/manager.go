@@ -559,7 +559,9 @@ func (m *Manager) refreshTrustedPeersLocked() {
 		}
 		rec.Alias = trusted.Alias
 		rec.LocalUser = trusted.LocalUser
-		rec.Addrs = slices.Clone(trusted.Addrs)
+		if len(trusted.Addrs) > 0 {
+			rec.Addrs = slices.Clone(trusted.Addrs)
+		}
 		rec.Notes = trusted.Notes
 		rec.Trusted = trusted.Enabled
 		rec.Authorized = trusted.Enabled && strings.TrimSpace(trusted.LocalUser) != ""
