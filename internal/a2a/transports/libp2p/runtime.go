@@ -380,8 +380,13 @@ func (r *Runtime) watchReachability(ctx context.Context, sub eventSubscription) 
 			if changed {
 				L_info("a2a libp2p: reachability changed", "reachability", strings.ToLower(reachability.String()))
 				if reachability != network.ReachabilityUnknown {
-					go r.triggerRendezvousRegister(ctx, "reachability-changed")
-					go r.maybeQueryRendezvous(ctx, "reachability-changed", rendezvousTriggerMinInterval, true)
+					// Reachability alone is not a good registration edge: private often arrives
+					// before relay/direct advertised addrs are actually ready. Query immediately,
+					// but only register here once the node believes it is public.
+					if reachability == network.ReachabilityPublic {
+						go r.maybeRegisterRendezvous(ctx, "reachability-public", 0)
+					}
+					go r.maybeQueryRendezvous(ctx, "reachability-changed", 0, true)
 				}
 			}
 		}
@@ -408,8 +413,10 @@ func (r *Runtime) watchAutoRelayAddrs(ctx context.Context, sub eventSubscription
 				L_trace("a2a libp2p: relay advertised address", "addr", addr)
 			}
 			if !sameStrings(prevRelayAddrs, relayAddrs) && len(relayAddrs) > 0 {
-				go r.triggerRendezvousRegister(ctx, "relay-addrs-updated")
-				go r.maybeQueryRendezvous(ctx, "relay-addrs-updated", rendezvousTriggerMinInterval, true)
+				// Relay addrs are the real "ready now" edge for private nodes. Register
+				// immediately so rendezvous stops advertising an empty entry.
+				go r.maybeRegisterRendezvous(ctx, "relay-addrs-updated", 0)
+				go r.maybeQueryRendezvous(ctx, "relay-addrs-updated", 0, true)
 			}
 		}
 	}
@@ -557,8 +564,10 @@ func (r *Runtime) watchLocalAddresses(ctx context.Context, sub eventSubscription
 				L_trace("a2a libp2p: local address removed", "action", addrActionLabel(removed.Action), "addr", removed.Address.String())
 			}
 			if len(updated.Current) > 0 {
-				go r.triggerRendezvousRegister(ctx, "local-addresses-updated")
-				go r.maybeQueryRendezvous(ctx, "local-addresses-updated", rendezvousTriggerMinInterval, true)
+				// Local address changes can mean new direct/public advertised addrs. Register
+				// them immediately; direct upgrades matter more than suppressing duplicate passes.
+				go r.maybeRegisterRendezvous(ctx, "local-addresses-updated", 0)
+				go r.maybeQueryRendezvous(ctx, "local-addresses-updated", 0, true)
 			}
 		}
 	}
