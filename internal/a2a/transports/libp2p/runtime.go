@@ -1337,6 +1337,13 @@ func (r *Runtime) registerRendezvous(ctx context.Context) {
 	advertised := r.AdvertisedAddrs()
 	if len(advertised) == 0 {
 		L_info("a2a libp2p: rendezvous register proceeding with empty addresses", "namespace", r.cfg.RendezvousNamespace)
+	} else {
+		L_info("a2a libp2p: rendezvous register publishing addresses",
+			"namespace", r.cfg.RendezvousNamespace,
+			"count", len(advertised),
+			"reachability", r.Reachability(),
+			"addrs", strings.Join(advertised, ", "),
+		)
 	}
 	payload := rendezvousRequest{
 		Action:    "register",
@@ -2167,6 +2174,26 @@ func (r *Runtime) logPeerPathState(peerID peer.ID, trigger string) {
 	}
 }
 
+func (r *Runtime) logHolePunchFailureContext(peerID peer.ID, trigger string) {
+	if r.host == nil || peerID == "" {
+		return
+	}
+	summary := summarizePeerConnections(r.host.Network().ConnsToPeer(peerID))
+	mode := peerPathMode(summary.Total, summary.Direct, summary.Relayed)
+	peerstoreAddrs := multiaddrsToStrings(r.host.Peerstore().Addrs(peerID))
+	L_warn("a2a libp2p: hole punch failure context",
+		"peerID", peerID,
+		"trigger", trigger,
+		"mode", mode,
+		"total", summary.Total,
+		"direct", summary.Direct,
+		"relayed", summary.Relayed,
+		"transports", formatCounts(summary.Transports),
+		"connAddrs", strings.Join(summary.Addrs, ", "),
+		"peerstoreAddrs", strings.Join(peerstoreAddrs, ", "),
+	)
+}
+
 func (r *Runtime) Trace(evt *holepunch.Event) {
 	if evt == nil {
 		return
@@ -2208,6 +2235,7 @@ func (r *Runtime) Trace(evt *holepunch.Event) {
 			L_info("a2a libp2p: hole punch succeeded", "peerID", evt.Remote, "elapsed", end.EllapsedTime)
 		} else {
 			L_warn("a2a libp2p: hole punch failed", "peerID", evt.Remote, "elapsed", end.EllapsedTime, "error", end.Error)
+			r.logHolePunchFailureContext(evt.Remote, "holepunch-end")
 		}
 		r.logPeerPathState(evt.Remote, "holepunch-end")
 	case holepunch.HolePunchAttemptEvtT:
