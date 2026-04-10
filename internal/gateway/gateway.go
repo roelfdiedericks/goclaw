@@ -34,6 +34,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/hass"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/localllm"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
 	"github.com/roelfdiedericks/goclaw/internal/memorygraph"
@@ -1449,6 +1450,8 @@ func (g *Gateway) Start(ctx context.Context) {
 	// Check embeddings model mismatch and auto-rebuild if configured
 	g.checkEmbeddingsMismatch(ctx)
 
+	g.startManagedLocalLLM(ctx)
+
 	if g.a2aManager != nil {
 		if err := g.a2aManager.Start(ctx); err != nil {
 			L_warn("a2a: start failed", "error", err)
@@ -2185,6 +2188,45 @@ func (g *Gateway) Shutdown() {
 	if g.sessions != nil {
 		g.sessions.Close() //nolint:errcheck // shutdown cleanup
 	}
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := localllm.GetManager().Stop(stopCtx); err != nil {
+		L_warn("localllm: shutdown stop failed", "error", err)
+	}
+}
+
+func (g *Gateway) startManagedLocalLLM(ctx context.Context) {
+	spec, ok := managedLocalLLMSpec(g.config)
+	if !ok {
+		return
+	}
+	if _, err := localllm.GetManager().Start(ctx, spec); err != nil {
+		L_warn("localllm: managed startup failed", "error", err, "modelID", spec.ModelID)
+		return
+	}
+	L_info("localllm: managed startup ready", "modelID", spec.ModelID)
+}
+
+func managedLocalLLMSpec(cfg *config.Config) (localllm.ManagedSpec, bool) {
+	if cfg == nil || len(cfg.LLM.Agent.Models) == 0 {
+		return localllm.ManagedSpec{}, false
+	}
+	parts := strings.SplitN(cfg.LLM.Agent.Models[0], "/", 2)
+	if len(parts) != 2 {
+		return localllm.ManagedSpec{}, false
+	}
+	provider, ok := cfg.LLM.Providers[parts[0]]
+	if !ok || provider.Driver != "llamacpp" || provider.LlamaCpp == nil || provider.LlamaCpp.Mode != llm.LlamaCppModeManaged {
+		return localllm.ManagedSpec{}, false
+	}
+	return localllm.ManagedSpec{
+		RuntimeVersion: provider.LlamaCpp.RuntimeVersion,
+		ModelID:        provider.LlamaCpp.ManagedModelID,
+		Host:           provider.LlamaCpp.Host,
+		Port:           provider.LlamaCpp.Port,
+		ModelAlias:     provider.LlamaCpp.ModelAlias,
+	}, true
 }
 
 const canonicalSilentToken = "SILENT_OK"

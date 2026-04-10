@@ -3841,7 +3841,10 @@
                 return 'Not configured';
             }
             const provider = this.wizardData.LLMProviderName || this.wizardData.LLMProviderID;
-            const model = this.wizardData.LLMModel || '';
+            let model = this.wizardData.LLMModel || '';
+            if ((this.wizardData.LLMOnboardingChoice || '') === 'local_gemma' && this.wizardData.LLMManagedModelID) {
+                model = this.wizardData.LLMManagedModelID;
+            }
             return model ? `${provider} - ${model}` : provider;
         }
 

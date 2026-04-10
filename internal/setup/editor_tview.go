@@ -21,6 +21,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
+	"github.com/roelfdiedericks/goclaw/internal/localllm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memorygraph"
@@ -64,6 +65,7 @@ func (e *EditorTview) Run() error {
 	// Register command handlers for all components
 	telegramconfig.RegisterCommands()
 	llm.RegisterCommands()
+	localllm.RegisterCommands()
 	media.RegisterCommands()
 	tuiconfig.RegisterCommands()
 	httpconfig.RegisterCommands()

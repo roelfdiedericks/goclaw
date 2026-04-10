@@ -13,6 +13,41 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/configapply"
 )
 
+func TestHandleGetPresetsIncludesSyntheticLlamaCppPreset(t *testing.T) {
+	api := NewAPI(filepath.Join(t.TempDir(), "goclaw.json"), configapply.CallerWebStandalone, EditorSectionsForMode(false))
+	req := httptest.NewRequest(http.MethodGet, "/setup/api/presets", nil)
+	rec := httptest.NewRecorder()
+
+	api.HandleGetPresets(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Presets []struct {
+				ID        string `json:"id"`
+				Driver    string `json:"driver"`
+				Synthetic bool   `json:"synthetic"`
+			} `json:"presets"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	for _, preset := range resp.Data.Presets {
+		if preset.ID == "llamacpp-managed" {
+			if preset.Driver != "llamacpp" || !preset.Synthetic {
+				t.Fatalf("unexpected synthetic preset payload %#v", preset)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected synthetic llamacpp preset in response")
+}
+
 func TestSetConfigPathRootMergeIsNonDestructive(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Agent.Name = "GoClaw"

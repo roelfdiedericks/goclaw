@@ -143,6 +143,7 @@ func NewRegistry(cfg RegistryConfig) (*Registry, error) {
 
 // initProvider initializes a provider instance
 func (r *Registry) initProvider(name string, cfg LLMProviderConfig) error {
+	cfg = resolveLlamaCppProviderConfig(cfg)
 	provider, err := NewProvider(name, cfg)
 	if err != nil {
 		return err
@@ -397,6 +398,8 @@ func (r *Registry) resolveForPurpose(ref, purpose string) (interface{}, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown provider: %s", providerName)
 	}
+
+	modelName = resolveLlamaCppModelName(instance.config, modelName)
 
 	p, ok := instance.provider.(Provider)
 	if !ok {

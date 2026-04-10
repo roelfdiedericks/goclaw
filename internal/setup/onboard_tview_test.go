@@ -244,10 +244,13 @@ func TestStepLLMProviderRequiresProviderAndAPIKey(t *testing.T) {
 		t.Fatalf("expected llm step to validate on exit")
 	}
 	if err := step.OnExit(nil); err == nil {
-		t.Fatalf("expected missing provider to fail validation")
+		t.Fatalf("expected missing setup mode to fail validation")
 	}
 
+	data.LLMOnboardingChoice = LLMChoiceCloudProvider
 	data.LLMProviderID = "anthropic"
+	data.LLMDriver = "anthropic"
+	data.LLMBaseURL = "https://api.anthropic.com"
 	if err := step.OnExit(nil); err == nil {
 		t.Fatalf("expected missing API key to fail validation for remote provider")
 	}
@@ -257,18 +260,21 @@ func TestStepLLMProviderRequiresProviderAndAPIKey(t *testing.T) {
 		t.Fatalf("expected remote provider with API key to pass, got %v", err)
 	}
 
-	data.LLMProviderID = "ollama"
-	data.LLMDriver = "ollama"
-	data.LLMBaseURL = "http://10.0.0.25:11434"
+	data.LLMOnboardingChoice = LLMChoiceLocalGemma
+	data.LLMManagedModelID = "gemma4-e2b"
 	data.LLMAPIKey = ""
 	if err := step.OnExit(nil); err != nil {
-		t.Fatalf("expected ollama without API key to pass, got %v", err)
+		t.Fatalf("expected local gemma onboarding to pass, got %v", err)
 	}
 
-	data.LLMProviderID = "custom"
+	data.LLMOnboardingChoice = LLMChoiceExistingLlamaCpp
+	data.LLMProviderID = LLMProviderEndpointLlamaCpp
+	data.LLMDriver = "llamacpp"
+	data.LLMBaseURL = "http://127.0.0.1:8080"
+	data.LLMModel = "ggml-org/gemma-4-E2B-it-GGUF:Q8_0"
 	data.LLMAPIKey = ""
 	if err := step.OnExit(nil); err != nil {
-		t.Fatalf("expected custom provider without API key to pass, got %v", err)
+		t.Fatalf("expected llama.cpp endpoint without API key to pass, got %v", err)
 	}
 }
 

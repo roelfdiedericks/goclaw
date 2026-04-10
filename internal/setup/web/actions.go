@@ -13,6 +13,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
+	"github.com/roelfdiedericks/goclaw/internal/localllm"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memorygraph"
 	"github.com/roelfdiedericks/goclaw/internal/sandbox"
@@ -33,6 +34,7 @@ func registerWebActionCommands() {
 		httpconfig.RegisterCommands()
 		tuiconfig.RegisterCommands()
 		llm.RegisterCommands()
+		localllm.RegisterCommands()
 		acp.RegisterCommands()
 		a2a.RegisterCommands()
 		gateway.RegisterCommands()

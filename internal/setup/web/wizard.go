@@ -40,7 +40,7 @@ var WizardSteps = []WizardStep{
 	{ID: "user", Title: "Owner Account", Description: "Create your owner account for authentication."},
 	{ID: "channels", Title: "Communication Channels", Description: "Configure how you'll interact with GoClaw."},
 	{ID: "pairing", Title: "Channel Pairing", Description: "Pair each enabled owner channel before you continue."},
-	{ID: "llm", Title: "LLM Provider", Description: "Set up your language model provider (Anthropic, OpenAI, etc.)."},
+	{ID: "llm", Title: "LLM Provider", Description: "Choose between Gemma Local, a cloud provider, or an existing llama.cpp server."},
 	{ID: "voice", Title: "Voice Settings", Description: "Configure speech-to-text and voice LLM (optional)."},
 	{ID: "security", Title: "Security & Skills", Description: "Configure sandboxing and skill installation sources."},
 	{ID: "review", Title: "Review & Finish", Description: "Review your settings and complete the setup."},
@@ -710,10 +710,34 @@ func getStepFormDef(stepID string, data *setup.WizardData) *forms.FormDef {
 		}
 
 	case "llm":
-		// Build model options from metadata based on selected provider
-		var modelOptions []forms.Option
+		recs := setup.BuildLocalModelRecommendations()
+		localOptions := make([]forms.Option, 0, len(recs.Options))
+		for _, option := range recs.Options {
+			label := option.Spec.Label
+			if option.DefaultSelected {
+				label += " (default)"
+			}
+			if option.Recommended {
+				label += " [recommended]"
+			}
+			if !option.Viable {
+				label += " [heavy]"
+			}
+			label += " - " + option.Reason
+			localOptions = append(localOptions, forms.Option{Value: option.Spec.ID, Label: label})
+		}
+
 		meta := metadata.Get()
-		if data != nil && data.LLMProviderID != "" && data.LLMProviderID != "custom" {
+		cloudProviderOptions := []forms.Option{}
+		for _, preset := range setup.BuildPresets() {
+			if preset.Driver == "llamacpp" {
+				continue
+			}
+			cloudProviderOptions = append(cloudProviderOptions, forms.Option{Value: preset.Key, Label: preset.Name})
+		}
+
+		modelOptions := []forms.Option{}
+		if data != nil && data.LLMProviderID != "" && data.LLMOnboardingChoice == setup.LLMChoiceCloudProvider {
 			modelIDs := meta.GetKnownChatModels(data.LLMProviderID)
 			defaultLarge, _ := meta.GetDefaultModels(data.LLMProviderID)
 			for _, mid := range modelIDs {
@@ -728,45 +752,52 @@ func getStepFormDef(stepID string, data *setup.WizardData) *forms.FormDef {
 			}
 		}
 
-		// If no provider selected or custom, show a text field for model
-		modelField := forms.Field{
-			Name:  "LLMModel",
-			Title: "Model",
-			Type:  forms.Text,
-			Desc:  "e.g., claude-sonnet-4-20250514",
-		}
-		if len(modelOptions) > 0 {
-			modelField = forms.Field{
-				Name:    "LLMModel",
-				Title:   "Model",
-				Type:    forms.Select,
-				Options: modelOptions,
-			}
-		}
-
 		return &forms.FormDef{
 			Title: "LLM Provider",
 			Sections: []forms.Section{
 				{
-					Title: "Provider Selection",
-					Desc:  "Choose your primary language model provider.",
+					Title: "Onboarding Path",
+					Desc:  "Choose between a managed local model, a cloud API, or your own llama.cpp server.",
 					Fields: []forms.Field{
 						{
-							Name:  "LLMProviderID",
-							Title: "Provider",
+							Name:  "LLMOnboardingChoice",
+							Title: "Setup Mode",
 							Type:  forms.Select,
 							Options: []forms.Option{
-								{Value: "anthropic", Label: "Anthropic (Claude)"},
-								{Value: "openai", Label: "OpenAI (GPT)"},
-								{Value: "google", Label: "Google (Gemini)"},
-								{Value: "xai", Label: "xAI (Grok)"},
-								{Value: "openrouter", Label: "OpenRouter"},
-								{Value: "custom", Label: "Custom/Local"},
+								{Value: setup.LLMChoiceLocalGemma, Label: "Gemma Local (recommended)"},
+								{Value: setup.LLMChoiceCloudProvider, Label: "Cloud provider"},
+								{Value: setup.LLMChoiceExistingLlamaCpp, Label: "Existing llama.cpp server"},
 							},
 						},
-						{Name: "LLMAPIKey", Title: "API Key (optional for local/self-hosted providers)", Type: forms.Secret},
-						{Name: "LLMBaseURL", Title: "Base URL (optional)", Type: forms.Text, Desc: "For custom endpoints"},
-						modelField,
+					},
+				},
+				{
+					Title:    "Gemma Local",
+					Desc:     recs.Summary,
+					ShowWhen: "LLMOnboardingChoice=" + setup.LLMChoiceLocalGemma,
+					Fields: []forms.Field{
+						{Name: "LLMManagedModelID", Title: "Gemma Model", Type: forms.Select, Options: localOptions},
+					},
+				},
+				{
+					Title:    "Cloud Provider",
+					Desc:     "Use a hosted API provider.",
+					ShowWhen: "LLMOnboardingChoice=" + setup.LLMChoiceCloudProvider,
+					Fields: []forms.Field{
+						{Name: "LLMProviderID", Title: "Provider", Type: forms.Select, Options: cloudProviderOptions},
+						{Name: "LLMAPIKey", Title: "API Key", Type: forms.Secret},
+						{Name: "LLMBaseURL", Title: "Base URL (optional)", Type: forms.Text, Desc: "Override the default provider endpoint if needed."},
+						{Name: "LLMModel", Title: "Model", Type: forms.Select, Options: modelOptions},
+					},
+				},
+				{
+					Title:    "Existing llama.cpp Server",
+					Desc:     "Connect to a llama-server instance you already manage.",
+					ShowWhen: "LLMOnboardingChoice=" + setup.LLMChoiceExistingLlamaCpp,
+					Fields: []forms.Field{
+						{Name: "LLMBaseURL", Title: "Server URL", Type: forms.Text, Desc: "Example: http://127.0.0.1:8080"},
+						{Name: "LLMModel", Title: "Model", Type: forms.Text, Desc: "Example: ggml-org/gemma-4-E2B-it-GGUF:Q8_0"},
+						{Name: "LLMAPIKey", Title: "API Key (optional)", Type: forms.Secret},
 					},
 				},
 			},
@@ -1001,10 +1032,12 @@ func updateWizardData(data *setup.WizardData, payload map[string]interface{}) er
 		TelegramEnabled          bool   `json:"TelegramEnabled"`
 		TelegramToken            string `json:"TelegramToken"`
 		WhatsAppEnabled          bool   `json:"WhatsAppEnabled"`
+		LLMOnboardingChoice      string `json:"LLMOnboardingChoice"`
 		LLMProviderID            string `json:"LLMProviderID"`
 		LLMAPIKey                string `json:"LLMAPIKey"`
 		LLMBaseURL               string `json:"LLMBaseURL"`
 		LLMModel                 string `json:"LLMModel"`
+		LLMManagedModelID        string `json:"LLMManagedModelID"`
 		STTEnabled               bool   `json:"STTEnabled"`
 		STTModel                 string `json:"STTModel"`
 		VoiceLLMEnabled          bool   `json:"VoiceLLMEnabled"`
@@ -1085,21 +1118,52 @@ func updateWizardData(data *setup.WizardData, payload map[string]interface{}) er
 	}
 	data.WhatsAppEnabled = fields.WhatsAppEnabled
 	data.MarkDirty("WhatsAppEnabled")
+	if _, ok := payload["LLMOnboardingChoice"]; ok {
+		data.LLMOnboardingChoice = fields.LLMOnboardingChoice
+		data.MarkDirty("LLMOnboardingChoice")
+		switch fields.LLMOnboardingChoice {
+		case setup.LLMChoiceLocalGemma:
+			setup.ConfigureWizardForManagedLlamaCpp(data, data.LLMManagedModelID)
+		case setup.LLMChoiceExistingLlamaCpp:
+			setup.ConfigureWizardForLlamaCppEndpoint(data)
+		case setup.LLMChoiceCloudProvider:
+			setup.ConfigureWizardForCloudProvider(data, nil)
+			data.LLMProviderID = ""
+			data.LLMProviderName = ""
+			data.LLMDriver = ""
+			data.LLMBaseURL = ""
+			data.LLMModel = ""
+			data.LLMAPIKey = ""
+		}
+	}
 	if fields.LLMProviderID != "" {
 		data.LLMProviderID = fields.LLMProviderID
 		data.MarkDirty("LLMProviderID")
+		for _, preset := range setup.BuildPresets() {
+			if preset.Key == fields.LLMProviderID {
+				setup.ConfigureWizardForCloudProvider(data, &preset)
+				break
+			}
+		}
 	}
-	if fields.LLMAPIKey != "" {
+	if _, ok := payload["LLMAPIKey"]; ok {
 		data.LLMAPIKey = fields.LLMAPIKey
 		data.MarkDirty("LLMAPIKey")
 	}
-	if fields.LLMBaseURL != "" {
+	if _, ok := payload["LLMBaseURL"]; ok {
 		data.LLMBaseURL = fields.LLMBaseURL
 		data.MarkDirty("LLMBaseURL")
 	}
-	if fields.LLMModel != "" {
+	if _, ok := payload["LLMModel"]; ok {
 		data.LLMModel = fields.LLMModel
 		data.MarkDirty("LLMModel")
+	}
+	if _, ok := payload["LLMManagedModelID"]; ok {
+		data.LLMManagedModelID = fields.LLMManagedModelID
+		if data.LLMOnboardingChoice == setup.LLMChoiceLocalGemma {
+			setup.ConfigureWizardForManagedLlamaCpp(data, fields.LLMManagedModelID)
+		}
+		data.MarkDirty("LLMManagedModelID")
 	}
 	data.STTEnabled = fields.STTEnabled
 	data.MarkDirty("STTEnabled")
@@ -1197,21 +1261,37 @@ func validateStep(stepID string, data *setup.WizardData) map[string]string {
 		}
 
 	case "llm":
-		if data.LLMProviderID == "" {
-			errors["LLMProviderID"] = "Please select an LLM provider"
-		}
-		if data.LLMAPIKey == "" && data.LLMProviderID != "custom" {
-			driver := ""
-			baseURL := data.LLMBaseURL
-			if prov, ok := metadata.Get().GetModelProvider(data.LLMProviderID); ok {
-				driver = prov.Driver
-				if baseURL == "" {
-					baseURL = prov.APIEndpoint
+		switch data.LLMOnboardingChoice {
+		case setup.LLMChoiceLocalGemma:
+			if strings.TrimSpace(data.LLMManagedModelID) == "" {
+				errors["LLMManagedModelID"] = "Please select a local Gemma model"
+			}
+		case setup.LLMChoiceCloudProvider:
+			if data.LLMProviderID == "" {
+				errors["LLMProviderID"] = "Please select an LLM provider"
+			}
+			if data.LLMAPIKey == "" && data.LLMProviderID != "custom" {
+				driver := ""
+				baseURL := data.LLMBaseURL
+				if prov, ok := metadata.Get().GetModelProvider(data.LLMProviderID); ok {
+					driver = prov.Driver
+					if baseURL == "" {
+						baseURL = prov.APIEndpoint
+					}
+				}
+				if llm.SetupAPIKeyRequired(driver, baseURL) {
+					errors["LLMAPIKey"] = "API key is required"
 				}
 			}
-			if llm.SetupAPIKeyRequired(driver, baseURL) {
-				errors["LLMAPIKey"] = "API key is required"
+		case setup.LLMChoiceExistingLlamaCpp:
+			if strings.TrimSpace(data.LLMBaseURL) == "" {
+				errors["LLMBaseURL"] = "Server URL is required"
 			}
+			if strings.TrimSpace(data.LLMModel) == "" {
+				errors["LLMModel"] = "Model is required"
+			}
+		default:
+			errors["LLMOnboardingChoice"] = "Please choose an LLM setup path"
 		}
 
 	case "voice":

@@ -114,13 +114,15 @@ type WizardData struct {
 	SkillsAllowLocal    bool
 
 	// LLM
-	LLMProviderID   string
-	LLMProviderName string
-	LLMDriver       string
-	LLMAPIKey       string
-	LLMBaseURL      string
-	LLMModel        string
-	LLMSkipped      bool
+	LLMOnboardingChoice string
+	LLMProviderID       string
+	LLMProviderName     string
+	LLMDriver           string
+	LLMAPIKey           string
+	LLMBaseURL          string
+	LLMModel            string
+	LLMManagedModelID   string
+	LLMSkipped          bool
 
 	// STT (Speech-to-Text)
 	STTEnabled        bool
@@ -265,17 +267,45 @@ func (d *WizardData) loadFromConfig(cfg *config.Config) {
 		if len(parts) == 2 {
 			alias := parts[0]
 			if provCfg, ok := cfg.LLM.Providers[alias]; ok {
-				d.LLMProviderID = provCfg.Subtype
-				if d.LLMProviderID == "" {
-					d.LLMProviderID = provCfg.Driver
-				}
-				d.LLMDriver = provCfg.Driver
-				d.LLMAPIKey = provCfg.APIKey
-				d.LLMBaseURL = provCfg.BaseURL
-				d.LLMModel = parts[1]
+				if isLlamaCppManagedConfig(provCfg) {
+					d.LLMOnboardingChoice = LLMChoiceLocalGemma
+					d.LLMProviderID = LLMProviderManagedLlamaCpp
+					d.LLMProviderName = LlamaCppManagedPreset().Name
+					d.LLMDriver = provCfg.Driver
+					d.LLMAPIKey = provCfg.APIKey
+					d.LLMBaseURL = provCfg.BaseURL
+					if d.LLMBaseURL == "" {
+						d.LLMBaseURL = "http://127.0.0.1:8080"
+					}
+					d.LLMModel = parts[1]
+					if provCfg.LlamaCpp != nil {
+						d.LLMManagedModelID = provCfg.LlamaCpp.ManagedModelID
+					}
+				} else if isLlamaCppEndpointConfig(provCfg) {
+					d.LLMOnboardingChoice = LLMChoiceExistingLlamaCpp
+					d.LLMProviderID = LLMProviderEndpointLlamaCpp
+					d.LLMProviderName = "Existing llama.cpp server"
+					d.LLMDriver = provCfg.Driver
+					d.LLMAPIKey = provCfg.APIKey
+					d.LLMBaseURL = provCfg.BaseURL
+					d.LLMModel = parts[1]
+				} else {
+					d.LLMOnboardingChoice = LLMChoiceCloudProvider
+					d.LLMProviderID = provCfg.Subtype
+					if d.LLMProviderID == "" {
+						d.LLMProviderID = provCfg.Driver
+					}
+					d.LLMDriver = provCfg.Driver
+					d.LLMAPIKey = provCfg.APIKey
+					d.LLMBaseURL = provCfg.BaseURL
+					d.LLMModel = parts[1]
 
-				if prov, ok := metadata.Get().GetModelProvider(d.LLMProviderID); ok {
-					d.LLMProviderName = prov.Name
+					if prov, ok := metadata.Get().GetModelProvider(d.LLMProviderID); ok {
+						d.LLMProviderName = prov.Name
+					}
+				}
+				if d.LLMOnboardingChoice == "" {
+					d.LLMOnboardingChoice = LLMChoiceCloudProvider
 				}
 			}
 		}
@@ -1707,52 +1737,106 @@ func stepLLMProvider(data *WizardData) forms.WizardStep {
 	return forms.WizardStep{
 		Title: "LLM Provider",
 		Content: func(w *forms.Wizard) tview.Primitive {
-			// If we already have a provider selected (re-run), show the config form
-			if data.LLMProviderID != "" && !data.LLMSkipped {
-				return buildLLMConfigForm(data, w)
+			if data.LLMOnboardingChoice != "" && !data.LLMSkipped {
+				switch data.LLMOnboardingChoice {
+				case LLMChoiceCloudProvider:
+					if data.LLMProviderID != "" {
+						return buildLLMConfigForm(data, w)
+					}
+					return buildCloudProviderList(data, w)
+				case LLMChoiceLocalGemma, LLMChoiceExistingLlamaCpp:
+					return buildLLMConfigForm(data, w)
+				default:
+					return buildLLMChoiceList(data, w)
+				}
 			}
-			return buildLLMProviderList(data, w)
+			return buildLLMChoiceList(data, w)
 		},
 		OnExit: func(_ *forms.Wizard) error {
-			if strings.TrimSpace(data.LLMProviderID) == "" {
-				return fmt.Errorf("please select an LLM provider")
-			}
-			if data.LLMProviderID != "custom" && llm.SetupAPIKeyRequired(data.LLMDriver, data.LLMBaseURL) && strings.TrimSpace(data.LLMAPIKey) == "" {
-				return fmt.Errorf("api key is required for the selected LLM provider")
+			switch data.LLMOnboardingChoice {
+			case LLMChoiceLocalGemma:
+				if strings.TrimSpace(data.LLMManagedModelID) == "" {
+					return fmt.Errorf("please select a local Gemma model")
+				}
+			case LLMChoiceCloudProvider:
+				if strings.TrimSpace(data.LLMProviderID) == "" {
+					return fmt.Errorf("please select an LLM provider")
+				}
+				if data.LLMProviderID != "custom" && llm.SetupAPIKeyRequired(data.LLMDriver, data.LLMBaseURL) && strings.TrimSpace(data.LLMAPIKey) == "" {
+					return fmt.Errorf("api key is required for the selected LLM provider")
+				}
+			case LLMChoiceExistingLlamaCpp:
+				if strings.TrimSpace(data.LLMBaseURL) == "" {
+					return fmt.Errorf("llama.cpp server URL is required")
+				}
+				if strings.TrimSpace(data.LLMModel) == "" {
+					return fmt.Errorf("llama.cpp model name is required")
+				}
+			default:
+				return fmt.Errorf("please choose how you want to set up your LLM")
 			}
 			return nil
 		},
 	}
 }
 
-// buildLLMProviderList shows the flat provider list for selection.
-func buildLLMProviderList(data *WizardData, w *forms.Wizard) tview.Primitive {
+func buildLLMChoiceList(data *WizardData, w *forms.Wizard) tview.Primitive {
+	recs := BuildLocalModelRecommendations()
+	list := tview.NewList()
+	list.SetBorder(false)
+	list.ShowSecondaryText(true)
+	list.AddItem("Gemma Local (recommended)", recs.Summary, 0, func() {
+		ConfigureWizardForManagedLlamaCpp(data, recs.DefaultModelID)
+		w.RefreshCurrentStep()
+	})
+	list.AddItem("Cloud provider", "Anthropic, OpenAI, Google, xAI, OpenRouter, and more.", 0, func() {
+		ConfigureWizardForCloudProvider(data, nil)
+		data.LLMProviderID = ""
+		data.LLMProviderName = ""
+		data.LLMDriver = ""
+		data.LLMBaseURL = ""
+		data.LLMAPIKey = ""
+		data.LLMModel = ""
+		w.RefreshCurrentStep()
+	})
+	list.AddItem("Existing llama.cpp server", "Connect to a llama-server endpoint you already manage.", 0, func() {
+		ConfigureWizardForLlamaCppEndpoint(data)
+		w.RefreshCurrentStep()
+	})
+
+	header := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(`GoClaw needs an LLM provider to function.
+
+[yellow]Choose how you want to get started:[white]
+  • Gemma Local installs and manages llama.cpp for you
+  • Cloud provider uses an API key
+  • Existing llama.cpp server connects to your own endpoint`)
+	header.SetBorder(false)
+
+	return tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(header, 7, 0, false).
+		AddItem(list, 0, 1, true)
+}
+
+// buildCloudProviderList shows the flat provider list for cloud-provider selection.
+func buildCloudProviderList(data *WizardData, w *forms.Wizard) tview.Primitive {
 	meta := metadata.Get()
-	providerIDs := meta.ModelProviderIDs()
+	presets := cloudProviderPresets()
 
 	list := tview.NewList()
 	list.SetBorder(false)
 	list.ShowSecondaryText(false)
 
-	for _, pid := range providerIDs {
-		providerID := pid
+	for _, preset := range presets {
+		providerID := preset.Key
 		prov, ok := meta.GetModelProvider(providerID)
 		if !ok {
 			continue
 		}
 		list.AddItem(prov.Name, "", 0, func() {
-			data.LLMProviderID = providerID
-			data.LLMProviderName = prov.Name
-			data.LLMDriver = prov.Driver
-			data.LLMBaseURL = prov.APIEndpoint
-			data.LLMAPIKey = ""
-			data.LLMModel = ""
-			data.LLMSkipped = false
-			data.MarkDirty("LLMProviderID", "LLMDriver", "LLMBaseURL", "LLMModel")
-
-			large, _ := meta.GetDefaultModels(providerID)
-			data.LLMModel = large
-
+			ConfigureWizardForCloudProvider(data, &preset)
 			w.RefreshCurrentStep()
 		})
 	}
@@ -1782,7 +1866,9 @@ func buildLLMConfigForm(data *WizardData, w *forms.Wizard) tview.Primitive {
 	// Provider info header (static)
 	headerInfo := fmt.Sprintf("[cyan]%s[white]\n", data.LLMProviderName)
 	headerInfo += fmt.Sprintf("Driver:   %s\n", data.LLMDriver)
-	if !isLocal {
+	if data.LLMOnboardingChoice == LLMChoiceLocalGemma {
+		headerInfo += fmt.Sprintf("Runtime:  %s\n", data.LLMBaseURL)
+	} else if !isLocal {
 		headerInfo += fmt.Sprintf("Endpoint: %s", data.LLMBaseURL)
 	}
 	header := tview.NewTextView().SetDynamicColors(true).SetText(headerInfo)
@@ -1823,7 +1909,41 @@ func buildLLMConfigForm(data *WizardData, w *forms.Wizard) tview.Primitive {
 	form.SetBorder(false)
 	enableFormMouseScroll(form, w)
 
-	if isLocal {
+	if data.LLMOnboardingChoice == LLMChoiceLocalGemma {
+		recs := BuildLocalModelRecommendations()
+		options := make([]string, 0, len(recs.Options))
+		selectedIdx := 0
+		for i, option := range recs.Options {
+			label := option.Spec.Label
+			if option.DefaultSelected {
+				label += " (default)"
+			}
+			if option.Recommended {
+				label += " [recommended]"
+			}
+			if !option.Viable {
+				label += " [heavy]"
+			}
+			options = append(options, label)
+			if option.Spec.ID == data.LLMManagedModelID || (data.LLMManagedModelID == "" && option.DefaultSelected) {
+				selectedIdx = i
+			}
+		}
+		form.AddDropDown("Gemma Model", options, selectedIdx, func(_ string, index int) {
+			if index >= 0 && index < len(recs.Options) {
+				data.LLMManagedModelID = recs.Options[index].Spec.ID
+				data.LLMModel = "managed"
+				data.MarkDirty("LLMManagedModelID", "LLMModel")
+				modelInfo.SetText(recs.Options[index].Reason)
+			}
+		})
+		if data.LLMManagedModelID == "" {
+			data.LLMManagedModelID = recs.DefaultModelID
+		}
+		if spec, err := ResolveWizardManagedModel(data); err == nil {
+			modelInfo.SetText(fmt.Sprintf("[green]%s[white]\n%s", spec.Label, recs.Summary))
+		}
+	} else if isLocal {
 		form.AddInputField("URL", data.LLMBaseURL, 50, nil, func(text string) {
 			data.LLMBaseURL = text
 			data.MarkDirty("LLMBaseURL")
@@ -1877,14 +1997,20 @@ func buildLLMConfigForm(data *WizardData, w *forms.Wizard) tview.Primitive {
 		})
 	}
 
-	form.AddButton("Change Provider", func() {
+	form.AddButton("Change Setup", func() {
+		data.LLMOnboardingChoice = ""
 		data.LLMProviderID = ""
 		data.LLMProviderName = ""
+		data.LLMDriver = ""
+		data.LLMAPIKey = ""
+		data.LLMBaseURL = ""
+		data.LLMModel = ""
+		data.LLMManagedModelID = ""
 		w.RefreshCurrentStep()
 	})
 
 	// Initialize model info
-	if data.LLMModel != "" {
+	if data.LLMOnboardingChoice != LLMChoiceLocalGemma && data.LLMModel != "" {
 		updateModelInfo(data.LLMModel)
 	}
 
@@ -2135,7 +2261,7 @@ func wizardLLMSummary(data *WizardData) string {
 	if strings.TrimSpace(provider) == "" {
 		provider = data.LLMProviderID
 	}
-	model := strings.TrimSpace(data.LLMModel)
+	model := strings.TrimSpace(WizardLLMModelDisplay(data))
 	if model == "" {
 		return provider
 	}
@@ -2337,34 +2463,62 @@ func buildConfigFromWizardData(data *WizardData) map[string]interface{} {
 	}
 
 	// LLM provider - only if dirty
-	if data.HasAnyDirty("LLMProviderID", "LLMDriver", "LLMAPIKey", "LLMBaseURL", "LLMModel") {
+	if data.HasAnyDirty("LLMOnboardingChoice", "LLMProviderID", "LLMDriver", "LLMAPIKey", "LLMBaseURL", "LLMModel", "LLMManagedModelID") {
 		if !data.LLMSkipped && data.LLMProviderID != "" {
 			alias := data.LLMProviderID
 
 			deepSet(cfg, "llm.providers."+alias+".driver", data.LLMDriver)
-			deepSet(cfg, "llm.providers."+alias+".subtype", data.LLMProviderID)
-
-			if data.LLMAPIKey != "" {
-				deepSet(cfg, "llm.providers."+alias+".apiKey", data.LLMAPIKey)
+			if data.LLMOnboardingChoice == LLMChoiceCloudProvider {
+				deepSet(cfg, "llm.providers."+alias+".subtype", data.LLMProviderID)
+			} else {
+				deepSet(cfg, "llm.providers."+alias+".subtype", "")
 			}
+
+			deepSet(cfg, "llm.providers."+alias+".apiKey", data.LLMAPIKey)
 			if data.LLMBaseURL != "" {
 				deepSet(cfg, "llm.providers."+alias+".baseURL", data.LLMBaseURL)
 			}
 
-			// Anthropic: auto-enable prompt caching
-			if data.LLMDriver == "anthropic" {
-				deepSet(cfg, "llm.providers."+alias+".promptCaching", true)
-			}
+			if data.LLMDriver == "llamacpp" {
+				mode := llm.LlamaCppModeEndpoint
+				modelRef := data.LLMModel
+				deepSet(cfg, "llm.providers."+alias+".llamacpp.host", "127.0.0.1")
+				deepSet(cfg, "llm.providers."+alias+".llamacpp.port", 8080)
+				deepSet(cfg, "llm.providers."+alias+".llamacpp.modelAlias", "")
+				if data.LLMOnboardingChoice == LLMChoiceLocalGemma {
+					mode = llm.LlamaCppModeManaged
+					modelRef = "managed"
+					deepSet(cfg, "llm.providers."+alias+".llamacpp.managedModelID", data.LLMManagedModelID)
+				} else {
+					deepSet(cfg, "llm.providers."+alias+".llamacpp.managedModelID", "")
+				}
+				deepSet(cfg, "llm.providers."+alias+".llamacpp.mode", mode)
 
-			// Agent chain: replace first model, preserve fallbacks
-			ref := alias + "/" + data.LLMModel
-			agentModels := getStringSlice(cfg, "llm.agent.models")
-			if len(agentModels) > 0 {
-				agentModels[0] = ref
+				// Agent chain: replace first model, preserve fallbacks
+				ref := alias + "/" + modelRef
+				agentModels := getStringSlice(cfg, "llm.agent.models")
+				if len(agentModels) > 0 {
+					agentModels[0] = ref
+				} else {
+					agentModels = []string{ref}
+				}
+				deepSet(cfg, "llm.agent.models", agentModels)
 			} else {
-				agentModels = []string{ref}
+				// Anthropic: auto-enable prompt caching
+				if data.LLMDriver == "anthropic" {
+					deepSet(cfg, "llm.providers."+alias+".promptCaching", true)
+				}
+
+				// Agent chain: replace first model, preserve fallbacks
+				ref := alias + "/" + data.LLMModel
+				agentModels := getStringSlice(cfg, "llm.agent.models")
+				if len(agentModels) > 0 {
+					agentModels[0] = ref
+				} else {
+					agentModels = []string{ref}
+				}
+				deepSet(cfg, "llm.agent.models", agentModels)
 			}
-			deepSet(cfg, "llm.agent.models", agentModels)
 		}
 	}
 

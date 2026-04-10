@@ -69,24 +69,27 @@ func TestValidateStepAgentTypingMaxLength(t *testing.T) {
 
 func TestValidateStepLLMAPIKeyRequirements(t *testing.T) {
 	data := setup.NewWizardData()
+	data.LLMOnboardingChoice = setup.LLMChoiceCloudProvider
 	data.LLMProviderID = "anthropic"
+	data.LLMBaseURL = "https://api.anthropic.com"
 	data.LLMAPIKey = ""
 	if errs := validateStep("llm", data); errs["LLMAPIKey"] == "" {
 		t.Fatalf("expected anthropic to require an API key during setup")
 	}
 
 	data = setup.NewWizardData()
-	data.LLMProviderID = "ollama"
-	data.LLMAPIKey = ""
-	if errs := validateStep("llm", data); errs["LLMAPIKey"] != "" {
-		t.Fatalf("expected ollama to allow empty API key during setup, got %#v", errs)
+	data.LLMOnboardingChoice = setup.LLMChoiceLocalGemma
+	data.LLMManagedModelID = "gemma4-e2b"
+	if errs := validateStep("llm", data); len(errs) != 0 {
+		t.Fatalf("expected local gemma choice to validate, got %#v", errs)
 	}
 
 	data = setup.NewWizardData()
-	data.LLMProviderID = "custom"
-	data.LLMAPIKey = ""
-	if errs := validateStep("llm", data); errs["LLMAPIKey"] != "" {
-		t.Fatalf("expected custom provider to allow empty API key during setup, got %#v", errs)
+	data.LLMOnboardingChoice = setup.LLMChoiceExistingLlamaCpp
+	data.LLMBaseURL = "http://127.0.0.1:8080"
+	data.LLMModel = "ggml-org/gemma-4-E2B-it-GGUF:Q8_0"
+	if errs := validateStep("llm", data); len(errs) != 0 {
+		t.Fatalf("expected existing llama.cpp to validate, got %#v", errs)
 	}
 }
 

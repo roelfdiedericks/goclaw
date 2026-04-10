@@ -19,6 +19,7 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
+	setupcore "github.com/roelfdiedericks/goclaw/internal/setup"
 	"github.com/roelfdiedericks/goclaw/internal/voicellm"
 )
 
@@ -919,30 +920,23 @@ func (a *API) HandleGetPresets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	meta := metadata.Get()
-	providerIDs := meta.ModelProviderIDs()
-
 	var presets []map[string]interface{}
-
-	for _, pid := range providerIDs {
-		prov, ok := meta.GetModelProvider(pid)
-		if !ok {
-			continue
-		}
-
+	for _, presetDef := range setupcore.BuildPresets() {
 		preset := map[string]interface{}{
-			"id":          pid,
-			"name":        prov.Name,
-			"driver":      prov.Driver,
-			"apiEndpoint": prov.APIEndpoint,
-			"modelCount":  len(prov.Models),
-			"isLocal":     llm.DriverOrEndpointIsLocal(prov.Driver, prov.APIEndpoint),
+			"id":          presetDef.Key,
+			"name":        presetDef.Name,
+			"driver":      presetDef.Driver,
+			"apiEndpoint": presetDef.BaseURL,
+			"modelCount":  len(presetDef.KnownChatModels),
+			"isLocal":     presetDef.IsLocal,
+			"synthetic":   presetDef.Synthetic,
 		}
 
-		// Get default model for this provider
-		defaultLarge, _ := meta.GetDefaultModels(pid)
-		if defaultLarge != "" {
-			preset["defaultModel"] = defaultLarge
+		if presetDef.DefaultModel != "" {
+			preset["defaultModel"] = presetDef.DefaultModel
+		}
+		if presetDef.Description != "" {
+			preset["description"] = presetDef.Description
 		}
 
 		presets = append(presets, preset)

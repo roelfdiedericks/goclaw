@@ -27,6 +27,12 @@ func TestSetupAPIKeyRequired(t *testing.T) {
 			endpoint: "http://10.0.0.25:11434",
 			want:     false,
 		},
+		{
+			name:     "llamacpp driver does not require key during setup",
+			driver:   "llamacpp",
+			endpoint: "http://10.0.0.99:8080/v1",
+			want:     false,
+		},
 	}
 
 	for _, tc := range tests {

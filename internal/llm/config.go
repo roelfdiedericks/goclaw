@@ -67,6 +67,18 @@ type LLMProviderConfig struct {
 	IncrementalContext *bool    `json:"incrementalContext,omitempty"` // xAI: chain context, send only new messages (nil = true)
 	KeepaliveTime      int      `json:"keepaliveTime,omitempty"`      // xAI gRPC keepalive time in seconds (0 = xai-go default)
 	KeepaliveTimeout   int      `json:"keepaliveTimeout,omitempty"`   // xAI gRPC keepalive timeout in seconds (0 = xai-go default)
+
+	// llama.cpp-specific fields
+	LlamaCpp *LlamaCppProviderConfig `json:"llamacpp,omitempty"`
+}
+
+type LlamaCppProviderConfig struct {
+	Mode           string `json:"mode,omitempty"`           // "managed" or "endpoint"
+	Host           string `json:"host,omitempty"`           // Managed mode listen host (default 127.0.0.1)
+	Port           int    `json:"port,omitempty"`           // Managed mode listen port (default 8080)
+	ManagedModelID string `json:"managedModelID,omitempty"` // Curated local model catalog ID
+	RuntimeVersion string `json:"runtimeVersion,omitempty"` // Managed llama.cpp runtime version
+	ModelAlias     string `json:"modelAlias,omitempty"`     // Optional alias exposed by llama-server
 }
 
 // LLMPurposeConfig defines the model chain for a specific purpose (agent, summarization, embeddings).

@@ -48,6 +48,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/hass"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/localllm"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memorygraph"
 	"github.com/roelfdiedericks/goclaw/internal/metrics"
@@ -277,6 +278,7 @@ type CLI struct {
 	Whatsapp   WhatsAppCmd   `cmd:"" help:"Manage WhatsApp connection"`
 	Browser    BrowserCmd    `cmd:"" help:"Manage browser (download, profiles, setup)"`
 	Embeddings EmbeddingsCmd `cmd:"" help:"Manage embeddings (status, rebuild)"`
+	LocalLLM   LocalLLMCmd   `cmd:"" name:"local-llm" help:"Manage local llama.cpp runtime and models"`
 	Graph      GraphCmd      `cmd:"" help:"Memory graph operations (ingest, search, bulletin, stats)"`
 	A2A        A2ACmd        `cmd:"" help:"A2A libp2p runtime, status, and infra modes"`
 	Setup      SetupCmd      `cmd:"" help:"Interactive setup wizard"`
@@ -314,6 +316,100 @@ func (g *GatewayTUICmd) Run(ctx *Context) error {
 type A2ACmd struct {
 	Status A2AStatusCmd `cmd:"" help:"Show configured A2A runtime status"`
 	Libp2p A2ALibp2pCmd `cmd:"" help:"Run dedicated libp2p infra modes"`
+}
+
+type LocalLLMCmd struct {
+	Status        LocalLLMStatusCmd        `cmd:"" help:"Show managed llama.cpp status"`
+	EnsureRuntime LocalLLMEnsureRuntimeCmd `cmd:"" name:"ensure-runtime" help:"Download runtime and managed model assets"`
+	Start         LocalLLMStartCmd         `cmd:"" help:"Ensure assets and start managed llama.cpp server"`
+	Stop          LocalLLMStopCmd          `cmd:"" help:"Stop managed llama.cpp server"`
+	DownloadModel LocalLLMDownloadModelCmd `cmd:"" name:"download-model" help:"Download a managed model without starting the server"`
+	SelectModel   LocalLLMSelectModelCmd   `cmd:"" name:"select-model" help:"Update the selected managed model in local state"`
+}
+
+type LocalLLMFlags struct {
+	Model          string `help:"Managed model ID override (for example gemma4-e2b)."`
+	RuntimeVersion string `help:"llama.cpp runtime version override (defaults to latest builder release)."`
+	Host           string `help:"Managed server host override."`
+	Port           int    `help:"Managed server port override."`
+	ModelAlias     string `help:"Optional llama-server model alias override."`
+}
+
+type LocalLLMStatusCmd struct{}
+type LocalLLMEnsureRuntimeCmd struct{ LocalLLMFlags }
+type LocalLLMStartCmd struct{ LocalLLMFlags }
+type LocalLLMStopCmd struct{}
+type LocalLLMDownloadModelCmd struct{ LocalLLMFlags }
+type LocalLLMSelectModelCmd struct{ Model string `arg:"" help:"Managed model ID to select."` }
+
+func (c *LocalLLMStatusCmd) Run(_ *Context) error {
+	status := localllm.GetManager().Status()
+	if !status.Configured {
+		if spec, ok, err := loadManagedLocalLLMSpec(); err == nil && ok {
+			L_info("local_llm config",
+				"modelID", spec.ModelID,
+				"runtimeVersion", spec.RuntimeVersion,
+				"host", spec.Host,
+				"port", spec.Port,
+			)
+		}
+	}
+	L_info("local_llm status",
+		"configured", status.Configured,
+		"runtimeVersion", status.RuntimeVersion,
+		"modelID", status.ModelID,
+		"backend", status.Backend,
+		"endpoint", status.Server.Endpoint,
+		"state", status.Server.State,
+		"healthy", status.Server.Healthy,
+		"pid", status.Server.PID,
+	)
+	if status.RuntimePath != "" {
+		L_info("local_llm paths", "runtime", status.RuntimePath, "model", status.ModelPath, "mmproj", status.MMProjPath)
+	}
+	return nil
+}
+
+func (c *LocalLLMEnsureRuntimeCmd) Run(_ *Context) error {
+	spec, err := resolveLocalLLMSpec(c.LocalLLMFlags, false)
+	if err != nil {
+		return err
+	}
+	_, err = localllm.GetManager().EnsureRuntime(context.Background(), spec)
+	return err
+}
+
+func (c *LocalLLMStartCmd) Run(_ *Context) error {
+	spec, err := resolveLocalLLMSpec(c.LocalLLMFlags, false)
+	if err != nil {
+		return err
+	}
+	_, err = localllm.GetManager().Start(context.Background(), spec)
+	return err
+}
+
+func (c *LocalLLMStopCmd) Run(_ *Context) error {
+	return localllm.GetManager().Stop(context.Background())
+}
+
+func (c *LocalLLMDownloadModelCmd) Run(_ *Context) error {
+	spec, err := resolveLocalLLMSpec(c.LocalLLMFlags, true)
+	if err != nil {
+		return err
+	}
+	_, err = localllm.GetManager().EnsureRuntime(context.Background(), localllm.ManagedSpec{
+		ModelID:        spec.ModelID,
+		RuntimeVersion: spec.RuntimeVersion,
+	})
+	return err
+}
+
+func (c *LocalLLMSelectModelCmd) Run(_ *Context) error {
+	if _, err := localllm.GetManager().SelectModel(c.Model); err != nil {
+		return err
+	}
+	L_info("local_llm model selected", "modelID", c.Model)
+	return nil
 }
 
 type A2AStatusCmd struct{}
@@ -3053,6 +3149,61 @@ func (t *TUICmd) Run(ctx *Context) error {
 	return runGateway(ctx, true, t.Dev)
 }
 
+func resolveLocalLLMSpec(flags LocalLLMFlags, requireModel bool) (localllm.ManagedSpec, error) {
+	spec, ok, err := loadManagedLocalLLMSpec()
+	if err != nil {
+		return localllm.ManagedSpec{}, err
+	}
+	if !ok {
+		spec = localllm.ManagedSpec{}
+	}
+	if strings.TrimSpace(flags.Model) != "" {
+		spec.ModelID = strings.TrimSpace(flags.Model)
+	}
+	if strings.TrimSpace(flags.RuntimeVersion) != "" {
+		spec.RuntimeVersion = strings.TrimSpace(flags.RuntimeVersion)
+	}
+	if strings.TrimSpace(flags.Host) != "" {
+		spec.Host = strings.TrimSpace(flags.Host)
+	}
+	if flags.Port != 0 {
+		spec.Port = flags.Port
+	}
+	if strings.TrimSpace(flags.ModelAlias) != "" {
+		spec.ModelAlias = strings.TrimSpace(flags.ModelAlias)
+	}
+	if requireModel && strings.TrimSpace(spec.ModelID) == "" {
+		return localllm.ManagedSpec{}, fmt.Errorf("no managed local model configured; pass --model or configure a managed llamacpp provider first")
+	}
+	return spec, nil
+}
+
+func loadManagedLocalLLMSpec() (localllm.ManagedSpec, bool, error) {
+	loadResult, err := config.LoadRuntime()
+	if err != nil {
+		return localllm.ManagedSpec{}, false, err
+	}
+	cfg := loadResult.Config
+	if cfg == nil || len(cfg.LLM.Agent.Models) == 0 {
+		return localllm.ManagedSpec{}, false, nil
+	}
+	parts := strings.SplitN(cfg.LLM.Agent.Models[0], "/", 2)
+	if len(parts) != 2 {
+		return localllm.ManagedSpec{}, false, nil
+	}
+	provider, ok := cfg.LLM.Providers[parts[0]]
+	if !ok || provider.Driver != "llamacpp" || provider.LlamaCpp == nil || provider.LlamaCpp.Mode != llm.LlamaCppModeManaged {
+		return localllm.ManagedSpec{}, false, nil
+	}
+	return localllm.ManagedSpec{
+		RuntimeVersion: provider.LlamaCpp.RuntimeVersion,
+		ModelID:        provider.LlamaCpp.ManagedModelID,
+		Host:           provider.LlamaCpp.Host,
+		Port:           provider.LlamaCpp.Port,
+		ModelAlias:     provider.LlamaCpp.ModelAlias,
+	}, true, nil
+}
+
 // Context passed to all commands
 type Context struct {
 	Debug bool
@@ -3233,6 +3384,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	gateway.RegisterCommands()
 	transcript.RegisterCommands()
 	llm.RegisterCommands()
+	localllm.RegisterCommands()
 	stt.RegisterCommands()
 	L_debug("config commands registered")
 
