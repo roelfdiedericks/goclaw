@@ -460,7 +460,10 @@ func buildLocalLLMModels(status localllm.ManagerStatus, recs setupcore.LocalMode
 	for _, option := range recs.Options {
 		modelPath, _ := localllm.ManagedModelPath(option.Spec)
 		mmprojPath, _ := localllm.ManagedModelMMProjPath(option.Spec)
-		installed := pathExists(modelPath) && pathExists(mmprojPath)
+		installed := pathExists(modelPath)
+		if strings.TrimSpace(option.Spec.MMProjFilename) != "" {
+			installed = installed && pathExists(mmprojPath)
+		}
 		items = append(items, map[string]any{
 			"id":                     option.Spec.ID,
 			"label":                  option.Spec.Label,

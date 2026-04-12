@@ -9,9 +9,9 @@ import (
 )
 
 type StorageLayout struct {
-	RootDir         string
-	BinRootDir      string
-	ModelsRootDir   string
+	RootDir          string
+	BinRootDir       string
+	ModelsRootDir    string
 	DownloadsRootDir string
 }
 
@@ -68,6 +68,9 @@ func ManagedModelPath(spec ManagedModelSpec) (string, error) {
 }
 
 func ManagedModelMMProjPath(spec ManagedModelSpec) (string, error) {
+	if strings.TrimSpace(spec.MMProjFilename) == "" {
+		return "", nil
+	}
 	dir, err := ManagedModelDir(spec.ID)
 	if err != nil {
 		return "", err

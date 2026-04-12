@@ -45,6 +45,20 @@ func TestManagedModelPaths(t *testing.T) {
 	}
 }
 
+func TestManagedModelMMProjPathEmptyWhenOmitted(t *testing.T) {
+	spec, err := ManagedModelByID("qwen3-coder-next")
+	if err != nil {
+		t.Fatalf("ManagedModelByID: %v", err)
+	}
+	mmprojPath, err := ManagedModelMMProjPath(spec)
+	if err != nil {
+		t.Fatalf("ManagedModelMMProjPath: %v", err)
+	}
+	if mmprojPath != "" {
+		t.Fatalf("expected empty mmproj path, got %q", mmprojPath)
+	}
+}
+
 func TestRuntimeBinaryPath(t *testing.T) {
 	got, err := RuntimeBinaryPath("b1234", OSLinux, ArchAMD64, BackendCUDA)
 	if err != nil {

@@ -214,6 +214,39 @@ func TestDownloadManagedModel(t *testing.T) {
 	}
 }
 
+func TestDownloadManagedModelWithoutMMProj(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "Qwen3-Coder-Next-Q8_0.gguf") {
+			_, _ = w.Write([]byte("model"))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	origHFBase := huggingFaceBaseURL
+	huggingFaceBaseURL = server.URL
+	t.Cleanup(func() { huggingFaceBaseURL = origHFBase })
+	t.Setenv("HOME", t.TempDir())
+
+	spec, err := ManagedModelByID("qwen3-coder-next")
+	if err != nil {
+		t.Fatalf("ManagedModelByID: %v", err)
+	}
+
+	got, err := DownloadManagedModel(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("DownloadManagedModel: %v", err)
+	}
+	if _, err := os.Stat(got); err != nil {
+		t.Fatalf("expected model file: %v", err)
+	}
+	mmprojPath, err := ManagedModelMMProjPath(spec)
+	if err != nil || mmprojPath != "" {
+		t.Fatalf("expected no mmproj path, got %q err %v", mmprojPath, err)
+	}
+}
+
 func tarGzBytes(t *testing.T, files map[string]string) []byte {
 	t.Helper()
 	entries := make([]tarEntry, 0, len(files))

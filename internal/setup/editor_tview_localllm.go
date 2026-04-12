@@ -374,13 +374,18 @@ func localLLMModelInstalled(spec localllm.ManagedModelSpec) bool {
 	if err != nil || strings.TrimSpace(modelPath) == "" {
 		return false
 	}
+	if _, modelErr := os.Stat(modelPath); modelErr != nil {
+		return false
+	}
+	if strings.TrimSpace(spec.MMProjFilename) == "" {
+		return true
+	}
 	mmprojPath, err := localllm.ManagedModelMMProjPath(spec)
 	if err != nil || strings.TrimSpace(mmprojPath) == "" {
 		return false
 	}
-	_, modelErr := os.Stat(modelPath)
 	_, mmprojErr := os.Stat(mmprojPath)
-	return modelErr == nil && mmprojErr == nil
+	return mmprojErr == nil
 }
 
 func hasRunningLocalLLMJobs(items []jobs.Status) bool {

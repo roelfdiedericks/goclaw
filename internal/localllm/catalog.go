@@ -5,7 +5,8 @@ import "fmt"
 type ModelFamily string
 
 const (
-	ModelFamilyGemma4 ModelFamily = "gemma4"
+	ModelFamilyGemma4    ModelFamily = "gemma4"
+	ModelFamilyQwenCoder ModelFamily = "qwen_coder"
 )
 
 type ManagedModelSpec struct {
@@ -69,6 +70,18 @@ var managedModelCatalog = []ManagedModelSpec{
 		MMProjFilename:         "mmproj-gemma-4-31B-it-f16.gguf",
 		ApproxDownloadBytes:    18700000000,
 		RecommendedMinRAMBytes: 32 * 1024 * 1024 * 1024,
+		FallbackContextTokens:  256 * 1024,
+	},
+	{
+		ID:                     "qwen3-coder-next",
+		Family:                 ModelFamilyQwenCoder,
+		Label:                  "Qwen3 Coder Next (Q8_0)",
+		HFRepo:                 "ggml-org/Qwen3-Coder-Next-GGUF",
+		PreferredQuant:         "Q8_0",
+		PreferredFilename:      "Qwen3-Coder-Next-Q8_0.gguf",
+		MMProjFilename:         "",
+		ApproxDownloadBytes:    84812255040,
+		RecommendedMinRAMBytes: 96 * 1024 * 1024 * 1024,
 		FallbackContextTokens:  256 * 1024,
 	},
 }

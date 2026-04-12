@@ -99,6 +99,9 @@ func DownloadManagedModel(ctx context.Context, spec ManagedModelSpec) (string, e
 		{role: "weights", filename: spec.PreferredFilename, url: HuggingFaceResolveURL(spec.HFRepo, spec.PreferredFilename), path: modelPath},
 		{role: "mmproj", filename: spec.MMProjFilename, url: HuggingFaceResolveURL(spec.HFRepo, spec.MMProjFilename), path: mmprojPath},
 	} {
+		if strings.TrimSpace(item.filename) == "" {
+			continue
+		}
 		if err := downloadFileWithResume(ctx, item.url, item.path); err != nil {
 			return "", fmt.Errorf("managed model %s %s file %q: %w", spec.ID, item.role, item.filename, err)
 		}

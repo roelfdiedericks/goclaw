@@ -10,11 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - coding agents/acp: expand Cursor ACP integration, startup/session handling, interactive prompt plumbing, and related config/editor support
 - a2a/libp2p: add the first libp2p-based A2A runtime with bootstrap discovery, rendezvous, relay-first messaging, NAT traversal groundwork, and infra visibility tooling
 - agent tools: add native owner-only A2A tool support for structured status, peer/task inspection, pairing payloads, ping, and remote task operations
-- a2a/libp2p: optional background bounded direct `Connect()` when relay-only to a peer with known direct addresses (config under `libp2p.relay`, relay-first traffic unchanged)
-- localllm: start managed `llama-server` with `--metrics`; llm/llamacpp: record `timings.cache_n`/`prompt_n` from captured SSE, optional async `GET /metrics` scrape into internal gauges
+- a2a/libp2p: optional background attempts to open a direct path to peers you already reach via relay (config under `libp2p.relay`; relay stays the default)
+- localllm/llamacpp: turn on llama-server metrics for managed installs and record prompt-cache reuse plus basic server stats in GoClaw metrics
+- localllm: add Qwen3 Coder Next (Q8_0) to the managed local model list; text-only models no longer require a vision sidecar file
 - localllm: resolve ROCm managed-runtime artifact on Debian trixie (same upstream `ubuntu-rocm-7.2-x64` tarball as generic Linux)
-- gateway/context: move context token status out of `BuildSystemPrompt` into ephemeral system messages; default memory graph bulletin injection is `message` (was `prompt`)
-- llm/llamacpp: send `cache_prompt` + client-assigned `id_slot` (with slot allocator + unpinned fallback) via `LlamaCppChatAugmentTransport` chained outside `CapturingTransport`; session `slot_id` in provider state
+- gateway/context: context token usage and memory graph bulletins no longer default inside the main system prompt—they show as their own system notes
+- llm/llamacpp: pin chat requests to stable llama-server slots when possible so prompt caching can stick across turns, with a safe fallback when slots are full
 
 ## [0.1.13] stable - 2026-04-03
 
