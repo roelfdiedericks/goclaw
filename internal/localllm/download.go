@@ -19,8 +19,8 @@ import (
 )
 
 var (
-	httpClient          = http.DefaultClient
-	huggingFaceBaseURL  = "https://huggingface.co"
+	httpClient         = http.DefaultClient
+	huggingFaceBaseURL = "https://huggingface.co"
 )
 
 func HuggingFaceResolveURL(repo, filename string) string {
@@ -91,14 +91,16 @@ func DownloadManagedModel(ctx context.Context, spec ManagedModelSpec) (string, e
 	}
 
 	for _, item := range []struct {
-		url  string
-		path string
+		role     string
+		filename string
+		url      string
+		path     string
 	}{
-		{url: HuggingFaceResolveURL(spec.HFRepo, spec.PreferredFilename), path: modelPath},
-		{url: HuggingFaceResolveURL(spec.HFRepo, spec.MMProjFilename), path: mmprojPath},
+		{role: "weights", filename: spec.PreferredFilename, url: HuggingFaceResolveURL(spec.HFRepo, spec.PreferredFilename), path: modelPath},
+		{role: "mmproj", filename: spec.MMProjFilename, url: HuggingFaceResolveURL(spec.HFRepo, spec.MMProjFilename), path: mmprojPath},
 	} {
 		if err := downloadFileWithResume(ctx, item.url, item.path); err != nil {
-			return "", err
+			return "", fmt.Errorf("managed model %s %s file %q: %w", spec.ID, item.role, item.filename, err)
 		}
 	}
 
@@ -186,6 +188,17 @@ func downloadFileWithResume(ctx context.Context, url, dest string) error {
 	case http.StatusPartialContent:
 	default:
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		snippet := strings.TrimSpace(string(body))
+		if len(snippet) > 400 {
+			snippet = snippet[:400] + "..."
+		}
+		L_warn("localllm: download HTTP error", "url", url, "dest", dest, "statusCode", resp.StatusCode, "bodySnippet", snippet)
+		// Client errors (e.g. 404 wrong filename) will never succeed on resume; drop stale partial so dir matches reality.
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			if err := os.Remove(partial); err != nil && !os.IsNotExist(err) {
+				L_debug("localllm: could not remove partial after HTTP 4xx", "path", partial, "error", err)
+			}
+		}
 		return fmt.Errorf("download failed with status %d: %s", resp.StatusCode, string(body))
 	}
 

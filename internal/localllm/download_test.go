@@ -177,7 +177,7 @@ func TestDownloadManagedModel(t *testing.T) {
 		switch {
 		case strings.Contains(r.URL.Path, "gemma-4-e2b-it-Q8_0.gguf"):
 			_, _ = w.Write([]byte("model"))
-		case strings.Contains(r.URL.Path, "mmproj-gemma-4-e2b-it-f16.gguf"):
+		case strings.Contains(r.URL.Path, "mmproj-gemma-4-e2b-it-bf16.gguf"):
 			_, _ = w.Write([]byte("mmproj"))
 		default:
 			http.NotFound(w, r)
