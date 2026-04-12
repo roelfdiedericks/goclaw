@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/localllm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	. "github.com/roelfdiedericks/goclaw/internal/metrics"
@@ -149,11 +150,19 @@ func NewOpenAIProvider(name string, cfg LLMProviderConfig) (*OpenAIProvider, err
 
 	// Fetch model metadata from /v1/models endpoint (if supported)
 	// This populates context_length for accurate context window detection
-	if baseURL != "" {
+	if baseURL != "" && shouldFetchOpenAIModelMetadata(cfg) {
 		p.fetchModelMetadata(baseURL, apiKey)
 	}
 
 	return p, nil
+}
+
+func shouldFetchOpenAIModelMetadata(cfg LLMProviderConfig) bool {
+	if cfg.Driver != "llamacpp" || normalizedLlamaCppMode(cfg) != LlamaCppModeManaged {
+		return true
+	}
+	status := localllm.GetManager().Status()
+	return status.Configured && status.Server.Healthy
 }
 
 // fetchModelMetadata fetches model metadata from provider endpoints.

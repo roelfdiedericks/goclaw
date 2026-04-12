@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +25,7 @@ type ServerConfig struct {
 	BinaryPath   string
 	ModelPath    string
 	MMProjPath   string
+	ModelID      string
 	Alias        string
 	Host         string
 	Port         int
@@ -93,11 +96,34 @@ func (s *ManagedServer) Start(ctx context.Context) error {
 	s.status.State = "starting"
 	s.status.Healthy = false
 	s.stopping = false
+	s.status.LastError = ""
+	endpoint := s.status.Endpoint
+	s.mu.Unlock()
+
+	if err := s.prepareStartEndpoint(ctx, endpoint); err != nil {
+		s.mu.Lock()
+		s.status.Healthy = false
+		s.status.LastError = err.Error()
+		if _, ok := err.(OwnershipConflictError); ok {
+			s.status.State = "conflict"
+		} else {
+			s.status.State = "error"
+		}
+		s.mu.Unlock()
+		return err
+	}
 
 	cmd := commandFactory(s.cfg.BinaryPath, s.args()...)
+	baseEnv := cmd.Env
+	if len(baseEnv) == 0 {
+		baseEnv = os.Environ()
+	}
+	cmd.Env = runtimeLaunchEnv(baseEnv, filepath.Dir(s.cfg.BinaryPath))
 	writer := io.MultiWriter(&s.logBuf)
 	cmd.Stdout = writer
 	cmd.Stderr = writer
+
+	s.mu.Lock()
 	if err := cmd.Start(); err != nil {
 		s.status.State = "error"
 		s.status.LastError = err.Error()
@@ -107,14 +133,25 @@ func (s *ManagedServer) Start(ctx context.Context) error {
 	s.cmd = cmd
 	s.waitCh = make(chan error, 1)
 	s.status.PID = cmd.Process.Pid
+	ownedState := s.ownedProcessState(cmd)
+	if err := persistOwnedProcessState(ownedState); err != nil {
+		s.status.State = "error"
+		s.status.LastError = err.Error()
+		s.mu.Unlock()
+		_ = cmd.Process.Kill()
+		return err
+	}
 	s.mu.Unlock()
 
-	L_info("localllm: server starting", "pid", cmd.Process.Pid, "endpoint", s.status.Endpoint)
+	L_info("localllm: server starting", "pid", cmd.Process.Pid, "endpoint", endpoint)
 	go s.monitorProcess(cmd, s.waitCh)
 
 	readyCtx, cancel := context.WithTimeout(ctx, s.cfg.ReadyTimeout)
 	defer cancel()
-	if err := waitForServerReady(readyCtx, s.status.Endpoint); err != nil {
+	if err := waitForManagedServerReady(readyCtx, endpoint, cmd.Process.Pid); err != nil {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		_ = s.Stop(stopCtx)
 		s.mu.Lock()
 		s.status.State = "error"
 		s.status.LastError = err.Error()
@@ -128,7 +165,7 @@ func (s *ManagedServer) Start(ctx context.Context) error {
 	s.status.LastError = ""
 	s.restartBackoff = 0
 	s.mu.Unlock()
-	L_info("localllm: server ready", "endpoint", s.status.Endpoint, "pid", cmd.Process.Pid)
+	L_info("localllm: server ready", "endpoint", endpoint, "pid", cmd.Process.Pid)
 	return nil
 }
 
@@ -139,8 +176,10 @@ func (s *ManagedServer) Stop(ctx context.Context) error {
 	if cmd == nil || cmd.Process == nil {
 		s.status.State = "stopped"
 		s.status.Healthy = false
+		s.status.PID = 0
+		s.status.LastError = ""
 		s.mu.Unlock()
-		return nil
+		return clearOwnedProcessState()
 	}
 	s.stopping = true
 	s.status.State = "stopping"
@@ -160,6 +199,9 @@ func (s *ManagedServer) Stop(ctx context.Context) error {
 		s.status.Healthy = false
 		s.status.PID = 0
 		s.mu.Unlock()
+		if clearErr := clearOwnedProcessState(); clearErr != nil {
+			return clearErr
+		}
 		return normalizeExitErr(err)
 	case <-ctx.Done():
 		_ = cmd.Process.Kill()
@@ -236,6 +278,7 @@ func (s *ManagedServer) monitorProcess(cmd *exec.Cmd, waitCh chan error) {
 	s.waitCh = nil
 	s.status.PID = 0
 	s.status.Healthy = false
+	_ = clearOwnedProcessState()
 
 	if s.stopping {
 		s.status.State = "stopped"
@@ -268,6 +311,84 @@ func (s *ManagedServer) monitorProcess(cmd *exec.Cmd, waitCh chan error) {
 	}()
 }
 
+func (s *ManagedServer) prepareStartEndpoint(ctx context.Context, endpoint string) error {
+	ownedState, err := loadOwnedProcessState()
+	if err == nil {
+		if ownerProcessAlive(ownedState) && ownedState.OwnerPID != os.Getpid() {
+			return OwnershipConflictError{
+				Endpoint: endpoint,
+				Reason:   fmt.Sprintf("already owned by running GoClaw process pid %d", ownedState.OwnerPID),
+			}
+		}
+		if !pidExists(ownedState.PID) {
+			if clearErr := clearOwnedProcessState(); clearErr != nil {
+				return clearErr
+			}
+		} else if ownerProcessAlive(ownedState) && ownedState.OwnerPID == os.Getpid() {
+			if err := stopPID(ctx, ownedState.PID); err != nil {
+				return fmt.Errorf("stop existing managed llama-server pid %d: %w", ownedState.PID, err)
+			}
+			if clearErr := clearOwnedProcessState(); clearErr != nil {
+				return clearErr
+			}
+		} else if !ownerProcessAlive(ownedState) {
+			if err := stopPID(ctx, ownedState.PID); err != nil {
+				return fmt.Errorf("stop stale owned llama-server pid %d: %w", ownedState.PID, err)
+			}
+			if clearErr := clearOwnedProcessState(); clearErr != nil {
+				return clearErr
+			}
+		}
+	}
+
+	if !portInUse(s.cfg.Host, s.cfg.Port) {
+		return nil
+	}
+
+	ownedState, err = loadOwnedProcessState()
+	if err == nil && endpointMatchesOwnedPort(endpoint, ownedState) {
+		if ownerProcessAlive(ownedState) && ownedState.OwnerPID != os.Getpid() {
+			return OwnershipConflictError{
+				Endpoint: endpoint,
+				Reason:   fmt.Sprintf("already owned by running GoClaw process pid %d", ownedState.OwnerPID),
+			}
+		}
+		if pidExists(ownedState.PID) {
+			return OwnershipConflictError{
+				Endpoint: endpoint,
+				Reason:   fmt.Sprintf("owned llama-server pid %d still occupies the port", ownedState.PID),
+			}
+		}
+	}
+
+	return OwnershipConflictError{
+		Endpoint: endpoint,
+		Reason:   "foreign listener already bound to managed llama.cpp port",
+	}
+}
+
+func (s *ManagedServer) ownedProcessState(cmd *exec.Cmd) OwnedProcessState {
+	state := OwnedProcessState{
+		OwnerPID:   os.Getpid(),
+		PID:        cmd.Process.Pid,
+		Host:       s.cfg.Host,
+		Port:       s.cfg.Port,
+		Endpoint:   serverEndpoint(s.cfg.Host, s.cfg.Port),
+		BinaryPath: s.cfg.BinaryPath,
+		ModelPath:  s.cfg.ModelPath,
+		RuntimePath: filepath.Dir(s.cfg.BinaryPath),
+		ModelID:    s.cfg.ModelID,
+		StartedAt:  time.Now(),
+		ManagedBy:  "goclaw",
+	}
+	if runtime.GOOS == "linux" {
+		if cmdline, err := readProcessCommandLine(cmd.Process.Pid); err == nil {
+			state.CommandLine = cmdline
+		}
+	}
+	return state
+}
+
 func nextRestartDelay(previous time.Duration) time.Duration {
 	if previous <= 0 {
 		return 1 * time.Second
@@ -277,6 +398,45 @@ func nextRestartDelay(previous time.Duration) time.Duration {
 		return 30 * time.Second
 	}
 	return next
+}
+
+func runtimeLaunchEnv(base []string, runtimeDir string) []string {
+	if strings.TrimSpace(runtimeDir) == "" {
+		return append([]string{}, base...)
+	}
+	env := append([]string{}, base...)
+	switch runtime.GOOS {
+	case "darwin":
+		env = upsertPathLikeEnv(env, "DYLD_LIBRARY_PATH", runtimeDir)
+	case "windows":
+		env = upsertPathLikeEnv(env, "PATH", runtimeDir)
+	default:
+		env = upsertPathLikeEnv(env, "LD_LIBRARY_PATH", runtimeDir)
+	}
+	return env
+}
+
+func upsertPathLikeEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, item := range env {
+		if !strings.HasPrefix(item, prefix) {
+			continue
+		}
+		current := strings.TrimPrefix(item, prefix)
+		if current == "" {
+			env[i] = prefix + value
+			return env
+		}
+		parts := strings.Split(current, string(os.PathListSeparator))
+		for _, part := range parts {
+			if part == value {
+				return env
+			}
+		}
+		env[i] = prefix + value + string(os.PathListSeparator) + current
+		return env
+	}
+	return append(env, prefix+value)
 }
 
 func waitForServerReady(ctx context.Context, endpoint string) error {
@@ -300,7 +460,40 @@ func waitForServerReady(ctx context.Context, endpoint string) error {
 	}
 }
 
+func waitForManagedServerReady(ctx context.Context, endpoint string, pid int) error {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if pid > 0 && !pidExists(pid) {
+			return fmt.Errorf("managed llama-server pid %d exited before becoming ready", pid)
+		}
+
+		healthy, err := serverHealthy(ctx, endpoint)
+		if err == nil && healthy {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			if pid > 0 && !pidExists(pid) {
+				return fmt.Errorf("managed llama-server pid %d exited before becoming ready", pid)
+			}
+			if err != nil {
+				return fmt.Errorf("server did not become ready: %w", err)
+			}
+			return fmt.Errorf("server did not become ready: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 func serverHealthy(ctx context.Context, endpoint string) (bool, error) {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/health", nil)
 	if err != nil {
 		return false, err

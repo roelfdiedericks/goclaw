@@ -11,6 +11,7 @@ import (
 	neturl "net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -35,7 +36,14 @@ func DownloadRuntime(ctx context.Context, version string, osFlavor OSFlavor, arc
 	if err != nil {
 		return "", err
 	}
+	installDir, err := RuntimeInstallDir(version, osFlavor, arch, backend)
+	if err != nil {
+		return "", err
+	}
 	if _, err := os.Stat(binaryPath); err == nil {
+		if err := reconcileRuntimeSharedLibraries(installDir, osFlavor); err != nil {
+			return "", err
+		}
 		L_info("localllm: runtime already present", "binary", binaryPath)
 		return binaryPath, nil
 	}
@@ -45,10 +53,6 @@ func DownloadRuntime(ctx context.Context, version string, osFlavor OSFlavor, arc
 		return "", err
 	}
 
-	installDir, err := RuntimeInstallDir(version, osFlavor, arch, backend)
-	if err != nil {
-		return "", err
-	}
 	if err := paths.EnsureDir(installDir); err != nil {
 		return "", err
 	}
@@ -62,6 +66,10 @@ func DownloadRuntime(ctx context.Context, version string, osFlavor OSFlavor, arc
 		if err := downloadAndInstallArchive(ctx, url, cachePath, installDir); err != nil {
 			return "", err
 		}
+	}
+
+	if err := reconcileRuntimeSharedLibraries(installDir, osFlavor); err != nil {
+		return "", err
 	}
 
 	if _, err := os.Stat(binaryPath); err != nil {
@@ -234,6 +242,20 @@ func extractTarGz(src, dest string) error {
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				return err
 			}
+		case tar.TypeSymlink:
+			if err := paths.EnsureParentDir(target); err != nil {
+				return err
+			}
+			if _, err := os.Lstat(target); err == nil {
+				if err := os.Remove(target); err != nil {
+					return err
+				}
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+			if err := os.Symlink(header.Linkname, target); err != nil {
+				return err
+			}
 		case tar.TypeReg:
 			if err := paths.EnsureParentDir(target); err != nil {
 				return err
@@ -251,6 +273,65 @@ func extractTarGz(src, dest string) error {
 			}
 		}
 	}
+}
+
+func reconcileRuntimeSharedLibraries(installDir string, osFlavor OSFlavor) error {
+	if osFlavor != OSLinux && osFlavor != OSBookworm && osFlavor != OSTrixie {
+		return nil
+	}
+	entries, err := os.ReadDir(installDir)
+	if err != nil {
+		return err
+	}
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		files = append(files, entry.Name())
+	}
+	sort.Strings(files)
+
+	for _, name := range files {
+		if !strings.Contains(name, ".so.") {
+			continue
+		}
+		fullPath := filepath.Join(installDir, name)
+		info, err := os.Lstat(fullPath)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || info.IsDir() {
+			continue
+		}
+		target := sonameAliasName(name)
+		if target == "" || target == name {
+			continue
+		}
+		targetPath := filepath.Join(installDir, target)
+		if _, err := os.Lstat(targetPath); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.Symlink(name, targetPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sonameAliasName(name string) string {
+	idx := strings.Index(name, ".so.")
+	if idx < 0 {
+		return ""
+	}
+	suffix := name[idx+len(".so."):]
+	if suffix == "" {
+		return ""
+	}
+	parts := strings.Split(suffix, ".")
+	if len(parts) == 0 || parts[0] == "" {
+		return ""
+	}
+	return name[:idx+len(".so.")] + parts[0]
 }
 
 func extractZip(src, dest string) error {

@@ -61,6 +61,7 @@ func mountSetup(mux *http.ServeMux, opts mountOptions) {
 	mux.HandleFunc("/setup/api/models/", wrap(api.HandleGetModels))
 	mux.HandleFunc("/setup/api/presets", wrap(api.HandleGetPresets))
 	mux.HandleFunc("/setup/api/drivers", wrap(api.HandleGetDrivers))
+	mux.HandleFunc("/setup/api/local-llm", wrap(api.HandleLocalLLM))
 
 	mux.HandleFunc("/setup/api/users", wrap(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

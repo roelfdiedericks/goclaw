@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
+	"github.com/roelfdiedericks/goclaw/internal/jobs"
 )
 
 type CommandRequest struct {
@@ -40,16 +41,27 @@ func handleEnsureRuntime(cmd bus.Command) bus.CommandResult {
 	if err != nil {
 		return failureResult(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-	status, err := GetManager().EnsureRuntime(ctx, spec)
-	if err != nil {
-		return failureResult(err)
-	}
+	job := jobs.GetManager().Start(jobs.StartSpec{
+		OwnerComponent: "local_llm",
+		OwnerAction:    "ensure_runtime",
+		InitialPhase:   "queued",
+		InitialMessage: "Preparing managed local runtime",
+		PollAfterMs:    1000,
+		Cancelable:     true,
+		Metadata:       localLLMJobMetadata(spec),
+	}, func(ctx context.Context, reporter *jobs.Reporter) (interface{}, error) {
+		timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+		defer cancel()
+		status, err := GetManager().EnsureRuntimeWithProgress(timeoutCtx, spec, reporter.Update)
+		if err != nil {
+			return status, err
+		}
+		return status, nil
+	})
 	return bus.CommandResult{
 		Success: true,
-		Message: fmt.Sprintf("llama.cpp runtime ensured for %s", status.ModelID),
-		Data:    status,
+		Message: fmt.Sprintf("llama.cpp ensure-runtime job started: %s", job.JobID),
+		Data:    job,
 	}
 }
 
@@ -58,19 +70,33 @@ func handleDownloadModel(cmd bus.Command) bus.CommandResult {
 	if err != nil {
 		return failureResult(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
 	if spec.ModelID == "" {
 		return failureResult(fmt.Errorf("modelID is required"))
 	}
-	status, err := GetManager().EnsureRuntime(ctx, ManagedSpec{ModelID: spec.ModelID, RuntimeVersion: spec.RuntimeVersion})
-	if err != nil {
-		return failureResult(err)
-	}
+	job := jobs.GetManager().Start(jobs.StartSpec{
+		OwnerComponent: "local_llm",
+		OwnerAction:    "download_model",
+		InitialPhase:   "queued",
+		InitialMessage: fmt.Sprintf("Preparing managed model %s", spec.ModelID),
+		PollAfterMs:    1000,
+		Cancelable:     true,
+		Metadata:       localLLMJobMetadata(spec),
+	}, func(ctx context.Context, reporter *jobs.Reporter) (interface{}, error) {
+		timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+		defer cancel()
+		status, err := GetManager().EnsureRuntimeWithProgress(timeoutCtx, ManagedSpec{
+			ModelID:        spec.ModelID,
+			RuntimeVersion: spec.RuntimeVersion,
+		}, reporter.Update)
+		if err != nil {
+			return status, err
+		}
+		return status, nil
+	})
 	return bus.CommandResult{
 		Success: true,
-		Message: fmt.Sprintf("model %s downloaded", status.ModelID),
-		Data:    status,
+		Message: fmt.Sprintf("llama.cpp model download job started: %s", job.JobID),
+		Data:    job,
 	}
 }
 
@@ -79,16 +105,27 @@ func handleStart(cmd bus.Command) bus.CommandResult {
 	if err != nil {
 		return failureResult(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-	status, err := GetManager().Start(ctx, spec)
-	if err != nil {
-		return failureResult(err)
-	}
+	job := jobs.GetManager().Start(jobs.StartSpec{
+		OwnerComponent: "local_llm",
+		OwnerAction:    "start",
+		InitialPhase:   "queued",
+		InitialMessage: "Starting managed llama.cpp server",
+		PollAfterMs:    1000,
+		Cancelable:     true,
+		Metadata:       localLLMJobMetadata(spec),
+	}, func(ctx context.Context, reporter *jobs.Reporter) (interface{}, error) {
+		timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+		defer cancel()
+		status, err := GetManager().StartWithProgress(timeoutCtx, spec, reporter.Update)
+		if err != nil {
+			return status, err
+		}
+		return status, nil
+	})
 	return bus.CommandResult{
 		Success: true,
-		Message: fmt.Sprintf("llama.cpp server started at %s", status.Server.Endpoint),
-		Data:    status,
+		Message: fmt.Sprintf("llama.cpp start job started: %s", job.JobID),
+		Data:    job,
 	}
 }
 
@@ -166,4 +203,24 @@ func failureResult(err error) bus.CommandResult {
 		Error:   err,
 		Message: err.Error(),
 	}
+}
+
+func localLLMJobMetadata(spec ManagedSpec) map[string]any {
+	metadata := map[string]any{}
+	if spec.ModelID != "" {
+		metadata["modelID"] = spec.ModelID
+	}
+	if spec.RuntimeVersion != "" {
+		metadata["runtimeVersion"] = spec.RuntimeVersion
+	}
+	if spec.Port != 0 {
+		metadata["port"] = spec.Port
+	}
+	if spec.Host != "" {
+		metadata["host"] = spec.Host
+	}
+	if spec.ModelAlias != "" {
+		metadata["modelAlias"] = spec.ModelAlias
+	}
+	return metadata
 }

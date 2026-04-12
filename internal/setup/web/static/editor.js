@@ -89,6 +89,20 @@
         return date.toLocaleString();
     }
 
+    function formatBytes(value) {
+        const bytes = Number(value || 0);
+        if (!Number.isFinite(bytes) || bytes <= 0) return '-';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let size = bytes;
+        let unitIndex = 0;
+        while (size >= 1024 && unitIndex < units.length - 1) {
+            size /= 1024;
+            unitIndex += 1;
+        }
+        const precision = size >= 10 || unitIndex === 0 ? 0 : 1;
+        return `${size.toFixed(precision)} ${units[unitIndex]}`;
+    }
+
     function parseShowWhen(expr) {
         const raw = String(expr || '').trim();
         if (!raw) return [];
@@ -314,6 +328,10 @@
                 telegram: `web-editor-telegram-${Date.now()}`,
                 whatsapp: `web-editor-whatsapp-${Date.now()}`
             };
+            this.localLLMState = null;
+            this.localLLMError = '';
+            this.localLLMActionPending = false;
+            this.localLLMPollTimer = null;
             this.restartModal = new bootstrap.Modal(document.getElementById('editorRestartModal'));
             this.$restartMessage = $('#editor-restart-message');
             this.$restartDetail = $('#editor-restart-detail');
@@ -383,6 +401,7 @@
             this.$formContent.on('click', '.js-provider-add-cancel', (event) => this.cancelAddProvider($(event.currentTarget).data('field-path')));
             this.$formContent.on('input', '.js-provider-preset-filter', (event) => this.updateProviderPresetFilter($(event.currentTarget).data('field-path'), $(event.currentTarget).val()));
             this.$formContent.on('click', '.js-provider-preset-select', (event) => this.selectProviderPreset($(event.currentTarget).data('field-path'), $(event.currentTarget).data('preset-id')));
+            this.$formContent.on('click', '.js-provider-open-local-llm', () => this.switchSection('local-llm'));
             this.$formContent.on('input change', '.js-provider-input', (event) => this.handleProviderInput(event));
             this.$formContent.on('click', '.js-provider-save-new', (event) => this.saveNewProvider($(event.currentTarget).data('field-path')));
 
@@ -495,6 +514,7 @@
 
         showDashboard() {
             this.cacheCurrentSectionState();
+            this.stopLocalLLMPolling();
             this.currentSection = '';
             this.currentTitle = 'Dashboard';
             this.currentSectionType = '';
@@ -511,6 +531,9 @@
         async loadSection(sectionId) {
             this.loading = true;
             this.fieldErrors = {};
+            if (sectionId !== 'local-llm') {
+                this.stopLocalLLMPolling();
+            }
             showAlert(this.$errorAlert, '');
             showAlert(this.$successAlert, '');
             this.$loading.removeClass('d-none');
@@ -537,6 +560,8 @@
                         await this.loadUsers();
                     } else if (sectionId === 'a2a-peers') {
                         await this.loadA2APeers();
+                    } else if (sectionId === 'local-llm') {
+                        await this.loadLocalLLM();
                     }
                 } else {
                     const serverConfig = data.data.config || {};
@@ -2155,22 +2180,31 @@
                 const expanded = !!ui.expanded[alias];
                 const showKey = !!ui.showKey[alias];
                 const baseURL = cfg.baseURL || '';
+                const managedLocal = cfg.driver === 'llamacpp' && cfg.llamacpp && cfg.llamacpp.mode === 'managed';
                 html += `<div class="provider-item${expanded ? ' provider-item-expanded' : ''}">`;
                 html += `<div class="provider-header"><div class="provider-info"><span class="provider-alias">${escapeHtml(alias)}</span>`;
-                html += `<span class="provider-meta"><span>${escapeHtml(this.providerPresetName(cfg))}</span><span class="provider-key">${escapeHtml(this.maskApiKey(cfg.apiKey))}</span>${cfg.promptCaching ? '<span class="badge bg-info">Cache</span>' : ''}</span></div>`;
+                html += `<span class="provider-meta"><span>${escapeHtml(this.providerPresetName(cfg))}</span><span class="provider-key">${escapeHtml(this.maskApiKey(cfg.apiKey))}</span>${cfg.promptCaching ? '<span class="badge bg-info">Cache</span>' : ''}${managedLocal ? '<span class="badge bg-secondary">managed local</span>' : ''}</span></div>`;
                 html += `<div class="provider-actions"><button type="button" class="provider-btn js-provider-toggle" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}"><i class="bi ${expanded ? 'bi-chevron-up' : 'bi-chevron-down'}"></i></button>`;
-                html += `<button type="button" class="provider-btn provider-btn-remove js-provider-delete" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}"><i class="bi bi-x-lg"></i></button></div></div>`;
+                if (managedLocal) {
+                    html += `<button type="button" class="provider-btn js-provider-open-local-llm" title="Open Local LLM"><i class="bi bi-cpu"></i></button>`;
+                } else {
+                    html += `<button type="button" class="provider-btn provider-btn-remove js-provider-delete" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}"><i class="bi bi-x-lg"></i></button>`;
+                }
+                html += `</div></div>`;
                 if (expanded) {
                     html += `<div class="provider-form"><div class="row g-3">`;
+                    if (managedLocal) {
+                        html += `<div class="col-12"><div class="alert alert-light border mb-0">This provider is backed by the managed local llama.cpp runtime. Use the <button type="button" class="btn btn-link btn-sm p-0 align-baseline js-provider-open-local-llm">Local LLM</button> section for model downloads, start/stop, and runtime status.</div></div>`;
+                    }
                     html += `<div class="col-md-6"><label class="form-label">Alias</label><input type="text" class="form-control form-control-sm" value="${escapeHtml(alias)}" disabled></div>`;
-                    html += `<div class="col-md-6"><label class="form-label">Driver</label><select class="form-select form-select-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="driver">${this.renderOptions(this.providerDriverOptions, cfg.driver || '')}</select></div>`;
-                    html += `<div class="col-12"><label class="form-label">API Key (optional for local/self-hosted providers)</label><div class="input-group input-group-sm"><input type="${showKey ? 'text' : 'password'}" class="form-control js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="apiKey" value="${escapeHtml(cfg.apiKey || '')}" placeholder="Leave empty if your provider does not require one"><button type="button" class="btn btn-outline-secondary js-provider-toggle-key" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}"><i class="bi ${showKey ? 'bi-eye-slash' : 'bi-eye'}"></i></button></div></div>`;
-                    html += `<div class="col-12"><label class="form-label">Base URL (optional)</label><input type="text" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="baseURL" value="${escapeHtml(baseURL)}" placeholder="Leave empty for default"></div>`;
-                    html += `<div class="col-md-6"><div class="form-check form-switch"><input class="form-check-input js-provider-input" type="checkbox" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="promptCaching"${cfg.promptCaching ? ' checked' : ''}><label class="form-check-label">Prompt Caching</label></div></div>`;
-                    html += `<div class="col-md-6"><label class="form-label">Thinking Level</label><select class="form-select form-select-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="thinkingLevel">${this.renderOptions(THINKING_LEVEL_OPTIONS, cfg.thinkingLevel || '')}</select></div>`;
-                    html += `<div class="col-md-6"><label class="form-label">Max Tokens</label><input type="number" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="maxTokens" value="${escapeHtml(cfg.maxTokens || '')}" placeholder="0 = default"></div>`;
-                    html += `<div class="col-md-6"><label class="form-label">Context Window (tokens)</label><input type="number" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="contextTokens" value="${escapeHtml(cfg.contextTokens || '')}" placeholder="0 = auto-detect"></div>`;
-                    html += `<div class="col-md-6"><label class="form-label">Timeout (seconds)</label><input type="number" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="timeoutSeconds" value="${escapeHtml(cfg.timeoutSeconds || '')}" placeholder="0 = default"></div>`;
+                    html += `<div class="col-md-6"><label class="form-label">Driver</label><select class="form-select form-select-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="driver"${managedLocal ? ' disabled' : ''}>${this.renderOptions(this.providerDriverOptions, cfg.driver || '')}</select></div>`;
+                    html += `<div class="col-12"><label class="form-label">API Key (optional for local/self-hosted providers)</label><div class="input-group input-group-sm"><input type="${showKey ? 'text' : 'password'}" class="form-control js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="apiKey" value="${escapeHtml(cfg.apiKey || '')}" placeholder="Leave empty if your provider does not require one"${managedLocal ? ' disabled' : ''}><button type="button" class="btn btn-outline-secondary js-provider-toggle-key" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}"${managedLocal ? ' disabled' : ''}><i class="bi ${showKey ? 'bi-eye-slash' : 'bi-eye'}"></i></button></div></div>`;
+                    html += `<div class="col-12"><label class="form-label">Base URL (optional)</label><input type="text" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="baseURL" value="${escapeHtml(baseURL)}" placeholder="Leave empty for default"${managedLocal ? ' disabled' : ''}></div>`;
+                    html += `<div class="col-md-6"><div class="form-check form-switch"><input class="form-check-input js-provider-input" type="checkbox" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="promptCaching"${cfg.promptCaching ? ' checked' : ''}${managedLocal ? ' disabled' : ''}><label class="form-check-label">Prompt Caching</label></div></div>`;
+                    html += `<div class="col-md-6"><label class="form-label">Thinking Level</label><select class="form-select form-select-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="thinkingLevel"${managedLocal ? ' disabled' : ''}>${this.renderOptions(THINKING_LEVEL_OPTIONS, cfg.thinkingLevel || '')}</select></div>`;
+                    html += `<div class="col-md-6"><label class="form-label">Max Tokens</label><input type="number" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="maxTokens" value="${escapeHtml(cfg.maxTokens || '')}" placeholder="0 = default"${managedLocal ? ' disabled' : ''}></div>`;
+                    html += `<div class="col-md-6"><label class="form-label">Context Window (tokens)</label><input type="number" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="contextTokens" value="${escapeHtml(cfg.contextTokens || '')}" placeholder="0 = auto-detect"${managedLocal ? ' disabled' : ''}></div>`;
+                    html += `<div class="col-md-6"><label class="form-label">Timeout (seconds)</label><input type="number" class="form-control form-control-sm js-provider-input" data-field-path="${escapeHtml(fieldPath)}" data-alias="${escapeHtml(alias)}" data-provider-field="timeoutSeconds" value="${escapeHtml(cfg.timeoutSeconds || '')}" placeholder="0 = default"${managedLocal ? ' disabled' : ''}></div>`;
                     html += `</div></div>`;
                 }
                 html += `</div>`;
@@ -2275,7 +2309,8 @@
                 subtype: preset.id,
                 apiKey: '',
                 baseURL: preset.apiEndpoint || '',
-                promptCaching: preset.driver === 'anthropic'
+                promptCaching: preset.driver === 'anthropic',
+                llamacpp: preset.llamacpp ? deepClone(preset.llamacpp) : undefined
             };
             this.renderProviderList(fieldPath);
         }
@@ -2571,6 +2606,338 @@
             this.sectionDrafts[this.currentSection] = deepClone(this.formData);
             this.dirtyState[this.currentSection] = this.currentDirty();
             this.syncTopBar();
+        }
+
+        stopLocalLLMPolling() {
+            if (this.localLLMPollTimer) {
+                window.clearTimeout(this.localLLMPollTimer);
+                this.localLLMPollTimer = null;
+            }
+        }
+
+        scheduleLocalLLMPoll(delayMs) {
+            this.stopLocalLLMPolling();
+            if (this.currentSection !== 'local-llm') return;
+            const delay = Math.max(500, Number(delayMs || 1000));
+            this.localLLMPollTimer = window.setTimeout(() => {
+                this.loadLocalLLM({ silent: true });
+            }, delay);
+        }
+
+        async loadLocalLLM(options = {}) {
+            if (!options.silent) {
+                this.localLLMError = '';
+                this.renderLocalLLMSection();
+            }
+            try {
+                const resp = await fetch('/setup/api/local-llm', { cache: 'no-store' });
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || 'Failed to load local LLM state');
+                this.localLLMState = data.data || {};
+                this.localLLMError = '';
+            } catch (err) {
+                this.localLLMError = err.message || 'Failed to load local LLM state';
+            } finally {
+                this.renderLocalLLMSection();
+                const activeJobs = ((this.localLLMState && this.localLLMState.jobs) || []).filter(job => job && job.state === 'running');
+                if (activeJobs.length) {
+                    const pollMs = activeJobs.reduce((min, job) => {
+                        const next = Number(job.pollAfterMs || 1000);
+                        return Math.min(min, next > 0 ? next : 1000);
+                    }, 1000);
+                    this.scheduleLocalLLMPoll(pollMs);
+                } else {
+                    this.stopLocalLLMPolling();
+                }
+            }
+        }
+
+        async runLocalLLMAction(action, extra = {}) {
+            if (this.localLLMActionPending) return;
+            this.localLLMActionPending = true;
+            this.localLLMError = '';
+            this.renderLocalLLMSection();
+            try {
+                const resp = await fetch('/setup/api/local-llm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action, ...extra })
+                });
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.message || 'Local LLM action failed');
+                this.syncLocalLLMConfigCaches(data.data || {});
+                await this.loadLocalLLM({ silent: true });
+                showAlert(this.$successAlert, data.message || 'Local LLM action started');
+            } catch (err) {
+                this.localLLMError = err.message || 'Local LLM action failed';
+                this.renderLocalLLMSection();
+            } finally {
+                this.localLLMActionPending = false;
+                this.renderLocalLLMSection();
+            }
+        }
+
+        syncLocalLLMConfigCaches(data) {
+            if (!data || !data.configUpdated) return;
+            this.syncManagedProviderSectionDraft('llm-providers', data.providerAlias, data.providerConfig);
+            this.syncManagedAgentChainDraft('llm', data.providerAlias, data.agentModelRef);
+            this.mcProvidersByPurpose = {};
+            this.mcProvidersLoadedByPurpose = {};
+        }
+
+        syncManagedProviderSectionDraft(sectionId, alias, providerConfig) {
+            if (!alias || !providerConfig) return;
+            const applyUpdate = (sectionData) => {
+                if (!sectionData || typeof sectionData !== 'object' || Array.isArray(sectionData)) return;
+                if (!sectionData.providers || typeof sectionData.providers !== 'object' || Array.isArray(sectionData.providers)) {
+                    sectionData.providers = {};
+                }
+                sectionData.providers[alias] = deepClone(providerConfig);
+            };
+            applyUpdate(this.sectionDrafts[sectionId]);
+            applyUpdate(this.sectionOriginals[sectionId]);
+        }
+
+        syncManagedAgentChainDraft(sectionId, alias, agentModelRef) {
+            if (!alias || !agentModelRef) return;
+            const aliasPrefix = `${alias}/`;
+            const applyUpdate = (sectionData) => {
+                if (!sectionData || typeof sectionData !== 'object' || Array.isArray(sectionData)) return;
+                if (!sectionData.agent || typeof sectionData.agent !== 'object' || Array.isArray(sectionData.agent)) {
+                    sectionData.agent = {};
+                }
+                const models = Array.isArray(sectionData.agent.models) ? [...sectionData.agent.models] : [];
+                const existingIndex = models.findIndex(item => String(item || '').startsWith(aliasPrefix));
+                if (existingIndex >= 0) {
+                    models[existingIndex] = agentModelRef;
+                } else {
+                    models.push(agentModelRef);
+                }
+                sectionData.agent.models = models;
+            };
+            applyUpdate(this.sectionDrafts[sectionId]);
+            applyUpdate(this.sectionOriginals[sectionId]);
+        }
+
+        localLLMStatusBadgeClass(status) {
+            const state = (((status || {}).server || {}).state || '').toLowerCase();
+            if (state === 'running' && status.server && status.server.healthy) return 'text-bg-success';
+            if (state === 'running') return 'text-bg-warning';
+            if ((status || {}).lastError) return 'text-bg-danger';
+            return 'text-bg-secondary';
+        }
+
+        localLLMJobBadgeClass(job) {
+            const state = String((job || {}).state || '').toLowerCase();
+            if (state === 'completed') return 'text-bg-success';
+            if (state === 'failed') return 'text-bg-danger';
+            if (state === 'canceled') return 'text-bg-secondary';
+            return 'text-bg-warning';
+        }
+
+        renderLocalLLMSection() {
+            const data = this.localLLMState || {};
+            const status = data.status || {};
+            const server = status.server || {};
+            const models = Array.isArray(data.models) ? data.models : [];
+            const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+            const providers = Array.isArray(data.managedProviders) ? data.managedProviders : [];
+            const activeJobs = jobs.filter(job => job && job.state === 'running');
+            const systemProfile = status.systemProfile || ((data.recommendations || {}).profile || {});
+            const summary = (data.recommendations || {}).summary || '';
+            const runtimeVersion = data.runtimeVersion || {};
+            const wiring = data.wiring || {};
+            const selectedModelID = status.modelID || ((data.defaultSpec || {}).modelID || '');
+            const defaultProviderAlias = wiring.defaultProvider || data.defaultProvider || '';
+            const providerInAgentChain = !!wiring.providerInAgentChain;
+            const agentModelRef = wiring.agentModelRef || '';
+            const recommendedAlias = wiring.recommendedAlias || 'local-llm';
+            const defaultManagedProvider = providers.find(item => item.alias === defaultProviderAlias) || providers[0] || null;
+            const providerModelID = defaultManagedProvider ? (defaultManagedProvider.managedModelID || '') : '';
+            const managedAgentModelRef = defaultProviderAlias ? `${defaultProviderAlias}/managed` : '';
+            const providerUsesManagedRef = !!managedAgentModelRef && agentModelRef === managedAgentModelRef;
+            const serverSummary = server.endpoint ? escapeHtml(server.endpoint) : 'Not started';
+            const runtimeModeText = runtimeVersion.usingLatestByDefault
+                ? 'Latest by default'
+                : 'Pinned by managed provider config';
+            const runtimeNote = runtimeVersion.usingLatestByDefault
+                ? 'Ensure Runtime will resolve the latest supported llama.cpp builder release.'
+                : 'Ensure Runtime follows the managed provider pin unless you explicitly choose Ensure Latest.';
+
+            const providerSummary = providers.length
+                ? providers.map(item => `<div class="small mb-2"><div><code>${escapeHtml(item.alias)}</code>${item.isAgentDefault ? ' <span class="badge text-bg-primary">agent default</span>' : ''}</div><div class="text-muted">managed model: <code>${escapeHtml(item.managedModelID || '-')}</code></div></div>`).join('')
+                : '<div class="text-muted small">No managed `llamacpp` provider is configured yet. The runtime can still be prepared here, but the agent will not use it until a managed provider is configured.</div>';
+            const providerActions = [];
+            if (!providers.length) {
+                providerActions.push(`<button type="button" class="btn btn-sm btn-outline-primary js-local-llm-action" data-action="configure_managed_provider" data-model-id="${escapeHtml(selectedModelID || '')}"${this.localLLMActionPending ? ' disabled' : ''}>Add Managed Provider</button>`);
+                providerActions.push(`<button type="button" class="btn btn-sm btn-primary js-local-llm-action" data-action="use_for_agent" data-model-id="${escapeHtml(selectedModelID || '')}"${this.localLLMActionPending ? ' disabled' : ''}>Add Provider + Add To Agent</button>`);
+            } else {
+                if (!providerInAgentChain || !providerUsesManagedRef) {
+                    providerActions.push(`<button type="button" class="btn btn-sm btn-outline-primary js-local-llm-action" data-action="add_managed_provider_to_agent_chain"${this.localLLMActionPending ? ' disabled' : ''}>Add To Agent Chain</button>`);
+                }
+                if (selectedModelID && providerModelID !== selectedModelID) {
+                    providerActions.push(`<button type="button" class="btn btn-sm btn-primary js-local-llm-action" data-action="use_for_agent" data-model-id="${escapeHtml(selectedModelID)}"${this.localLLMActionPending ? ' disabled' : ''}>Use Selected Model For Agent</button>`);
+                }
+            }
+            const providerFooter = !providers.length
+                ? `<div class="small text-muted mt-3">Suggested alias: <code>${escapeHtml(recommendedAlias)}</code>${selectedModelID ? ` · selected model: <code>${escapeHtml(selectedModelID)}</code>` : ''}</div>`
+                : `<div class="small text-muted mt-3">${agentModelRef ? `Agent chain ref: <code>${escapeHtml(agentModelRef)}</code>${providerUsesManagedRef ? '' : ' (will be normalized to <code>' + escapeHtml(managedAgentModelRef || 'alias/managed') + '</code>)'}` : 'This managed provider is not yet in the agent chain.'}</div>`;
+
+            const jobsHtml = activeJobs.length
+                ? activeJobs.map(job => `
+                    <div class="card mb-2">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start gap-3">
+                                <div>
+                                    <div class="fw-semibold">${escapeHtml(job.ownerAction || 'job')}</div>
+                                    <div class="small text-muted">${escapeHtml(job.phase || '')}</div>
+                                    <div>${escapeHtml(job.message || '')}</div>
+                                </div>
+                                <div class="text-end">
+                                    <div><span class="badge ${this.localLLMJobBadgeClass(job)}">${escapeHtml(job.state)}</span></div>
+                                    <button type="button" class="btn btn-sm btn-outline-danger mt-2 js-local-llm-action" data-action="cancel_job" data-job-id="${escapeHtml(job.jobID)}"${this.localLLMActionPending ? ' disabled' : ''}>Cancel</button>
+                                </div>
+                            </div>
+                            <div class="progress mt-3" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${escapeHtml(String(job.progressPercent || 0))}">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: ${escapeHtml(String(job.progressPercent || 0))}%">${escapeHtml(String(job.progressPercent || 0))}%</div>
+                            </div>
+                        </div>
+                    </div>
+                `).join('')
+                : '<div class="text-muted small">No active local LLM jobs.</div>';
+
+            const modelCards = models.map(model => {
+                const modelUsedByAgent = !!defaultManagedProvider && providerUsesManagedRef && providerModelID === model.id;
+                const badges = [
+                    model.installed ? '<span class="badge text-bg-success">installed</span>' : '<span class="badge text-bg-secondary">not installed</span>',
+                    model.selected ? '<span class="badge text-bg-primary">selected</span>' : '',
+                    modelUsedByAgent ? '<span class="badge text-bg-dark">agent wired</span>' : '',
+                    model.recommended ? '<span class="badge text-bg-info">recommended</span>' : '',
+                    model.defaultSelected ? '<span class="badge text-bg-light">default</span>' : '',
+                    model.viable ? '' : '<span class="badge text-bg-warning">heavy</span>'
+                ].filter(Boolean).join(' ');
+                return `
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+                                <div>
+                                    <div class="fw-semibold">${escapeHtml(model.label)}</div>
+                                    <div class="small text-muted">${escapeHtml(model.hfRepo || '')}</div>
+                                </div>
+                                <div>${badges}</div>
+                            </div>
+                            <p class="small text-muted mt-2 mb-3">${escapeHtml(model.reason || '')}</p>
+                            <div class="row g-3 small mb-3">
+                                <div class="col-12 col-md-4"><div class="text-muted">Download</div><div>${escapeHtml(formatBytes(model.approxDownloadBytes))}</div></div>
+                                <div class="col-12 col-md-4"><div class="text-muted">Recommended RAM</div><div>${escapeHtml(formatBytes(model.recommendedMinRAMBytes))}</div></div>
+                                <div class="col-12 col-md-4"><div class="text-muted">Quant</div><div>${escapeHtml(model.preferredQuant || '-')}</div></div>
+                            </div>
+                            <div class="d-flex gap-2 flex-wrap">
+                                <button type="button" class="btn btn-sm btn-outline-primary js-local-llm-action" data-action="download_model" data-model-id="${escapeHtml(model.id)}"${this.localLLMActionPending ? ' disabled' : ''}>${model.installed ? 'Re-download' : 'Download'}</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary js-local-llm-action" data-action="select_model" data-model-id="${escapeHtml(model.id)}"${this.localLLMActionPending || model.selected ? ' disabled' : ''}>Select</button>
+                                <button type="button" class="btn btn-sm btn-primary js-local-llm-action" data-action="start" data-model-id="${escapeHtml(model.id)}"${this.localLLMActionPending ? ' disabled' : ''}>Start With This Model</button>
+                                <button type="button" class="btn btn-sm btn-outline-dark js-local-llm-action" data-action="use_for_agent" data-model-id="${escapeHtml(model.id)}"${this.localLLMActionPending || !model.installed || modelUsedByAgent ? ' disabled' : ''}>${modelUsedByAgent ? 'Already In Agent Flow' : 'Use For Agent'}</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            this.$usersContent.html(`
+                <div class="row g-3 mb-4">
+                    <div class="col-12 col-xl-4">
+                        <div class="card h-100">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <span>Runtime Status</span>
+                                <span class="badge ${this.localLLMStatusBadgeClass(status)}">${escapeHtml(server.state || 'stopped')}</span>
+                            </div>
+                            <div class="card-body">
+                                <dl class="row mb-0 small">
+                                    <dt class="col-5">Endpoint</dt><dd class="col-7">${serverSummary}</dd>
+                                    <dt class="col-5">Model</dt><dd class="col-7">${escapeHtml(selectedModelID || '-')}</dd>
+                                    <dt class="col-5">Runtime</dt><dd class="col-7">${escapeHtml(status.runtimeVersion || '-')}</dd>
+                                    <dt class="col-5">Backend</dt><dd class="col-7">${escapeHtml(status.backend || '-')}${server.healthy ? ' <span class="badge text-bg-success">healthy</span>' : ''}</dd>
+                                    <dt class="col-5">PID</dt><dd class="col-7">${escapeHtml(String(server.pid || '-'))}</dd>
+                                </dl>
+                                ${status.lastError ? `<div class="alert alert-danger mt-3 mb-0">${escapeHtml(status.lastError)}</div>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-12 col-xl-4">
+                        <div class="card h-100">
+                            <div class="card-header">Managed Providers</div>
+                            <div class="card-body">
+                                ${providerSummary}
+                                ${providerActions.length ? `<div class="d-flex gap-2 flex-wrap mt-3">${providerActions.join('')}</div>` : ''}
+                                ${providerFooter}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-12 col-xl-4">
+                        <div class="card h-100">
+                            <div class="card-header">Machine Profile</div>
+                            <div class="card-body">
+                                <div class="small text-muted mb-2">${escapeHtml(summary || 'No recommendation summary available')}</div>
+                                <dl class="row mb-0 small">
+                                    <dt class="col-5">Platform</dt><dd class="col-7">${escapeHtml(`${systemProfile.osFlavor || '-'}/${systemProfile.arch || '-'}`)}</dd>
+                                    <dt class="col-5">Backend</dt><dd class="col-7">${escapeHtml(systemProfile.recommended || '-')}</dd>
+                                    <dt class="col-5">RAM</dt><dd class="col-7">${escapeHtml(formatBytes(systemProfile.totalRAMBytes))}</dd>
+                                </dl>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card mb-4">
+                    <div class="card-header">Runtime Version</div>
+                    <div class="card-body">
+                        <div class="small text-muted mb-2">${escapeHtml(runtimeNote)}</div>
+                        <dl class="row mb-0 small">
+                            <dt class="col-4">Mode</dt><dd class="col-8">${escapeHtml(runtimeModeText)}</dd>
+                            <dt class="col-4">Installed</dt><dd class="col-8">${escapeHtml(runtimeVersion.installed || '-')}</dd>
+                            <dt class="col-4">Configured</dt><dd class="col-8">${escapeHtml(runtimeVersion.configured || 'latest')}</dd>
+                            <dt class="col-4">Latest</dt><dd class="col-8">${escapeHtml(runtimeVersion.latest || '-')}</dd>
+                            <dt class="col-4">Effective</dt><dd class="col-8">${escapeHtml(runtimeVersion.effective || '-')}</dd>
+                        </dl>
+                        ${runtimeVersion.latestLookupError ? `<div class="alert alert-warning mt-3 mb-0">${escapeHtml(runtimeVersion.latestLookupError)}</div>` : ''}
+                    </div>
+                </div>
+
+                <div class="card mb-4">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span>Actions</span>
+                        <div class="d-flex gap-2 flex-wrap">
+                            <button type="button" class="btn btn-sm btn-outline-secondary js-local-llm-refresh"${this.localLLMActionPending ? ' disabled' : ''}>Refresh</button>
+                            <button type="button" class="btn btn-sm btn-outline-primary js-local-llm-action" data-action="ensure_runtime"${this.localLLMActionPending ? ' disabled' : ''}>Ensure Runtime</button>
+                            <button type="button" class="btn btn-sm btn-outline-primary js-local-llm-action" data-action="ensure_latest_runtime" data-runtime-version="${escapeHtml(runtimeVersion.latest || '')}"${this.localLLMActionPending || !runtimeVersion.latest ? ' disabled' : ''}>Ensure Latest</button>
+                            <button type="button" class="btn btn-sm btn-primary js-local-llm-action" data-action="start"${this.localLLMActionPending ? ' disabled' : ''}>Start Server</button>
+                            <button type="button" class="btn btn-sm btn-outline-danger js-local-llm-action" data-action="stop"${this.localLLMActionPending || !server.pid ? ' disabled' : ''}>Stop Server</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        ${this.localLLMError ? `<div class="alert alert-danger mb-3">${escapeHtml(this.localLLMError)}</div>` : ''}
+                        ${jobsHtml}
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">Managed Models</div>
+                    <div class="card-body">
+                        ${modelCards || '<div class="text-muted">No managed models available.</div>'}
+                    </div>
+                </div>
+            `);
+
+            this.$usersContent.off('click.localllm');
+            this.$usersContent.on('click.localllm', '.js-local-llm-refresh', () => this.loadLocalLLM());
+            this.$usersContent.on('click.localllm', '.js-local-llm-action', (event) => {
+                const $button = $(event.currentTarget);
+                const action = $button.data('action');
+                const modelID = $button.data('model-id') || '';
+                const jobID = $button.data('job-id') || '';
+                const runtimeVersionValue = $button.data('runtime-version') || '';
+                this.runLocalLLMAction(action, { modelID, jobID, runtimeVersion: runtimeVersionValue });
+            });
         }
 
         async loadUsers() {

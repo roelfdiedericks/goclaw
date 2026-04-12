@@ -1,9 +1,22 @@
 package localllm
 
-import "testing"
+import (
+	"fmt"
+	"net"
+	"testing"
+)
 
 func TestManagerStatusLoadsPersistedState(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	// Use a port that is not listening so Status() clears a stale PID instead of reporting conflict.
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d", port)
 
 	mgr := &Manager{}
 	want := ManagerStatus{
@@ -14,7 +27,7 @@ func TestManagerStatusLoadsPersistedState(t *testing.T) {
 		ModelPath:      "/tmp/model.gguf",
 		Server: ServerStatus{
 			State:    "running",
-			Endpoint: "http://127.0.0.1:8080",
+			Endpoint: endpoint,
 			PID:      999999, // guaranteed to be absent; status should downgrade to stopped
 			Healthy:  false,
 		},
@@ -39,5 +52,41 @@ func TestManagerStatusLoadsPersistedState(t *testing.T) {
 	}
 	if got.Server.State != "stopped" {
 		t.Fatalf("expected stale persisted server to downgrade to stopped, got %q", got.Server.State)
+	}
+}
+
+func TestManagerStatusMarksForeignListenerConflict(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	mgr := &Manager{}
+	endpoint := "http://" + ln.Addr().String()
+	want := ManagerStatus{
+		Configured:     true,
+		RuntimeVersion: "b7777",
+		ModelID:        "gemma4-e2b",
+		RuntimePath:    "/tmp/llama-server",
+		ModelPath:      "/tmp/model.gguf",
+		Server: ServerStatus{
+			State:    "running",
+			Endpoint: endpoint,
+		},
+	}
+
+	if err := mgr.persistStatus(want); err != nil {
+		t.Fatalf("persistStatus returned error: %v", err)
+	}
+
+	got := (&Manager{}).Status()
+	if got.Server.State != "conflict" {
+		t.Fatalf("expected conflict state, got %#v", got.Server)
+	}
+	if got.LastError == "" {
+		t.Fatalf("expected conflict status to include an error message")
 	}
 }

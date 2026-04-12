@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/delivery"
+	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/update"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
@@ -195,6 +197,54 @@ func TestRestartCmdRunStartsImmediatelyWhenNotRunning(t *testing.T) {
 	}
 	if !startCalled {
 		t.Fatalf("expected start to be called")
+	}
+}
+
+func TestFilterManagedLocalFromRuntimeConfigRemovesManagedProvidersAndRefs(t *testing.T) {
+	cfg := &config.Config{
+		LLM: llm.LLMConfig{
+			Providers: map[string]llm.LLMProviderConfig{
+				"local-llm": {
+					Driver: "llamacpp",
+					LlamaCpp: &llm.LlamaCppProviderConfig{
+						Mode:           llm.LlamaCppModeManaged,
+						ManagedModelID: "gemma-local",
+					},
+				},
+				"cloud": {
+					Driver:  "openai",
+					BaseURL: "https://example.test/v1",
+				},
+			},
+			Agent:            llm.LLMPurposeConfig{Models: []string{"local-llm/managed", "cloud/gpt"}},
+			Subagent:         llm.LLMPurposeConfig{Models: []string{"local-llm/managed"}},
+			Summarization:    llm.LLMPurposeConfig{Models: []string{"cloud/gpt", "local-llm/managed"}},
+			Embeddings:       llm.LLMPurposeConfig{Models: []string{"local-llm/managed"}},
+			Heartbeat:        llm.LLMPurposeConfig{Models: []string{"local-llm/managed"}},
+			Cron:             llm.LLMPurposeConfig{Models: []string{"cloud/gpt"}},
+			Hass:             llm.LLMPurposeConfig{Models: []string{"local-llm/managed"}},
+			MemoryExtraction: llm.LLMPurposeConfig{Models: []string{"local-llm/managed", "cloud/gpt"}},
+		},
+	}
+
+	filtered, err := filterManagedLocalFromRuntimeConfig(cfg)
+	if err != nil {
+		t.Fatalf("filterManagedLocalFromRuntimeConfig returned error: %v", err)
+	}
+	if _, ok := filtered.LLM.Providers["local-llm"]; ok {
+		t.Fatalf("expected managed provider to be removed")
+	}
+	if len(filtered.LLM.Agent.Models) != 1 || filtered.LLM.Agent.Models[0] != "cloud/gpt" {
+		t.Fatalf("unexpected filtered agent models: %#v", filtered.LLM.Agent.Models)
+	}
+	if len(filtered.LLM.Subagent.Models) != 0 {
+		t.Fatalf("expected subagent managed refs to be removed, got %#v", filtered.LLM.Subagent.Models)
+	}
+	if len(filtered.LLM.MemoryExtraction.Models) != 1 || filtered.LLM.MemoryExtraction.Models[0] != "cloud/gpt" {
+		t.Fatalf("unexpected filtered memory extraction models: %#v", filtered.LLM.MemoryExtraction.Models)
+	}
+	if _, ok := cfg.LLM.Providers["local-llm"]; !ok {
+		t.Fatalf("expected original config to remain unchanged")
 	}
 }
 

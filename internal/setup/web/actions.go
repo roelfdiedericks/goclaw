@@ -12,6 +12,7 @@ import (
 	whatsappconfig "github.com/roelfdiedericks/goclaw/internal/channels/whatsapp/config"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
+	"github.com/roelfdiedericks/goclaw/internal/jobs"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/localllm"
 	"github.com/roelfdiedericks/goclaw/internal/media"
@@ -35,6 +36,7 @@ func registerWebActionCommands() {
 		tuiconfig.RegisterCommands()
 		llm.RegisterCommands()
 		localllm.RegisterCommands()
+		jobs.RegisterCommands()
 		acp.RegisterCommands()
 		a2a.RegisterCommands()
 		gateway.RegisterCommands()

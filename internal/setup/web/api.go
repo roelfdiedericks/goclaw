@@ -938,6 +938,9 @@ func (a *API) HandleGetPresets(w http.ResponseWriter, r *http.Request) {
 		if presetDef.Description != "" {
 			preset["description"] = presetDef.Description
 		}
+		if presetDef.LlamaCpp != nil {
+			preset["llamacpp"] = presetDef.LlamaCpp
+		}
 
 		presets = append(presets, preset)
 	}

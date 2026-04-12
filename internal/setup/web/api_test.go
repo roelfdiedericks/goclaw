@@ -1,16 +1,22 @@
 package web
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/roelfdiedericks/goclaw/internal/bus"
 	"github.com/roelfdiedericks/goclaw/internal/config"
 	"github.com/roelfdiedericks/goclaw/internal/configapply"
+	"github.com/roelfdiedericks/goclaw/internal/jobs"
+	"github.com/roelfdiedericks/goclaw/internal/llm"
+	"github.com/roelfdiedericks/goclaw/internal/localllm"
 )
 
 func TestHandleGetPresetsIncludesSyntheticLlamaCppPreset(t *testing.T) {
@@ -30,6 +36,10 @@ func TestHandleGetPresetsIncludesSyntheticLlamaCppPreset(t *testing.T) {
 				ID        string `json:"id"`
 				Driver    string `json:"driver"`
 				Synthetic bool   `json:"synthetic"`
+				LlamaCpp  struct {
+					Mode           string `json:"mode"`
+					ManagedModelID string `json:"managedModelID"`
+				} `json:"llamacpp"`
 			} `json:"presets"`
 		} `json:"data"`
 	}
@@ -42,10 +52,336 @@ func TestHandleGetPresetsIncludesSyntheticLlamaCppPreset(t *testing.T) {
 			if preset.Driver != "llamacpp" || !preset.Synthetic {
 				t.Fatalf("unexpected synthetic preset payload %#v", preset)
 			}
+			if preset.LlamaCpp.Mode != "managed" || preset.LlamaCpp.ManagedModelID == "" {
+				t.Fatalf("expected managed llamacpp config in preset payload, got %#v", preset.LlamaCpp)
+			}
 			return
 		}
 	}
 	t.Fatalf("expected synthetic llamacpp preset in response")
+}
+
+func TestHandleGetLocalLLMIncludesManagedProvidersAndModels(t *testing.T) {
+	origLatestFunc := localLLMLatestRuntimeVersionFunc
+	localLLMLatestRuntimeVersionFunc = func(ctx context.Context) (string, error) { return "b9999", nil }
+	localLLMLatestRuntimeCache = struct {
+		Value     string
+		Err       string
+		FetchedAt time.Time
+	}{}
+	t.Cleanup(func() {
+		localLLMLatestRuntimeVersionFunc = origLatestFunc
+		localLLMLatestRuntimeCache = struct {
+			Value     string
+			Err       string
+			FetchedAt time.Time
+		}{}
+	})
+
+	configPath := filepath.Join(t.TempDir(), "goclaw.json")
+	writeTestConfig(t, configPath, &config.Config{
+		LLM: llm.LLMConfig{
+			Providers: map[string]llm.LLMProviderConfig{
+				"local": {
+					Driver: "llamacpp",
+					LlamaCpp: &llm.LlamaCppProviderConfig{
+						Mode:           "managed",
+						ManagedModelID: "gemma4-e2b",
+						Host:           "127.0.0.1",
+						Port:           8080,
+					},
+				},
+			},
+			Agent: llm.LLMPurposeConfig{
+				Models: []string{"local/managed"},
+			},
+		},
+	})
+	api := NewAPI(configPath, configapply.CallerWebStandalone, EditorSectionsForMode(false))
+	req := httptest.NewRequest(http.MethodGet, "/setup/api/local-llm", nil)
+	rec := httptest.NewRecorder()
+
+	api.HandleLocalLLM(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			ManagedProviders []struct {
+				Alias          string `json:"alias"`
+				IsAgentDefault bool   `json:"isAgentDefault"`
+			} `json:"managedProviders"`
+			Models []struct {
+				ID          string `json:"id"`
+				Recommended bool   `json:"recommended"`
+			} `json:"models"`
+			Status struct {
+				SystemProfile struct {
+					Recommended string `json:"recommended"`
+				} `json:"systemProfile"`
+			} `json:"status"`
+			RuntimeVersion struct {
+				Latest               string `json:"latest"`
+				Configured           string `json:"configured"`
+				UsingLatestByDefault bool   `json:"usingLatestByDefault"`
+				Effective            string `json:"effective"`
+			} `json:"runtimeVersion"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("expected success response")
+	}
+	if len(resp.Data.ManagedProviders) != 1 || resp.Data.ManagedProviders[0].Alias != "local" || !resp.Data.ManagedProviders[0].IsAgentDefault {
+		t.Fatalf("unexpected managed providers payload %#v", resp.Data.ManagedProviders)
+	}
+	if len(resp.Data.Models) == 0 {
+		t.Fatalf("expected managed model list in response")
+	}
+	if resp.Data.Status.SystemProfile.Recommended == "" {
+		t.Fatalf("expected normalized system profile in response")
+	}
+	if resp.Data.RuntimeVersion.Latest != "b9999" {
+		t.Fatalf("expected latest runtime version b9999, got %#v", resp.Data.RuntimeVersion)
+	}
+	if resp.Data.RuntimeVersion.Configured != "" || !resp.Data.RuntimeVersion.UsingLatestByDefault || resp.Data.RuntimeVersion.Effective != "b9999" {
+		t.Fatalf("unexpected runtime version payload %#v", resp.Data.RuntimeVersion)
+	}
+}
+
+func TestHandleLocalLLMActionCancelsRunningJob(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "goclaw.json")
+	writeTestConfig(t, configPath, &config.Config{})
+	api := NewAPI(configPath, configapply.CallerWebStandalone, EditorSectionsForMode(false))
+
+	job := jobs.GetManager().Start(jobs.StartSpec{
+		OwnerComponent: "local_llm",
+		OwnerAction:    "start",
+		Cancelable:     true,
+	}, func(ctx context.Context, reporter *jobs.Reporter) (interface{}, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+
+	body, err := json.Marshal(map[string]any{
+		"action": "cancel_job",
+		"jobID":  job.JobID,
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/setup/api/local-llm", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	api.HandleLocalLLM(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		status, ok := jobs.GetManager().Status(job.JobID)
+		if !ok {
+			t.Fatalf("expected job %s to exist", job.JobID)
+		}
+		if status.State == jobs.StateCanceled {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected canceled job state")
+}
+
+func TestHandleLocalLLMActionEnsureLatestRuntimeUsesResolvedLatestVersion(t *testing.T) {
+	origLatestFunc := localLLMLatestRuntimeVersionFunc
+	localLLMLatestRuntimeVersionFunc = func(ctx context.Context) (string, error) { return "b4242", nil }
+	localLLMLatestRuntimeCache = struct {
+		Value     string
+		Err       string
+		FetchedAt time.Time
+	}{}
+	t.Cleanup(func() {
+		localLLMLatestRuntimeVersionFunc = origLatestFunc
+		localLLMLatestRuntimeCache = struct {
+			Value     string
+			Err       string
+			FetchedAt time.Time
+		}{}
+		localllm.RegisterCommands()
+	})
+
+	var captured localllm.ManagedSpec
+	bus.RegisterCommand("local_llm", "ensure_runtime", func(cmd bus.Command) bus.CommandResult {
+		spec, ok := cmd.Payload.(localllm.ManagedSpec)
+		if !ok {
+			t.Fatalf("expected ManagedSpec payload, got %T", cmd.Payload)
+		}
+		captured = spec
+		return bus.CommandResult{Success: true, Message: "ok"}
+	})
+
+	configPath := filepath.Join(t.TempDir(), "goclaw.json")
+	writeTestConfig(t, configPath, &config.Config{})
+	api := NewAPI(configPath, configapply.CallerWebStandalone, EditorSectionsForMode(false))
+
+	body, err := json.Marshal(map[string]any{
+		"action": "ensure_latest_runtime",
+		"modelID": "gemma4-e2b",
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/setup/api/local-llm", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	api.HandleLocalLLM(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if captured.RuntimeVersion != "b4242" || captured.ModelID != "gemma4-e2b" {
+		t.Fatalf("unexpected ensure_latest_runtime payload %#v", captured)
+	}
+}
+
+func TestHandleLocalLLMActionConfigureManagedProviderPersistsConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "goclaw.json")
+	writeTestConfig(t, configPath, &config.Config{})
+	api := NewAPI(configPath, configapply.CallerWebStandalone, EditorSectionsForMode(false))
+
+	body, err := json.Marshal(map[string]any{
+		"action":  "configure_managed_provider",
+		"modelID": "gemma4-e2b",
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/setup/api/local-llm", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	api.HandleLocalLLM(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			ConfigUpdated bool   `json:"configUpdated"`
+			ProviderAlias string `json:"providerAlias"`
+			ProviderConfig struct {
+				Driver   string `json:"driver"`
+				Subtype  string `json:"subtype"`
+				LlamaCpp struct {
+					Mode           string `json:"mode"`
+					ManagedModelID string `json:"managedModelID"`
+					Host           string `json:"host"`
+					Port           int    `json:"port"`
+				} `json:"llamacpp"`
+			} `json:"providerConfig"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.Success || !resp.Data.ConfigUpdated || resp.Data.ProviderAlias == "" {
+		t.Fatalf("unexpected response payload %#v", resp)
+	}
+	if resp.Data.ProviderConfig.Driver != "llamacpp" || resp.Data.ProviderConfig.LlamaCpp.ManagedModelID != "gemma4-e2b" {
+		t.Fatalf("unexpected provider payload %#v", resp.Data.ProviderConfig)
+	}
+
+	result, err := config.LoadFromPath(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	provider, ok := result.Config.LLM.Providers[resp.Data.ProviderAlias]
+	if !ok {
+		t.Fatalf("expected provider %q in saved config", resp.Data.ProviderAlias)
+	}
+	if provider.Driver != "llamacpp" || provider.Subtype != "llamacpp-managed" || provider.LlamaCpp == nil {
+		t.Fatalf("unexpected saved provider %#v", provider)
+	}
+	if provider.LlamaCpp.Mode != "managed" || provider.LlamaCpp.ManagedModelID != "gemma4-e2b" {
+		t.Fatalf("unexpected saved llamacpp config %#v", provider.LlamaCpp)
+	}
+	if provider.LlamaCpp.Host != "127.0.0.1" || provider.LlamaCpp.Port != 8080 {
+		t.Fatalf("expected default managed host/port, got %#v", provider.LlamaCpp)
+	}
+}
+
+func TestHandleLocalLLMActionUseForAgentUpdatesProviderAndChain(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "goclaw.json")
+	writeTestConfig(t, configPath, &config.Config{
+		LLM: llm.LLMConfig{
+			Providers: map[string]llm.LLMProviderConfig{
+				"local": {
+					Driver:  "llamacpp",
+					Subtype: "llamacpp-managed",
+					LlamaCpp: &llm.LlamaCppProviderConfig{
+						Mode:           "managed",
+						ManagedModelID: "gemma4-e2b",
+						Host:           "127.0.0.1",
+						Port:           8080,
+					},
+				},
+			},
+			Agent: llm.LLMPurposeConfig{
+				Models: []string{
+					"anthropic/claude-sonnet-4-20250514",
+					"local/custom-model",
+				},
+			},
+		},
+	})
+	api := NewAPI(configPath, configapply.CallerWebStandalone, EditorSectionsForMode(false))
+
+	body, err := json.Marshal(map[string]any{
+		"action":  "use_for_agent",
+		"modelID": "gemma4-e4b",
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/setup/api/local-llm", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	api.HandleLocalLLM(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	result, err := config.LoadFromPath(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	provider := result.Config.LLM.Providers["local"]
+	if provider.LlamaCpp == nil || provider.LlamaCpp.ManagedModelID != "gemma4-e4b" {
+		t.Fatalf("expected provider model to be updated, got %#v", provider.LlamaCpp)
+	}
+	if len(result.Config.LLM.Agent.Models) != 2 {
+		t.Fatalf("unexpected agent model chain %#v", result.Config.LLM.Agent.Models)
+	}
+	if result.Config.LLM.Agent.Models[0] != "anthropic/claude-sonnet-4-20250514" {
+		t.Fatalf("expected existing primary model to be preserved, got %#v", result.Config.LLM.Agent.Models)
+	}
+	if result.Config.LLM.Agent.Models[1] != "local/managed" {
+		t.Fatalf("expected managed local model ref to replace existing alias entry, got %#v", result.Config.LLM.Agent.Models)
+	}
+}
+
+func writeTestConfig(t *testing.T, path string, cfg *config.Config) {
+	t.Helper()
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 }
 
 func TestSetConfigPathRootMergeIsNonDestructive(t *testing.T) {

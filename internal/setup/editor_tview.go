@@ -20,6 +20,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 	"github.com/roelfdiedericks/goclaw/internal/cron"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
+	"github.com/roelfdiedericks/goclaw/internal/jobs"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/localllm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -66,6 +67,7 @@ func (e *EditorTview) Run() error {
 	telegramconfig.RegisterCommands()
 	llm.RegisterCommands()
 	localllm.RegisterCommands()
+	jobs.RegisterCommands()
 	media.RegisterCommands()
 	tuiconfig.RegisterCommands()
 	httpconfig.RegisterCommands()
@@ -135,6 +137,7 @@ func (e *EditorTview) createMenu() *forms.MenuListResult {
 
 	items := []forms.MenuItem{
 		{Label: "LLM Configuration", OnSelect: e.editLLM},
+		{Label: "Local LLM", OnSelect: e.editLocalLLM},
 		{Label: "VoiceLLM Configuration", OnSelect: e.editVoiceLLM},
 		{Label: "Coding Agents", OnSelect: e.editACP},
 		{Label: "A2A Networking", OnSelect: e.editA2A},

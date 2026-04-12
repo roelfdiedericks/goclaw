@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
+	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -23,23 +25,24 @@ type ManagedSpec struct {
 }
 
 type ManagerStatus struct {
-	Configured      bool
-	RuntimeVersion  string
-	ModelID         string
-	ModelPath       string
-	MMProjPath      string
-	RuntimePath     string
-	Backend         Backend
-	SystemProfile   SystemProfile
-	LastError       string
-	Server          ServerStatus
+	Configured           bool
+	RuntimeVersion       string
+	ModelID              string
+	ModelPath            string
+	MMProjPath           string
+	RuntimePath          string
+	Backend              Backend
+	SystemProfile        SystemProfile
+	LastError            string
+	EffectiveContextSize int `json:"effectiveContextSize,omitempty"`
+	Server               ServerStatus
 }
 
 type Manager struct {
-	mu      sync.RWMutex
-	spec    ManagedSpec
-	status  ManagerStatus
-	server  *ManagedServer
+	mu     sync.RWMutex
+	spec   ManagedSpec
+	status ManagerStatus
+	server *ManagedServer
 }
 
 var (
@@ -55,11 +58,23 @@ func GetManager() *Manager {
 }
 
 func (m *Manager) EnsureRuntime(ctx context.Context, spec ManagedSpec) (ManagerStatus, error) {
+	return m.ensureRuntime(ctx, spec, nil)
+}
+
+func (m *Manager) EnsureRuntimeWithProgress(ctx context.Context, spec ManagedSpec, progress func(string, string, int)) (ManagerStatus, error) {
+	return m.ensureRuntime(ctx, spec, progress)
+}
+
+func (m *Manager) ensureRuntime(ctx context.Context, spec ManagedSpec, progress func(string, string, int)) (ManagerStatus, error) {
 	current := m.Status()
-	if current.Configured && current.Server.PID > 0 && current.ModelID == specOrCurrentModelID(spec, m.spec) {
+	m.mu.RLock()
+	currentServer := m.server
+	m.mu.RUnlock()
+	if currentServer != nil && current.Configured && current.Server.PID > 0 && current.ModelID == specOrCurrentModelID(spec, m.spec) {
 		return current, nil
 	}
 
+	reportProgress(progress, "resolving", "Resolving managed local runtime settings", 5)
 	resolved, err := m.resolveSpec(ctx, spec)
 	if err != nil {
 		m.recordError(err)
@@ -67,6 +82,7 @@ func (m *Manager) EnsureRuntime(ctx context.Context, spec ManagedSpec) (ManagerS
 	}
 
 	profile := DetectSystemProfile()
+	reportProgress(progress, "runtime_download", "Downloading or reusing llama.cpp runtime", 20)
 	runtimePath, err := DownloadRuntime(ctx, resolved.RuntimeVersion, profile.OSFlavor, profile.Arch, profile.Recommended)
 	if err != nil {
 		err = fmt.Errorf("download runtime for %s/%s backend=%s: %w", profile.OSFlavor, profile.Arch, profile.Recommended, err)
@@ -79,6 +95,7 @@ func (m *Manager) EnsureRuntime(ctx context.Context, spec ManagedSpec) (ManagerS
 		m.recordError(err)
 		return m.Status(), err
 	}
+	reportProgress(progress, "model_download", "Downloading or reusing managed model files", 55)
 	modelPath, err := DownloadManagedModel(ctx, modelSpec)
 	if err != nil {
 		m.recordError(err)
@@ -90,6 +107,10 @@ func (m *Manager) EnsureRuntime(ctx context.Context, spec ManagedSpec) (ManagerS
 		return m.Status(), err
 	}
 
+	effectiveCtx := deriveManagedEffectiveContext(resolved.ContextSize, modelPath, modelSpec.FallbackContextTokens)
+	L_debug("localllm: effective context size", "tokens", effectiveCtx, "modelID", resolved.ModelID, "override", resolved.ContextSize)
+
+	reportProgress(progress, "persisting", "Saving managed local runtime state", 90)
 	m.mu.Lock()
 	m.spec = resolved
 	m.status.Configured = true
@@ -100,6 +121,7 @@ func (m *Manager) EnsureRuntime(ctx context.Context, spec ManagedSpec) (ManagerS
 	m.status.RuntimePath = runtimePath
 	m.status.Backend = profile.Recommended
 	m.status.SystemProfile = profile
+	m.status.EffectiveContextSize = effectiveCtx
 	m.status.LastError = ""
 	if m.server != nil {
 		m.status.Server = m.server.Status()
@@ -113,7 +135,15 @@ func (m *Manager) EnsureRuntime(ctx context.Context, spec ManagedSpec) (ManagerS
 }
 
 func (m *Manager) Start(ctx context.Context, spec ManagedSpec) (ManagerStatus, error) {
-	status, err := m.EnsureRuntime(ctx, spec)
+	return m.start(ctx, spec, nil)
+}
+
+func (m *Manager) StartWithProgress(ctx context.Context, spec ManagedSpec, progress func(string, string, int)) (ManagerStatus, error) {
+	return m.start(ctx, spec, progress)
+}
+
+func (m *Manager) start(ctx context.Context, spec ManagedSpec, progress func(string, string, int)) (ManagerStatus, error) {
+	status, err := m.ensureRuntime(ctx, spec, progress)
 	if err != nil {
 		return status, err
 	}
@@ -121,12 +151,23 @@ func (m *Manager) Start(ctx context.Context, spec ManagedSpec) (ManagerStatus, e
 	m.mu.Lock()
 	currentSpec := m.spec
 	currentServer := m.server
+	modelSpec, specErr := ManagedModelByID(currentSpec.ModelID)
+	fallbackCtx := 0
+	if specErr == nil {
+		fallbackCtx = modelSpec.FallbackContextTokens
+	} else {
+		L_warn("localllm: managed model spec missing for context sizing", "modelID", currentSpec.ModelID, "error", specErr)
+	}
+	effectiveCtx := deriveManagedEffectiveContext(currentSpec.ContextSize, status.ModelPath, fallbackCtx)
+	m.status.EffectiveContextSize = effectiveCtx
 	m.mu.Unlock()
 
 	if currentServer != nil && currentServer.Status().State == "running" {
 		current := currentServer.Status()
 		if current.Endpoint == serverEndpoint(defaultHost(currentSpec.Host), currentSpec.Port) && currentSpec.ModelID == specOrCurrentModelID(spec, currentSpec) {
-			return m.Status(), nil
+			out := m.Status()
+			_ = m.persistStatus(out)
+			return out, nil
 		}
 		stopCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -139,14 +180,16 @@ func (m *Manager) Start(ctx context.Context, spec ManagedSpec) (ManagerStatus, e
 		BinaryPath:   status.RuntimePath,
 		ModelPath:    status.ModelPath,
 		MMProjPath:   status.MMProjPath,
+		ModelID:      status.ModelID,
 		Alias:        currentSpec.ModelAlias,
 		Host:         defaultHost(currentSpec.Host),
 		Port:         currentSpec.Port,
-		ContextSize:  currentSpec.ContextSize,
+		ContextSize:  effectiveCtx,
 		Backend:      status.Backend,
 		AutoRestart:  true,
 		ReadyTimeout: 60 * time.Second,
 	})
+	reportProgress(progress, "server_start", "Starting managed llama.cpp server", 95)
 	if err := server.Start(ctx); err != nil {
 		m.mu.Lock()
 		m.status.Server = server.Status()
@@ -174,16 +217,34 @@ func (m *Manager) Stop(ctx context.Context) error {
 	m.mu.Unlock()
 	if server == nil {
 		status := m.Status()
-		if status.Server.PID == 0 {
-			return nil
+		ownedState, err := loadOwnedProcessState()
+		if err != nil {
+			if status.Server.PID == 0 {
+				return nil
+			}
+			return OwnershipConflictError{
+				Endpoint: status.Server.Endpoint,
+				Reason:   "managed process exists without a GoClaw ownership record",
+			}
 		}
-		if err := stopPID(ctx, status.Server.PID); err != nil {
-			return err
+		if ownerProcessAlive(ownedState) && ownedState.OwnerPID != os.Getpid() {
+			return OwnershipConflictError{
+				Endpoint: ownedState.Endpoint,
+				Reason:   fmt.Sprintf("owned by running GoClaw process pid %d", ownedState.OwnerPID),
+			}
+		}
+		if pidExists(ownedState.PID) {
+			if err := stopPID(ctx, ownedState.PID); err != nil {
+				return err
+			}
 		}
 		status.Server.State = "stopped"
 		status.Server.Healthy = false
 		status.Server.PID = 0
 		status.LastError = ""
+		if err := clearOwnedProcessState(); err != nil {
+			return err
+		}
 		return m.persistStatus(status)
 	}
 	if err := server.Stop(ctx); err != nil {
@@ -224,10 +285,34 @@ func (m *Manager) Status() ManagerStatus {
 		out.Server = server.Status()
 	} else if out.Server.Endpoint != "" {
 		healthy, _ := serverHealthy(context.Background(), out.Server.Endpoint)
-		out.Server.Healthy = healthy
-		if !out.Server.Healthy && out.Server.PID > 0 && !pidExists(out.Server.PID) {
-			out.Server.State = "stopped"
-			out.Server.PID = 0
+		ownedState, ownErr := loadOwnedProcessState()
+		ownedValid := ownErr == nil && endpointMatchesOwnedPort(out.Server.Endpoint, ownedState) && validateOwnedProcessState(ownedState, out.Server.Endpoint) == nil
+		if ownedValid {
+			out.Server.PID = ownedState.PID
+			if ownerProcessAlive(ownedState) || ownedState.OwnerPID == os.Getpid() {
+				out.Server.Healthy = healthy
+				if healthy {
+					out.Server.State = "running"
+				}
+			} else if pidExists(ownedState.PID) {
+				out.Server.State = "orphaned"
+				out.Server.Healthy = false
+				out.LastError = fmt.Sprintf("owned llama-server pid %d was left behind by dead GoClaw owner pid %d", ownedState.PID, ownedState.OwnerPID)
+			}
+		} else {
+			out.Server.Healthy = false
+			host, port, ok := parseEndpointHostPort(out.Server.Endpoint)
+			if healthy || (ok && portInUse(defaultHost(host), port)) {
+				out.Server.State = "conflict"
+				if ownErr == nil && ownerProcessAlive(ownedState) {
+					out.LastError = fmt.Sprintf("managed llama.cpp endpoint is owned by another running GoClaw process pid %d", ownedState.OwnerPID)
+				} else {
+					out.LastError = fmt.Sprintf("foreign listener already bound to %s", out.Server.Endpoint)
+				}
+			} else if out.Server.PID > 0 && !pidExists(out.Server.PID) {
+				out.Server.State = "stopped"
+				out.Server.PID = 0
+			}
 		}
 		_ = m.persistStatus(out)
 	}
@@ -320,7 +405,7 @@ func stopPID(ctx context.Context, pid int) error {
 	if err != nil {
 		return err
 	}
-	if err := proc.Signal(syscall.SIGTERM); err != nil {
+	if err := proc.Signal(syscall.SIGTERM); err != nil && !processAlreadyExited(err) {
 		return err
 	}
 	ticker := time.NewTicker(250 * time.Millisecond)
@@ -341,11 +426,23 @@ func pidExists(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
+	if processIsZombie(pid) {
+		return false
+	}
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return false
 	}
 	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+func processIsZombie(pid int) bool {
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return false
+	}
+	parts := strings.Fields(string(data))
+	return len(parts) > 2 && parts[2] == "Z"
 }
 
 func (m *Manager) recordError(err error) {
@@ -357,4 +454,10 @@ func (m *Manager) recordError(err error) {
 	out := m.status
 	m.mu.Unlock()
 	_ = m.persistStatus(out)
+}
+
+func reportProgress(progress func(string, string, int), phase, message string, percent int) {
+	if progress != nil {
+		progress(phase, message, percent)
+	}
 }

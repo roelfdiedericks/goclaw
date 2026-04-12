@@ -46,6 +46,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/embeddings"
 	"github.com/roelfdiedericks/goclaw/internal/gateway"
 	"github.com/roelfdiedericks/goclaw/internal/hass"
+	"github.com/roelfdiedericks/goclaw/internal/jobs"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/localllm"
@@ -2443,6 +2444,103 @@ func buildLLMRegistry(cfg *config.Config) (*llm.Registry, error) {
 	return llm.NewRegistry(regCfg)
 }
 
+func cloneRuntimeConfig(cfg *config.Config) (*config.Config, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var cloned config.Config
+	if err := json.Unmarshal(data, &cloned); err != nil {
+		return nil, err
+	}
+	return &cloned, nil
+}
+
+func managedLocalLLMSpecFromConfig(cfg *config.Config) (localllm.ManagedSpec, string, bool) {
+	if cfg == nil || len(cfg.LLM.Agent.Models) == 0 {
+		return localllm.ManagedSpec{}, "", false
+	}
+	parts := strings.SplitN(cfg.LLM.Agent.Models[0], "/", 2)
+	if len(parts) != 2 {
+		return localllm.ManagedSpec{}, "", false
+	}
+	alias := strings.TrimSpace(parts[0])
+	provider, ok := cfg.LLM.Providers[alias]
+	if !ok || provider.Driver != "llamacpp" || provider.LlamaCpp == nil || provider.LlamaCpp.Mode != llm.LlamaCppModeManaged {
+		return localllm.ManagedSpec{}, "", false
+	}
+	return localllm.ManagedSpec{
+		RuntimeVersion: provider.LlamaCpp.RuntimeVersion,
+		ModelID:        provider.LlamaCpp.ManagedModelID,
+		Host:           provider.LlamaCpp.Host,
+		Port:           provider.LlamaCpp.Port,
+		ModelAlias:     provider.LlamaCpp.ModelAlias,
+	}, alias, true
+}
+
+func filterManagedLocalFromRuntimeConfig(cfg *config.Config) (*config.Config, error) {
+	cloned, err := cloneRuntimeConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	aliases := make(map[string]bool)
+	for alias, provider := range cloned.LLM.Providers {
+		if provider.Driver == "llamacpp" && provider.LlamaCpp != nil && provider.LlamaCpp.Mode == llm.LlamaCppModeManaged {
+			aliases[alias] = true
+			delete(cloned.LLM.Providers, alias)
+		}
+	}
+	if len(aliases) == 0 {
+		return nil, fmt.Errorf("no managed llamacpp providers to filter")
+	}
+	filter := func(models []string) []string {
+		out := make([]string, 0, len(models))
+		for _, ref := range models {
+			parts := strings.SplitN(strings.TrimSpace(ref), "/", 2)
+			if len(parts) == 2 && aliases[strings.TrimSpace(parts[0])] {
+				continue
+			}
+			out = append(out, ref)
+		}
+		return out
+	}
+	cloned.LLM.Agent.Models = filter(cloned.LLM.Agent.Models)
+	cloned.LLM.Subagent.Models = filter(cloned.LLM.Subagent.Models)
+	cloned.LLM.Summarization.Models = filter(cloned.LLM.Summarization.Models)
+	cloned.LLM.Embeddings.Models = filter(cloned.LLM.Embeddings.Models)
+	cloned.LLM.Heartbeat.Models = filter(cloned.LLM.Heartbeat.Models)
+	cloned.LLM.Cron.Models = filter(cloned.LLM.Cron.Models)
+	cloned.LLM.Hass.Models = filter(cloned.LLM.Hass.Models)
+	cloned.LLM.MemoryExtraction.Models = filter(cloned.LLM.MemoryExtraction.Models)
+	return cloned, nil
+}
+
+func prepareGatewayRuntimeConfig(ctx context.Context, cfg *config.Config) (*config.Config, bool, error) {
+	spec, alias, ok := managedLocalLLMSpecFromConfig(cfg)
+	if !ok {
+		return cfg, false, nil
+	}
+	if _, err := localllm.GetManager().Start(ctx, spec); err != nil {
+		filtered, filterErr := filterManagedLocalFromRuntimeConfig(cfg)
+		if filterErr != nil {
+			return nil, false, fmt.Errorf("managed local llama.cpp required for agent startup via %s: %w", alias, err)
+		}
+		if len(filtered.LLM.Agent.Models) == 0 {
+			return nil, false, fmt.Errorf("managed local llama.cpp required for agent startup via %s: %w", alias, err)
+		}
+		L_warn("localllm: managed startup unavailable, continuing without managed local models",
+			"alias", alias,
+			"error", err,
+			"remainingAgentModels", len(filtered.LLM.Agent.Models))
+		return filtered, false, nil
+	}
+	L_info("localllm: managed startup ready", "modelID", spec.ModelID, "phase", "pre-registry")
+	return cfg, true, nil
+}
+
 // runEmbeddingsRebuild rebuilds all non-primary embeddings
 func runEmbeddingsRebuild(batchSize int) error {
 	// Load config
@@ -3183,25 +3281,8 @@ func loadManagedLocalLLMSpec() (localllm.ManagedSpec, bool, error) {
 	if err != nil {
 		return localllm.ManagedSpec{}, false, err
 	}
-	cfg := loadResult.Config
-	if cfg == nil || len(cfg.LLM.Agent.Models) == 0 {
-		return localllm.ManagedSpec{}, false, nil
-	}
-	parts := strings.SplitN(cfg.LLM.Agent.Models[0], "/", 2)
-	if len(parts) != 2 {
-		return localllm.ManagedSpec{}, false, nil
-	}
-	provider, ok := cfg.LLM.Providers[parts[0]]
-	if !ok || provider.Driver != "llamacpp" || provider.LlamaCpp == nil || provider.LlamaCpp.Mode != llm.LlamaCppModeManaged {
-		return localllm.ManagedSpec{}, false, nil
-	}
-	return localllm.ManagedSpec{
-		RuntimeVersion: provider.LlamaCpp.RuntimeVersion,
-		ModelID:        provider.LlamaCpp.ManagedModelID,
-		Host:           provider.LlamaCpp.Host,
-		Port:           provider.LlamaCpp.Port,
-		ModelAlias:     provider.LlamaCpp.ModelAlias,
-	}, true, nil
+	spec, _, ok := managedLocalLLMSpecFromConfig(loadResult.Config)
+	return spec, ok, nil
 }
 
 // Context passed to all commands
@@ -3254,19 +3335,36 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	users := user.NewRegistryFromUsers(usersConfig, cfg.Roles)
 	L_debug("user registry created", "users", users.Count())
 
+	runtimeCfg, managedLocalStartedEarly, err := prepareGatewayRuntimeConfig(context.Background(), cfg)
+	if err != nil {
+		L_error("failed to prepare managed local runtime", "error", err)
+		return err
+	}
+	gatewayStarted := false
+	defer func() {
+		if !managedLocalStartedEarly || gatewayStarted {
+			return
+		}
+		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := localllm.GetManager().Stop(stopCtx); err != nil {
+			L_warn("localllm: cleanup stop failed after startup error", "error", err)
+		}
+	}()
+
 	// Create LLM registry from config
-	if len(cfg.LLM.Providers) == 0 {
+	if len(runtimeCfg.LLM.Providers) == 0 {
 		L_error("no LLM providers configured")
 		return fmt.Errorf("llm.providers must be configured in goclaw.json")
 	}
 
-	llmRegistry, err := buildLLMRegistry(cfg)
+	llmRegistry, err := buildLLMRegistry(runtimeCfg)
 	if err != nil {
 		L_error("failed to create LLM registry", "error", err)
 		return err
 	}
 	llm.SetGlobalRegistry(llmRegistry)
-	L_info("LLM registry created", "providers", len(cfg.LLM.Providers))
+	L_info("LLM registry created", "providers", len(runtimeCfg.LLM.Providers))
 
 	// Initialize sandbox manager singleton before checking backend availability.
 	sandbox.InitManager(cfg.Sandbox, cfg.Gateway.WorkingDir)
@@ -3306,38 +3404,38 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	}
 
 	// Initialize browser manager for web_fetch fallback and browser tool
-	if cfg.Tools.Browser.Enabled {
+	if runtimeCfg.Tools.Browser.Enabled {
 		browserCfg := browser.ToolsConfigAdapter{
-			Dir:                           cfg.Tools.Browser.Dir,
-			AutoDownload:                  cfg.Tools.Browser.AutoDownload,
-			Revision:                      cfg.Tools.Browser.Revision,
-			Headless:                      cfg.Tools.Browser.Headless,
-			NoSandbox:                     cfg.Tools.Browser.NoSandbox,
-			DefaultProfile:                cfg.Tools.Browser.DefaultProfile,
-			Timeout:                       cfg.Tools.Browser.Timeout,
-			Stealth:                       cfg.Tools.Browser.Stealth,
-			Device:                        cfg.Tools.Browser.Device,
-			ProfileDomains:                cfg.Tools.Browser.ProfileDomains,
-			ChromeCDP:                     cfg.Tools.Browser.ChromeCDP,
-			AllowAgentProfiles:            cfg.Tools.Browser.AllowAgentProfiles,
-			RemoteEnabled:                 cfg.Tools.Browser.Remote.Enabled,
-			RemoteProfilesText:            cfg.Tools.Browser.Remote.ProfilesText,
-			RemoteAllowedHosts:            cfg.Tools.Browser.Remote.AllowedHosts,
-			RemoteAllowDirectEndpoints:    cfg.Tools.Browser.Remote.AllowDirectEndpoints,
-			RemoteAllowHTTPDiscovery:      cfg.Tools.Browser.Remote.AllowHTTPDiscovery,
-			RemoteConnectionTimeout:       cfg.Tools.Browser.Remote.ConnectionTimeout,
-			AdvancedNetworkCaptureEnabled: cfg.Tools.Browser.Advanced.NetworkCaptureEnabled,
-			AdvancedNetworkCaptureMax:     cfg.Tools.Browser.Advanced.NetworkCaptureMax,
-			AdvancedConsoleCaptureEnabled: cfg.Tools.Browser.Advanced.ConsoleCaptureEnabled,
-			AdvancedConsoleCaptureMax:     cfg.Tools.Browser.Advanced.ConsoleCaptureMax,
-			AdvancedTraceDir:              cfg.Tools.Browser.Advanced.TraceDir,
-			AdvancedTraceRetention:        cfg.Tools.Browser.Advanced.TraceRetention,
-			Workspace:                     cfg.Gateway.WorkingDir,
-			BubblewrapEnabled:             cfg.Sandbox.IsBrowserEnabled(),
-			BubblewrapPath:                cfg.Sandbox.GetBackendPath(),
-			BubblewrapGPU:                 cfg.Tools.Browser.Bubblewrap.GPU,
-			ExtraRoBind:                   cfg.Tools.Browser.Bubblewrap.ExtraRoBind,
-			ExtraBind:                     cfg.Tools.Browser.Bubblewrap.ExtraBind,
+			Dir:                           runtimeCfg.Tools.Browser.Dir,
+			AutoDownload:                  runtimeCfg.Tools.Browser.AutoDownload,
+			Revision:                      runtimeCfg.Tools.Browser.Revision,
+			Headless:                      runtimeCfg.Tools.Browser.Headless,
+			NoSandbox:                     runtimeCfg.Tools.Browser.NoSandbox,
+			DefaultProfile:                runtimeCfg.Tools.Browser.DefaultProfile,
+			Timeout:                       runtimeCfg.Tools.Browser.Timeout,
+			Stealth:                       runtimeCfg.Tools.Browser.Stealth,
+			Device:                        runtimeCfg.Tools.Browser.Device,
+			ProfileDomains:                runtimeCfg.Tools.Browser.ProfileDomains,
+			ChromeCDP:                     runtimeCfg.Tools.Browser.ChromeCDP,
+			AllowAgentProfiles:            runtimeCfg.Tools.Browser.AllowAgentProfiles,
+			RemoteEnabled:                 runtimeCfg.Tools.Browser.Remote.Enabled,
+			RemoteProfilesText:            runtimeCfg.Tools.Browser.Remote.ProfilesText,
+			RemoteAllowedHosts:            runtimeCfg.Tools.Browser.Remote.AllowedHosts,
+			RemoteAllowDirectEndpoints:    runtimeCfg.Tools.Browser.Remote.AllowDirectEndpoints,
+			RemoteAllowHTTPDiscovery:      runtimeCfg.Tools.Browser.Remote.AllowHTTPDiscovery,
+			RemoteConnectionTimeout:       runtimeCfg.Tools.Browser.Remote.ConnectionTimeout,
+			AdvancedNetworkCaptureEnabled: runtimeCfg.Tools.Browser.Advanced.NetworkCaptureEnabled,
+			AdvancedNetworkCaptureMax:     runtimeCfg.Tools.Browser.Advanced.NetworkCaptureMax,
+			AdvancedConsoleCaptureEnabled: runtimeCfg.Tools.Browser.Advanced.ConsoleCaptureEnabled,
+			AdvancedConsoleCaptureMax:     runtimeCfg.Tools.Browser.Advanced.ConsoleCaptureMax,
+			AdvancedTraceDir:              runtimeCfg.Tools.Browser.Advanced.TraceDir,
+			AdvancedTraceRetention:        runtimeCfg.Tools.Browser.Advanced.TraceRetention,
+			Workspace:                     runtimeCfg.Gateway.WorkingDir,
+			BubblewrapEnabled:             runtimeCfg.Sandbox.IsBrowserEnabled(),
+			BubblewrapPath:                runtimeCfg.Sandbox.GetBackendPath(),
+			BubblewrapGPU:                 runtimeCfg.Tools.Browser.Bubblewrap.GPU,
+			ExtraRoBind:                   runtimeCfg.Tools.Browser.Bubblewrap.ExtraRoBind,
+			ExtraBind:                     runtimeCfg.Tools.Browser.Bubblewrap.ExtraBind,
 		}.ToConfig()
 
 		browserMgr, err := browser.InitManager(browserCfg)
@@ -3346,8 +3444,8 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		} else {
 			defer browserMgr.CloseAll()
 			L_info("browser: manager initialized",
-				"headless", cfg.Tools.Browser.Headless,
-				"sandbox", cfg.Sandbox.IsBrowserEnabled())
+				"headless", runtimeCfg.Tools.Browser.Headless,
+				"sandbox", runtimeCfg.Sandbox.IsBrowserEnabled())
 		}
 	} else {
 		L_info("browser: disabled by configuration")
@@ -3357,7 +3455,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	toolsReg := tools.NewRegistry()
 
 	// Create gateway (creates MediaStore internally)
-	gw, err := gateway.New(cfg, loadResult.SourcePath, users, llmRegistry, toolsReg)
+	gw, err := gateway.New(runtimeCfg, loadResult.SourcePath, users, llmRegistry, toolsReg)
 	if err != nil {
 		L_error("failed to create gateway", "error", err)
 		return fmt.Errorf("failed to create gateway: %w", err)
@@ -3385,6 +3483,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	transcript.RegisterCommands()
 	llm.RegisterCommands()
 	localllm.RegisterCommands()
+	jobs.RegisterCommands()
 	stt.RegisterCommands()
 	L_debug("config commands registered")
 
@@ -3400,6 +3499,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 
 	// Start gateway background tasks (compaction retry, etc.)
 	gw.Start(runCtx)
+	gatewayStarted = true
 
 	// Start memory graph background tasks (maintenance + live extraction)
 	if mgraphMgr := gw.MemoryGraphManager(); mgraphMgr != nil {

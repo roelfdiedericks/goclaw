@@ -54,9 +54,11 @@ func TestDownloadFileWithResume(t *testing.T) {
 
 func TestExtractTarGz(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "runtime.tar.gz")
-	if err := os.WriteFile(src, tarGzBytes(t, map[string]string{
-		"llama-b1234/llama-server": "#!/bin/sh\necho ok\n",
-		"llama-b1234/README.md":    "docs",
+	if err := os.WriteFile(src, tarGzEntries(t, []tarEntry{
+		{name: "llama-b1234/llama-server", body: "#!/bin/sh\necho ok\n", mode: 0o755},
+		{name: "llama-b1234/README.md", body: "docs", mode: 0o644},
+		{name: "llama-b1234/libllama.so.0", linkname: "libllama.so.0.0.1234", typeflag: tar.TypeSymlink},
+		{name: "llama-b1234/libllama.so.0.0.1234", body: "binary", mode: 0o755},
 	}), 0o644); err != nil {
 		t.Fatalf("write archive: %v", err)
 	}
@@ -67,6 +69,14 @@ func TestExtractTarGz(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dest, "llama-server")); err != nil {
 		t.Fatalf("expected extracted binary: %v", err)
+	}
+	linkPath := filepath.Join(dest, "libllama.so.0")
+	target, err := os.Readlink(linkPath)
+	if err != nil {
+		t.Fatalf("expected extracted symlink: %v", err)
+	}
+	if target != "libllama.so.0.0.1234" {
+		t.Fatalf("unexpected symlink target %q", target)
 	}
 }
 
@@ -90,8 +100,8 @@ func TestExtractZip(t *testing.T) {
 func TestDownloadRuntime(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, ".tar.gz") {
-			_, _ = w.Write(tarGzBytes(t, map[string]string{
-				"llama-b1234/llama-server": "#!/bin/sh\necho ok\n",
+			_, _ = w.Write(tarGzEntries(t, []tarEntry{
+				{name: "llama-b1234/llama-server", body: "#!/bin/sh\necho ok\n", mode: 0o755},
 			}))
 			return
 		}
@@ -113,6 +123,52 @@ func TestDownloadRuntime(t *testing.T) {
 	}
 	if _, err := os.Stat(got); err != nil {
 		t.Fatalf("expected runtime binary: %v", err)
+	}
+}
+
+func TestDownloadRuntimeRepairsMissingSharedLibraryLinks(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	installDir, err := RuntimeInstallDir("b1234", OSLinux, ArchAMD64, BackendCPU)
+	if err != nil {
+		t.Fatalf("RuntimeInstallDir returned error: %v", err)
+	}
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		t.Fatalf("mkdir install dir: %v", err)
+	}
+	binaryPath, err := RuntimeBinaryPath("b1234", OSLinux, ArchAMD64, BackendCPU)
+	if err != nil {
+		t.Fatalf("RuntimeBinaryPath returned error: %v", err)
+	}
+	if err := os.WriteFile(binaryPath, []byte("binary"), 0o755); err != nil {
+		t.Fatalf("write binary: %v", err)
+	}
+	for _, name := range []string{
+		"libmtmd.so.0.0.8742",
+		"libllama.so.0.0.8742",
+		"libggml.so.0.9.11",
+		"libggml-base.so.0.9.11",
+	} {
+		if err := os.WriteFile(filepath.Join(installDir, name), []byte("lib"), 0o755); err != nil {
+			t.Fatalf("write shared library %s: %v", name, err)
+		}
+	}
+
+	got, err := DownloadRuntime(context.Background(), "b1234", OSLinux, ArchAMD64, BackendCPU)
+	if err != nil {
+		t.Fatalf("DownloadRuntime returned error: %v", err)
+	}
+	if got != binaryPath {
+		t.Fatalf("expected cached runtime path %q, got %q", binaryPath, got)
+	}
+	for _, name := range []string{
+		"libmtmd.so.0",
+		"libllama.so.0",
+		"libggml.so.0",
+		"libggml-base.so.0",
+	} {
+		if _, err := os.Lstat(filepath.Join(installDir, name)); err != nil {
+			t.Fatalf("expected repaired soname link %s: %v", name, err)
+		}
 	}
 }
 
@@ -160,20 +216,51 @@ func TestDownloadManagedModel(t *testing.T) {
 
 func tarGzBytes(t *testing.T, files map[string]string) []byte {
 	t.Helper()
+	entries := make([]tarEntry, 0, len(files))
+	for name, content := range files {
+		entries = append(entries, tarEntry{name: name, body: content, mode: 0o755})
+	}
+	return tarGzEntries(t, entries)
+}
+
+type tarEntry struct {
+	name     string
+	body     string
+	mode     int64
+	typeflag byte
+	linkname string
+}
+
+func tarGzEntries(t *testing.T, entries []tarEntry) []byte {
+	t.Helper()
 	var buf bytes.Buffer
 	gzw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gzw)
-	for name, content := range files {
+	for _, entry := range entries {
+		typeflag := entry.typeflag
+		if typeflag == 0 {
+			typeflag = tar.TypeReg
+		}
+		mode := entry.mode
+		if mode == 0 {
+			mode = 0o755
+		}
 		hdr := &tar.Header{
-			Name: name,
-			Mode: 0o755,
-			Size: int64(len(content)),
+			Name:     entry.name,
+			Mode:     mode,
+			Typeflag: typeflag,
+			Linkname: entry.linkname,
+		}
+		if typeflag == tar.TypeReg {
+			hdr.Size = int64(len(entry.body))
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
 			t.Fatalf("write tar header: %v", err)
 		}
-		if _, err := tw.Write([]byte(content)); err != nil {
-			t.Fatalf("write tar body: %v", err)
+		if typeflag == tar.TypeReg {
+			if _, err := tw.Write([]byte(entry.body)); err != nil {
+				t.Fatalf("write tar body: %v", err)
+			}
 		}
 	}
 	if err := tw.Close(); err != nil {

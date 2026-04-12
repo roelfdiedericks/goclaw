@@ -34,6 +34,7 @@ var EditorSections = []SectionCategory{
 		Items: []SectionItem{
 			{ID: "llm", Label: "Model Chains", ConfigPath: "/llm", Type: SectionTypeFormDef, Expandable: true},
 			{ID: "llm-providers", Label: "LLM Providers", ConfigPath: "/llm", Type: SectionTypeFormDef},
+			{ID: "local-llm", Label: "Local LLM", ConfigPath: "/llm", Type: SectionTypeCustom},
 			{ID: "voicellm", Label: "VoiceLLM", ConfigPath: "/voicellm", Type: SectionTypeFormDef},
 			{ID: "acp", Label: "Coding Agents", ConfigPath: "/acp", Type: SectionTypeFormDef},
 			{ID: "a2a", Label: "A2A Networking", ConfigPath: "/a2a", Type: SectionTypeFormDef},
