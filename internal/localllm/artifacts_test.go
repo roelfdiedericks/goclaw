@@ -64,6 +64,15 @@ func TestResolveLlamaCppArtifact(t *testing.T) {
 			backend:  BackendCPU,
 			wantErr:  "Bookworm AMD64",
 		},
+		{
+			name:         "trixie amd64 rocm same artifact as generic linux",
+			version:      "b1234",
+			arch:         ArchAMD64,
+			osFlavor:     OSTrixie,
+			backend:      BackendROCm,
+			wantBaseURL:  upstreamReleaseBase + "/b1234",
+			wantFilename: "llama-b1234-bin-ubuntu-rocm-7.2-x64.tar.gz",
+		},
 	}
 
 	for _, tc := range tests {

@@ -163,6 +163,12 @@ func ResolveLlamaCppArtifact(version string, arch Arch, osFlavor OSFlavor, backe
 				return spec, nil
 			}
 			spec.Filename = fmt.Sprintf("llama-%s-bin-ubuntu-vulkan-x64.tar.gz", version)
+		case BackendROCm:
+			// Same prebuilt as generic Linux AMD64; not trixie-specific in upstream releases.
+			if arch != ArchAMD64 {
+				return ArtifactSpec{}, fmt.Errorf("precompiled binaries for Trixie ARM64 ROCm are not available")
+			}
+			spec.Filename = fmt.Sprintf("llama-%s-bin-ubuntu-rocm-7.2-x64.tar.gz", version)
 		default:
 			return ArtifactSpec{}, fmt.Errorf("unsupported backend %q for %s", backend, osFlavor)
 		}
