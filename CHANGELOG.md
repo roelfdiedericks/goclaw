@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - agent tools: add native owner-only A2A tool support for structured status, peer/task inspection, pairing payloads, ping, and remote task operations
 - a2a/libp2p: optional background attempts to open a direct path to peers you already reach via relay (config under `libp2p.relay`; relay stays the default)
 - localllm/llamacpp: turn on llama-server metrics for managed installs and record prompt-cache reuse plus basic server stats in GoClaw metrics
+- localllm: add curated Qwen3 Coder 30B A3B managed-model variants from mradermacher (`Q2_K`, `Q3_K_S`, `Q4_K_S`, `Q4_K_M`)
 - localllm: add Qwen3 Coder Next (Q8_0) to the managed local model list; text-only models no longer require a vision sidecar file
 - localllm: resolve ROCm managed-runtime artifact on Debian trixie (same upstream `ubuntu-rocm-7.2-x64` tarball as generic Linux)
 - gateway/context: context token usage and memory graph bulletins no longer default inside the main system prompt—they show as their own system notes

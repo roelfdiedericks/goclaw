@@ -180,9 +180,13 @@ See [Session Supervision](supervision.md) for full documentation on:
 - Interrupt generation
 - Configuration options
 
-## Delegated Runs and Subagent Access
+## Owner-Only Tooling
 
-Yes — subagent tooling is owner-only by design.
+Some tools are deliberately restricted to owners because they control privileged background work or remote peer activity.
+
+### Delegated runs and subagent access
+
+Subagent tooling is owner-only.
 
 This includes:
 
@@ -191,9 +195,7 @@ This includes:
 - `subagent_cancel`
 - `subagent_fanout`
 
-### How enforcement works
-
-Access is enforced in multiple layers:
+How enforcement works:
 
 1. **Registration gate (config):**
    - Tools are only registered when `tools.subagent.enabled=true`.
@@ -201,15 +203,40 @@ Access is enforced in multiple layers:
    - Subagents and related background runs are controlled by `gateway.delegatedRuns.enabled`.
 3. **Execution authorization (hard check):**
    - Each subagent tool checks `sessionCtx.User.IsOwner()` at execution time.
-   - Non-owner calls are rejected, even if a role/user tool allowlist includes the tool name.
+   - Non-owner calls are rejected even if a role or user tool allowlist includes the tool name.
 
 This means subagent access cannot be granted to non-owner users by role config alone.
 
+### A2A tool access
+
+The native `a2a` tool is also owner-only.
+
+This includes all A2A tool actions:
+
+- `status`
+- `peers`
+- `tasks`
+- `pair`
+- `ping`
+- `submit`
+- `resume`
+- `cancel`
+
+How enforcement works:
+
+1. **Role filtering:**
+   - Non-owner users do not get the `a2a` tool in their normal tool list.
+2. **Execution authorization (hard check):**
+   - The tool also checks `sessionCtx.User.IsOwner()` at execution time.
+   - Non-owner calls are rejected even if a role or user tool allowlist accidentally includes `a2a`.
+
+This means A2A peer control cannot be granted to non-owner users by role config alone.
+
 ### RBAC implications
 
-- Keep normal users on bounded/readonly tool sets (`read`, `memory_search`, etc.).
-- Treat delegated tooling as a privileged operator capability.
-- If you need non-owner async workflows, prefer narrowly scoped custom tools rather than exposing delegated subagent control.
+- Keep normal users on bounded or readonly tools such as `read`, `memory_search`, or `transcript`.
+- Treat delegated tooling and A2A peer control as operator capabilities.
+- If you need non-owner async or remote-peer workflows, prefer narrowly scoped custom tools rather than exposing subagent or A2A control directly.
 
 ## Unknown Users and Guest Role
 

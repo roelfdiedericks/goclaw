@@ -9,6 +9,14 @@ weight: 25
 
 ACP lets GoClaw attach to an external agent session and route your chat turns through that session instead of the normal local LLM tool loop.
 
+Mental model:
+
+- GoClaw is the control plane
+- ACP is the execution plane
+- you stay inside the normal GoClaw chat experience
+
+So ACP in GoClaw is not mainly "a tool that talks to Cursor". It is a session-aware external agent attachment. Once attached, your normal GoClaw session is temporarily routed through that ACP session.
+
 In the current MVP, GoClaw supports a local stdio ACP session with the Cursor driver. This is useful when you want to steer a live Cursor agent session, inspect its state, and handle Cursor interactive workflows from GoClaw's channels.
 
 ## Current Scope
@@ -155,6 +163,8 @@ There are two ACP control surfaces:
 
 - `/acp` slash commands are for you as the operator
 - `acp_control` and `acp_inspect` are agent-facing tools used internally by the GoClaw agent
+
+That means you can also ask GoClaw to interact with an attached ACP session on your behalf, for example to inspect ACP state, switch mode, or steer the attached ACP instance through its ACP tools.
 
 Use the slash commands for normal manual control. The agent tools are documented separately in [ACP Tools](tools/acp.md).
 

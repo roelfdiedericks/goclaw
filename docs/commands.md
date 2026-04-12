@@ -24,6 +24,7 @@ GoClaw provides slash commands available across all text channels (Telegram, Wha
 | `/hass` | Home Assistant status and debug |
 | `/llm` | LLM provider status and cooldown management |
 | `/embeddings` | Embeddings status and rebuild |
+| `/a2a` | Inspect A2A state and interact with A2A peers |
 | `/acp` | Attach, inspect, and control ACP sessions |
 
 ## Command Details
@@ -182,6 +183,54 @@ Model: nomic-embed-text
 Provider: ollama
 ```
 
+### /a2a
+
+Inspect A2A transport state, peers, tasks, pairing payloads, and remote task operations.
+
+**Usage:**
+```
+/a2a status
+/a2a peers [all|connected|trusted|authorized|discovered|relayed|disconnected] [list]
+/a2a tasks [all|active|resumable|failed|inbound|outbound] [peer <peer>]
+/a2a pair
+/a2a ping <peer>
+/a2a submit <peer> <message>
+/a2a resume <peer> <task-id>
+/a2a cancel <peer> <task-id>
+```
+
+**Subcommands:**
+
+| Subcommand | Description |
+|------------|-------------|
+| `status` | Show transport readiness, addresses, and peer/task counters |
+| `peers` | List known peers, optionally filtered by connection or trust state |
+| `tasks` | List retained A2A tasks, optionally filtered and scoped to one peer |
+| `pair` | Show the local pairing payload |
+| `ping` | Ping a peer by alias or peer ID |
+| `submit` | Submit a remote task to a peer and wait for the final snapshot |
+| `resume` | Resume a retained remote task |
+| `cancel` | Cancel a retained remote task |
+
+**Examples:**
+```
+/a2a status
+/a2a peers connected
+/a2a tasks active
+/a2a tasks resumable peer wsl
+/a2a pair
+/a2a ping wsl
+/a2a submit wsl Summarize the current logs.
+/a2a resume wsl remote-20260407T002849577468142
+/a2a cancel wsl remote-20260407T002849577468142
+```
+
+**Behavior notes:**
+
+- Relay-backed connectivity is used immediately when direct connectivity is not ready yet.
+- If the peer is currently relay-only and GoClaw knows direct candidates, GoClaw may try a short background direct upgrade for future traffic.
+- That background attempt does not delay the live `/a2a ping`, `/a2a submit`, `/a2a resume`, or `/a2a cancel` command already in progress.
+
 ### /acp
 
 Attach, inspect, and control ACP sessions from any text channel.
@@ -257,6 +306,8 @@ Commands are registered at startup. Custom commands can be added by extending th
 ## See Also
 
 - [Channels](channels.md) — Channel overview
+- [A2A Networking](a2a.md) — A2A configuration and runtime behavior
+- [A2A Tool](tools/a2a.md) — Agent-facing A2A tool
 - [ACP Sessions](acp.md) — ACP attach, steer, and interactive workflows
 - [Telegram](telegram.md) — Telegram bot
 - [TUI](tui.md) — Terminal interface

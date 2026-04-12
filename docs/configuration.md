@@ -252,6 +252,7 @@ GoClaw is configured via `goclaw.json` in the working directory.
 |---------|-------------|---------------|
 | `media` | Temporary media storage | Below |
 | `promptCache` | Workspace file caching | Below |
+| `a2a` | Agent-to-agent networking over libp2p | [A2A Networking](a2a.md) |
 | `acp` | ACP driver defaults and model preferences | [ACP Sessions](acp.md) |
 | `gateway` | Server settings | Below |
 | `auth` | Role elevation via external script | [User Auth Tool](tools/user-auth.md) |
@@ -500,6 +501,69 @@ The prompt cache watches workspace identity files (SOUL.md, AGENTS.md, etc.) for
 | `delegatedRuns.defaultTimeoutSeconds` | int | `300` | Default time limit for delegated runs when a tool/job does not set one |
 | `delegatedRuns.maxTimeoutSeconds` | int | `1800` | Maximum delegated run timeout for safety (0 = unlimited) |
 
+### A2A Settings
+
+GoClaw's A2A subsystem lets one GoClaw node talk to another over libp2p. This covers peer discovery, relay-backed communication, pairing payloads, and remote task handoff.
+
+```json
+{
+  "a2a": {
+    "enabled": true,
+    "defaultTransport": "libp2p",
+    "libp2p": {
+      "enabled": true,
+      "listenAddrs": [
+        "/ip4/0.0.0.0/tcp/0",
+        "/ip4/0.0.0.0/udp/0/quic-v1"
+      ],
+      "discovery": {
+        "rendezvousEnabled": true,
+        "bootstrapSeedTXT": "p2p_boot.goclaw.org",
+        "registerIntervalSeconds": 30,
+        "queryIntervalSeconds": 30
+      },
+      "relay": {
+        "enableClient": true,
+        "enableServer": false,
+        "enableAutoRelay": true,
+        "enableHolePunch": true,
+        "enableBackgroundDirectUpgrade": true,
+        "directUpgradeTimeoutSeconds": 3,
+        "directUpgradeCooldownSeconds": 30
+      }
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable the A2A subsystem |
+| `defaultTransport` | string | `"libp2p"` | Active transport. Current release supports `libp2p` |
+| `libp2p.enabled` | bool | `false` | Enable the libp2p transport |
+| `libp2p.listenAddrs` | string[] | local TCP + QUIC ephemeral ports | Listen addresses for the local node |
+| `libp2p.announceAddrs` | string[] | `[]` | Optional explicit advertised addresses |
+| `libp2p.discovery.bootstrapPeers` | string[] | `[]` | Explicit bootstrap multiaddrs |
+| `libp2p.discovery.bootstrapSeedTXT` | string | `p2p_boot.goclaw.org` | DNS TXT fallback for bootstrap discovery when `bootstrapPeers` is empty |
+| `libp2p.discovery.rendezvousEnabled` | bool | `true` | Enable GoClaw rendezvous registration and lookup |
+| `libp2p.discovery.registerIntervalSeconds` | int | `30` | Registration refresh interval |
+| `libp2p.discovery.queryIntervalSeconds` | int | `30` | Rendezvous query interval |
+| `libp2p.relay.enableClient` | bool | `true` | Allow relay-backed connectivity |
+| `libp2p.relay.enableServer` | bool | `false` | Offer relay service from this node |
+| `libp2p.relay.enableAutoRelay` | bool | `true` | Use bootstrap peers as relay candidates |
+| `libp2p.relay.enableHolePunch` | bool | `true` | Allow libp2p hole punching |
+| `libp2p.relay.enableBackgroundDirectUpgrade` | bool | `true` | After a relay-backed outbound request, try a short background direct dial for future traffic when direct candidates are known |
+| `libp2p.relay.directUpgradeTimeoutSeconds` | int | `3` | Timeout for one background direct-upgrade attempt |
+| `libp2p.relay.directUpgradeCooldownSeconds` | int | `30` | Minimum time between background direct-upgrade attempts per peer |
+
+Behavior notes:
+
+- Relay remains the immediate working path when direct connectivity is not ready yet.
+- Background direct upgrade does not delay the live `ping`, `submit`, `resume`, or `cancel` operation that triggered it.
+- This setting improves future connection quality only when the direct upgrade succeeds.
+
+For full A2A usage and behavior, see [A2A Networking](a2a.md).
+
 ### ACP Sessions
 
 ACP now has its own top-level `acp` config section in `goclaw.json` and its own dedicated setup-editor section in both the web UI and the TUI.
@@ -727,6 +791,7 @@ See [Roles](roles.md) for detailed access control documentation.
 - [Session Management](session-management.md) — Compaction, checkpoints, memory flush
 - [LLM Providers](llm-providers.md) — Multi-provider setup
 - [Tools](tools.md) — Tool configuration
+- [A2A Networking](a2a.md) — A2A overview, relay behavior, and manual usage
 - [ACP Sessions](acp.md) — ACP runtime attachment and workflow
 - [Skills](skills.md) — Skills system
 - [Architecture](architecture.md) — System overview

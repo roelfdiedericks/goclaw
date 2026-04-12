@@ -4,8 +4,8 @@ import "testing"
 
 func TestManagedModelCatalogIncludesGemma4Families(t *testing.T) {
 	catalog := ManagedModelCatalog()
-	if len(catalog) != 5 {
-		t.Fatalf("expected 5 managed models, got %d", len(catalog))
+	if len(catalog) != 9 {
+		t.Fatalf("expected 9 managed models, got %d", len(catalog))
 	}
 
 	for _, id := range []string{"gemma4-e2b", "gemma4-e4b", "gemma4-26b-a4b", "gemma4-31b"} {
@@ -35,6 +35,54 @@ func TestManagedModelCatalogQwen3CoderNextTextOnly(t *testing.T) {
 	}
 	if spec.MMProjFilename != "" {
 		t.Fatalf("expected no mmproj for text-only catalog entry")
+	}
+}
+
+func TestManagedModelCatalogQwen3Coder30BA3BVariants(t *testing.T) {
+	cases := []struct {
+		id       string
+		quant    string
+		filename string
+	}{
+		{
+			id:       "qwen3-coder-30b-a3b-q2-k",
+			quant:    "Q2_K",
+			filename: "Qwen3-Coder-30B-A3B-Instruct.Q2_K.gguf",
+		},
+		{
+			id:       "qwen3-coder-30b-a3b-q3-k-s",
+			quant:    "Q3_K_S",
+			filename: "Qwen3-Coder-30B-A3B-Instruct.Q3_K_S.gguf",
+		},
+		{
+			id:       "qwen3-coder-30b-a3b-q4-k-s",
+			quant:    "Q4_K_S",
+			filename: "Qwen3-Coder-30B-A3B-Instruct.Q4_K_S.gguf",
+		},
+		{
+			id:       "qwen3-coder-30b-a3b-q4-k-m",
+			quant:    "Q4_K_M",
+			filename: "Qwen3-Coder-30B-A3B-Instruct.Q4_K_M.gguf",
+		},
+	}
+
+	for _, tc := range cases {
+		spec, err := ManagedModelByID(tc.id)
+		if err != nil {
+			t.Fatalf("ManagedModelByID(%q): %v", tc.id, err)
+		}
+		if spec.Family != ModelFamilyQwenCoder {
+			t.Fatalf("%q family: got %q", tc.id, spec.Family)
+		}
+		if spec.HFRepo != "mradermacher/Qwen3-Coder-30B-A3B-Instruct-GGUF" {
+			t.Fatalf("%q repo: got %q", tc.id, spec.HFRepo)
+		}
+		if spec.PreferredQuant != tc.quant || spec.PreferredFilename != tc.filename {
+			t.Fatalf("%q quant/filename mismatch: %#v", tc.id, spec)
+		}
+		if spec.MMProjFilename != "" {
+			t.Fatalf("%q should not require mmproj", tc.id)
+		}
 	}
 }
 
