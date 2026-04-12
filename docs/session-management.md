@@ -254,17 +254,11 @@ This allows:
 
 ## Context Pressure Warnings
 
-GoClaw shows context usage in the system prompt and warns the agent when approaching limits.
+GoClaw shows context usage to the agent and warns when approaching limits.
 
-### System Prompt Status
+### Context status (ephemeral)
 
-The agent always sees a context status section in the system prompt:
-
-```
-## Context Status
-
-[Context: 85k/200k tokens (42%)]
-```
+The agent sees the same `## Context Status` block as before, but it is injected as an ephemeral **system** message just before the latest user turn (not inside the long-lived system prompt), so the stable prompt prefix stays cache-friendly.
 
 At higher usage levels, warnings are added:
 

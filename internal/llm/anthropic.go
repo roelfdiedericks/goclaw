@@ -633,7 +633,7 @@ func (c *AnthropicProvider) StreamMessage(
 		}
 
 		// Cost tracking (per-provider and per-purpose)
-		emitCostMetrics(c.metricPrefix, PurposeFromContext(ctx), c.config, c.metadataProvider, c.model, response)
+		EmitCostMetrics(c.metricPrefix, PurposeFromContext(ctx), c.config, c.metadataProvider, c.model, response)
 	}
 
 	// Finalize dump (delete on success unless dumpOnSuccess is enabled)

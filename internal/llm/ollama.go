@@ -550,7 +550,7 @@ func (c *OllamaClient) SimpleMessage(ctx context.Context, userMessage, systemPro
 			InputTokens:  result.PromptEvalCount,
 			OutputTokens: result.EvalCount,
 		}
-		emitCostMetrics(c.metricPrefix, PurposeFromContext(ctx), c.config, c.metadataProvider, c.model, costResp)
+		EmitCostMetrics(c.metricPrefix, PurposeFromContext(ctx), c.config, c.metadataProvider, c.model, costResp)
 	}
 
 	// Finalize dump (delete on success unless dumpOnSuccess is enabled)

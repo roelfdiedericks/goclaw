@@ -276,7 +276,7 @@ func (p *OaiNextProvider) StreamMessage(
 			MetricSet(p.metricPrefix, "context_used", int64(resp.InputTokens))
 			MetricThreshold(p.metricPrefix, "context_usage_percent", usagePercent, 100.0)
 		}
-		emitCostMetrics(p.metricPrefix, PurposeFromContext(ctx), p.config, p.metadataProvider, p.model, resp)
+		EmitCostMetrics(p.metricPrefix, PurposeFromContext(ctx), p.config, p.metadataProvider, p.model, resp)
 	}
 
 	return resp, nil

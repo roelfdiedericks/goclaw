@@ -26,7 +26,7 @@ type PromptParams struct {
 	UserTimezone   string
 	Version        string
 	User           *user.User // Current user for identity section
-	// Context tracking
+	// Context tracking (not rendered into the system prompt; gateway injects status ephemerally)
 	TotalTokens int // Current context size
 	MaxTokens   int // Model's context window
 	// Optional cached workspace files (if nil, loads from disk)
@@ -239,12 +239,8 @@ func BuildSystemPrompt(params PromptParams) string {
 		sections = append(sections, s)
 	}
 
-	// 14. Context status (if tracking enabled)
-	if params.MaxTokens > 0 {
-		s := buildContextStatusSection(params.TotalTokens, params.MaxTokens)
-		staticText += s
-		sections = append(sections, s)
-	}
+	// 14. Context status moved to ephemeral system messages (gateway) so the system
+	// prompt prefix stays stable for prompt caching across providers.
 
 	// 15. Runtime info
 	{
@@ -736,7 +732,9 @@ func buildContextBulletinSection(bulletin string) string {
 	return "## Context Bulletin\n\n" + bulletin
 }
 
-func buildContextStatusSection(totalTokens, maxTokens int) string {
+// BuildContextStatusSection returns the "## Context Status" markdown block used for
+// per-turn injection (not part of the stable system prompt).
+func BuildContextStatusSection(totalTokens, maxTokens int) string {
 	if maxTokens == 0 {
 		return ""
 	}

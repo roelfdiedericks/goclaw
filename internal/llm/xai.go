@@ -592,7 +592,7 @@ func (p *XAIProvider) SimpleMessage(ctx context.Context, userMessage, systemProm
 			CacheReadTokens: int(resp.Usage.CachedPromptTokens),
 			ReasoningTokens: int(resp.Usage.ReasoningTokens),
 		}
-		emitCostMetrics(p.metricPrefix, PurposeFromContext(ctx), p.config, p.metadataProvider, p.model, simpleResp)
+		EmitCostMetrics(p.metricPrefix, PurposeFromContext(ctx), p.config, p.metadataProvider, p.model, simpleResp)
 	}
 
 	return resp.Content, nil
@@ -1052,7 +1052,7 @@ func (p *XAIProvider) processStream(
 		}
 		MetricOutcome(p.metricPrefix, "stop_reason", resp.StopReason)
 		MetricSuccess(p.metricPrefix, "request_status")
-		emitCostMetrics(p.metricPrefix, PurposeFromContext(ctx), p.config, p.metadataProvider, p.model, resp)
+		EmitCostMetrics(p.metricPrefix, PurposeFromContext(ctx), p.config, p.metadataProvider, p.model, resp)
 	}
 
 	return resp, nil

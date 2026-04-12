@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/roelfdiedericks/goclaw/internal/localllm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
 	. "github.com/roelfdiedericks/goclaw/internal/metrics"
@@ -158,11 +157,7 @@ func NewOpenAIProvider(name string, cfg LLMProviderConfig) (*OpenAIProvider, err
 }
 
 func shouldFetchOpenAIModelMetadata(cfg LLMProviderConfig) bool {
-	if cfg.Driver != "llamacpp" || normalizedLlamaCppMode(cfg) != LlamaCppModeManaged {
-		return true
-	}
-	status := localllm.GetManager().Status()
-	return status.Configured && status.Server.Healthy
+	return true
 }
 
 // fetchModelMetadata fetches model metadata from provider endpoints.
@@ -1308,7 +1303,7 @@ func (p *OpenAIProvider) StreamMessage(
 		}
 
 		// Cost tracking (per-provider and per-purpose)
-		emitCostMetrics(p.metricPrefix, PurposeFromContext(ctx), p.config, p.metadataProvider, p.model, response)
+		EmitCostMetrics(p.metricPrefix, PurposeFromContext(ctx), p.config, p.metadataProvider, p.model, response)
 	}
 
 	// Finalize dump (delete on success unless dumpOnSuccess is enabled)

@@ -10,6 +10,8 @@ import (
 
 type purposeContextKey struct{}
 
+type slotOwnerContextKey struct{}
+
 // ContextWithPurpose returns a context with the LLM purpose (e.g. "agent", "summarization") attached.
 func ContextWithPurpose(ctx context.Context, purpose string) context.Context {
 	return context.WithValue(ctx, purposeContextKey{}, purpose)
@@ -18,6 +20,23 @@ func ContextWithPurpose(ctx context.Context, purpose string) context.Context {
 // PurposeFromContext extracts the LLM purpose from the context, or "" if not set.
 func PurposeFromContext(ctx context.Context) string {
 	if v, ok := ctx.Value(purposeContextKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// ContextWithSlotOwner attaches a session key for providers that pin per-session resources
+// (e.g. llama.cpp slot affinity). Empty sessionKey is ignored.
+func ContextWithSlotOwner(ctx context.Context, sessionKey string) context.Context {
+	if sessionKey == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, slotOwnerContextKey{}, sessionKey)
+}
+
+// SlotOwnerFromContext returns the session key for slot affinity, or "" if unset.
+func SlotOwnerFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(slotOwnerContextKey{}).(string); ok {
 		return v
 	}
 	return ""
@@ -69,10 +88,10 @@ func CalculateRequestCost(pricing metadata.ModelCost, resp *Response) RequestCos
 	return rc
 }
 
-// emitCostMetrics resolves pricing and emits request_cost (gauge) and total_cost (counter)
+// EmitCostMetrics resolves pricing and emits request_cost (gauge) and total_cost (counter)
 // metrics in microdollars for a completed LLM request.
 // If purpose is non-empty, also emits aggregated metrics under "purpose/<name>".
-func emitCostMetrics(metricPrefix, purpose string, cfg LLMProviderConfig, metadataProvider, model string, resp *Response) {
+func EmitCostMetrics(metricPrefix, purpose string, cfg LLMProviderConfig, metadataProvider, model string, resp *Response) {
 	pricing := resolvePricing(cfg, metadataProvider, model)
 	cost := CalculateRequestCost(pricing, resp)
 

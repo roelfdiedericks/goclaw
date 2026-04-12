@@ -99,6 +99,36 @@ func TestBuildSystemPromptIncludesVisibleHomeWithoutBackingLeak(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPromptIgnoresTokenCountsForStability(t *testing.T) {
+	base := PromptParams{
+		WorkspaceDir:   "/tmp/workspace",
+		Channel:        "telegram",
+		WorkspaceFiles: []WorkspaceFile{},
+		IncludeMemory:  true,
+		MaxTokens:      8000,
+		TotalTokens:    100,
+	}
+	a := BuildSystemPrompt(base)
+	base.TotalTokens = 7500
+	b := BuildSystemPrompt(base)
+	if a != b {
+		t.Fatalf("system prompt should not change when only TotalTokens/usage changes (context status is ephemeral)")
+	}
+	if strings.Contains(a, "## Context Status") {
+		t.Fatalf("context status must not appear in system prompt")
+	}
+}
+
+func TestBuildContextStatusSectionFormatsUsage(t *testing.T) {
+	s := BuildContextStatusSection(500, 1000)
+	if !strings.Contains(s, "## Context Status") {
+		t.Fatalf("expected context status heading: %q", s)
+	}
+	if !strings.Contains(s, "[Context: 0k/1k tokens (50%)]") {
+		t.Fatalf("unexpected status body: %q", s)
+	}
+}
+
 func TestBuildSystemPromptIncludesSubagentGuidanceWhenToolsAvailable(t *testing.T) {
 	reg := itools.NewRegistry()
 	reg.Register(promptTestTool{name: "subagent_spawn", description: "start one worker"})

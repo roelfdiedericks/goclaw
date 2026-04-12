@@ -33,8 +33,8 @@ import (
 	gwtypes "github.com/roelfdiedericks/goclaw/internal/gateway/types"
 	"github.com/roelfdiedericks/goclaw/internal/hass"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
-	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/localllm"
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memory"
 	"github.com/roelfdiedericks/goclaw/internal/memorygraph"
@@ -3061,6 +3061,18 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 			})
 		}
 
+		// Context token usage (ephemeral so the system prompt stays cache-friendly)
+		if sess.GetMaxTokens() > 0 {
+			if status := gcontext.BuildContextStatusSection(sess.GetTotalTokens(), sess.GetMaxTokens()); status != "" {
+				ephemeralMessages = append(ephemeralMessages, types.Message{
+					Role:      "system",
+					Content:   status,
+					Timestamp: time.Now(),
+				})
+				L_debug("ephemeral: context status prepared", "totalTokens", sess.GetTotalTokens(), "maxTokens", sess.GetMaxTokens())
+			}
+		}
+
 		// Memory bulletin (if configured for message injection)
 		if bulletinCfg.MemoryInjection == "message" && memoryBulletin != "" {
 			ephemeralMessages = append(ephemeralMessages, types.Message{
@@ -3129,11 +3141,12 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		var failoverResult *llm.FailoverResult
 		var llmErr error
 		var successfulStreamText string
+		llmCtx := llm.ContextWithSlotOwner(agentCtx, sess.Key)
 		for retry := 0; retry <= maxOverflowRetries; retry++ {
 			var attemptStream strings.Builder
 			var attemptStreamMu sync.Mutex
 			failoverResult, llmErr = g.registry.StreamMessageWithFailover(
-				agentCtx,
+				llmCtx,
 				purpose,
 				stateAccessor,
 				resolvedMessages,

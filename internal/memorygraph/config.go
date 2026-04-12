@@ -41,7 +41,7 @@ type BulletinConfig struct {
 	// General settings
 	Enabled          bool   `json:"enabled" default:"true"`             // Master switch for bulletin injection
 	TTLMinutes       int    `json:"ttlMinutes" default:"5"`             // Cache TTL in minutes
-	MemoryInjection  string `json:"memoryInjection" default:"prompt"`   // "prompt" or "message"
+	MemoryInjection  string `json:"memoryInjection" default:"message"`  // "prompt" or "message"
 	ContextInjection string `json:"contextInjection" default:"message"` // "prompt" or "message"
 	Deduplicate      bool   `json:"deduplicate" default:"true"`         // Skip items already shown in earlier sections
 
@@ -449,7 +449,7 @@ func BulletinFormDef(cfg BulletinConfig) forms.FormDef {
 						Name:    "memoryInjection",
 						Title:   "Memory Bulletin Injection",
 						Type:    forms.Select,
-						Default: "prompt",
+						Default: "message",
 						Options: []forms.Option{
 							{Value: "prompt", Label: "System Prompt"},
 							{Value: "message", Label: "Ephemeral Message"},
@@ -816,14 +816,14 @@ func NormalizeBulletinConfig(b *BulletinConfig) {
 		b.TTLMinutes = 5
 	}
 	if b.MemoryInjection == "" {
-		b.MemoryInjection = "prompt"
+		b.MemoryInjection = "message"
 	}
 	if b.ContextInjection == "" {
 		b.ContextInjection = "message"
 	}
 	// Validate injection modes
 	if b.MemoryInjection != "prompt" && b.MemoryInjection != "message" {
-		b.MemoryInjection = "prompt"
+		b.MemoryInjection = "message"
 	}
 	if b.ContextInjection != "prompt" && b.ContextInjection != "message" {
 		b.ContextInjection = "message"

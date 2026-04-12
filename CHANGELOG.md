@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- gateway/context: move context token status out of `BuildSystemPrompt` into ephemeral system messages; default memory graph bulletin injection is `message` (was `prompt`)
+- llm/llamacpp: send `cache_prompt` + client-assigned `id_slot` (with slot allocator + unpinned fallback) via `LlamaCppChatAugmentTransport` chained outside `CapturingTransport`; session `slot_id` in provider state
+
 ## [0.1.13] stable - 2026-04-03
 
 - setup/runtime: auto-refresh stock workspace identity templates on startup when the workspace copy still matches a known stock version, while preserving customized files and excluding `BOOTSTRAP.md`
