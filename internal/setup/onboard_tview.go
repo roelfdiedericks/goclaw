@@ -1756,7 +1756,7 @@ func stepLLMProvider(data *WizardData) forms.WizardStep {
 			switch data.LLMOnboardingChoice {
 			case LLMChoiceLocalGemma:
 				if strings.TrimSpace(data.LLMManagedModelID) == "" {
-					return fmt.Errorf("please select a local Gemma model")
+					return fmt.Errorf("please select a local managed model")
 				}
 			case LLMChoiceCloudProvider:
 				if strings.TrimSpace(data.LLMProviderID) == "" {
@@ -1785,7 +1785,7 @@ func buildLLMChoiceList(data *WizardData, w *forms.Wizard) tview.Primitive {
 	list := tview.NewList()
 	list.SetBorder(false)
 	list.ShowSecondaryText(true)
-	list.AddItem("Gemma Local (recommended)", recs.Summary, 0, func() {
+	list.AddItem("Managed Local (recommended)", recs.Summary, 0, func() {
 		ConfigureWizardForManagedLlamaCpp(data, recs.DefaultModelID)
 		w.RefreshCurrentStep()
 	})
@@ -1809,7 +1809,7 @@ func buildLLMChoiceList(data *WizardData, w *forms.Wizard) tview.Primitive {
 		SetText(`GoClaw needs an LLM provider to function.
 
 [yellow]Choose how you want to get started:[white]
-  • Gemma Local installs and manages llama.cpp for you
+  • Managed Local installs and manages llama.cpp for you
   • Cloud provider uses an API key
   • Existing llama.cpp server connects to your own endpoint`)
 	header.SetBorder(false)
@@ -1929,7 +1929,7 @@ func buildLLMConfigForm(data *WizardData, w *forms.Wizard) tview.Primitive {
 				selectedIdx = i
 			}
 		}
-		form.AddDropDown("Gemma Model", options, selectedIdx, func(_ string, index int) {
+		form.AddDropDown("Local Model", options, selectedIdx, func(_ string, index int) {
 			if index >= 0 && index < len(recs.Options) {
 				data.LLMManagedModelID = recs.Options[index].Spec.ID
 				data.LLMModel = "managed"

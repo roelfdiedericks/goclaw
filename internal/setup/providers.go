@@ -108,11 +108,11 @@ func LlamaCppManagedPreset() ProviderPreset {
 	}
 
 	return ProviderPreset{
-		Name:               "Gemma Local (recommended)",
+		Name:               "Managed Local (recommended)",
 		Key:                "llamacpp-managed",
 		Driver:             "llamacpp",
 		BaseURL:            "http://127.0.0.1:8080",
-		Description:        "GoClaw-managed llama.cpp runtime with curated local Gemma models.",
+		Description:        "GoClaw-managed llama.cpp runtime with curated local models.",
 		IsLocal:            true,
 		Synthetic:          true,
 		SupportsEmbeddings: true,

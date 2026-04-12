@@ -40,7 +40,7 @@ var WizardSteps = []WizardStep{
 	{ID: "user", Title: "Owner Account", Description: "Create your owner account for authentication."},
 	{ID: "channels", Title: "Communication Channels", Description: "Configure how you'll interact with GoClaw."},
 	{ID: "pairing", Title: "Channel Pairing", Description: "Pair each enabled owner channel before you continue."},
-	{ID: "llm", Title: "LLM Provider", Description: "Choose between Gemma Local, a cloud provider, or an existing llama.cpp server."},
+	{ID: "llm", Title: "LLM Provider", Description: "Choose between a managed local model, a cloud provider, or an existing llama.cpp server."},
 	{ID: "voice", Title: "Voice Settings", Description: "Configure speech-to-text and voice LLM (optional)."},
 	{ID: "security", Title: "Security & Skills", Description: "Configure sandboxing and skill installation sources."},
 	{ID: "review", Title: "Review & Finish", Description: "Review your settings and complete the setup."},
@@ -764,7 +764,7 @@ func getStepFormDef(stepID string, data *setup.WizardData) *forms.FormDef {
 							Title: "Setup Mode",
 							Type:  forms.Select,
 							Options: []forms.Option{
-								{Value: setup.LLMChoiceLocalGemma, Label: "Gemma Local (recommended)"},
+								{Value: setup.LLMChoiceLocalGemma, Label: "Managed Local (recommended)"},
 								{Value: setup.LLMChoiceCloudProvider, Label: "Cloud provider"},
 								{Value: setup.LLMChoiceExistingLlamaCpp, Label: "Existing llama.cpp server"},
 							},
@@ -772,11 +772,11 @@ func getStepFormDef(stepID string, data *setup.WizardData) *forms.FormDef {
 					},
 				},
 				{
-					Title:    "Gemma Local",
+					Title:    "Managed Local",
 					Desc:     recs.Summary,
 					ShowWhen: "LLMOnboardingChoice=" + setup.LLMChoiceLocalGemma,
 					Fields: []forms.Field{
-						{Name: "LLMManagedModelID", Title: "Gemma Model", Type: forms.Select, Options: localOptions},
+						{Name: "LLMManagedModelID", Title: "Local Model", Type: forms.Select, Options: localOptions},
 					},
 				},
 				{
@@ -1264,7 +1264,7 @@ func validateStep(stepID string, data *setup.WizardData) map[string]string {
 		switch data.LLMOnboardingChoice {
 		case setup.LLMChoiceLocalGemma:
 			if strings.TrimSpace(data.LLMManagedModelID) == "" {
-				errors["LLMManagedModelID"] = "Please select a local Gemma model"
+				errors["LLMManagedModelID"] = "Please select a local managed model"
 			}
 		case setup.LLMChoiceCloudProvider:
 			if data.LLMProviderID == "" {
