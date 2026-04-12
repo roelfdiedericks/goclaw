@@ -22,6 +22,8 @@ const (
 	DefaultLocalListenQUIC  = "/ip4/0.0.0.0/udp/0/quic-v1"
 	DefaultRetentionSeconds = 3600
 	DefaultBootstrapSeedTXT = "p2p_boot.goclaw.org"
+	DefaultDirectUpgradeTimeoutSecs  = 3
+	DefaultDirectUpgradeCooldownSecs = 30
 )
 
 const (
@@ -67,10 +69,13 @@ type DiscoveryConfig struct {
 }
 
 type RelayConfig struct {
-	EnableClient   bool     `json:"enableClient" default:"true"`
-	EnableServer   bool     `json:"enableServer" default:"false"`
-	EnableAutoRelay bool    `json:"enableAutoRelay" default:"true"`
-	EnableHolePunch bool    `json:"enableHolePunch" default:"true"`
+	EnableClient                  bool `json:"enableClient" default:"true"`
+	EnableServer                  bool `json:"enableServer" default:"false"`
+	EnableAutoRelay               bool `json:"enableAutoRelay" default:"true"`
+	EnableHolePunch               bool `json:"enableHolePunch" default:"true"`
+	EnableBackgroundDirectUpgrade bool `json:"enableBackgroundDirectUpgrade" default:"true"`
+	DirectUpgradeTimeoutSecs      int  `json:"directUpgradeTimeoutSeconds" default:"3"`
+	DirectUpgradeCooldownSecs     int  `json:"directUpgradeCooldownSeconds" default:"30"`
 }
 
 type ProtocolConfig struct {
@@ -125,6 +130,12 @@ func (c *Config) Normalize() {
 	}
 	if c.Libp2p.Protocol.StateRetentionSecs <= 0 {
 		c.Libp2p.Protocol.StateRetentionSecs = DefaultRetentionSeconds
+	}
+	if c.Libp2p.Relay.DirectUpgradeTimeoutSecs <= 0 {
+		c.Libp2p.Relay.DirectUpgradeTimeoutSecs = DefaultDirectUpgradeTimeoutSecs
+	}
+	if c.Libp2p.Relay.DirectUpgradeCooldownSecs <= 0 {
+		c.Libp2p.Relay.DirectUpgradeCooldownSecs = DefaultDirectUpgradeCooldownSecs
 	}
 }
 
@@ -198,6 +209,9 @@ func ConfigFormDef() forms.FormDef {
 					{Name: "libp2p.relay.enableServer", Title: "Enable Relay Server", Type: forms.Toggle, Default: false, Desc: "Offer relay service from this node."},
 					{Name: "libp2p.relay.enableAutoRelay", Title: "Enable Auto Relay", Type: forms.Toggle, Default: true, Desc: "Use bootstrap peers as relay candidates and advertise relay-reachable addresses when the node is private."},
 					{Name: "libp2p.relay.enableHolePunch", Title: "Enable Hole Punching", Type: forms.Toggle, Default: true, Desc: "Attempt direct libp2p hole punching upgrades on top of relay-backed connectivity."},
+					{Name: "libp2p.relay.enableBackgroundDirectUpgrade", Title: "Background Direct Upgrade", Type: forms.Toggle, Default: true, Desc: "When connected relay-only to a peer with known direct addresses, schedule a bounded background direct Connect() for future traffic. Does not delay the current relay-backed request."},
+					{Name: "libp2p.relay.directUpgradeTimeoutSeconds", Title: "Direct Upgrade Dial Timeout (seconds)", Type: forms.Number, Default: DefaultDirectUpgradeTimeoutSecs, Desc: "Per-attempt timeout for background direct dials."},
+					{Name: "libp2p.relay.directUpgradeCooldownSeconds", Title: "Direct Upgrade Cooldown (seconds)", Type: forms.Number, Default: DefaultDirectUpgradeCooldownSecs, Desc: "Minimum time between background direct-upgrade attempts per peer."},
 					{Name: "libp2p.protocol.rpcProtocolId", Title: "RPC Protocol ID", Type: forms.Text, Default: DefaultRPCProtocolID, Desc: "Protocol ID used for A2A traffic."},
 					{Name: "libp2p.protocol.rendezvousProtocolId", Title: "Rendezvous Protocol ID", Type: forms.Text, Default: DefaultRendezvousID, Desc: "Protocol ID used for GoClaw rendezvous."},
 					{Name: "libp2p.protocol.stateRetentionSeconds", Title: "Task State Retention (seconds)", Type: forms.Number, Default: DefaultRetentionSeconds, Desc: "How long completed task snapshots remain resumable."},

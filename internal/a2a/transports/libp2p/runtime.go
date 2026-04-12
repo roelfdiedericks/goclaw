@@ -73,6 +73,9 @@ type Config struct {
 	RelayServerEnabled          bool
 	AutoRelayEnabled            bool
 	HolePunchEnabled            bool
+	BackgroundDirectUpgradeEnabled bool
+	DirectUpgradeTimeoutSecs    int
+	DirectUpgradeCooldownSecs   int
 	RPCProtocolID               string
 	RendezvousProtocolID        string
 }
@@ -150,6 +153,12 @@ type Runtime struct {
 
 	advertiseEvalMu      sync.Mutex
 	lastAdvertiseEvalSig string
+
+	// Background direct-upgrade scheduling: relay-first outbound traffic stays immediate;
+	// bounded direct Connect() attempts run asynchronously for future sessions.
+	directUpgradeMu       sync.Mutex
+	directUpgradeLast     map[peer.ID]time.Time
+	directUpgradeInflight map[peer.ID]struct{}
 }
 
 type rendezvousEntry struct {
@@ -182,13 +191,15 @@ type rpcEnvelope struct {
 
 func New(cfg Config, mode RuntimeMode, callbacks Callbacks) *Runtime {
 	return &Runtime{
-		cfg:               cfg,
-		mode:              mode,
-		callbacks:         callbacks,
-		rendezvousData:    make(map[string]map[string]rendezvousEntry),
-		bootstrapPeerIDs:  make(map[peer.ID]struct{}),
-		localReachability: network.ReachabilityUnknown,
-		peerPathState:     make(map[string]peerPathSnapshot),
+		cfg:                   cfg,
+		mode:                  mode,
+		callbacks:             callbacks,
+		rendezvousData:        make(map[string]map[string]rendezvousEntry),
+		bootstrapPeerIDs:      make(map[peer.ID]struct{}),
+		localReachability:     network.ReachabilityUnknown,
+		peerPathState:         make(map[string]peerPathSnapshot),
+		directUpgradeLast:     make(map[peer.ID]time.Time),
+		directUpgradeInflight: make(map[peer.ID]struct{}),
 	}
 }
 
@@ -242,6 +253,12 @@ func (r *Runtime) Start(ctx context.Context) error {
 	}
 	r.host = h
 	r.startedAt = time.Now()
+	if r.cfg.DirectUpgradeTimeoutSecs <= 0 {
+		r.cfg.DirectUpgradeTimeoutSecs = 3
+	}
+	if r.cfg.DirectUpgradeCooldownSecs <= 0 {
+		r.cfg.DirectUpgradeCooldownSecs = 30
+	}
 	r.ping = pingproto.NewPingService(h)
 	h.Network().Notify(&notifiee{runtime: r})
 	r.startEventWatchers(ctx)
@@ -262,6 +279,9 @@ func (r *Runtime) Start(ctx context.Context) error {
 		"autoRelayMaxCandidates", 1,
 		"autoRelayDesiredRelays", 1,
 		"holePunch", r.cfg.HolePunchEnabled,
+		"backgroundDirectUpgrade", r.cfg.BackgroundDirectUpgradeEnabled,
+		"directUpgradeTimeoutSecs", r.cfg.DirectUpgradeTimeoutSecs,
+		"directUpgradeCooldownSecs", r.cfg.DirectUpgradeCooldownSecs,
 		"autoRelayCandidateSource", "bootstrap",
 	)
 
@@ -670,6 +690,9 @@ func (r *Runtime) PingPeer(ctx context.Context, target string, knownPeers []Peer
 	if err := r.ensureConnectedPeer(ctx, *info); err != nil {
 		L_debug("a2a libp2p: ping connect best effort failed", "peerID", info.ID, "error", err)
 	}
+	if r.hasLivePeerConnection(info.ID) {
+		r.afterOutboundPeerReady("ping", info.ID, info.Addrs)
+	}
 	results := r.ping.Ping(ctx, info.ID)
 	select {
 	case result := <-results:
@@ -701,6 +724,7 @@ func (r *Runtime) SubmitRemoteTask(ctx context.Context, target, taskID, input st
 	if err := r.ensureConnectedPeer(ctx, *info); err != nil {
 		return nil, err
 	}
+	r.afterOutboundPeerReady("submit", info.ID, info.Addrs)
 	stream, err := r.openRPCStream(ctx, info.ID, "submit", taskID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open stream: %w", err)
@@ -734,6 +758,7 @@ func (r *Runtime) ResumeRemoteTask(ctx context.Context, target, taskID string, k
 	if err := r.ensureConnectedPeer(ctx, *info); err != nil {
 		return nil, err
 	}
+	r.afterOutboundPeerReady("resume", info.ID, info.Addrs)
 	stream, err := r.openRPCStream(ctx, info.ID, "resume", taskID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open stream: %w", err)
@@ -767,6 +792,7 @@ func (r *Runtime) CancelRemoteTask(ctx context.Context, target, taskID string, k
 	if err := r.ensureConnectedPeer(ctx, *info); err != nil {
 		return TaskUpdate{}, err
 	}
+	r.afterOutboundPeerReady("cancel", info.ID, info.Addrs)
 	stream, err := r.openRPCStream(ctx, info.ID, "cancel", taskID)
 	if err != nil {
 		return TaskUpdate{}, fmt.Errorf("failed to open stream: %w", err)
@@ -1123,6 +1149,113 @@ func (r *Runtime) openRPCStream(ctx context.Context, peerID peer.ID, kind, taskI
 	}
 	L_info("a2a libp2p: rpc stream opened", "peerID", peerID, "kind", kind, "taskID", taskID, "elapsed", time.Since(started), "protocol", stream.Protocol())
 	return stream, nil
+}
+
+// nonRelayDialMultiaddrs returns multiaddrs that are not circuit-relay paths, for best-effort direct dials.
+func nonRelayDialMultiaddrs(addrs []ma.Multiaddr) []ma.Multiaddr {
+	if len(addrs) == 0 {
+		return nil
+	}
+	out := make([]ma.Multiaddr, 0, len(addrs))
+	for _, a := range addrs {
+		if a == nil {
+			continue
+		}
+		if strings.Contains(a.String(), "/p2p-circuit") {
+			continue
+		}
+		out = append(out, a)
+	}
+	return dedupeMultiaddrs(out)
+}
+
+// canAttemptBackgroundDirectUpgrade reports whether cooldown and inflight state allow another background attempt.
+func canAttemptBackgroundDirectUpgrade(inflight bool, lastAttempt time.Time, now time.Time, cooldown time.Duration) bool {
+	if inflight {
+		return false
+	}
+	if !lastAttempt.IsZero() && now.Sub(lastAttempt) < cooldown {
+		return false
+	}
+	return true
+}
+
+// afterOutboundPeerReady schedules a background direct upgrade when the peer is relay-only.
+// Design: relay-backed traffic for the current request stays immediate; this never blocks the caller.
+func (r *Runtime) afterOutboundPeerReady(trigger string, id peer.ID, resolvedAddrs []ma.Multiaddr) {
+	if !r.hasLivePeerConnection(id) {
+		return
+	}
+	r.maybeScheduleBackgroundDirectUpgrade(trigger, id, resolvedAddrs)
+}
+
+func (r *Runtime) maybeScheduleBackgroundDirectUpgrade(trigger string, target peer.ID, extra []ma.Multiaddr) {
+	if r.host == nil || !r.cfg.BackgroundDirectUpgradeEnabled {
+		return
+	}
+	if r.mode == RuntimeModeBootstrap || r.mode == RuntimeModeRelay {
+		return
+	}
+	if !r.hasLivePeerConnection(target) {
+		return
+	}
+	conns := r.host.Network().ConnsToPeer(target)
+	summary := summarizePeerConnections(conns)
+	mode := peerPathMode(summary.Total, summary.Direct, summary.Relayed)
+	if mode != "relay-only" {
+		L_trace("a2a libp2p: background direct upgrade skipped", "peerID", target, "trigger", trigger, "reason", "not-relay-only", "mode", mode)
+		return
+	}
+	merged := dedupeMultiaddrs(append(append([]ma.Multiaddr(nil), extra...), r.host.Peerstore().Addrs(target)...))
+	direct := nonRelayDialMultiaddrs(merged)
+	if len(direct) == 0 {
+		L_debug("a2a libp2p: background direct upgrade skipped", "peerID", target, "trigger", trigger, "reason", "no-direct-candidates")
+		return
+	}
+	cooldown := time.Duration(r.cfg.DirectUpgradeCooldownSecs) * time.Second
+	now := time.Now()
+	r.directUpgradeMu.Lock()
+	if _, inflight := r.directUpgradeInflight[target]; inflight {
+		r.directUpgradeMu.Unlock()
+		L_trace("a2a libp2p: background direct upgrade skipped", "peerID", target, "trigger", trigger, "reason", "inflight")
+		return
+	}
+	last := r.directUpgradeLast[target]
+	if !last.IsZero() && now.Sub(last) < cooldown {
+		r.directUpgradeMu.Unlock()
+		L_trace("a2a libp2p: background direct upgrade skipped", "peerID", target, "trigger", trigger, "reason", "cooldown")
+		return
+	}
+	r.directUpgradeInflight[target] = struct{}{}
+	r.directUpgradeMu.Unlock()
+
+	timeout := time.Duration(r.cfg.DirectUpgradeTimeoutSecs) * time.Second
+	L_info("a2a libp2p: background direct upgrade launched",
+		"peerID", target,
+		"trigger", trigger,
+		"candidates", len(direct),
+		"timeout", timeout,
+	)
+	go r.runBackgroundDirectConnect(target, direct, timeout, trigger)
+}
+
+func (r *Runtime) runBackgroundDirectConnect(target peer.ID, directAddrs []ma.Multiaddr, timeout time.Duration, trigger string) {
+	defer func() {
+		r.directUpgradeMu.Lock()
+		delete(r.directUpgradeInflight, target)
+		r.directUpgradeLast[target] = time.Now()
+		r.directUpgradeMu.Unlock()
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	info := peer.AddrInfo{ID: target, Addrs: directAddrs}
+	err := r.host.Connect(ctx, info)
+	if err != nil {
+		L_debug("a2a libp2p: background direct upgrade failed", "peerID", target, "trigger", trigger, "error", err)
+		return
+	}
+	L_debug("a2a libp2p: background direct upgrade connect ok", "peerID", target, "trigger", trigger)
+	r.logPeerPathState(target, "background-direct-upgrade")
 }
 
 func (r *Runtime) hasLivePeerConnection(peerID peer.ID) bool {

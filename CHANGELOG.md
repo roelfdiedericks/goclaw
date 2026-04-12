@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- coding agents/acp: expand Cursor ACP integration, startup/session handling, interactive prompt plumbing, and related config/editor support
+- a2a/libp2p: add the first libp2p-based A2A runtime with bootstrap discovery, rendezvous, relay-first messaging, NAT traversal groundwork, and infra visibility tooling
+- agent tools: add native owner-only A2A tool support for structured status, peer/task inspection, pairing payloads, ping, and remote task operations
+- a2a/libp2p: optional background bounded direct `Connect()` when relay-only to a peer with known direct addresses (config under `libp2p.relay`, relay-first traffic unchanged)
 - localllm: start managed `llama-server` with `--metrics`; llm/llamacpp: record `timings.cache_n`/`prompt_n` from captured SSE, optional async `GET /metrics` scrape into internal gauges
 - localllm: resolve ROCm managed-runtime artifact on Debian trixie (same upstream `ubuntu-rocm-7.2-x64` tarball as generic Linux)
 - gateway/context: move context token status out of `BuildSystemPrompt` into ephemeral system messages; default memory graph bulletin injection is `message` (was `prompt`)

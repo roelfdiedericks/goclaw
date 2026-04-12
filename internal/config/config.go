@@ -531,6 +531,12 @@ func applyRuntimeDefaults(cfg *Config, goclawDir, home string) {
 	if cfg.A2A.Libp2p.Protocol.StateRetentionSecs == 0 {
 		cfg.A2A.Libp2p.Protocol.StateRetentionSecs = a2a.DefaultRetentionSeconds
 	}
+	if cfg.A2A.Libp2p.Relay.DirectUpgradeTimeoutSecs == 0 {
+		cfg.A2A.Libp2p.Relay.DirectUpgradeTimeoutSecs = a2a.DefaultDirectUpgradeTimeoutSecs
+	}
+	if cfg.A2A.Libp2p.Relay.DirectUpgradeCooldownSecs == 0 {
+		cfg.A2A.Libp2p.Relay.DirectUpgradeCooldownSecs = a2a.DefaultDirectUpgradeCooldownSecs
+	}
 
 	// Map defaults
 	if cfg.LLM.Providers == nil {
@@ -900,10 +906,13 @@ func DefaultConfig() *DefaultConfigTemplate {
 					QueryIntervalSecs:       30,
 				},
 				Relay: a2a.RelayConfig{
-					EnableClient:    true,
-					EnableServer:    false,
-					EnableAutoRelay: true,
-					EnableHolePunch: true,
+					EnableClient:                  true,
+					EnableServer:                  false,
+					EnableAutoRelay:               true,
+					EnableHolePunch:               true,
+					EnableBackgroundDirectUpgrade: true,
+					DirectUpgradeTimeoutSecs:      a2a.DefaultDirectUpgradeTimeoutSecs,
+					DirectUpgradeCooldownSecs:     a2a.DefaultDirectUpgradeCooldownSecs,
 				},
 				Protocol: a2a.ProtocolConfig{
 					RPCProtocolID:        a2a.DefaultRPCProtocolID,

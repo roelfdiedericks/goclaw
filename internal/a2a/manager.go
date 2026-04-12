@@ -160,6 +160,9 @@ func (m *Manager) runStartup(ctx context.Context, mode RuntimeMode) {
 		RelayServerEnabled:           m.cfg.Libp2p.Relay.EnableServer,
 		AutoRelayEnabled:             m.cfg.Libp2p.Relay.EnableAutoRelay,
 		HolePunchEnabled:             m.cfg.Libp2p.Relay.EnableHolePunch,
+		BackgroundDirectUpgradeEnabled: m.cfg.Libp2p.Relay.EnableBackgroundDirectUpgrade,
+		DirectUpgradeTimeoutSecs:       m.cfg.Libp2p.Relay.DirectUpgradeTimeoutSecs,
+		DirectUpgradeCooldownSecs:      m.cfg.Libp2p.Relay.DirectUpgradeCooldownSecs,
 		RPCProtocolID:                m.cfg.Libp2p.Protocol.RPCProtocolID,
 		RendezvousProtocolID:         m.cfg.Libp2p.Protocol.RendezvousProtocolID,
 	}, libp2ptransport.RuntimeMode(mode), libp2ptransport.Callbacks{

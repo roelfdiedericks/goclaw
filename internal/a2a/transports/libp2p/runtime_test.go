@@ -634,6 +634,32 @@ func TestPrepareTargetPeerSynthesizesRelayFallback(t *testing.T) {
 	}
 }
 
+func TestNonRelayDialMultiaddrs(t *testing.T) {
+	relay := ma.StringCast("/ip4/34.35.192.27/udp/4001/quic-v1/p2p/12D3KooWL4onTt8HXGUWWQsKWjkNUjFrYGWd5vws8AKucszLMkXY/p2p-circuit/p2p/12D3KooWQvSQkqdGcpEqxNjptAQNy4Mp87e1JirUvnJbPm5KEa3L")
+	direct := ma.StringCast("/ip4/155.93.137.191/udp/45712/quic-v1")
+	out := nonRelayDialMultiaddrs([]ma.Multiaddr{relay, direct, nil})
+	if len(out) != 1 || out[0].String() != direct.String() {
+		t.Fatalf("expected single direct addr, got %#v", multiaddrsToStrings(out))
+	}
+}
+
+func TestCanAttemptBackgroundDirectUpgrade(t *testing.T) {
+	now := time.Unix(1000, 0)
+	cooldown := 30 * time.Second
+	if canAttemptBackgroundDirectUpgrade(true, time.Time{}, now, cooldown) {
+		t.Fatal("expected inflight to block")
+	}
+	if !canAttemptBackgroundDirectUpgrade(false, time.Time{}, now, cooldown) {
+		t.Fatal("expected first attempt allowed")
+	}
+	if !canAttemptBackgroundDirectUpgrade(false, now.Add(-31*time.Second), now, cooldown) {
+		t.Fatal("expected attempt after cooldown elapsed")
+	}
+	if canAttemptBackgroundDirectUpgrade(false, now.Add(-10*time.Second), now, cooldown) {
+		t.Fatal("expected cooldown to block")
+	}
+}
+
 func mustTestPeerID(t *testing.T) string {
 	t.Helper()
 	_, pub, err := crypto.GenerateEd25519Key(rand.Reader)
