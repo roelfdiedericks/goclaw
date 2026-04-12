@@ -1072,6 +1072,13 @@ func Run(ctx context.Context, gw *gateway.Gateway, u *user.User, showLogs bool) 
 	}()
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
+	if ctx != nil {
+		go func() {
+			<-ctx.Done()
+			m.cancel()
+			p.Quit()
+		}()
+	}
 
 	_, err := p.Run()
 	return err

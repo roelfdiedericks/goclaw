@@ -214,12 +214,28 @@ func (m *Manager) start(ctx context.Context, spec ManagedSpec, progress func(str
 func (m *Manager) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	server := m.server
+	status := m.status
 	m.mu.Unlock()
+	hasDeadline := false
+	deadlineIn := time.Duration(0)
+	if deadline, ok := ctx.Deadline(); ok {
+		hasDeadline = true
+		deadlineIn = time.Until(deadline).Round(time.Millisecond)
+	}
+	L_info("localllm: manager stop requested",
+		"modelID", status.ModelID,
+		"endpoint", status.Server.Endpoint,
+		"pid", status.Server.PID,
+		"inMemoryServer", server != nil,
+		"hasDeadline", hasDeadline,
+		"deadlineIn", deadlineIn,
+	)
 	if server == nil {
 		status := m.Status()
 		ownedState, err := loadOwnedProcessState()
 		if err != nil {
 			if status.Server.PID == 0 {
+				L_info("localllm: manager stop no-op", "reason", "no managed server or ownership record")
 				return nil
 			}
 			return OwnershipConflictError{
@@ -234,7 +250,17 @@ func (m *Manager) Stop(ctx context.Context) error {
 			}
 		}
 		if pidExists(ownedState.PID) {
+			L_info("localllm: manager stopping owned llama-server",
+				"pid", ownedState.PID,
+				"endpoint", ownedState.Endpoint,
+				"ownerPID", ownedState.OwnerPID,
+			)
 			if err := stopPID(ctx, ownedState.PID); err != nil {
+				L_warn("localllm: manager stop via ownership record failed",
+					"pid", ownedState.PID,
+					"endpoint", ownedState.Endpoint,
+					"error", err,
+				)
 				return err
 			}
 		}
@@ -245,9 +271,16 @@ func (m *Manager) Stop(ctx context.Context) error {
 		if err := clearOwnedProcessState(); err != nil {
 			return err
 		}
-		return m.persistStatus(status)
+		if err := m.persistStatus(status); err != nil {
+			return err
+		}
+		L_info("localllm: manager stop completed via ownership record",
+			"endpoint", status.Server.Endpoint,
+		)
+		return nil
 	}
 	if err := server.Stop(ctx); err != nil {
+		L_warn("localllm: manager stop failed", "error", err)
 		return err
 	}
 	m.mu.Lock()
@@ -255,7 +288,14 @@ func (m *Manager) Stop(ctx context.Context) error {
 	m.status.LastError = ""
 	out := m.status
 	m.mu.Unlock()
-	return m.persistStatus(out)
+	if err := m.persistStatus(out); err != nil {
+		return err
+	}
+	L_info("localllm: manager stop completed",
+		"endpoint", out.Server.Endpoint,
+		"state", out.Server.State,
+	)
+	return nil
 }
 
 func (m *Manager) SelectModel(modelID string) (ManagerStatus, error) {
@@ -405,6 +445,7 @@ func stopPID(ctx context.Context, pid int) error {
 	if err != nil {
 		return err
 	}
+	L_debug("localllm: stopPID sending SIGTERM", "pid", pid)
 	if err := proc.Signal(syscall.SIGTERM); err != nil && !processAlreadyExited(err) {
 		return err
 	}
@@ -412,10 +453,12 @@ func stopPID(ctx context.Context, pid int) error {
 	defer ticker.Stop()
 	for {
 		if !pidExists(pid) {
+			L_debug("localllm: stopPID observed exit", "pid", pid)
 			return nil
 		}
 		select {
 		case <-ctx.Done():
+			L_warn("localllm: stopPID timed out", "pid", pid, "error", ctx.Err())
 			return ctx.Err()
 		case <-ticker.C:
 		}

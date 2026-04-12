@@ -248,15 +248,47 @@ func TestFilterManagedLocalFromRuntimeConfigRemovesManagedProvidersAndRefs(t *te
 	}
 }
 
+func TestPerformGatewayShutdownOrdersSteps(t *testing.T) {
+	var got []string
+	performGatewayShutdown(gatewayShutdownHooks{
+		reason: "test",
+		stopChannels: func() {
+			got = append(got, "channels")
+		},
+		stopTranscript: func() {
+			got = append(got, "transcript")
+		},
+		stopMemoryGraph: func() {
+			got = append(got, "memorygraph")
+		},
+		closeMetrics: func() {
+			got = append(got, "metrics")
+		},
+		shutdownGateway: func() {
+			got = append(got, "gateway")
+		},
+	})
+
+	want := []string{"channels", "transcript", "memorygraph", "metrics", "gateway"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected shutdown step count: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected shutdown order: got=%v want=%v", got, want)
+		}
+	}
+}
+
 type postUpdateGatewayStub struct {
-	systemUserIDs   []string
-	systemMessages  []delivery.SystemMessage
-	invokeSource    string
-	invokePurpose   string
-	invokeMessage   string
-	invokeSuppress  string
-	invokeCalls     int
-	invokeErr       error
+	systemUserIDs  []string
+	systemMessages []delivery.SystemMessage
+	invokeSource   string
+	invokePurpose  string
+	invokeMessage  string
+	invokeSuppress string
+	invokeCalls    int
+	invokeErr      error
 }
 
 func (s *postUpdateGatewayStub) DeliverSystemMessage(ctx context.Context, userID string, msg delivery.SystemMessage) delivery.Report {

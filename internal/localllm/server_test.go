@@ -278,6 +278,51 @@ func TestManagedServerStartReplacesStaleOwnedProcess(t *testing.T) {
 	}
 }
 
+func TestManagedServerStopTimeoutKillsProcess(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	origFactory := commandFactory
+	commandFactory = func(name string, args ...string) *exec.Cmd {
+		helperArgs := append([]string{"-test.run=TestManagedServerHelperProcess", "--"}, args...)
+		cmd := exec.Command(os.Args[0], helperArgs...)
+		cmd.Env = append(os.Environ(), "GOCLAW_TEST_HELPER=1", "GOCLAW_TEST_HELPER_IGNORE_SIGTERM=1")
+		return cmd
+	}
+	t.Cleanup(func() { commandFactory = origFactory })
+
+	server := NewManagedServer(ServerConfig{
+		BinaryPath:   "llama-server",
+		ModelPath:    "/tmp/model.gguf",
+		Host:         "127.0.0.1",
+		ReadyTimeout: 5 * time.Second,
+		Backend:      BackendCPU,
+	})
+
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := server.Stop(stopCtx)
+	if err == nil {
+		t.Fatalf("expected stop timeout error")
+	}
+	if err != context.DeadlineExceeded {
+		t.Fatalf("expected context deadline exceeded, got %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		status := server.Status()
+		if status.PID == 0 && status.State == "stopped" {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("expected server to be stopped after timeout kill, got %#v", server.Status())
+}
+
 func TestManagedServerHelperProcess(t *testing.T) {
 	if os.Getenv("GOCLAW_TEST_HELPER") != "1" {
 		return
@@ -311,6 +356,9 @@ func TestManagedServerHelperProcess(t *testing.T) {
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-sigCh
+		if os.Getenv("GOCLAW_TEST_HELPER_IGNORE_SIGTERM") == "1" {
+			return
+		}
 		_ = srv.Shutdown(context.Background())
 	}()
 

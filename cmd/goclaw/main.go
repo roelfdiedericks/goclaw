@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -48,8 +49,8 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/hass"
 	"github.com/roelfdiedericks/goclaw/internal/jobs"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
-	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/localllm"
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/memorygraph"
 	"github.com/roelfdiedericks/goclaw/internal/metrics"
@@ -341,7 +342,9 @@ type LocalLLMEnsureRuntimeCmd struct{ LocalLLMFlags }
 type LocalLLMStartCmd struct{ LocalLLMFlags }
 type LocalLLMStopCmd struct{}
 type LocalLLMDownloadModelCmd struct{ LocalLLMFlags }
-type LocalLLMSelectModelCmd struct{ Model string `arg:"" help:"Managed model ID to select."` }
+type LocalLLMSelectModelCmd struct {
+	Model string `arg:"" help:"Managed model ID to select."`
+}
 
 func (c *LocalLLMStatusCmd) Run(_ *Context) error {
 	status := localllm.GetManager().Status()
@@ -3291,6 +3294,35 @@ type Context struct {
 	Trace bool
 }
 
+type gatewayShutdownHooks struct {
+	reason          string
+	stopChannels    func()
+	stopTranscript  func()
+	stopMemoryGraph func()
+	closeMetrics    func()
+	shutdownGateway func()
+}
+
+func performGatewayShutdown(hooks gatewayShutdownHooks) {
+	L_info("gateway shutting down", "reason", hooks.reason)
+	if hooks.stopChannels != nil {
+		hooks.stopChannels()
+	}
+	if hooks.stopTranscript != nil {
+		hooks.stopTranscript()
+	}
+	if hooks.stopMemoryGraph != nil {
+		hooks.stopMemoryGraph()
+	}
+	if hooks.closeMetrics != nil {
+		hooks.closeMetrics()
+	}
+	if hooks.shutdownGateway != nil {
+		hooks.shutdownGateway()
+	}
+	L_info("gateway shutdown complete", "reason", hooks.reason)
+}
+
 // runGateway is the actual gateway logic
 func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	L_info("starting gateway", "version", version)
@@ -3506,9 +3538,41 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		mgraphMgr.Start(runCtx)
 	}
 
+	// Create channel manager
+	chanMgr := channels.NewManager(gw, users)
+
+	var shutdownOnce sync.Once
+	shutdown := func(reason string) {
+		shutdownOnce.Do(func() {
+			performGatewayShutdown(gatewayShutdownHooks{
+				reason: reason,
+				stopChannels: func() {
+					chanMgr.StopAll()
+				},
+				stopTranscript: func() {
+					if transcriptMgr != nil {
+						transcriptMgr.Stop()
+					}
+				},
+				stopMemoryGraph: func() {
+					if mgraphMgr := gw.MemoryGraphManager(); mgraphMgr != nil {
+						mgraphMgr.Stop()
+					}
+				},
+				closeMetrics: func() {
+					metrics.GetInstance().Close() //nolint:errcheck // shutdown cleanup
+				},
+				shutdownGateway: func() {
+					gw.Shutdown()
+				},
+			})
+		})
+	}
+
 	// Handle signals
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
 
 	go func() {
 		sig := <-sigCh
@@ -3519,20 +3583,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 		// Cancel runCtx FIRST so goroutines (compaction retry, etc.) can exit.
 		// Otherwise Shutdown blocks waiting for them while they wait on I/O.
 		cancel()
-		// Stop transcript manager BEFORE gateway shutdown (uses gateway's SQLite DB)
-		if transcriptMgr != nil {
-			transcriptMgr.Stop()
-		}
-		// Stop memory graph background processes
-		if mgraphMgr := gw.MemoryGraphManager(); mgraphMgr != nil {
-			mgraphMgr.Stop()
-		}
-		metrics.GetInstance().Close() //nolint:errcheck // shutdown cleanup
-		gw.Shutdown()
 	}()
-
-	// Create channel manager
-	chanMgr := channels.NewManager(gw, users)
 
 	// Subscribe to channel events to update message tool adapters
 	bus.SubscribeEvent("channels.telegram.started", func(event bus.Event) {
@@ -3596,7 +3647,14 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	if useTUI {
 		// Run TUI mode
 		L_info("starting TUI mode")
-		return runTUI(runCtx, gw, users, cfg.Channels.TUI.ShowLogs, sandboxDisabledReason)
+		err := runTUI(runCtx, gw, users, cfg.Channels.TUI.ShowLogs, sandboxDisabledReason)
+		cancel()
+		shutdown("tui_exit")
+		if configapply.RestartRequested() {
+			L_info("gateway restart requested")
+			return configapply.ErrRestartRequested
+		}
+		return err
 	}
 
 	// Non-TUI mode: just wait for signals
@@ -3608,10 +3666,7 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	L_info("press Ctrl+C to stop")
 
 	<-runCtx.Done()
-	L_info("gateway shutting down")
-
-	// Stop all channels via manager
-	chanMgr.StopAll()
+	shutdown("runctx_done")
 
 	if configapply.RestartRequested() {
 		L_info("gateway restart requested")

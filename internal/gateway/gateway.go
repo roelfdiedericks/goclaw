@@ -2191,8 +2191,11 @@ func (g *Gateway) Shutdown() {
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	L_info("gateway: stopping managed localllm")
 	if err := localllm.GetManager().Stop(stopCtx); err != nil {
 		L_warn("localllm: shutdown stop failed", "error", err)
+	} else {
+		L_info("gateway: managed localllm stopped")
 	}
 }
 

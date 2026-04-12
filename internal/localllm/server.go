@@ -173,21 +173,48 @@ func (s *ManagedServer) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	cmd := s.cmd
 	waitCh := s.waitCh
+	pid := s.status.PID
+	endpoint := s.status.Endpoint
+	modelID := s.cfg.ModelID
+	hasDeadline := false
+	deadlineIn := time.Duration(0)
+	if deadline, ok := ctx.Deadline(); ok {
+		hasDeadline = true
+		deadlineIn = time.Until(deadline).Round(time.Millisecond)
+	}
 	if cmd == nil || cmd.Process == nil {
 		s.status.State = "stopped"
 		s.status.Healthy = false
 		s.status.PID = 0
 		s.status.LastError = ""
 		s.mu.Unlock()
+		L_info("localllm: server stop requested but already stopped",
+			"endpoint", endpoint,
+			"modelID", modelID,
+		)
 		return clearOwnedProcessState()
 	}
 	s.stopping = true
 	s.status.State = "stopping"
 	s.mu.Unlock()
 
+	L_info("localllm: server stop requested",
+		"pid", pid,
+		"endpoint", endpoint,
+		"modelID", modelID,
+		"hasDeadline", hasDeadline,
+		"deadlineIn", deadlineIn,
+	)
+
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		L_warn("localllm: graceful stop failed, killing", "error", err)
+		L_warn("localllm: graceful stop failed, killing",
+			"pid", pid,
+			"endpoint", endpoint,
+			"error", err,
+		)
 		_ = cmd.Process.Kill()
+	} else {
+		L_debug("localllm: SIGTERM sent", "pid", pid, "endpoint", endpoint)
 	}
 
 	select {
@@ -202,9 +229,36 @@ func (s *ManagedServer) Stop(ctx context.Context) error {
 		if clearErr := clearOwnedProcessState(); clearErr != nil {
 			return clearErr
 		}
-		return normalizeExitErr(err)
+		normErr := normalizeExitErr(err)
+		if normErr != nil {
+			L_warn("localllm: server stop wait returned error",
+				"pid", pid,
+				"endpoint", endpoint,
+				"error", normErr,
+			)
+		} else {
+			L_info("localllm: server stopped",
+				"pid", pid,
+				"endpoint", endpoint,
+				"modelID", modelID,
+			)
+		}
+		return normErr
 	case <-ctx.Done():
-		_ = cmd.Process.Kill()
+		L_warn("localllm: server stop timed out, killing",
+			"pid", pid,
+			"endpoint", endpoint,
+			"error", ctx.Err(),
+		)
+		if err := cmd.Process.Kill(); err != nil && !processAlreadyExited(err) {
+			L_warn("localllm: server kill after timeout failed",
+				"pid", pid,
+				"endpoint", endpoint,
+				"error", err,
+			)
+		} else {
+			L_debug("localllm: server kill issued after timeout", "pid", pid, "endpoint", endpoint)
+		}
 		return ctx.Err()
 	}
 }
@@ -284,6 +338,7 @@ func (s *ManagedServer) monitorProcess(cmd *exec.Cmd, waitCh chan error) {
 	if s.stopping {
 		s.status.State = "stopped"
 		s.stopping = false
+		L_debug("localllm: monitor observed intentional stop", "pid", cmd.Process.Pid, "endpoint", s.status.Endpoint)
 		return
 	}
 
@@ -370,17 +425,17 @@ func (s *ManagedServer) prepareStartEndpoint(ctx context.Context, endpoint strin
 
 func (s *ManagedServer) ownedProcessState(cmd *exec.Cmd) OwnedProcessState {
 	state := OwnedProcessState{
-		OwnerPID:   os.Getpid(),
-		PID:        cmd.Process.Pid,
-		Host:       s.cfg.Host,
-		Port:       s.cfg.Port,
-		Endpoint:   serverEndpoint(s.cfg.Host, s.cfg.Port),
-		BinaryPath: s.cfg.BinaryPath,
-		ModelPath:  s.cfg.ModelPath,
+		OwnerPID:    os.Getpid(),
+		PID:         cmd.Process.Pid,
+		Host:        s.cfg.Host,
+		Port:        s.cfg.Port,
+		Endpoint:    serverEndpoint(s.cfg.Host, s.cfg.Port),
+		BinaryPath:  s.cfg.BinaryPath,
+		ModelPath:   s.cfg.ModelPath,
 		RuntimePath: filepath.Dir(s.cfg.BinaryPath),
-		ModelID:    s.cfg.ModelID,
-		StartedAt:  time.Now(),
-		ManagedBy:  "goclaw",
+		ModelID:     s.cfg.ModelID,
+		StartedAt:   time.Now(),
+		ManagedBy:   "goclaw",
 	}
 	if runtime.GOOS == "linux" {
 		if cmdline, err := readProcessCommandLine(cmd.Process.Pid); err == nil {
