@@ -27,6 +27,12 @@ var (
 		Err       string
 		FetchedAt time.Time
 	}{}
+	localLLMRecommendationsCacheMu sync.Mutex
+	localLLMRecommendationsCache   = struct {
+		Value      setupcore.LocalModelRecommendations
+		FetchedAt  time.Time
+		ProfileKey string
+	}{}
 )
 
 type localLLMActionRequest struct {
@@ -64,7 +70,7 @@ func (a *API) handleGetLocalLLM(w http.ResponseWriter) {
 	}
 
 	status := localllm.GetManager().Status()
-	recs := setupcore.BuildLocalModelRecommendations()
+	recs := cachedLocalLLMRecommendations(status.SystemProfile)
 	if isZeroLocalLLMProfile(status.SystemProfile) {
 		status.SystemProfile = recs.Profile
 	}
@@ -573,6 +579,56 @@ func cachedLocalLLMLatestRuntimeVersion() (string, string) {
 		localLLMLatestRuntimeCache.Err = ""
 	}
 	return localLLMLatestRuntimeCache.Value, localLLMLatestRuntimeCache.Err
+}
+
+func cachedLocalLLMRecommendations(profile localllm.SystemProfile) setupcore.LocalModelRecommendations {
+	localLLMRecommendationsCacheMu.Lock()
+	defer localLLMRecommendationsCacheMu.Unlock()
+
+	now := time.Now()
+	profileKey := localLLMProfileCacheKey(profile)
+	if now.Sub(localLLMRecommendationsCache.FetchedAt) < time.Minute {
+		if profileKey == "" {
+			if !isZeroLocalLLMProfile(localLLMRecommendationsCache.Value.Profile) {
+				return localLLMRecommendationsCache.Value
+			}
+		} else if localLLMRecommendationsCache.ProfileKey == profileKey {
+			return localLLMRecommendationsCache.Value
+		}
+	}
+
+	var recs setupcore.LocalModelRecommendations
+	if profileKey != "" {
+		recs = setupcore.BuildLocalModelRecommendationsForProfile(profile)
+	} else {
+		recs = setupcore.BuildLocalModelRecommendations()
+		profileKey = localLLMProfileCacheKey(recs.Profile)
+	}
+	localLLMRecommendationsCache.Value = recs
+	localLLMRecommendationsCache.FetchedAt = now
+	localLLMRecommendationsCache.ProfileKey = profileKey
+	return recs
+}
+
+func localLLMProfileCacheKey(profile localllm.SystemProfile) string {
+	if isZeroLocalLLMProfile(profile) {
+		return ""
+	}
+	return strings.Join([]string{
+		string(profile.OSFlavor),
+		string(profile.Arch),
+		strconv.FormatUint(profile.TotalRAMBytes, 10),
+		strings.Join(stringifyBackends(profile.AvailableBackends), ","),
+		string(profile.Recommended),
+	}, "|")
+}
+
+func stringifyBackends(backends []localllm.Backend) []string {
+	items := make([]string, 0, len(backends))
+	for _, backend := range backends {
+		items = append(items, string(backend))
+	}
+	return items
 }
 
 func effectiveLocalLLMRuntimeVersion(installed, configured, latest string) string {

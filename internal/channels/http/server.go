@@ -313,14 +313,22 @@ func (s *Server) Stop() error {
 	}
 	s.mu.Unlock()
 
-	close(s.shutdownChan)
+	if s.channel != nil {
+		logging.L_info("http: stopping SSE sessions before server shutdown")
+		if err := s.channel.Stop(); err != nil {
+			logging.L_warn("http: failed to stop SSE sessions", "error", err)
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := s.server.Shutdown(ctx); err != nil {
-		logging.L_error("http: shutdown error", "error", err)
-		return err
+		logging.L_warn("http: graceful shutdown timed out, forcing close", "error", err)
+		if closeErr := s.server.Close(); closeErr != nil && closeErr != http.ErrServerClosed {
+			logging.L_error("http: forced close failed", "error", closeErr)
+			return closeErr
+		}
 	}
 
 	s.wg.Wait()

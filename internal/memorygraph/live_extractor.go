@@ -23,6 +23,12 @@ type LiveExtractor struct {
 	syncChan chan struct{}
 	syncing  atomic.Bool
 	wg       sync.WaitGroup
+	ctx      context.Context
+	cancel   context.CancelFunc
+	stopOnce sync.Once
+
+	getConversationsFn func(context.Context) []ConversationBatch
+	runExtractionFn    func(context.Context, LoopExtractionInput) (*LoopExtractionResult, error)
 
 	// Stats
 	lastSync          time.Time
@@ -41,12 +47,15 @@ type ConversationBatch struct {
 
 // NewLiveExtractor creates a new live extractor.
 func NewLiveExtractor(mgr *Manager, sessionsDB *sql.DB, cfg LiveExtractionConfig) *LiveExtractor {
+	runCtx, cancel := context.WithCancel(context.Background())
 	return &LiveExtractor{
 		manager:    mgr,
 		sessionsDB: sessionsDB,
 		config:     cfg,
 		stopChan:   make(chan struct{}),
 		syncChan:   make(chan struct{}, 1),
+		ctx:        runCtx,
+		cancel:     cancel,
 	}
 }
 
@@ -66,12 +75,24 @@ func (e *LiveExtractor) Start() {
 
 // Stop halts the extraction loop.
 func (e *LiveExtractor) Stop() {
-	close(e.stopChan)
+	L_info("live extractor: stop requested")
+	e.stopOnce.Do(func() {
+		close(e.stopChan)
+		if e.cancel != nil {
+			e.cancel()
+		}
+	})
 	e.wg.Wait()
+	L_debug("live extractor: stopped")
 }
 
 // TriggerSync requests an immediate sync.
 func (e *LiveExtractor) TriggerSync() {
+	select {
+	case <-e.stopChan:
+		return
+	default:
+	}
 	select {
 	case e.syncChan <- struct{}{}:
 	default:
@@ -127,16 +148,20 @@ func (e *LiveExtractor) runSync() {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := e.ctx
 
 	// Get conversations with unextracted messages
-	conversations := e.getUnextractedConversations(ctx)
+	conversations := e.getConversations(ctx)
 	if len(conversations) == 0 {
 		L_debug("live extractor: no new conversations")
 		return
 	}
 
 	for _, conv := range conversations {
+		if ctx.Err() != nil {
+			L_debug("live extractor: sync canceled")
+			return
+		}
 		if len(conv.MessageIDs) < e.config.MinMessages {
 			continue // Not enough new messages yet
 		}
@@ -151,8 +176,12 @@ func (e *LiveExtractor) runSync() {
 			ConversationTime: conv.FirstMessageTime,
 		}
 
-		result, err := e.extractionLoop.Run(ctx, ec)
+		result, err := e.runExtraction(ctx, ec)
 		if err != nil {
+			if ctx.Err() != nil {
+				L_debug("live extractor: extraction canceled", "session", conv.SessionKey)
+				return
+			}
 			L_warn("live extraction failed", "session", conv.SessionKey, "error", err)
 			continue
 		}
@@ -179,6 +208,20 @@ func (e *LiveExtractor) runSync() {
 	}
 
 	e.lastSync = time.Now()
+}
+
+func (e *LiveExtractor) getConversations(ctx context.Context) []ConversationBatch {
+	if e.getConversationsFn != nil {
+		return e.getConversationsFn(ctx)
+	}
+	return e.getUnextractedConversations(ctx)
+}
+
+func (e *LiveExtractor) runExtraction(ctx context.Context, ec LoopExtractionInput) (*LoopExtractionResult, error) {
+	if e.runExtractionFn != nil {
+		return e.runExtractionFn(ctx, ec)
+	}
+	return e.extractionLoop.Run(ctx, ec)
 }
 
 // getUnextractedConversations queries sessions.db for messages not yet extracted.

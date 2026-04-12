@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/paths"
@@ -23,6 +24,20 @@ var (
 	huggingFaceBaseURL = "https://huggingface.co"
 )
 
+type DownloadProgress struct {
+	Role            string
+	Name            string
+	FileIndex       int
+	FileCount       int
+	DownloadedBytes int64
+	TotalBytes      int64
+	Reusing         bool
+}
+
+type DownloadProgressFunc func(DownloadProgress)
+
+type downloadByteProgressFunc func(downloadedBytes, totalBytes int64, reusing bool)
+
 func HuggingFaceResolveURL(repo, filename string) string {
 	return fmt.Sprintf("%s/%s/resolve/main/%s?download=true",
 		strings.TrimRight(huggingFaceBaseURL, "/"),
@@ -31,7 +46,7 @@ func HuggingFaceResolveURL(repo, filename string) string {
 	)
 }
 
-func DownloadRuntime(ctx context.Context, version string, osFlavor OSFlavor, arch Arch, backend Backend) (string, error) {
+func DownloadRuntime(ctx context.Context, version string, osFlavor OSFlavor, arch Arch, backend Backend, progress DownloadProgressFunc) (string, error) {
 	binaryPath, err := RuntimeBinaryPath(version, osFlavor, arch, backend)
 	if err != nil {
 		return "", err
@@ -43,6 +58,17 @@ func DownloadRuntime(ctx context.Context, version string, osFlavor OSFlavor, arc
 	if _, err := os.Stat(binaryPath); err == nil {
 		if err := reconcileRuntimeSharedLibraries(installDir, osFlavor); err != nil {
 			return "", err
+		}
+		if progress != nil {
+			progress(DownloadProgress{
+				Role:            "runtime",
+				Name:            filepath.Base(binaryPath),
+				FileIndex:       1,
+				FileCount:       1,
+				DownloadedBytes: 1,
+				TotalBytes:      1,
+				Reusing:         true,
+			})
 		}
 		L_info("localllm: runtime already present", "binary", binaryPath)
 		return binaryPath, nil
@@ -57,13 +83,15 @@ func DownloadRuntime(ctx context.Context, version string, osFlavor OSFlavor, arc
 		return "", err
 	}
 
-	for _, name := range append(spec.AdditionalFiles, spec.Filename) {
+	files := append(spec.AdditionalFiles, spec.Filename)
+	for i, name := range files {
 		url := fmt.Sprintf("%s/%s", strings.TrimRight(spec.BaseURL, "/"), name)
 		cachePath, err := runtimeDownloadCachePath(version, name)
 		if err != nil {
 			return "", err
 		}
-		if err := downloadAndInstallArchive(ctx, url, cachePath, installDir); err != nil {
+		fileProgress := withDownloadProgressMetadata(progress, "runtime", name, i+1, len(files))
+		if err := downloadAndInstallArchive(ctx, url, cachePath, installDir, fileProgress); err != nil {
 			return "", err
 		}
 	}
@@ -80,7 +108,7 @@ func DownloadRuntime(ctx context.Context, version string, osFlavor OSFlavor, arc
 	return binaryPath, nil
 }
 
-func DownloadManagedModel(ctx context.Context, spec ManagedModelSpec) (string, error) {
+func DownloadManagedModel(ctx context.Context, spec ManagedModelSpec, progress DownloadProgressFunc) (string, error) {
 	modelPath, err := ManagedModelPath(spec)
 	if err != nil {
 		return "", err
@@ -90,7 +118,7 @@ func DownloadManagedModel(ctx context.Context, spec ManagedModelSpec) (string, e
 		return "", err
 	}
 
-	for _, item := range []struct {
+	items := []struct {
 		role     string
 		filename string
 		url      string
@@ -98,11 +126,22 @@ func DownloadManagedModel(ctx context.Context, spec ManagedModelSpec) (string, e
 	}{
 		{role: "weights", filename: spec.PreferredFilename, url: HuggingFaceResolveURL(spec.HFRepo, spec.PreferredFilename), path: modelPath},
 		{role: "mmproj", filename: spec.MMProjFilename, url: HuggingFaceResolveURL(spec.HFRepo, spec.MMProjFilename), path: mmprojPath},
-	} {
+	}
+	downloadable := make([]struct {
+		role     string
+		filename string
+		url      string
+		path     string
+	}, 0, len(items))
+	for _, item := range items {
 		if strings.TrimSpace(item.filename) == "" {
 			continue
 		}
-		if err := downloadFileWithResume(ctx, item.url, item.path); err != nil {
+		downloadable = append(downloadable, item)
+	}
+	for i, item := range downloadable {
+		fileProgress := withDownloadProgressMetadata(progress, item.role, item.filename, i+1, len(downloadable))
+		if err := downloadFileWithResume(ctx, item.url, item.path, fileProgress); err != nil {
 			return "", fmt.Errorf("managed model %s %s file %q: %w", spec.ID, item.role, item.filename, err)
 		}
 	}
@@ -123,8 +162,8 @@ func runtimeDownloadCachePath(version, filename string) (string, error) {
 	return filepath.Join(dir, filename), nil
 }
 
-func downloadAndInstallArchive(ctx context.Context, url, cachePath, installDir string) error {
-	if err := downloadFileWithResume(ctx, url, cachePath); err != nil {
+func downloadAndInstallArchive(ctx context.Context, url, cachePath, installDir string, progress downloadByteProgressFunc) error {
+	if err := downloadFileWithResume(ctx, url, cachePath, progress); err != nil {
 		return err
 	}
 
@@ -138,9 +177,12 @@ func downloadAndInstallArchive(ctx context.Context, url, cachePath, installDir s
 	}
 }
 
-func downloadFileWithResume(ctx context.Context, url, dest string) error {
-	if _, err := os.Stat(dest); err == nil {
+func downloadFileWithResume(ctx context.Context, url, dest string, progress downloadByteProgressFunc) error {
+	if info, err := os.Stat(dest); err == nil {
 		L_debug("localllm: download already present", "path", dest)
+		if progress != nil {
+			progress(info.Size(), info.Size(), true)
+		}
 		return nil
 	}
 	if err := paths.EnsureParentDir(dest); err != nil {
@@ -187,6 +229,7 @@ func downloadFileWithResume(ctx context.Context, url, dest string) error {
 			if _, err := file.Seek(0, io.SeekStart); err != nil {
 				return err
 			}
+			startAt = 0
 		}
 	case http.StatusPartialContent:
 	default:
@@ -205,7 +248,12 @@ func downloadFileWithResume(ctx context.Context, url, dest string) error {
 		return fmt.Errorf("download failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	if _, err := io.Copy(file, resp.Body); err != nil {
+	totalBytes := resp.ContentLength
+	if resp.StatusCode == http.StatusPartialContent && totalBytes >= 0 {
+		totalBytes += startAt
+	}
+	reader := newDownloadProgressReader(resp.Body, startAt, totalBytes, progress)
+	if _, err := io.Copy(file, reader); err != nil {
 		return err
 	}
 	if err := file.Close(); err != nil {
@@ -215,6 +263,76 @@ func downloadFileWithResume(ctx context.Context, url, dest string) error {
 		return err
 	}
 	return nil
+}
+
+func withDownloadProgressMetadata(progress DownloadProgressFunc, role, name string, fileIndex, fileCount int) downloadByteProgressFunc {
+	if progress == nil {
+		return nil
+	}
+	return func(downloadedBytes, totalBytes int64, reusing bool) {
+		progress(DownloadProgress{
+			Role:            role,
+			Name:            name,
+			FileIndex:       fileIndex,
+			FileCount:       fileCount,
+			DownloadedBytes: downloadedBytes,
+			TotalBytes:      totalBytes,
+			Reusing:         reusing,
+		})
+	}
+}
+
+type downloadProgressReader struct {
+	base        io.Reader
+	current     int64
+	total       int64
+	lastEmit    time.Time
+	lastPercent int
+	progress    downloadByteProgressFunc
+}
+
+func newDownloadProgressReader(base io.Reader, startAt, totalBytes int64, progress downloadByteProgressFunc) *downloadProgressReader {
+	r := &downloadProgressReader{
+		base:        base,
+		current:     startAt,
+		total:       totalBytes,
+		lastPercent: -1,
+		progress:    progress,
+	}
+	r.emit(true)
+	return r
+}
+
+func (r *downloadProgressReader) Read(p []byte) (int, error) {
+	n, err := r.base.Read(p)
+	if n > 0 {
+		r.current += int64(n)
+		r.emit(false)
+	}
+	if err == io.EOF {
+		r.emit(true)
+	}
+	return n, err
+}
+
+func (r *downloadProgressReader) emit(force bool) {
+	if r.progress == nil {
+		return
+	}
+	now := time.Now()
+	if !force {
+		if r.total > 0 {
+			percent := int((r.current * 100) / r.total)
+			if percent == r.lastPercent && now.Sub(r.lastEmit) < 300*time.Millisecond {
+				return
+			}
+			r.lastPercent = percent
+		} else if now.Sub(r.lastEmit) < 300*time.Millisecond {
+			return
+		}
+	}
+	r.lastEmit = now
+	r.progress(r.current, r.total, false)
 }
 
 func extractTarGz(src, dest string) error {

@@ -72,6 +72,16 @@ type SSESession struct {
 type SSEConnection struct {
 	Events chan SSEEvent
 	Done   chan struct{}
+	once   sync.Once
+}
+
+func (c *SSEConnection) Close() {
+	if c == nil {
+		return
+	}
+	c.once.Do(func() {
+		close(c.Done)
+	})
 }
 
 // BufferedEvent stores an event with its ID for replay
@@ -114,14 +124,19 @@ func (c *HTTPChannel) Stop() error {
 	c.sessionsMu.Lock()
 	defer c.sessionsMu.Unlock()
 
+	sessionCount := len(c.sessions)
+	activeConnections := 0
 	for _, sess := range c.sessions {
 		sess.connMu.Lock()
 		if sess.activeConn != nil {
-			close(sess.activeConn.Done)
+			sess.activeConn.Close()
+			sess.activeConn = nil
+			activeConnections++
 		}
 		sess.connMu.Unlock()
 	}
 	c.sessions = make(map[string]*SSESession)
+	logging.L_info("http: SSE sessions stopped", "sessions", sessionCount, "connections", activeConnections)
 	return nil
 }
 
@@ -364,7 +379,7 @@ func (c *HTTPChannel) RegisterConnection(sessionID string, u *user.User, lastEve
 
 	// Close existing connection if any (page refresh/reconnect)
 	if sess.activeConn != nil {
-		close(sess.activeConn.Done)
+		sess.activeConn.Close()
 		logging.L_debug("http: SSE connection replaced", "session", sessionID)
 	}
 

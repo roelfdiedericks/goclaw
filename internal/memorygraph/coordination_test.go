@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 	"github.com/roelfdiedericks/goclaw/internal/user"
-	_ "github.com/mattn/go-sqlite3"
 )
 
 func newTestManager(t *testing.T) *Manager {
@@ -176,3 +176,50 @@ func TestLiveExtractorRespectsHandoffDelayForRecentMessages(t *testing.T) {
 	}
 }
 
+func TestLiveExtractorStopCancelsInFlightSync(t *testing.T) {
+	mgr := newTestManager(t)
+	defer mgr.Close()
+	sessionsDB := newSessionsDB(t)
+	defer sessionsDB.Close()
+
+	extractor := NewLiveExtractor(mgr, sessionsDB, mgr.Config().LiveExtraction)
+	extractor.extractionLoop = &ExtractionLoop{}
+	started := make(chan struct{})
+	extractor.getConversationsFn = func(ctx context.Context) []ConversationBatch {
+		return []ConversationBatch{{
+			Username:         "rodent",
+			Channel:          "http",
+			SessionKey:       "session-stop",
+			Content:          "user: hi",
+			MessageIDs:       []string{"m1"},
+			FirstMessageTime: time.Now().Add(-time.Minute),
+		}}
+	}
+	extractor.runExtractionFn = func(ctx context.Context, ec LoopExtractionInput) (*LoopExtractionResult, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	extractor.wg.Add(1)
+	go extractor.loop()
+	extractor.TriggerSync()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("expected extraction to start")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		extractor.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("expected live extractor stop to cancel in-flight sync")
+	}
+}

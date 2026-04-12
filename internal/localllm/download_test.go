@@ -39,7 +39,7 @@ func TestDownloadFileWithResume(t *testing.T) {
 		t.Fatalf("write partial file: %v", err)
 	}
 
-	if err := downloadFileWithResume(context.Background(), server.URL, dest); err != nil {
+	if err := downloadFileWithResume(context.Background(), server.URL, dest, nil); err != nil {
 		t.Fatalf("downloadFileWithResume returned error: %v", err)
 	}
 
@@ -49,6 +49,40 @@ func TestDownloadFileWithResume(t *testing.T) {
 	}
 	if !bytes.Equal(got, content) {
 		t.Fatalf("expected %q, got %q", string(content), string(got))
+	}
+}
+
+func TestDownloadFileWithResumeReportsProgress(t *testing.T) {
+	content := bytes.Repeat([]byte("a"), 1024)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+
+	dest := filepath.Join(t.TempDir(), "file.bin")
+	var updates []struct {
+		current int64
+		total   int64
+		reusing bool
+	}
+	progress := func(downloadedBytes, totalBytes int64, reusing bool) {
+		updates = append(updates, struct {
+			current int64
+			total   int64
+			reusing bool
+		}{downloadedBytes, totalBytes, reusing})
+	}
+
+	if err := downloadFileWithResume(context.Background(), server.URL, dest, progress); err != nil {
+		t.Fatalf("downloadFileWithResume returned error: %v", err)
+	}
+	if len(updates) == 0 {
+		t.Fatalf("expected progress updates")
+	}
+	last := updates[len(updates)-1]
+	if last.current != int64(len(content)) || last.total != int64(len(content)) || last.reusing {
+		t.Fatalf("unexpected final progress update %#v", last)
 	}
 }
 
@@ -114,7 +148,7 @@ func TestDownloadRuntime(t *testing.T) {
 	t.Cleanup(func() { upstreamReleaseBase = origUpstream })
 	t.Setenv("HOME", t.TempDir())
 
-	got, err := DownloadRuntime(context.Background(), "b1234", OSLinux, ArchAMD64, BackendCPU)
+	got, err := DownloadRuntime(context.Background(), "b1234", OSLinux, ArchAMD64, BackendCPU, nil)
 	if err != nil {
 		t.Fatalf("DownloadRuntime returned error: %v", err)
 	}
@@ -153,7 +187,7 @@ func TestDownloadRuntimeRepairsMissingSharedLibraryLinks(t *testing.T) {
 		}
 	}
 
-	got, err := DownloadRuntime(context.Background(), "b1234", OSLinux, ArchAMD64, BackendCPU)
+	got, err := DownloadRuntime(context.Background(), "b1234", OSLinux, ArchAMD64, BackendCPU, nil)
 	if err != nil {
 		t.Fatalf("DownloadRuntime returned error: %v", err)
 	}
@@ -195,7 +229,7 @@ func TestDownloadManagedModel(t *testing.T) {
 		t.Fatalf("ManagedModelByID returned error: %v", err)
 	}
 
-	got, err := DownloadManagedModel(context.Background(), spec)
+	got, err := DownloadManagedModel(context.Background(), spec, nil)
 	if err != nil {
 		t.Fatalf("DownloadManagedModel returned error: %v", err)
 	}
@@ -234,7 +268,7 @@ func TestDownloadManagedModelWithoutMMProj(t *testing.T) {
 		t.Fatalf("ManagedModelByID: %v", err)
 	}
 
-	got, err := DownloadManagedModel(context.Background(), spec)
+	got, err := DownloadManagedModel(context.Background(), spec, nil)
 	if err != nil {
 		t.Fatalf("DownloadManagedModel: %v", err)
 	}
@@ -244,6 +278,46 @@ func TestDownloadManagedModelWithoutMMProj(t *testing.T) {
 	mmprojPath, err := ManagedModelMMProjPath(spec)
 	if err != nil || mmprojPath != "" {
 		t.Fatalf("expected no mmproj path, got %q err %v", mmprojPath, err)
+	}
+}
+
+func TestDownloadManagedModelReportsProgressMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "gemma-4-e2b-it-Q8_0.gguf"):
+			w.Header().Set("Content-Length", "5")
+			_, _ = w.Write([]byte("model"))
+		case strings.Contains(r.URL.Path, "mmproj-gemma-4-e2b-it-bf16.gguf"):
+			w.Header().Set("Content-Length", "6")
+			_, _ = w.Write([]byte("mmproj"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	origHFBase := huggingFaceBaseURL
+	huggingFaceBaseURL = server.URL
+	t.Cleanup(func() { huggingFaceBaseURL = origHFBase })
+	t.Setenv("HOME", t.TempDir())
+
+	spec, err := ManagedModelByID("gemma4-e2b")
+	if err != nil {
+		t.Fatalf("ManagedModelByID returned error: %v", err)
+	}
+
+	seen := map[string]DownloadProgress{}
+	progress := func(update DownloadProgress) {
+		seen[update.Role] = update
+	}
+	if _, err := DownloadManagedModel(context.Background(), spec, progress); err != nil {
+		t.Fatalf("DownloadManagedModel returned error: %v", err)
+	}
+	if seen["weights"].Name != spec.PreferredFilename || seen["weights"].FileCount != 2 {
+		t.Fatalf("unexpected weights progress %#v", seen["weights"])
+	}
+	if seen["mmproj"].Name != spec.MMProjFilename || seen["mmproj"].FileCount != 2 {
+		t.Fatalf("unexpected mmproj progress %#v", seen["mmproj"])
 	}
 }
 

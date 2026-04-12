@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
@@ -23,9 +24,11 @@ type SystemProfile struct {
 }
 
 var (
-	execCommand    = exec.Command
-	lookPath       = exec.LookPath
+	execCommand     = exec.Command
+	lookPath        = exec.LookPath
 	procMemInfoPath = "/proc/meminfo"
+	detectProfileMu sync.Mutex
+	lastProfileKey  string
 )
 
 func DetectSystemProfile() SystemProfile {
@@ -44,16 +47,37 @@ func DetectSystemProfile() SystemProfile {
 	profile.AvailableBackends = detectAvailableBackends(profile.OSFlavor, profile.Arch)
 	profile.Recommended = recommendBackend(profile.OSFlavor, profile.AvailableBackends)
 
-	L_info(
-		"localllm: detected system profile",
+	logDetectedSystemProfile(profile)
+
+	return profile
+}
+
+func logDetectedSystemProfile(profile SystemProfile) {
+	profileKey := fmt.Sprintf("%s|%s|%d|%v|%s",
+		profile.OSFlavor,
+		profile.Arch,
+		profile.TotalRAMBytes,
+		profile.AvailableBackends,
+		profile.Recommended,
+	)
+
+	detectProfileMu.Lock()
+	changed := profileKey != lastProfileKey
+	lastProfileKey = profileKey
+	detectProfileMu.Unlock()
+
+	logArgs := []any{
 		"os", profile.OSFlavor,
 		"arch", profile.Arch,
 		"ramBytes", profile.TotalRAMBytes,
 		"availableBackends", profile.AvailableBackends,
 		"recommendedBackend", profile.Recommended,
-	)
-
-	return profile
+	}
+	if changed {
+		L_info("localllm: detected system profile", logArgs...)
+		return
+	}
+	L_debug("localllm: detected system profile", logArgs...)
 }
 
 func detectAvailableBackends(osFlavor OSFlavor, arch Arch) []Backend {

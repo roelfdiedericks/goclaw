@@ -82,8 +82,15 @@ func (m *Manager) ensureRuntime(ctx context.Context, spec ManagedSpec, progress 
 	}
 
 	profile := DetectSystemProfile()
-	reportProgress(progress, "runtime_download", "Downloading or reusing llama.cpp runtime", 20)
-	runtimePath, err := DownloadRuntime(ctx, resolved.RuntimeVersion, profile.OSFlavor, profile.Arch, profile.Recommended)
+	reportProgress(progress, "runtime_download", "Preparing llama.cpp runtime download", 20)
+	runtimePath, err := DownloadRuntime(
+		ctx,
+		resolved.RuntimeVersion,
+		profile.OSFlavor,
+		profile.Arch,
+		profile.Recommended,
+		makeDownloadPhaseReporter(progress, "runtime_download", 20, 40),
+	)
 	if err != nil {
 		err = fmt.Errorf("download runtime for %s/%s backend=%s: %w", profile.OSFlavor, profile.Arch, profile.Recommended, err)
 		m.recordError(err)
@@ -95,8 +102,8 @@ func (m *Manager) ensureRuntime(ctx context.Context, spec ManagedSpec, progress 
 		m.recordError(err)
 		return m.Status(), err
 	}
-	reportProgress(progress, "model_download", "Downloading or reusing managed model files", 55)
-	modelPath, err := DownloadManagedModel(ctx, modelSpec)
+	reportProgress(progress, "model_download", "Preparing managed model download", 40)
+	modelPath, err := DownloadManagedModel(ctx, modelSpec, makeDownloadPhaseReporter(progress, "model_download", 40, 85))
 	if err != nil {
 		m.recordError(err)
 		return m.Status(), err
@@ -503,4 +510,85 @@ func reportProgress(progress func(string, string, int), phase, message string, p
 	if progress != nil {
 		progress(phase, message, percent)
 	}
+}
+
+func makeDownloadPhaseReporter(progress func(string, string, int), phase string, startPercent, endPercent int) DownloadProgressFunc {
+	if progress == nil {
+		return nil
+	}
+	return func(update DownloadProgress) {
+		reportProgress(
+			progress,
+			phase,
+			buildDownloadProgressMessage(update),
+			downloadProgressPercent(update, startPercent, endPercent),
+		)
+	}
+}
+
+func downloadProgressPercent(update DownloadProgress, startPercent, endPercent int) int {
+	if endPercent <= startPercent {
+		return startPercent
+	}
+	if update.FileCount <= 0 {
+		return startPercent
+	}
+	progressWithinFile := float64(0)
+	if update.Reusing {
+		progressWithinFile = 1
+	} else if update.TotalBytes > 0 {
+		progressWithinFile = float64(update.DownloadedBytes) / float64(update.TotalBytes)
+		if progressWithinFile < 0 {
+			progressWithinFile = 0
+		}
+		if progressWithinFile > 1 {
+			progressWithinFile = 1
+		}
+	}
+	completedFiles := float64(update.FileIndex - 1)
+	totalProgress := (completedFiles + progressWithinFile) / float64(update.FileCount)
+	if totalProgress < 0 {
+		totalProgress = 0
+	}
+	if totalProgress > 1 {
+		totalProgress = 1
+	}
+	return startPercent + int(totalProgress*float64(endPercent-startPercent))
+}
+
+func buildDownloadProgressMessage(update DownloadProgress) string {
+	entity := "file"
+	switch update.Role {
+	case "runtime":
+		entity = "runtime package"
+	case "weights":
+		entity = "model weights"
+	case "mmproj":
+		entity = "vision projector"
+	}
+
+	if update.Reusing {
+		return fmt.Sprintf("Reusing %s %q", entity, update.Name)
+	}
+	if update.TotalBytes > 0 {
+		return fmt.Sprintf("Downloading %s %q (%s / %s)", entity, update.Name, formatProgressBytes(update.DownloadedBytes), formatProgressBytes(update.TotalBytes))
+	}
+	return fmt.Sprintf("Downloading %s %q (%s)", entity, update.Name, formatProgressBytes(update.DownloadedBytes))
+}
+
+func formatProgressBytes(n int64) string {
+	if n <= 0 {
+		return "0 B"
+	}
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	value := float64(n)
+	unit := 0
+	for value >= 1024 && unit < len(units)-1 {
+		value /= 1024
+		unit++
+	}
+	if unit == 0 {
+		return fmt.Sprintf("%d %s", n, units[unit])
+	}
+	return fmt.Sprintf("%.1f %s", value, units[unit])
 }

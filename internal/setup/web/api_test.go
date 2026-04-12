@@ -17,6 +17,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/jobs"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/localllm"
+	setupcore "github.com/roelfdiedericks/goclaw/internal/setup"
 )
 
 func TestHandleGetPresetsIncludesSyntheticLlamaCppPreset(t *testing.T) {
@@ -69,12 +70,22 @@ func TestHandleGetLocalLLMIncludesManagedProvidersAndModels(t *testing.T) {
 		Err       string
 		FetchedAt time.Time
 	}{}
+	localLLMRecommendationsCache = struct {
+		Value      setupcore.LocalModelRecommendations
+		FetchedAt  time.Time
+		ProfileKey string
+	}{}
 	t.Cleanup(func() {
 		localLLMLatestRuntimeVersionFunc = origLatestFunc
 		localLLMLatestRuntimeCache = struct {
 			Value     string
 			Err       string
 			FetchedAt time.Time
+		}{}
+		localLLMRecommendationsCache = struct {
+			Value      setupcore.LocalModelRecommendations
+			FetchedAt  time.Time
+			ProfileKey string
 		}{}
 	})
 
@@ -204,12 +215,22 @@ func TestHandleLocalLLMActionEnsureLatestRuntimeUsesResolvedLatestVersion(t *tes
 		Err       string
 		FetchedAt time.Time
 	}{}
+	localLLMRecommendationsCache = struct {
+		Value      setupcore.LocalModelRecommendations
+		FetchedAt  time.Time
+		ProfileKey string
+	}{}
 	t.Cleanup(func() {
 		localLLMLatestRuntimeVersionFunc = origLatestFunc
 		localLLMLatestRuntimeCache = struct {
 			Value     string
 			Err       string
 			FetchedAt time.Time
+		}{}
+		localLLMRecommendationsCache = struct {
+			Value      setupcore.LocalModelRecommendations
+			FetchedAt  time.Time
+			ProfileKey string
 		}{}
 		localllm.RegisterCommands()
 	})
@@ -229,7 +250,7 @@ func TestHandleLocalLLMActionEnsureLatestRuntimeUsesResolvedLatestVersion(t *tes
 	api := NewAPI(configPath, configapply.CallerWebStandalone, EditorSectionsForMode(false))
 
 	body, err := json.Marshal(map[string]any{
-		"action": "ensure_latest_runtime",
+		"action":  "ensure_latest_runtime",
 		"modelID": "gemma4-e2b",
 	})
 	if err != nil {
@@ -270,8 +291,8 @@ func TestHandleLocalLLMActionConfigureManagedProviderPersistsConfig(t *testing.T
 	var resp struct {
 		Success bool `json:"success"`
 		Data    struct {
-			ConfigUpdated bool   `json:"configUpdated"`
-			ProviderAlias string `json:"providerAlias"`
+			ConfigUpdated  bool   `json:"configUpdated"`
+			ProviderAlias  string `json:"providerAlias"`
 			ProviderConfig struct {
 				Driver   string `json:"driver"`
 				Subtype  string `json:"subtype"`

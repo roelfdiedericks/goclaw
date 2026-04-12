@@ -8,11 +8,13 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/localllm"
 )
 
+var detectLocalModelProfile = localllm.DetectSystemProfile
+
 const (
-	LLMChoiceLocalGemma        = "local_gemma"
-	LLMChoiceCloudProvider     = "cloud"
-	LLMChoiceExistingLlamaCpp  = "existing_llamacpp"
-	LLMProviderManagedLlamaCpp = "llamacpp-managed"
+	LLMChoiceLocalGemma         = "local_gemma"
+	LLMChoiceCloudProvider      = "cloud"
+	LLMChoiceExistingLlamaCpp   = "existing_llamacpp"
+	LLMProviderManagedLlamaCpp  = "llamacpp-managed"
 	LLMProviderEndpointLlamaCpp = "llamacpp-endpoint"
 )
 
@@ -25,15 +27,18 @@ type LocalModelOption struct {
 }
 
 type LocalModelRecommendations struct {
-	Profile         localllm.SystemProfile
-	Options         []LocalModelOption
-	RecommendedID   string
-	DefaultModelID  string
-	Summary         string
+	Profile        localllm.SystemProfile
+	Options        []LocalModelOption
+	RecommendedID  string
+	DefaultModelID string
+	Summary        string
 }
 
 func BuildLocalModelRecommendations() LocalModelRecommendations {
-	profile := localllm.DetectSystemProfile()
+	return BuildLocalModelRecommendationsForProfile(detectLocalModelProfile())
+}
+
+func BuildLocalModelRecommendationsForProfile(profile localllm.SystemProfile) LocalModelRecommendations {
 	catalog := localllm.ManagedModelCatalog()
 	options := make([]LocalModelOption, 0, len(catalog))
 
