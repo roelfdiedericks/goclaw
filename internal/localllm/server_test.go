@@ -119,6 +119,23 @@ func TestManagedServerArgsIncludesCtxSize(t *testing.T) {
 	t.Fatalf("expected %v in args, got %#v", want, args)
 }
 
+func TestManagedServerArgsIncludesMetrics(t *testing.T) {
+	s := NewManagedServer(ServerConfig{
+		BinaryPath: "llama-server",
+		ModelPath:  "/tmp/model.gguf",
+		Host:       "127.0.0.1",
+		Port:       8080,
+		Backend:    BackendCPU,
+	})
+	args := s.args()
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--metrics" {
+			return
+		}
+	}
+	t.Fatalf("expected --metrics in args, got %#v", args)
+}
+
 func TestNextRestartDelay(t *testing.T) {
 	if got := nextRestartDelay(0); got != time.Second {
 		t.Fatalf("expected 1s, got %v", got)

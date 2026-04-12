@@ -612,6 +612,14 @@ func (p *LlamaCppProvider) StreamMessage(
 	)
 
 	if p.metricPrefix != "" {
+		_, sseCapture, _, _ := reqCapture.GetData()
+		cacheN, promptN, timingsOK := parseLastLlamaTimingsFromSSE(sseCapture)
+		if timingsOK {
+			emitLlamaCppTimingsMetrics(p.metricPrefix, cacheN, promptN)
+		} else {
+			maybeLogLlamaTimingsMissing(p.name, p.model)
+		}
+
 		MetricDuration(p.metricPrefix, "request", elapsed)
 		MetricAdd(p.metricPrefix, "input_tokens", int64(response.InputTokens))
 		MetricAdd(p.metricPrefix, "output_tokens", int64(response.OutputTokens))
@@ -629,6 +637,8 @@ func (p *LlamaCppProvider) StreamMessage(
 			MetricThreshold(p.metricPrefix, "context_usage_percent", usagePercent, 100.0)
 		}
 		EmitCostMetrics(p.metricPrefix, PurposeFromContext(ctx), p.config, p.metadataProvider, p.model, response)
+
+		goLlamaCppScrapeServerMetrics(p.metricPrefix, p.serverRoot, p.name)
 	}
 
 	FinishDumpSuccess(dumpCtx, p.dumpOnSuccess)

@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- localllm: start managed `llama-server` with `--metrics`; llm/llamacpp: record `timings.cache_n`/`prompt_n` from captured SSE, optional async `GET /metrics` scrape into internal gauges
 - localllm: resolve ROCm managed-runtime artifact on Debian trixie (same upstream `ubuntu-rocm-7.2-x64` tarball as generic Linux)
 - gateway/context: move context token status out of `BuildSystemPrompt` into ephemeral system messages; default memory graph bulletin injection is `message` (was `prompt`)
 - llm/llamacpp: send `cache_prompt` + client-assigned `id_slot` (with slot allocator + unpinned fallback) via `LlamaCppChatAugmentTransport` chained outside `CapturingTransport`; session `slot_id` in provider state

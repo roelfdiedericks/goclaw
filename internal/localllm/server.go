@@ -246,6 +246,7 @@ func (s *ManagedServer) args() []string {
 		"--host", s.cfg.Host,
 		"--port", strconv.Itoa(s.cfg.Port),
 		"--model", s.cfg.ModelPath,
+		"--metrics",
 	}
 	if s.cfg.MMProjPath != "" {
 		args = append(args, "--mmproj", s.cfg.MMProjPath)
