@@ -495,27 +495,6 @@ func upsertPathLikeEnv(env []string, key, value string) []string {
 	return append(env, prefix+value)
 }
 
-func waitForServerReady(ctx context.Context, endpoint string) error {
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		healthy, err := serverHealthy(ctx, endpoint)
-		if err == nil && healthy {
-			return nil
-		}
-
-		select {
-		case <-ctx.Done():
-			if err != nil {
-				return fmt.Errorf("server did not become ready: %w", err)
-			}
-			return fmt.Errorf("server did not become ready: %w", ctx.Err())
-		case <-ticker.C:
-		}
-	}
-}
-
 func waitForManagedServerReady(ctx context.Context, endpoint string, pid int) error {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -575,7 +554,7 @@ func reservePort(host string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	addr, ok := ln.Addr().(*net.TCPAddr)
 	if !ok {
 		return 0, fmt.Errorf("unexpected listener addr %T", ln.Addr())

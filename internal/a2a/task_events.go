@@ -7,11 +7,6 @@ import (
 	a2aproto "github.com/a2aproject/a2a-go/v2/a2a"
 )
 
-const (
-	a2aMetaTransportID = "goclaw.transportId"
-	a2aMetaRemotePeer  = "goclaw.remotePeerId"
-)
-
 func newTaskInfo(taskID, contextID string) a2aproto.TaskInfo {
 	return a2aproto.TaskInfo{
 		TaskID:    a2aproto.TaskID(taskID),

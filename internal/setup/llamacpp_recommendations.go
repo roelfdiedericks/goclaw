@@ -200,11 +200,11 @@ func summarizeLocalProfile(profile localllm.SystemProfile, defaultID, recommende
 	return strings.Join(parts, " | ")
 }
 
-func bytesToApproxGB(n uint64) int {
+func bytesToApproxGB(n uint64) uint64 {
 	if n == 0 {
 		return 0
 	}
-	return int((n + (1024*1024*1024)/2) / (1024 * 1024 * 1024))
+	return (n + (1024*1024*1024)/2) / (1024 * 1024 * 1024)
 }
 
 func hasAccelerator(profile localllm.SystemProfile) bool {

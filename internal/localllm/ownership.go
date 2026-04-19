@@ -27,18 +27,18 @@ func (e OwnershipConflictError) Error() string {
 }
 
 type OwnedProcessState struct {
-	OwnerPID     int       `json:"ownerPid"`
-	PID          int       `json:"pid"`
-	Host         string    `json:"host"`
-	Port         int       `json:"port"`
-	Endpoint     string    `json:"endpoint"`
-	BinaryPath   string    `json:"binaryPath"`
-	ModelPath    string    `json:"modelPath"`
-	RuntimePath  string    `json:"runtimePath"`
-	ModelID      string    `json:"modelID"`
-	StartedAt    time.Time `json:"startedAt"`
-	ManagedBy    string    `json:"managedBy"`
-	CommandLine  string    `json:"commandLine,omitempty"`
+	OwnerPID    int       `json:"ownerPid"`
+	PID         int       `json:"pid"`
+	Host        string    `json:"host"`
+	Port        int       `json:"port"`
+	Endpoint    string    `json:"endpoint"`
+	BinaryPath  string    `json:"binaryPath"`
+	ModelPath   string    `json:"modelPath"`
+	RuntimePath string    `json:"runtimePath"`
+	ModelID     string    `json:"modelID"`
+	StartedAt   time.Time `json:"startedAt"`
+	ManagedBy   string    `json:"managedBy"`
+	CommandLine string    `json:"commandLine,omitempty"`
 }
 
 func ownershipStatePath() (string, error) {
@@ -70,14 +70,14 @@ func persistOwnedProcessState(state OwnedProcessState) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return os.WriteFile(path, data, 0o600)
 }
 
 func clearOwnedProcessState() error {
@@ -171,10 +171,6 @@ func endpointMatchesOwnedPort(endpoint string, state OwnedProcessState) bool {
 		return false
 	}
 	return port == state.Port && defaultHost(host) == defaultHost(state.Host)
-}
-
-func sameManagedEndpoint(a, b OwnedProcessState) bool {
-	return strings.TrimSpace(defaultHost(a.Host)) == strings.TrimSpace(defaultHost(b.Host)) && a.Port == b.Port
 }
 
 func ownerProcessAlive(state OwnedProcessState) bool {

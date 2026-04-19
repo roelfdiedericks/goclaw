@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -54,30 +55,30 @@ const (
 )
 
 type Config struct {
-	IdentityKeyFile             string
-	ListenAddrs                 []string
-	AnnounceAddrs               []string
-	AnnouncePrivateAddrs        bool
-	DisableIdentifyAddrDiscovery bool
-	NATPortMap                  bool
-	BootstrapPeers              []string
-	BootstrapSeedTXT            string
-	MDNSEnabled                 bool
-	MDNSServiceName             string
-	RendezvousEnabled           bool
-	RendezvousNamespace         string
-	RendezvousAdmissionMode     string
-	RegisterIntervalSecs        int
-	QueryIntervalSecs           int
-	RelayClientEnabled          bool
-	RelayServerEnabled          bool
-	AutoRelayEnabled            bool
-	HolePunchEnabled            bool
+	IdentityKeyFile                string
+	ListenAddrs                    []string
+	AnnounceAddrs                  []string
+	AnnouncePrivateAddrs           bool
+	DisableIdentifyAddrDiscovery   bool
+	NATPortMap                     bool
+	BootstrapPeers                 []string
+	BootstrapSeedTXT               string
+	MDNSEnabled                    bool
+	MDNSServiceName                string
+	RendezvousEnabled              bool
+	RendezvousNamespace            string
+	RendezvousAdmissionMode        string
+	RegisterIntervalSecs           int
+	QueryIntervalSecs              int
+	RelayClientEnabled             bool
+	RelayServerEnabled             bool
+	AutoRelayEnabled               bool
+	HolePunchEnabled               bool
 	BackgroundDirectUpgradeEnabled bool
-	DirectUpgradeTimeoutSecs    int
-	DirectUpgradeCooldownSecs   int
-	RPCProtocolID               string
-	RendezvousProtocolID        string
+	DirectUpgradeTimeoutSecs       int
+	DirectUpgradeCooldownSecs      int
+	RPCProtocolID                  string
+	RendezvousProtocolID           string
 }
 
 type PeerObservation struct {
@@ -138,13 +139,13 @@ type Runtime struct {
 	rendezvousMu   sync.Mutex
 	rendezvousData map[string]map[string]rendezvousEntry
 
-	bootstrapMu         sync.RWMutex
-	bootstrapEntries    []string
-	bootstrapSource     string
-	bootstrapResolvedAt time.Time
-	bootstrapPeerIDs    map[peer.ID]struct{}
+	bootstrapMu            sync.RWMutex
+	bootstrapEntries       []string
+	bootstrapSource        string
+	bootstrapResolvedAt    time.Time
+	bootstrapPeerIDs       map[peer.ID]struct{}
 	lastRendezvousRegister time.Time
-	lastRendezvousQuery time.Time
+	lastRendezvousQuery    time.Time
 
 	stateMu           sync.RWMutex
 	localReachability network.Reachability
@@ -330,7 +331,7 @@ func (r *Runtime) Warmup(ctx context.Context) error {
 	}
 	r.runImmediateRendezvousPass(ctx, "warmup")
 	if len(errs) > 0 {
-		return fmt.Errorf(strings.Join(errs, "; "))
+		return errors.New(strings.Join(errs, "; "))
 	}
 	return nil
 }
@@ -388,8 +389,14 @@ type eventSubscription interface {
 	Close() error
 }
 
+func closeEventSubscription(name string, sub eventSubscription) {
+	if err := sub.Close(); err != nil {
+		L_debug("a2a libp2p: event subscription close failed", "watcher", name, "error", err)
+	}
+}
+
 func (r *Runtime) watchReachability(ctx context.Context, sub eventSubscription) {
-	defer sub.Close()
+	defer closeEventSubscription("reachability", sub)
 	for {
 		select {
 		case <-ctx.Done():
@@ -398,7 +405,12 @@ func (r *Runtime) watchReachability(ctx context.Context, sub eventSubscription) 
 			if !ok {
 				return
 			}
-			reachability := evt.(event.EvtLocalReachabilityChanged).Reachability
+			changedEvt, ok := evt.(event.EvtLocalReachabilityChanged)
+			if !ok {
+				L_warn("a2a libp2p: unexpected reachability event type", "type", fmt.Sprintf("%T", evt))
+				continue
+			}
+			reachability := changedEvt.Reachability
 			r.stateMu.Lock()
 			changed := r.localReachability != reachability
 			r.localReachability = reachability
@@ -420,7 +432,7 @@ func (r *Runtime) watchReachability(ctx context.Context, sub eventSubscription) 
 }
 
 func (r *Runtime) watchAutoRelayAddrs(ctx context.Context, sub eventSubscription) {
-	defer sub.Close()
+	defer closeEventSubscription("auto-relay-addrs", sub)
 	for {
 		select {
 		case <-ctx.Done():
@@ -429,7 +441,12 @@ func (r *Runtime) watchAutoRelayAddrs(ctx context.Context, sub eventSubscription
 			if !ok {
 				return
 			}
-			relayAddrs := multiaddrsWithPeerIDToStrings(evt.(event.EvtAutoRelayAddrsUpdated).RelayAddrs, r.host.ID())
+			updatedEvt, ok := evt.(event.EvtAutoRelayAddrsUpdated)
+			if !ok {
+				L_warn("a2a libp2p: unexpected auto relay event type", "type", fmt.Sprintf("%T", evt))
+				continue
+			}
+			relayAddrs := multiaddrsWithPeerIDToStrings(updatedEvt.RelayAddrs, r.host.ID())
 			r.stateMu.Lock()
 			prevRelayAddrs := cloneStrings(r.relayAddrs)
 			r.relayAddrs = relayAddrs
@@ -449,7 +466,7 @@ func (r *Runtime) watchAutoRelayAddrs(ctx context.Context, sub eventSubscription
 }
 
 func (r *Runtime) watchPeerIdentificationCompleted(ctx context.Context, sub eventSubscription) {
-	defer sub.Close()
+	defer closeEventSubscription("peer-identification-completed", sub)
 	for {
 		select {
 		case <-ctx.Done():
@@ -458,7 +475,11 @@ func (r *Runtime) watchPeerIdentificationCompleted(ctx context.Context, sub even
 			if !ok {
 				return
 			}
-			completed := evt.(event.EvtPeerIdentificationCompleted)
+			completed, ok := evt.(event.EvtPeerIdentificationCompleted)
+			if !ok {
+				L_warn("a2a libp2p: unexpected identification-completed event type", "type", fmt.Sprintf("%T", evt))
+				continue
+			}
 			remoteAddr := ""
 			localAddr := ""
 			observedAddr := ""
@@ -508,7 +529,7 @@ func (r *Runtime) watchPeerIdentificationCompleted(ctx context.Context, sub even
 }
 
 func (r *Runtime) watchPeerIdentificationFailed(ctx context.Context, sub eventSubscription) {
-	defer sub.Close()
+	defer closeEventSubscription("peer-identification-failed", sub)
 	for {
 		select {
 		case <-ctx.Done():
@@ -517,7 +538,11 @@ func (r *Runtime) watchPeerIdentificationFailed(ctx context.Context, sub eventSu
 			if !ok {
 				return
 			}
-			failed := evt.(event.EvtPeerIdentificationFailed)
+			failed, ok := evt.(event.EvtPeerIdentificationFailed)
+			if !ok {
+				L_warn("a2a libp2p: unexpected identification-failed event type", "type", fmt.Sprintf("%T", evt))
+				continue
+			}
 			L_warn("a2a libp2p: peer identification failed", "peerID", failed.Peer, "error", failed.Reason)
 			r.logPeerPathState(failed.Peer, "identify-failed")
 		}
@@ -525,7 +550,7 @@ func (r *Runtime) watchPeerIdentificationFailed(ctx context.Context, sub eventSu
 }
 
 func (r *Runtime) watchPeerConnectedness(ctx context.Context, sub eventSubscription) {
-	defer sub.Close()
+	defer closeEventSubscription("peer-connectedness", sub)
 	for {
 		select {
 		case <-ctx.Done():
@@ -534,7 +559,11 @@ func (r *Runtime) watchPeerConnectedness(ctx context.Context, sub eventSubscript
 			if !ok {
 				return
 			}
-			changed := evt.(event.EvtPeerConnectednessChanged)
+			changed, ok := evt.(event.EvtPeerConnectednessChanged)
+			if !ok {
+				L_warn("a2a libp2p: unexpected connectedness event type", "type", fmt.Sprintf("%T", evt))
+				continue
+			}
 			L_info("a2a libp2p: peer connectedness changed",
 				"peerID", changed.Peer,
 				"connectedness", strings.ToLower(changed.Connectedness.String()),
@@ -546,7 +575,7 @@ func (r *Runtime) watchPeerConnectedness(ctx context.Context, sub eventSubscript
 }
 
 func (r *Runtime) watchLocalAddresses(ctx context.Context, sub eventSubscription) {
-	defer sub.Close()
+	defer closeEventSubscription("local-addresses", sub)
 	for {
 		select {
 		case <-ctx.Done():
@@ -555,7 +584,11 @@ func (r *Runtime) watchLocalAddresses(ctx context.Context, sub eventSubscription
 			if !ok {
 				return
 			}
-			updated := evt.(event.EvtLocalAddressesUpdated)
+			updated, ok := evt.(event.EvtLocalAddressesUpdated)
+			if !ok {
+				L_warn("a2a libp2p: unexpected local-address event type", "type", fmt.Sprintf("%T", evt))
+				continue
+			}
 			added := 0
 			maintained := 0
 			unknown := 0
@@ -600,7 +633,7 @@ func (r *Runtime) watchLocalAddresses(ctx context.Context, sub eventSubscription
 }
 
 func (r *Runtime) watchPeerProtocols(ctx context.Context, sub eventSubscription) {
-	defer sub.Close()
+	defer closeEventSubscription("peer-protocols", sub)
 	for {
 		select {
 		case <-ctx.Done():
@@ -609,7 +642,11 @@ func (r *Runtime) watchPeerProtocols(ctx context.Context, sub eventSubscription)
 			if !ok {
 				return
 			}
-			updated := evt.(event.EvtPeerProtocolsUpdated)
+			updated, ok := evt.(event.EvtPeerProtocolsUpdated)
+			if !ok {
+				L_warn("a2a libp2p: unexpected peer-protocols event type", "type", fmt.Sprintf("%T", evt))
+				continue
+			}
 			L_debug("a2a libp2p: peer protocols updated",
 				"peerID", updated.Peer,
 				"added", len(updated.Added),
@@ -815,7 +852,7 @@ func (r *Runtime) CancelRemoteTask(ctx context.Context, target, taskID string, k
 	case "cancelled":
 		return TaskUpdate{TaskID: taskID, State: "cancelled", UpdatedAt: time.Now()}, nil
 	case "error":
-		return TaskUpdate{}, fmt.Errorf(env.Error)
+		return TaskUpdate{}, errors.New(env.Error)
 	default:
 		return TaskUpdate{}, fmt.Errorf("unexpected cancel response kind %q", env.Kind)
 	}
@@ -889,7 +926,7 @@ func (r *Runtime) connectBootstrapPeers(ctx context.Context, forceRefresh bool) 
 		}
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf(strings.Join(errs, "; "))
+		return errors.New(strings.Join(errs, "; "))
 	}
 	return nil
 }
@@ -1005,31 +1042,12 @@ func (r *Runtime) connectedToBootstrapPeer() bool {
 	return false
 }
 
-func (r *Runtime) shouldRunRendezvousQuery(now time.Time) bool {
-	healthy := r.connectedToBootstrapPeer()
-	r.bootstrapMu.Lock()
-	defer r.bootstrapMu.Unlock()
-	if healthy && !r.lastRendezvousQuery.IsZero() && now.Sub(r.lastRendezvousQuery) < rendezvousHealthyQueryEvery {
-		L_trace("a2a libp2p: rendezvous query skipped", "reason", "healthy-bootstrap-connection", "nextQueryIn", rendezvousHealthyQueryEvery-now.Sub(r.lastRendezvousQuery))
-		return false
-	}
-	r.lastRendezvousQuery = now
-	return true
-}
-
 func (r *Runtime) runImmediateRendezvousPass(ctx context.Context, reason string) {
 	if !r.rendezvousEnabledForNode() {
 		return
 	}
 	r.maybeRegisterRendezvous(ctx, reason, 0)
 	r.maybeQueryRendezvous(ctx, reason, 0, true)
-}
-
-func (r *Runtime) triggerRendezvousRegister(ctx context.Context, reason string) {
-	if !r.rendezvousEnabledForNode() {
-		return
-	}
-	r.maybeRegisterRendezvous(ctx, reason, rendezvousTriggerMinInterval)
 }
 
 func (r *Runtime) rendezvousEnabledForNode() bool {
@@ -1215,15 +1233,15 @@ func (r *Runtime) maybeScheduleBackgroundDirectUpgrade(trigger string, target pe
 	cooldown := time.Duration(r.cfg.DirectUpgradeCooldownSecs) * time.Second
 	now := time.Now()
 	r.directUpgradeMu.Lock()
-	if _, inflight := r.directUpgradeInflight[target]; inflight {
-		r.directUpgradeMu.Unlock()
-		L_trace("a2a libp2p: background direct upgrade skipped", "peerID", target, "trigger", trigger, "reason", "inflight")
-		return
-	}
 	last := r.directUpgradeLast[target]
-	if !last.IsZero() && now.Sub(last) < cooldown {
+	_, inflight := r.directUpgradeInflight[target]
+	if !canAttemptBackgroundDirectUpgrade(inflight, last, now, cooldown) {
 		r.directUpgradeMu.Unlock()
-		L_trace("a2a libp2p: background direct upgrade skipped", "peerID", target, "trigger", trigger, "reason", "cooldown")
+		reason := "cooldown"
+		if inflight {
+			reason = "inflight"
+		}
+		L_trace("a2a libp2p: background direct upgrade skipped", "peerID", target, "trigger", trigger, "reason", reason)
 		return
 	}
 	r.directUpgradeInflight[target] = struct{}{}
@@ -1321,7 +1339,7 @@ func (r *Runtime) reserveBootstrapRelays(ctx context.Context) error {
 		L_info("a2a libp2p: bootstrap relay reserved", "source", source, "peerID", info.ID)
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf(strings.Join(errs, "; "))
+		return errors.New(strings.Join(errs, "; "))
 	}
 	return nil
 }
@@ -1603,7 +1621,7 @@ func (r *Runtime) sendRendezvousRequest(ctx context.Context, info peer.AddrInfo,
 		return fmt.Errorf("decode rendezvous response: %w", err)
 	}
 	if resp.Error != "" {
-		return fmt.Errorf(resp.Error)
+		return errors.New(resp.Error)
 	}
 	return nil
 }
@@ -1847,9 +1865,9 @@ func (r *Runtime) resolveTargetPeer(target string, knownPeers []PeerCandidate) (
 		return nil, nil, fmt.Errorf("peer target is required")
 	}
 	var (
-		id            peer.ID
+		id             peer.ID
 		candidateAddrs []string
-		sources       []string
+		sources        []string
 	)
 	if decoded, err := peer.Decode(target); err == nil {
 		id = decoded
@@ -2704,11 +2722,9 @@ func readRemoteUpdates(stream network.Stream, updates chan<- TaskUpdate) {
 			}
 		case "error":
 			updates <- TaskUpdate{TaskID: env.TaskID, State: "failed", Error: env.Error, UpdatedAt: time.Now()}
-			terminalSeen = true
 			return
 		case "cancelled":
 			updates <- TaskUpdate{TaskID: env.TaskID, State: "cancelled", UpdatedAt: time.Now()}
-			terminalSeen = true
 			return
 		}
 	}

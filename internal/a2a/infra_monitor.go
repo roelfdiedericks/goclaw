@@ -41,16 +41,16 @@ type InfraRendezvousEntry struct {
 }
 
 type InfraRendezvousNamespace struct {
-	Namespace string                `json:"namespace"`
+	Namespace string                 `json:"namespace"`
 	Entries   []InfraRendezvousEntry `json:"entries,omitempty"`
 }
 
 type InfraSnapshot struct {
-	Status      Status                    `json:"status"`
-	Summary     InfraSummary              `json:"summary"`
-	Peers       []InfraConnectedPeer      `json:"peers,omitempty"`
-	Rendezvous  []InfraRendezvousNamespace `json:"rendezvous,omitempty"`
-	CapturedAt  time.Time                 `json:"capturedAt"`
+	Status     Status                     `json:"status"`
+	Summary    InfraSummary               `json:"summary"`
+	Peers      []InfraConnectedPeer       `json:"peers,omitempty"`
+	Rendezvous []InfraRendezvousNamespace `json:"rendezvous,omitempty"`
+	CapturedAt time.Time                  `json:"capturedAt"`
 }
 
 func (m *Manager) InfraSnapshot() InfraSnapshot {

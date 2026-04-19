@@ -29,12 +29,12 @@ const (
 type LifecycleState string
 
 const (
-	LifecycleStateIdle      LifecycleState = "idle"
-	LifecycleStateDisabled  LifecycleState = "disabled"
-	LifecycleStateStarting  LifecycleState = "starting"
-	LifecycleStateRunning   LifecycleState = "running"
-	LifecycleStateDegraded  LifecycleState = "degraded"
-	LifecycleStateFailed    LifecycleState = "failed"
+	LifecycleStateIdle     LifecycleState = "idle"
+	LifecycleStateDisabled LifecycleState = "disabled"
+	LifecycleStateStarting LifecycleState = "starting"
+	LifecycleStateRunning  LifecycleState = "running"
+	LifecycleStateDegraded LifecycleState = "degraded"
+	LifecycleStateFailed   LifecycleState = "failed"
 )
 
 type TaskState string
@@ -72,39 +72,39 @@ type PeerRecord struct {
 }
 
 type Status struct {
-	Enabled             bool           `json:"enabled"`
-	ActiveTransport     string         `json:"activeTransport"`
-	LifecycleState      LifecycleState `json:"lifecycleState"`
-	Ready               bool           `json:"ready"`
-	WarmupComplete      bool           `json:"warmupComplete"`
-	RuntimeMode         RuntimeMode    `json:"runtimeMode"`
-	LocalPeerID         string         `json:"localPeerId,omitempty"`
-	ListenAddrs         []string       `json:"listenAddrs,omitempty"`
-	AdvertisedAddrs     []string       `json:"advertisedAddrs,omitempty"`
-	RelayAddrs          []string       `json:"relayAddrs,omitempty"`
-	BootstrapPeers      int            `json:"bootstrapPeers"`
-	TrustedPeers        int            `json:"trustedPeers"`
-	KnownPeers          int            `json:"knownPeers"`
-	ConnectedPeers      int            `json:"connectedPeers"`
-	DiscoveredPeers     int            `json:"discoveredPeers"`
-	RelayClientEnabled  bool           `json:"relayClientEnabled"`
-	RelayServerEnabled  bool           `json:"relayServerEnabled"`
-	AutoRelayEnabled    bool           `json:"autoRelayEnabled"`
-	HolePunchEnabled    bool           `json:"holePunchEnabled"`
-	NATPortMapEnabled   bool           `json:"natPortMapEnabled"`
-	AutoNATv2Enabled    bool           `json:"autoNATv2Enabled"`
-	NATServiceEnabled   bool           `json:"natServiceEnabled"`
-	AnnouncePrivate     bool           `json:"announcePrivate"`
-	RendezvousEnabled   bool           `json:"rendezvousEnabled"`
-	RendezvousNamespace string         `json:"rendezvousNamespace,omitempty"`
-	RendezvousAdmissionMode string     `json:"rendezvousAdmissionMode,omitempty"`
-	RendezvousAcceptsPrivate bool      `json:"rendezvousAcceptsPrivate"`
-	Reachability        string         `json:"reachability,omitempty"`
-	PeerStateCounts     map[string]int `json:"peerStateCounts,omitempty"`
-	LastError           string         `json:"lastError,omitempty"`
-	StartedAt           *time.Time     `json:"startedAt,omitempty"`
-	RecentTaskCount     int            `json:"recentTaskCount"`
-	StateRetentionSecs  int            `json:"stateRetentionSecs"`
+	Enabled                  bool           `json:"enabled"`
+	ActiveTransport          string         `json:"activeTransport"`
+	LifecycleState           LifecycleState `json:"lifecycleState"`
+	Ready                    bool           `json:"ready"`
+	WarmupComplete           bool           `json:"warmupComplete"`
+	RuntimeMode              RuntimeMode    `json:"runtimeMode"`
+	LocalPeerID              string         `json:"localPeerId,omitempty"`
+	ListenAddrs              []string       `json:"listenAddrs,omitempty"`
+	AdvertisedAddrs          []string       `json:"advertisedAddrs,omitempty"`
+	RelayAddrs               []string       `json:"relayAddrs,omitempty"`
+	BootstrapPeers           int            `json:"bootstrapPeers"`
+	TrustedPeers             int            `json:"trustedPeers"`
+	KnownPeers               int            `json:"knownPeers"`
+	ConnectedPeers           int            `json:"connectedPeers"`
+	DiscoveredPeers          int            `json:"discoveredPeers"`
+	RelayClientEnabled       bool           `json:"relayClientEnabled"`
+	RelayServerEnabled       bool           `json:"relayServerEnabled"`
+	AutoRelayEnabled         bool           `json:"autoRelayEnabled"`
+	HolePunchEnabled         bool           `json:"holePunchEnabled"`
+	NATPortMapEnabled        bool           `json:"natPortMapEnabled"`
+	AutoNATv2Enabled         bool           `json:"autoNATv2Enabled"`
+	NATServiceEnabled        bool           `json:"natServiceEnabled"`
+	AnnouncePrivate          bool           `json:"announcePrivate"`
+	RendezvousEnabled        bool           `json:"rendezvousEnabled"`
+	RendezvousNamespace      string         `json:"rendezvousNamespace,omitempty"`
+	RendezvousAdmissionMode  string         `json:"rendezvousAdmissionMode,omitempty"`
+	RendezvousAcceptsPrivate bool           `json:"rendezvousAcceptsPrivate"`
+	Reachability             string         `json:"reachability,omitempty"`
+	PeerStateCounts          map[string]int `json:"peerStateCounts,omitempty"`
+	LastError                string         `json:"lastError,omitempty"`
+	StartedAt                *time.Time     `json:"startedAt,omitempty"`
+	RecentTaskCount          int            `json:"recentTaskCount"`
+	StateRetentionSecs       int            `json:"stateRetentionSecs"`
 }
 
 type PairingPayload struct {

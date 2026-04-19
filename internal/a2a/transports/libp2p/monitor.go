@@ -13,7 +13,7 @@ type RendezvousEntrySnapshot struct {
 }
 
 type RendezvousNamespaceSnapshot struct {
-	Namespace string                   `json:"namespace"`
+	Namespace string                    `json:"namespace"`
 	Entries   []RendezvousEntrySnapshot `json:"entries,omitempty"`
 }
 

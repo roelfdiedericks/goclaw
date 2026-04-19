@@ -169,11 +169,31 @@ func (p *LlamaCppProvider) Model() string {
 }
 
 func (p *LlamaCppProvider) clone() *LlamaCppProvider {
-	clone := *p
-	clone.mu = sync.RWMutex{}
-	clone.propsMu = sync.RWMutex{}
-	clone.slotMu = sync.Mutex{}
-	return &clone
+	return &LlamaCppProvider{
+		name:                   p.name,
+		client:                 p.client,
+		httpClient:             p.httpClient,
+		model:                  p.model,
+		maxTokens:              p.maxTokens,
+		contextTokens:          p.contextTokens,
+		apiKey:                 p.apiKey,
+		baseURL:                p.baseURL,
+		serverRoot:             p.serverRoot,
+		metricPrefix:           p.metricPrefix,
+		metadataProvider:       p.metadataProvider,
+		config:                 p.config,
+		embeddingOnly:          p.embeddingOnly,
+		embeddingDimensions:    p.embeddingDimensions,
+		traceEnabled:           p.traceEnabled,
+		transport:              p.transport,
+		chatAugment:            p.chatAugment,
+		dumpOnSuccess:          p.dumpOnSuccess,
+		available:              p.available,
+		cachedPropsNCtx:        p.cachedPropsNCtx,
+		cachedPropsTotalSlots:  p.cachedPropsTotalSlots,
+		cachedPropsFetchedTime: p.cachedPropsFetchedTime,
+		slotPersisted:          p.slotPersisted,
+	}
 }
 
 func (p *LlamaCppProvider) WithModel(model string) Provider {

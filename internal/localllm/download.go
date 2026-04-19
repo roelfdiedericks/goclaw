@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,14 @@ import (
 var (
 	httpClient         = http.DefaultClient
 	huggingFaceBaseURL = "https://huggingface.co"
+)
+
+const (
+	downloadFilePerm     = 0o600
+	archiveDirPerm       = 0o750
+	maxArchiveEntryBytes = 8 << 30
+	maxArchiveTotalBytes = 16 << 30
+	maxArchiveInt64      = int64(^uint64(0) >> 1)
 )
 
 type DownloadProgress struct {
@@ -195,11 +204,15 @@ func downloadFileWithResume(ctx context.Context, url, dest string, progress down
 		startAt = info.Size()
 	}
 
-	file, err := os.OpenFile(partial, os.O_CREATE|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(partial, os.O_CREATE|os.O_WRONLY, downloadFilePerm)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		if file != nil {
+			_ = file.Close()
+		}
+	}()
 
 	if _, err := file.Seek(startAt, io.SeekStart); err != nil {
 		return err
@@ -259,6 +272,7 @@ func downloadFileWithResume(ctx context.Context, url, dest string, progress down
 	if err := file.Close(); err != nil {
 		return err
 	}
+	file = nil
 	if err := os.Rename(partial, dest); err != nil {
 		return err
 	}
@@ -350,9 +364,10 @@ func extractTarGz(src, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer gzr.Close()
+	defer func() { _ = gzr.Close() }()
 
 	tr := tar.NewReader(gzr)
+	totalExtracted := int64(0)
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -373,7 +388,7 @@ func extractTarGz(src, dest string) error {
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := os.MkdirAll(target, archiveDirPerm); err != nil {
 				return err
 			}
 		case tar.TypeSymlink:
@@ -394,14 +409,24 @@ func extractTarGz(src, dest string) error {
 			if err := paths.EnsureParentDir(target); err != nil {
 				return err
 			}
-			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			if header.Size < 0 {
+				return fmt.Errorf("archive entry %s has negative size", header.Name)
+			}
+			if header.Size > maxArchiveEntryBytes {
+				return fmt.Errorf("archive entry %s exceeds size limit", header.Name)
+			}
+			if totalExtracted+header.Size > maxArchiveTotalBytes {
+				return fmt.Errorf("archive extraction exceeds total size limit")
+			}
+			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, archiveFileMode(header.Mode))
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(out, tr); err != nil {
+			if err := copyExactArchiveBytes(out, tr, header.Size); err != nil {
 				out.Close()
 				return err
 			}
+			totalExtracted += header.Size
 			if err := out.Close(); err != nil {
 				return err
 			}
@@ -477,8 +502,9 @@ func extractZip(src, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
+	totalExtracted := int64(0)
 	for _, file := range r.File {
 		rel, ok := archiveRelativePath(file.Name)
 		if !ok {
@@ -490,7 +516,7 @@ func extractZip(src, dest string) error {
 		}
 
 		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := os.MkdirAll(target, archiveDirPerm); err != nil {
 				return err
 			}
 			continue
@@ -503,16 +529,34 @@ func extractZip(src, dest string) error {
 		if err != nil {
 			return err
 		}
+		if file.UncompressedSize64 > uint64(maxArchiveInt64) {
+			_ = rc.Close()
+			return fmt.Errorf("archive entry %s exceeds supported size", file.Name)
+		}
+		entrySize, err := strconv.ParseInt(strconv.FormatUint(file.UncompressedSize64, 10), 10, 64)
+		if err != nil {
+			_ = rc.Close()
+			return fmt.Errorf("archive entry %s size conversion failed: %w", file.Name, err)
+		}
+		if entrySize > maxArchiveEntryBytes {
+			_ = rc.Close()
+			return fmt.Errorf("archive entry %s exceeds size limit", file.Name)
+		}
+		if totalExtracted+entrySize > maxArchiveTotalBytes {
+			_ = rc.Close()
+			return fmt.Errorf("archive extraction exceeds total size limit")
+		}
 		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, file.Mode())
 		if err != nil {
-			rc.Close()
+			_ = rc.Close()
 			return err
 		}
-		if _, err := io.Copy(out, rc); err != nil {
-			rc.Close()
+		if err := copyExactArchiveBytes(out, rc, entrySize); err != nil {
+			_ = rc.Close()
 			out.Close()
 			return err
 		}
+		totalExtracted += entrySize
 		if err := rc.Close(); err != nil {
 			out.Close()
 			return err
@@ -520,6 +564,27 @@ func extractZip(src, dest string) error {
 		if err := out.Close(); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func archiveFileMode(mode int64) os.FileMode {
+	if mode&0o111 != 0 {
+		return 0o755
+	}
+	return 0o644
+}
+
+func copyExactArchiveBytes(dst io.Writer, src io.Reader, size int64) error {
+	if size < 0 {
+		return fmt.Errorf("negative archive size")
+	}
+	written, err := io.CopyN(dst, src, size)
+	if err != nil {
+		return err
+	}
+	if written != size {
+		return io.ErrUnexpectedEOF
 	}
 	return nil
 }

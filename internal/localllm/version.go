@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	latestVersionAPIURL   = "https://api.github.com/repos/hybridgroup/llama-cpp-builder/releases/latest"
+	latestVersionAPIURL    = "https://api.github.com/repos/hybridgroup/llama-cpp-builder/releases/latest"
 	fetchLatestVersionFunc = fetchLatestRuntimeVersion
 )
 

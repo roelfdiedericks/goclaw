@@ -2,6 +2,7 @@ package localllm
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -62,6 +63,27 @@ func TestManagedServerStartHealthStop(t *testing.T) {
 	status = server.Status()
 	if status.State != "stopped" || status.Healthy {
 		t.Fatalf("unexpected stopped status %#v", status)
+	}
+}
+
+func waitForServerReady(ctx context.Context, endpoint string) error {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		healthy, err := serverHealthy(ctx, endpoint)
+		if err == nil && healthy {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			if err != nil {
+				return fmt.Errorf("server did not become ready: %w", err)
+			}
+			return fmt.Errorf("server did not become ready: %w", ctx.Err())
+		case <-ticker.C:
+		}
 	}
 }
 

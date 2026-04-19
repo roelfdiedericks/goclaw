@@ -46,14 +46,14 @@ type monitor struct {
 	footer     *tview.TextView
 	lastUpdate *tview.TextView
 
-	mu             sync.Mutex
-	snapshot       a2a.InfraSnapshot
+	mu              sync.Mutex
+	snapshot        a2a.InfraSnapshot
 	lastFingerprint string
-	logLines       []string
-	selectedPeerID string
-	selectedRVKey  string
-	focus          focusPane
-	suppressChange bool
+	logLines        []string
+	selectedPeerID  string
+	selectedRVKey   string
+	focus           focusPane
+	suppressChange  bool
 }
 
 func Run(ctx context.Context, manager *a2a.Manager, initialLogLines []string) error {

@@ -9,26 +9,26 @@ import (
 )
 
 const (
-	configPath              = "a2a"
-	DefaultTransportLibp2p  = "libp2p"
-	DefaultRPCProtocolID    = "/goclaw/a2a/rpc/1.0.0"
-	DefaultRendezvousID     = "/goclaw/a2a/rendezvous/1.0.0"
-	DefaultRendezvousNS     = "goclaw-a2a-v1"
-	DefaultRendezvousAdmissionMode = RendezvousAdmissionPublicSafe
-	DefaultIdentityKeyFile  = "~/.goclaw/a2a/libp2p/identity.key"
-	DefaultListenTCP        = "/ip4/0.0.0.0/tcp/4001"
-	DefaultListenQUIC       = "/ip4/0.0.0.0/udp/4001/quic-v1"
-	DefaultLocalListenTCP   = "/ip4/0.0.0.0/tcp/0"
-	DefaultLocalListenQUIC  = "/ip4/0.0.0.0/udp/0/quic-v1"
-	DefaultRetentionSeconds = 3600
-	DefaultBootstrapSeedTXT = "p2p_boot.goclaw.org"
+	configPath                       = "a2a"
+	DefaultTransportLibp2p           = "libp2p"
+	DefaultRPCProtocolID             = "/goclaw/a2a/rpc/1.0.0"
+	DefaultRendezvousID              = "/goclaw/a2a/rendezvous/1.0.0"
+	DefaultRendezvousNS              = "goclaw-a2a-v1"
+	DefaultRendezvousAdmissionMode   = RendezvousAdmissionPublicSafe
+	DefaultIdentityKeyFile           = "~/.goclaw/a2a/libp2p/identity.key"
+	DefaultListenTCP                 = "/ip4/0.0.0.0/tcp/4001"
+	DefaultListenQUIC                = "/ip4/0.0.0.0/udp/4001/quic-v1"
+	DefaultLocalListenTCP            = "/ip4/0.0.0.0/tcp/0"
+	DefaultLocalListenQUIC           = "/ip4/0.0.0.0/udp/0/quic-v1"
+	DefaultRetentionSeconds          = 3600
+	DefaultBootstrapSeedTXT          = "p2p_boot.goclaw.org"
 	DefaultDirectUpgradeTimeoutSecs  = 3
 	DefaultDirectUpgradeCooldownSecs = 30
 )
 
 const (
-	RendezvousAdmissionPublicSafe   = "public-safe"
-	RendezvousAdmissionPrivateNet   = "private-network"
+	RendezvousAdmissionPublicSafe = "public-safe"
+	RendezvousAdmissionPrivateNet = "private-network"
 )
 
 type Config struct {
@@ -38,17 +38,17 @@ type Config struct {
 }
 
 type Libp2pConfig struct {
-	Enabled                       bool            `json:"enabled" default:"false"`
-	Identity                      IdentityConfig  `json:"identity"`
-	ListenAddrs                   []string        `json:"listenAddrs"`
-	AnnounceAddrs                 []string        `json:"announceAddrs"`
-	AnnouncePrivateAddrs          bool            `json:"announcePrivateAddrs" default:"false"`
-	DisableIdentifyAddrDiscovery  bool            `json:"disableIdentifyAddressDiscovery" default:"false"`
-	NATPortMap                    bool            `json:"natPortMap" default:"true"`
-	BootstrapPeers                []string        `json:"bootstrapPeers"`
-	Discovery                     DiscoveryConfig `json:"discovery"`
-	Relay                         RelayConfig     `json:"relay"`
-	Protocol                      ProtocolConfig  `json:"protocol"`
+	Enabled                      bool            `json:"enabled" default:"false"`
+	Identity                     IdentityConfig  `json:"identity"`
+	ListenAddrs                  []string        `json:"listenAddrs"`
+	AnnounceAddrs                []string        `json:"announceAddrs"`
+	AnnouncePrivateAddrs         bool            `json:"announcePrivateAddrs" default:"false"`
+	DisableIdentifyAddrDiscovery bool            `json:"disableIdentifyAddressDiscovery" default:"false"`
+	NATPortMap                   bool            `json:"natPortMap" default:"true"`
+	BootstrapPeers               []string        `json:"bootstrapPeers"`
+	Discovery                    DiscoveryConfig `json:"discovery"`
+	Relay                        RelayConfig     `json:"relay"`
+	Protocol                     ProtocolConfig  `json:"protocol"`
 }
 
 type IdentityConfig struct {
@@ -57,15 +57,15 @@ type IdentityConfig struct {
 }
 
 type DiscoveryConfig struct {
-	MDNSEnabled          bool   `json:"mdnsEnabled" default:"false"`
-	ServiceName          string `json:"serviceName" default:"goclaw-a2a-v1"`
-	DHTEnabled           bool   `json:"dhtEnabled" default:"false"`
-	RendezvousEnabled    bool   `json:"rendezvousEnabled" default:"true"`
-	RendezvousNamespace  string `json:"rendezvousNamespace" default:"goclaw-a2a-v1"`
+	MDNSEnabled             bool   `json:"mdnsEnabled" default:"false"`
+	ServiceName             string `json:"serviceName" default:"goclaw-a2a-v1"`
+	DHTEnabled              bool   `json:"dhtEnabled" default:"false"`
+	RendezvousEnabled       bool   `json:"rendezvousEnabled" default:"true"`
+	RendezvousNamespace     string `json:"rendezvousNamespace" default:"goclaw-a2a-v1"`
 	RendezvousAdmissionMode string `json:"rendezvousAdmissionMode" default:"public-safe"`
-	BootstrapSeedTXT     string `json:"bootstrapSeedTXT" default:"p2p_boot.goclaw.org"`
-	RegisterIntervalSecs int    `json:"registerIntervalSeconds" default:"30"`
-	QueryIntervalSecs    int    `json:"queryIntervalSeconds" default:"30"`
+	BootstrapSeedTXT        string `json:"bootstrapSeedTXT" default:"p2p_boot.goclaw.org"`
+	RegisterIntervalSecs    int    `json:"registerIntervalSeconds" default:"30"`
+	QueryIntervalSecs       int    `json:"queryIntervalSeconds" default:"30"`
 }
 
 type RelayConfig struct {

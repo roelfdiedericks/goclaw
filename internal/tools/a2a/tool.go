@@ -90,10 +90,10 @@ type pingOutput struct {
 }
 
 type taskOperationOutput struct {
-	Action   string                  `json:"action"`
-	Peer     string                  `json:"peer"`
-	TaskID   string                  `json:"taskId"`
-	Snapshot a2adomain.TaskSnapshot  `json:"snapshot"`
+	Action   string                 `json:"action"`
+	Peer     string                 `json:"peer"`
+	TaskID   string                 `json:"taskId"`
+	Snapshot a2adomain.TaskSnapshot `json:"snapshot"`
 }
 
 func (t *Tool) Execute(ctx context.Context, inputRaw json.RawMessage) (*types.ToolResult, error) {

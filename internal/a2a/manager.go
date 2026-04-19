@@ -10,29 +10,29 @@ import (
 	"time"
 
 	a2aproto "github.com/a2aproject/a2a-go/v2/a2a"
-	"github.com/roelfdiedericks/goclaw/internal/a2apeers"
 	libp2ptransport "github.com/roelfdiedericks/goclaw/internal/a2a/transports/libp2p"
+	"github.com/roelfdiedericks/goclaw/internal/a2apeers"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/user"
 )
 
 type Manager struct {
-	mu       sync.RWMutex
-	cfg      Config
-	users    *user.Registry
+	mu           sync.RWMutex
+	cfg          Config
+	users        *user.Registry
 	peerRegistry *a2apeers.Registry
-	executor Executor
-	adapter  ExecutionAdapter
-	runtime  *libp2ptransport.Runtime
+	executor     Executor
+	adapter      ExecutionAdapter
+	runtime      *libp2ptransport.Runtime
 
 	lifecycleState LifecycleState
 	runtimeMode    RuntimeMode
 	warmupComplete bool
-	peers        map[string]*PeerRecord
-	tasks        map[string]*taskRuntime
-	expiredTasks map[string]time.Time
-	startedAt    *time.Time
-	lastError    string
+	peers          map[string]*PeerRecord
+	tasks          map[string]*taskRuntime
+	expiredTasks   map[string]time.Time
+	startedAt      *time.Time
+	lastError      string
 }
 
 type taskRuntime struct {
@@ -64,14 +64,14 @@ type TaskSnapshot struct {
 func NewManager(cfg Config, users *user.Registry, peerRegistry *a2apeers.Registry) *Manager {
 	cfg.Normalize()
 	m := &Manager{
-		cfg:           cfg,
-		users:         users,
-		peerRegistry:  peerRegistry,
+		cfg:            cfg,
+		users:          users,
+		peerRegistry:   peerRegistry,
 		lifecycleState: LifecycleStateIdle,
-		runtimeMode:   RuntimeModeNode,
-		peers:         make(map[string]*PeerRecord),
-		tasks:         make(map[string]*taskRuntime),
-		expiredTasks:  make(map[string]time.Time),
+		runtimeMode:    RuntimeModeNode,
+		peers:          make(map[string]*PeerRecord),
+		tasks:          make(map[string]*taskRuntime),
+		expiredTasks:   make(map[string]time.Time),
 	}
 	m.seedTrustedPeers()
 	return m
@@ -141,30 +141,30 @@ func (m *Manager) startWithMode(ctx context.Context, mode RuntimeMode) error {
 
 func (m *Manager) runStartup(ctx context.Context, mode RuntimeMode) {
 	rt := libp2ptransport.New(libp2ptransport.Config{
-		IdentityKeyFile:              m.cfg.Libp2p.Identity.KeyFile,
-		ListenAddrs:                  m.cfg.Libp2p.ListenAddrs,
-		AnnounceAddrs:                m.cfg.Libp2p.AnnounceAddrs,
-		AnnouncePrivateAddrs:         m.cfg.Libp2p.AnnouncePrivateAddrs,
-		DisableIdentifyAddrDiscovery: m.cfg.Libp2p.DisableIdentifyAddrDiscovery,
-		NATPortMap:                   m.cfg.Libp2p.NATPortMap,
-		BootstrapPeers:               m.cfg.Libp2p.BootstrapPeers,
-		BootstrapSeedTXT:             m.cfg.Libp2p.Discovery.BootstrapSeedTXT,
-		MDNSEnabled:                  m.cfg.Libp2p.Discovery.MDNSEnabled,
-		MDNSServiceName:              m.cfg.Libp2p.Discovery.ServiceName,
-		RendezvousEnabled:            m.cfg.Libp2p.Discovery.RendezvousEnabled,
-		RendezvousNamespace:          m.cfg.Libp2p.Discovery.RendezvousNamespace,
-		RendezvousAdmissionMode:      m.cfg.Libp2p.Discovery.RendezvousAdmissionMode,
-		RegisterIntervalSecs:         m.cfg.Libp2p.Discovery.RegisterIntervalSecs,
-		QueryIntervalSecs:            m.cfg.Libp2p.Discovery.QueryIntervalSecs,
-		RelayClientEnabled:           m.cfg.Libp2p.Relay.EnableClient,
-		RelayServerEnabled:           m.cfg.Libp2p.Relay.EnableServer,
-		AutoRelayEnabled:             m.cfg.Libp2p.Relay.EnableAutoRelay,
-		HolePunchEnabled:             m.cfg.Libp2p.Relay.EnableHolePunch,
+		IdentityKeyFile:                m.cfg.Libp2p.Identity.KeyFile,
+		ListenAddrs:                    m.cfg.Libp2p.ListenAddrs,
+		AnnounceAddrs:                  m.cfg.Libp2p.AnnounceAddrs,
+		AnnouncePrivateAddrs:           m.cfg.Libp2p.AnnouncePrivateAddrs,
+		DisableIdentifyAddrDiscovery:   m.cfg.Libp2p.DisableIdentifyAddrDiscovery,
+		NATPortMap:                     m.cfg.Libp2p.NATPortMap,
+		BootstrapPeers:                 m.cfg.Libp2p.BootstrapPeers,
+		BootstrapSeedTXT:               m.cfg.Libp2p.Discovery.BootstrapSeedTXT,
+		MDNSEnabled:                    m.cfg.Libp2p.Discovery.MDNSEnabled,
+		MDNSServiceName:                m.cfg.Libp2p.Discovery.ServiceName,
+		RendezvousEnabled:              m.cfg.Libp2p.Discovery.RendezvousEnabled,
+		RendezvousNamespace:            m.cfg.Libp2p.Discovery.RendezvousNamespace,
+		RendezvousAdmissionMode:        m.cfg.Libp2p.Discovery.RendezvousAdmissionMode,
+		RegisterIntervalSecs:           m.cfg.Libp2p.Discovery.RegisterIntervalSecs,
+		QueryIntervalSecs:              m.cfg.Libp2p.Discovery.QueryIntervalSecs,
+		RelayClientEnabled:             m.cfg.Libp2p.Relay.EnableClient,
+		RelayServerEnabled:             m.cfg.Libp2p.Relay.EnableServer,
+		AutoRelayEnabled:               m.cfg.Libp2p.Relay.EnableAutoRelay,
+		HolePunchEnabled:               m.cfg.Libp2p.Relay.EnableHolePunch,
 		BackgroundDirectUpgradeEnabled: m.cfg.Libp2p.Relay.EnableBackgroundDirectUpgrade,
 		DirectUpgradeTimeoutSecs:       m.cfg.Libp2p.Relay.DirectUpgradeTimeoutSecs,
 		DirectUpgradeCooldownSecs:      m.cfg.Libp2p.Relay.DirectUpgradeCooldownSecs,
-		RPCProtocolID:                m.cfg.Libp2p.Protocol.RPCProtocolID,
-		RendezvousProtocolID:         m.cfg.Libp2p.Protocol.RendezvousProtocolID,
+		RPCProtocolID:                  m.cfg.Libp2p.Protocol.RPCProtocolID,
+		RendezvousProtocolID:           m.cfg.Libp2p.Protocol.RendezvousProtocolID,
 	}, libp2ptransport.RuntimeMode(mode), libp2ptransport.Callbacks{
 		OnPeerObserved:  m.observePeer,
 		OnInboundSubmit: m.startInboundTaskFromTransport,

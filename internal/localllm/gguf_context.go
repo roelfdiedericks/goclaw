@@ -17,6 +17,7 @@ const (
 
 	maxGGUFKeyLen    = 1 << 16
 	maxGGUFStringLen = 16 << 20
+	maxGGUFInt64     = uint64(1<<63 - 1)
 )
 
 // GGUF metadata value types (llama.cpp / ggml), wire enum is int32.
@@ -177,6 +178,9 @@ func readGGUFIntScalar(br io.Reader, vt int32) (int64, error) {
 		var v uint64
 		if err := binary.Read(br, binary.LittleEndian, &v); err != nil {
 			return 0, err
+		}
+		if v > maxGGUFInt64 {
+			return 0, fmt.Errorf("gguf uint64 value %d exceeds int64", v)
 		}
 		return int64(v), nil
 	case ggufTypeInt64:
