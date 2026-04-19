@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.1.14] stable - 2026-04-19
+
 - coding agents/acp: expand Cursor ACP integration, startup/session handling, interactive prompt plumbing, and related config/editor support
 - a2a/libp2p: add the first libp2p-based A2A runtime with bootstrap discovery, rendezvous, relay-first messaging, NAT traversal groundwork, and infra visibility tooling
 - agent tools: add native owner-only A2A tool support for structured status, peer/task inspection, pairing payloads, ping, and remote task operations
