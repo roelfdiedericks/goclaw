@@ -370,4 +370,3 @@ func TestBusBridgeEmitterPublishesSchemaVersionAndRunFields(t *testing.T) {
 		t.Fatalf("timed out waiting for completed event")
 	}
 }
-

@@ -20,7 +20,7 @@ func (g *cancelToolGatewayStub) RunAgentForCron(ctx context.Context, req cron.Ag
 	<-ctx.Done()
 	events <- cron.AgentErrorEvent{Error: ctx.Err().Error()}
 }
-func (g *cancelToolGatewayStub) GetOwnerUserID() string { return "owner" }
+func (g *cancelToolGatewayStub) GetOwnerUserID() string                                   { return "owner" }
 func (g *cancelToolGatewayStub) InjectSystemEvent(ctx context.Context, text string) error { return nil }
 func (g *cancelToolGatewayStub) DeliverAssistantOutput(ctx context.Context, userID string, msg delivery.AssistantMessage) delivery.Report {
 	return delivery.Report{}
@@ -28,7 +28,9 @@ func (g *cancelToolGatewayStub) DeliverAssistantOutput(ctx context.Context, user
 func (g *cancelToolGatewayStub) DeliverSystemMessage(ctx context.Context, userID string, msg delivery.SystemMessage) delivery.Report {
 	return delivery.Report{}
 }
-func (g *cancelToolGatewayStub) HandoffCronResult(ctx context.Context, jobName, result string) error { return nil }
+func (g *cancelToolGatewayStub) HandoffCronResult(ctx context.Context, jobName, result string) error {
+	return nil
+}
 
 func ownerCtx() context.Context {
 	u := &user.User{ID: "owner", Role: user.RoleOwner}
@@ -121,4 +123,3 @@ func TestSubagentKillMarksBindingUnfocused(t *testing.T) {
 	rec, _ := svc.GetDelegatedRun(runID)
 	t.Fatalf("expected canceled + unfocused binding, got state=%s binding=%s reason=%s", rec.State, rec.RequesterBindingState, rec.RequesterBindingReason)
 }
-

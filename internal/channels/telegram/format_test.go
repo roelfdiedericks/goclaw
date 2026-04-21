@@ -51,4 +51,3 @@ func TestFormatMessage_TableLinksDeduplicateByURL(t *testing.T) {
 		t.Fatalf("expected one deduplicated footnote link, got: %s", out)
 	}
 }
-

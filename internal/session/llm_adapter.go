@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
@@ -78,7 +79,7 @@ func GenerateCheckpointWithClient(ctx context.Context, client SummarizationClien
 // GenerateSummaryWithClient generates a compaction summary using the provided client.
 // maxInputTokens is the configured limit (0 = use model context - buffer).
 // Deprecated: Use GenerateSummaryWithRegistry for failover support.
-func GenerateSummaryWithClient(ctx context.Context, client SummarizationClient, messages []Message, maxInputTokens int) (string, error) {
+func GenerateSummaryWithClient(ctx context.Context, client SummarizationClient, messages []Message, maxInputTokens int, targetTokens int) (string, error) {
 	if client == nil || !client.IsAvailable() {
 		return "", fmt.Errorf("no LLM client available")
 	}
@@ -120,7 +121,7 @@ func GenerateSummaryWithClient(ctx context.Context, client SummarizationClient, 
 			"estimatedTokens", estimatedTokens,
 			"inputLimit", currentLimit)
 
-		userMessage := fmt.Sprintf("%s\n\nConversation to summarize:\n%s", CompactionSummaryPrompt, conversationText)
+		userMessage := buildLeafSummaryPrompt(conversationText, targetTokens)
 		systemPrompt := "You are a helpful assistant that creates concise conversation summaries."
 
 		// Call LLM
@@ -153,7 +154,7 @@ func GenerateSummaryWithClient(ctx context.Context, client SummarizationClient, 
 // GenerateSummaryWithRegistry generates a compaction summary using the registry with failover.
 // Handles both failover (rate_limit, auth, billing, timeout) and context overflow (reduce input).
 // Returns: summary text, model used, error
-func GenerateSummaryWithRegistry(ctx context.Context, registry *llm.Registry, messages []Message, maxInputTokens int) (string, string, error) {
+func GenerateSummaryWithRegistry(ctx context.Context, registry *llm.Registry, messages []Message, maxInputTokens int, targetTokens int) (string, string, error) {
 	if registry == nil {
 		return "", "", fmt.Errorf("no registry available")
 	}
@@ -189,7 +190,7 @@ func GenerateSummaryWithRegistry(ctx context.Context, registry *llm.Registry, me
 			"estimatedTokens", estimatedTokens,
 			"inputLimit", currentLimit)
 
-		userMessage := fmt.Sprintf("%s\n\nConversation to summarize:\n%s", CompactionSummaryPrompt, conversationText)
+		userMessage := buildLeafSummaryPrompt(conversationText, targetTokens)
 		systemPrompt := "You are a helpful assistant that creates concise conversation summaries."
 
 		// Call LLM with failover
@@ -221,6 +222,61 @@ func GenerateSummaryWithRegistry(ctx context.Context, registry *llm.Registry, me
 	}
 
 	return "", "", fmt.Errorf("LLM call failed after %d retries", maxRetries+1)
+}
+
+func GenerateCondensedSummaryWithRegistry(ctx context.Context, registry *llm.Registry, summariesText string, depth, targetTokens int) (string, string, error) {
+	if registry == nil {
+		return "", "", fmt.Errorf("no registry available")
+	}
+	if targetTokens <= 0 {
+		targetTokens = 1200
+	}
+
+	userMessage := buildCondensedSummaryPrompt(summariesText, depth, targetTokens)
+	systemPrompt := "You are a helpful assistant that condenses conversation summaries without losing durable context."
+	result, err := registry.SimpleMessageWithFailover(ctx, "summarization", nil, userMessage, systemPrompt)
+	if err != nil {
+		return "", "", fmt.Errorf("LLM call failed: %w", err)
+	}
+	return result.Text, result.ModelUsed, nil
+}
+
+func buildLeafSummaryPrompt(conversationText string, targetTokens int) string {
+	if targetTokens <= 0 {
+		targetTokens = 800
+	}
+	prompt := strings.ReplaceAll(CompactionSummaryPrompt, "{{TARGET_TOKENS}}", fmt.Sprintf("%d", targetTokens))
+	return strings.ReplaceAll(prompt, "{{CONVERSATION_TEXT}}", conversationText)
+}
+
+func buildCondensedSummaryPrompt(summariesText string, depth, targetTokens int) string {
+	// Depth 1: condensing leaves into the first condensed layer. Frame the prompt
+	// as handing off context to a fresh model instance that will continue the
+	// conversation.
+	levelNoun := "leaf-level conversation summaries"
+	framingLine := "You are preparing context for a fresh model instance that will continue this conversation."
+	preserveSpecifics := "Specific references (names, paths, URLs, identifiers) needed for continuation."
+	dropSpecifics := "Transient states that are already resolved; context unchanged across the child summaries."
+	if depth > 1 {
+		// Depth >=2: condensing condensed nodes into deeper summaries. The framing
+		// shifts from immediate handoff to long-term trajectory.
+		levelNoun = "multiple session-level summaries"
+		framingLine = "A future model should understand trajectory, not per-session minutiae."
+		preserveSpecifics = "Important relationships between people, systems, or concepts; durable lessons learned."
+		dropSpecifics = "Session-local operational detail; identifiers that are no longer relevant."
+	}
+	if targetTokens <= 0 {
+		targetTokens = 1200
+	}
+
+	prompt := CondensedSummaryPrompt
+	prompt = strings.ReplaceAll(prompt, "{{LEVEL_NOUN}}", levelNoun)
+	prompt = strings.ReplaceAll(prompt, "{{FRAMING_LINE}}", framingLine)
+	prompt = strings.ReplaceAll(prompt, "{{PRESERVE_SPECIFICS}}", preserveSpecifics)
+	prompt = strings.ReplaceAll(prompt, "{{DROP_SPECIFICS}}", dropSpecifics)
+	prompt = strings.ReplaceAll(prompt, "{{TARGET_TOKENS}}", fmt.Sprintf("%d", targetTokens))
+	prompt = strings.ReplaceAll(prompt, "{{SUMMARIES_TEXT}}", summariesText)
+	return prompt
 }
 
 // GenerateCheckpointWithRegistry generates a checkpoint using the registry with failover.

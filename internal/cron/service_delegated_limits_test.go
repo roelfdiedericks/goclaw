@@ -10,7 +10,7 @@ import (
 )
 
 type delegatedStartRunnerStub struct {
-	started int
+	started  int
 	lastSpec delegatedrun.RunSpec
 }
 
@@ -209,4 +209,3 @@ func TestStartDelegatedRunNormalizesUnknownLLMPurposeToSubagent(t *testing.T) {
 		t.Fatalf("expected unknown llmPurpose normalized to subagent, got %q", runner.lastSpec.LLMPurpose)
 	}
 }
-

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.15] stable - 2026-04-21
+
+- session: GoClaw now remembers long conversations, similar in spirit to OpenClaw's `lossless-claw` plugin. When the chat grows past the context window, older parts get rolled up into searchable summaries instead of being dropped, and GoClaw pulls the exact original messages back whenever it actually needs the detail — so a decision from three months ago stays recoverable instead of being hallucinated
+- session: four recall presets (`balanced` default, `aggressive`, `long_term_memory`, `recall_heavy`) trade off how much history GoClaw carries forward against prompt size and cost; configure under `session.summarization.compaction.lcm.preset`
+- session: existing installs with large chat histories catch up automatically after upgrade — no manual migration. `/session` shows the catch-up progress while it runs
+- tools: the `transcript.stats` agent tool surfaces the same long-memory picture plus preset-tuning hints, so GoClaw's own agent can diagnose its recall behavior
 
 ## [0.1.14] stable - 2026-04-19
 

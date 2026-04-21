@@ -93,7 +93,9 @@ func (g *delegatedGatewayRunnerStub) RunAgentForCron(ctx context.Context, req cr
 
 func (g *delegatedGatewayRunnerStub) GetOwnerUserID() string { return "owner" }
 
-func (g *delegatedGatewayRunnerStub) InjectSystemEvent(ctx context.Context, text string) error { return nil }
+func (g *delegatedGatewayRunnerStub) InjectSystemEvent(ctx context.Context, text string) error {
+	return nil
+}
 
 func (g *delegatedGatewayRunnerStub) DeliverAssistantOutput(ctx context.Context, userID string, msg delivery.AssistantMessage) delivery.Report {
 	return delivery.Report{}
@@ -103,7 +105,9 @@ func (g *delegatedGatewayRunnerStub) DeliverSystemMessage(ctx context.Context, u
 	return delivery.Report{}
 }
 
-func (g *delegatedGatewayRunnerStub) HandoffCronResult(ctx context.Context, jobName, result string) error { return nil }
+func (g *delegatedGatewayRunnerStub) HandoffCronResult(ctx context.Context, jobName, result string) error {
+	return nil
+}
 
 func TestSubagentSpawnReturnToRequesterInjectsIntoRequesterSession(t *testing.T) {
 	svc := cron.NewService(cron.NewStore("", ""), &delegatedGatewayRunnerStub{})
@@ -181,4 +185,3 @@ func asString(v any) string {
 	s, _ := v.(string)
 	return s
 }
-

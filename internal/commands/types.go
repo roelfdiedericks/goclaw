@@ -89,6 +89,8 @@ type SessionInfo struct {
 	UsagePercent    float64
 	CompactionCount int
 	LastCompaction  *session.StoredCompaction
+	LCMEnabled      bool
+	LCMStats        *session.CompactionDAGStats
 }
 
 // CommandResult contains the result of a command execution

@@ -50,6 +50,10 @@ type PromptParams struct {
 	ParallelExecution     bool     // If true, gateway may execute eligible tool calls concurrently
 	ParallelMaxConcurrent int      // Max concurrent eligible tools
 	ParallelEligibleTools []string // Effective allowlist of tools eligible for parallel execution
+	LCMEnabled            bool
+	CompactionCount       int
+	CompactionMaxDepth    int
+	CompactionCondensed   int
 }
 
 // BuildSystemPrompt builds the full system prompt with workspace context injection
@@ -218,21 +222,35 @@ func BuildSystemPrompt(params PromptParams) string {
 		sections = append(sections, s)
 	}
 
-	// 13b. Agent-driven memory extraction guidance (main agent only, if enabled)
+	// 13b. LCM recall policy (main agent only, if enabled)
+	if !isMinimal && params.LCMEnabled {
+		s := buildLosslessRecallPolicySection()
+		staticText += s
+		sections = append(sections, s)
+	}
+
+	// 13c. Dynamic compacted-context reminder
+	if !isMinimal && params.LCMEnabled && params.CompactionCount > 0 {
+		s := buildCompactedConversationContextSection(params.CompactionMaxDepth, params.CompactionCondensed)
+		staticText += s
+		sections = append(sections, s)
+	}
+
+	// 13d. Agent-driven memory extraction guidance (main agent only, if enabled)
 	if !isMinimal && params.AgentExtraction {
 		s := buildAgentExtractionSection()
 		staticText += s
 		sections = append(sections, s)
 	}
 
-	// 13c. Memory bulletin (main agent only, if injection="prompt")
+	// 13e. Memory bulletin (main agent only, if injection="prompt")
 	if !isMinimal && params.MemoryBulletin != "" {
 		s := buildMemoryBulletinSection(params.MemoryBulletin)
 		staticText += s
 		sections = append(sections, s)
 	}
 
-	// 13d. Context bulletin (main agent only, if injection="prompt")
+	// 13f. Context bulletin (main agent only, if injection="prompt")
 	if !isMinimal && params.ContextBulletin != "" {
 		s := buildContextBulletinSection(params.ContextBulletin)
 		staticText += s
@@ -644,6 +662,105 @@ You have two search tools for different purposes:
 - Looking for when/how something was discussed? → transcript
 - Need exact quotes or context? → transcript
 - Checking if something was saved to memory? → memory_search`
+}
+
+func buildLosslessRecallPolicySection() string {
+	return `## Lossless Recall Policy
+
+GoClaw compacts older conversation history into summaries. Summaries in the
+context are compressed recall cues, not full detail.
+
+For questions about prior conversation content, decisions, or details that
+may have been compacted, prefer these recall tools before trusting memory:
+
+1. ` + "`transcript action=grep_summaries`" + ` — FTS5 search across compacted summaries
+2. ` + "`transcript action=describe`" + ` — inspect a specific summary by ID (cheap)
+3. ` + "`transcript action=expand`" + ` — drill into a summary's children and raw messages
+
+**Conflict handling:** If newer evidence conflicts with an older summary,
+prefer the newer evidence. Do not trust a stale summary over fresher
+contradictory information.
+
+**Uncertainty:** Before stating an exact command, SHA, file path, timestamp,
+config value, or causal claim that came from a summary, expand first. State
+uncertainty instead of guessing from compressed summaries.
+
+**` + "`grep_summaries`" + ` query construction:**
+- FTS5 defaults to AND matching. Extra terms narrow results, they do not
+  broaden them. Prefer 1-3 distinctive terms or one quoted multi-word phrase.
+- Wrap exact phrases in quotes: ` + "`\"error handling\"`" + `.
+- Default sort is recency (newest first); switch to relevance when hunting
+  for the best older match on a topic.
+
+**` + "`expand`" + ` usage:**
+- Pass ` + "`summaryIds`" + ` from a ` + "`<summary id=\"...\">`" + ` block in context, or pass a
+  ` + "`query`" + ` string to grep-then-expand the top match.
+- ` + "`tokenCap`" + ` limits the total size of the returned expansion.
+- Pending summaries (still being generated) return raw source messages so
+  expansion is always useful.
+
+Keep raw summary IDs out of normal user-facing prose unless the user
+explicitly asks for sources or IDs.
+
+**Scope boundary — LCM vs memory graph:**
+
+These rules apply only to compacted conversation history from the current
+session. For durable facts about the user, environment, preferences,
+decisions, routines, or anything that should persist across sessions, use
+the memory graph tools (` + "`memory_graph_store`, `memory_graph_recall`, `memory_graph_query`" + `)
+instead — LCM is not a substitute and will not be consulted cross-session.
+
+Conversely, do not use memory graph tools to retrieve exact wording, tool
+call arguments, or timeline detail from earlier in *this* conversation —
+that lives in LCM. Pick the right family:
+
+- "What is the user's home city?" -> memory graph
+- "What did we decide about X in this session?" -> LCM (` + "`transcript action=expand`" + `)
+- "What command did we run at 09:45?" -> LCM
+- "Does the user prefer terse logs?" -> memory graph`
+}
+
+func buildCompactedConversationContextSection(maxDepth, condensedCount int) string {
+	if maxDepth >= 2 || condensedCount >= 2 {
+		return `## Compacted Conversation Context
+
+Summaries above are compressed context, not full detail.
+
+**Deeply compacted context: expand before asserting specifics.**
+
+Before answering with exact commands, SHAs, paths, timestamps, config
+values, or causal chains, expand for the missing detail.
+
+Default recall flow for precision work:
+1) ` + "`transcript action=grep_summaries`" + ` to locate relevant summary IDs
+2) ` + "`transcript action=expand`" + ` with those IDs and a focused question
+3) Answer directly from the retrieved evidence
+
+` + "`grep_summaries`" + ` tips: quote exact multi-word phrases, keep 1-3 distinctive
+terms, use relevance sort for older-topic retrieval. FTS5 ANDs terms by
+default; extra keywords narrow, not broaden.
+
+**Uncertainty checklist (run before answering):**
+- Am I making an exact factual claim from a compressed or condensed summary?
+- Could compaction have omitted a crucial detail?
+- Would I need an expansion step if the user asks for proof or exact text?
+
+If yes to any item, expand first or explicitly state that expansion is
+needed. Do not guess exact commands, SHAs, file paths, timestamps, config
+values, or causal claims from condensed summaries.`
+	}
+
+	return `## Compacted Conversation Context
+
+Summaries above are compressed context, not full detail. Treat them as
+recall cues rather than proof of exact wording or values.
+
+If a summary's ` + "`Expand for details about:`" + ` line mentions something the
+current question depends on, expand before asserting specifics.
+
+For exact commands, SHAs, paths, timestamps, config values, or causal
+chains, call ` + "`transcript action=expand`" + ` first. State uncertainty instead of
+guessing from compressed summaries.`
 }
 
 func buildAgentExtractionSection() string {

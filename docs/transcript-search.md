@@ -15,6 +15,8 @@ Transcript search solves a fundamental problem with LLM agents: **context window
 
 When your context window fills up, GoClaw compacts old messages into summaries. Without transcript search, the details of those conversations are lost to the agent. With transcript search, your agent can query the full history and recover context on demand.
 
+With Lossless Context Management (LCM) enabled, transcript recall also covers the **compacted summaries themselves**. That means the agent can search summary cues first, then expand back into raw source messages when precision matters.
+
 ### Key Features
 
 | Feature | Description |
@@ -25,6 +27,7 @@ When your context window fills up, GoClaw compacts old messages into summaries. 
 | **OpenClaw Import** | Merges OpenClaw conversation history into the index |
 | **Real-time Sync** | New OpenClaw messages indexed while running side-by-side |
 | **Configurable Chunking** | Control how messages are grouped into searchable units |
+| **Compacted Summary Recall** | Search, inspect, and expand LCM summaries after compaction |
 
 ### How It Compares
 
@@ -203,6 +206,11 @@ Final score: `vector * 0.7 + keyword * 0.3`
 
 ## Agent Tools
 
+GoClaw now exposes two related recall surfaces through the same `transcript` tool:
+
+- **Raw transcript search** — semantic search, recent messages, exact/hybrid search, gaps, and `get_messages`
+- **Compacted history recall** — `grep_summaries`, `describe`, and `expand`
+
 ### `transcript` (search action)
 
 Search conversation history:
@@ -266,6 +274,94 @@ Returns:
 - `pendingMessages` — New messages not yet chunked
 - `provider` — Current embedding model (`"none"` if unavailable)
 
+### `transcript` (`grep_summaries` action)
+
+Search compacted summaries from the current session:
+
+```json
+{
+  "tool": "transcript",
+  "input": {
+    "action": "grep_summaries",
+    "query": "\"error handling\"",
+    "limit": 10,
+    "sort": "recency"
+  }
+}
+```
+
+Returns summary IDs you can pass to `describe` or `expand`:
+
+```json
+{
+  "results": [
+    {
+      "id": "sum_1772237645628_000001",
+      "kind": "leaf",
+      "depth": 0,
+      "timestamp": "2026-04-20T10:30:00Z",
+      "preview": "We decided to centralize error handling in the gateway...",
+      "matchType": "fts"
+    }
+  ],
+  "count": 1
+}
+```
+
+**Tip:** FTS5 defaults to **AND** matching. Short queries work best: 1-3 distinctive terms or one quoted phrase.
+
+### `transcript` (`describe` action)
+
+Inspect one summary node without expanding its children or raw messages:
+
+```json
+{
+  "tool": "transcript",
+  "input": {
+    "action": "describe",
+    "summaryId": "sum_1772237645628_000001"
+  }
+}
+```
+
+This is useful when you already have a summary ID in prompt context and want to confirm its depth, lineage, or summary text before drilling deeper.
+
+### `transcript` (`expand` action)
+
+Expand one or more compacted summaries back into child summaries and, when needed, raw messages:
+
+```json
+{
+  "tool": "transcript",
+  "input": {
+    "action": "expand",
+    "summaryIds": ["sum_1772237645628_000001"],
+    "tokenCap": 4000,
+    "maxDepth": 3,
+    "includeMessages": false
+  }
+}
+```
+
+You can also expand by query:
+
+```json
+{
+  "tool": "transcript",
+  "input": {
+    "action": "expand",
+    "query": "gateway error handling"
+  }
+}
+```
+
+Key behavior:
+
+- `summaryIds` use the `sum_` prefix
+- `expand` is token-capped, so large results may be truncated
+- If a summary is still pending, GoClaw falls back to the raw source messages automatically
+- Use `includeMessages: true` when exact wording matters
+
 ---
 
 ## OpenClaw Integration
@@ -303,6 +399,15 @@ This means conversations in OpenClaw become searchable in GoClaw within ~30 seco
 Agent: "I don't have the earlier context, but let me search..."
 → transcript(action="search", query="database migration approach")
 → "Found: We decided to use incremental migrations with checksums..."
+```
+
+With LCM enabled, the agent can stay inside the compacted history first:
+
+```
+Agent: "That detail may be in compacted context. Let me check..."
+→ transcript(action="grep_summaries", query="database migration")
+→ transcript(action="describe", summaryId="sum_...")
+→ transcript(action="expand", summaryIds=["sum_..."])
 ```
 
 ### Finding Past Decisions
@@ -359,6 +464,17 @@ Check `chunksNeedingEmbeddings` in stats. If high:
 2. Lower `minScore` threshold (try `0.2`)
 3. Check query isn't too vague
 4. Ensure `chunksWithEmbeddings > 0`
+
+### `grep_summaries` returns no results
+
+Check:
+
+1. LCM is enabled in `session.summarization.compaction.lcm.enabled`
+2. The session has actually compacted at least once
+3. Your query is short and distinctive
+4. You are searching the current session's compacted history, not cross-session data
+
+If you need full-history lookup across all sessions, use transcript search on raw messages instead.
 
 ### Slow indexing
 

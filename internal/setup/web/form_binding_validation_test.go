@@ -30,4 +30,3 @@ func TestAllFormDefSectionsHaveValidBindings(t *testing.T) {
 		}
 	}
 }
-

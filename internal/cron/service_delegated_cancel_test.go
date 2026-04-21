@@ -100,4 +100,3 @@ func TestCancelDelegatedRunCascadeReturnsNotFoundForUnknownRoot(t *testing.T) {
 		t.Fatalf("expected ErrRunNotFound, got: %v", err)
 	}
 }
-

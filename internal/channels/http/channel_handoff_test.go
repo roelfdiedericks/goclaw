@@ -37,8 +37,8 @@ func (s *handoffGatewayStub) ACPHandoffPending(ctx context.Context, sessionKey s
 	}}, nil
 }
 func (s *handoffGatewayStub) StopAllUserSessions(userID string) (int, error) { return 0, nil }
-func (s *handoffGatewayStub) RequestShutdown(userID string) error             { return nil }
-func (s *handoffGatewayStub) ListDelegatedRuns() []delegatedrun.RunRecord     { return nil }
+func (s *handoffGatewayStub) RequestShutdown(userID string) error            { return nil }
+func (s *handoffGatewayStub) ListDelegatedRuns() []delegatedrun.RunRecord    { return nil }
 func (s *handoffGatewayStub) GetDelegatedRun(runID string) (delegatedrun.RunRecord, bool) {
 	return delegatedrun.RunRecord{}, false
 }

@@ -70,10 +70,10 @@ func (s *delegatedAgentRunnerStub) RunAgent(ctx context.Context, req gateway.Age
 	return nil
 }
 
-func (s *delegatedAgentRunnerStub) AgentIdentity() *gwtypes.AgentIdentityConfig { return nil }
-func (s *delegatedAgentRunnerStub) SupervisionConfig() *gwtypes.SupervisionConfig { return nil }
+func (s *delegatedAgentRunnerStub) AgentIdentity() *gwtypes.AgentIdentityConfig    { return nil }
+func (s *delegatedAgentRunnerStub) SupervisionConfig() *gwtypes.SupervisionConfig  { return nil }
 func (s *delegatedAgentRunnerStub) StopAllUserSessions(userID string) (int, error) { return 0, nil }
-func (s *delegatedAgentRunnerStub) RequestShutdown(userID string) error { return nil }
+func (s *delegatedAgentRunnerStub) RequestShutdown(userID string) error            { return nil }
 func (s *delegatedAgentRunnerStub) ACPRespond(sessionKey string, resp acp.ACPDriverExtensionResponse) error {
 	return nil
 }
@@ -96,14 +96,18 @@ func (g *delegatedCronGatewayStub) RunAgentForCron(ctx context.Context, req cron
 	events <- cron.AgentEndEvent{FinalText: "delegated complete"}
 }
 func (g *delegatedCronGatewayStub) GetOwnerUserID() string { return "owner" }
-func (g *delegatedCronGatewayStub) InjectSystemEvent(ctx context.Context, text string) error { return nil }
+func (g *delegatedCronGatewayStub) InjectSystemEvent(ctx context.Context, text string) error {
+	return nil
+}
 func (g *delegatedCronGatewayStub) DeliverAssistantOutput(ctx context.Context, userID string, msg delivery.AssistantMessage) delivery.Report {
 	return delivery.Report{}
 }
 func (g *delegatedCronGatewayStub) DeliverSystemMessage(ctx context.Context, userID string, msg delivery.SystemMessage) delivery.Report {
 	return delivery.Report{}
 }
-func (g *delegatedCronGatewayStub) HandoffCronResult(ctx context.Context, jobName, result string) error { return nil }
+func (g *delegatedCronGatewayStub) HandoffCronResult(ctx context.Context, jobName, result string) error {
+	return nil
+}
 
 func TestHandleSendTriggersSubagentReturnToRequesterInSession(t *testing.T) {
 	_ = cron.NewService(cron.NewStore("", ""), &delegatedCronGatewayStub{})
@@ -162,4 +166,3 @@ func TestHandleSendTriggersSubagentReturnToRequesterInSession(t *testing.T) {
 		t.Fatalf("expected tool_result toolUseID %q, got %q", toolUse.ToolUseID, toolResult.ToolUseID)
 	}
 }
-

@@ -448,7 +448,7 @@ func TestFanoutDefaultsToImmediateOnlyEvenWhenCallbackPlumbingExists(t *testing.
 		t.Fatalf("expected fanout success, got error: %v", err)
 	}
 	var payload struct {
-		NotifyOnComplete bool `json:"notifyOnComplete"`
+		NotifyOnComplete   bool `json:"notifyOnComplete"`
 		CompletionCallback struct {
 			Enabled bool `json:"enabled"`
 		} `json:"completionCallback"`
@@ -467,4 +467,3 @@ func TestFanoutDefaultsToImmediateOnlyEvenWhenCallbackPlumbingExists(t *testing.
 		t.Fatalf("expected no callback injection by default, got %d", injectCalled.Load())
 	}
 }
-

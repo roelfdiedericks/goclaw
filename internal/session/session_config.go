@@ -67,11 +67,33 @@ type CheckpointSubConfig struct {
 
 // CompactionSubConfig configures context compaction
 type CompactionSubConfig struct {
-	ReserveTokens    int  `json:"reserveTokens" default:"4000"`    // Tokens to reserve before compaction
-	MaxMessages      int  `json:"maxMessages" default:"500"`       // Trigger compaction if messages exceed this (0 = disabled)
-	PreferCheckpoint bool `json:"preferCheckpoint" default:"true"` // Use existing checkpoint for summary if available
-	KeepPercent      int  `json:"keepPercent" default:"50"`        // Percent of messages to keep after compaction
-	MinMessages      int  `json:"minMessages" default:"20"`        // Minimum messages to always keep
+	ReserveTokens      int  `json:"reserveTokens" default:"4000"`      // Tokens to reserve before compaction
+	MaxMessages        int  `json:"maxMessages" default:"500"`         // Trigger compaction if messages exceed this (0 = disabled)
+	PreferCheckpoint   bool `json:"preferCheckpoint" default:"true"`   // Use existing checkpoint for summary if available
+	KeepPercent        int  `json:"keepPercent" default:"50"`          // Percent of messages to keep after compaction
+	MinMessages        int  `json:"minMessages" default:"20"`          // Minimum messages to always keep
+	FreshTailCount     int  `json:"freshTailCount" default:"10"`       // When > 0, keep this many newest messages instead of KeepPercent
+	FreshTailMaxTokens int  `json:"freshTailMaxTokens" default:"4000"` // Optional extra cap for the fresh tail token budget
+
+	LeafMinFanout         int `json:"leafMinFanout" default:"4"`            // Minimum depth-0 leaves before condensation
+	CondensedMinFanout    int `json:"condensedMinFanout" default:"4"`       // Minimum condensed children before further condensation
+	IncrementalMaxDepth   int `json:"incrementalMaxDepth" default:"2"`      // Maximum summary depth built incrementally
+	LeafTargetTokens      int `json:"leafTargetTokens" default:"800"`       // Target output tokens for leaf summaries
+	CondensedTargetTokens int `json:"condensedTargetTokens" default:"1200"` // Target output tokens for condensed summaries
+
+	// LCM values are normalized via NormalizeSessionConfig at load and save.
+	// Downstream reads may trust the fields directly; there is no per-site
+	// NormalizeLCMConfig call required.
+	LCM LCMConfig `json:"lcm"`
+}
+
+// LCMConfig controls lossless context management features layered on top of compaction.
+type LCMConfig struct {
+	Preset                   string  `json:"preset"`
+	Enabled                  bool    `json:"enabled" default:"true"`
+	SummaryInjectionMode     string  `json:"summaryInjectionMode" default:"frontier"`
+	MaxInjectedSummaryTokens int     `json:"maxInjectedSummaryTokens" default:"4000"`
+	SummaryMaxOverageFactor  float64 `json:"summaryMaxOverageFactor" default:"3"`
 }
 
 // OllamaLLMConfig configures an Ollama model for LLM tasks (compaction, checkpoints)

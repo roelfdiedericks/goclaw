@@ -19,6 +19,7 @@ type Store interface {
 	// Message operations
 	AppendMessage(ctx context.Context, sessionKey string, msg *StoredMessage) error
 	GetMessages(ctx context.Context, sessionKey string, opts MessageQueryOpts) ([]StoredMessage, error)
+	GetMessagesByIDs(ctx context.Context, sessionKey string, ids []string) ([]StoredMessage, error)
 	GetMessageCount(ctx context.Context, sessionKey string) (int, error)
 
 	// Checkpoint operations
@@ -30,6 +31,19 @@ type Store interface {
 	AppendCompaction(ctx context.Context, sessionKey string, comp *StoredCompaction) error
 	GetCompactions(ctx context.Context, sessionKey string) ([]StoredCompaction, error)
 	GetLatestCompaction(ctx context.Context, sessionKey string) (*StoredCompaction, error)
+	GetCompaction(ctx context.Context, compactionID string) (*StoredCompaction, error)
+	GetCompactionsByDepth(ctx context.Context, sessionKey string, depth int, kind CompactionKind) ([]StoredCompaction, error)
+	GetCompactionChildren(ctx context.Context, compactionID string) ([]StoredCompaction, error)
+	SearchCompactionsFTS(ctx context.Context, sessionKey, query string, limit int, mode CompactionSearchMode, sort CompactionSearchSort) ([]CompactionSearchResult, error)
+	UpdateCompactionDAG(ctx context.Context, compactionID string, dag CompactionDAGUpdate) error
+	// ListCompactionSessionKeys returns every distinct session_key present in
+	// the compactions table. The condensation background loop uses this as its
+	// authoritative iteration source — the sessions table can diverge from
+	// where compactions actually live (e.g. historical data keyed to
+	// `primary` while the sessions row uses a namespaced key), and driving
+	// condensation from the compactions table itself makes the loop self-
+	// heal against that drift.
+	ListCompactionSessionKeys(ctx context.Context) ([]string, error)
 
 	// Compaction retry operations
 	GetPendingSummaryRetry(ctx context.Context) (*StoredCompaction, error)
@@ -168,6 +182,25 @@ type StoredCompaction struct {
 	FromCheckpoint    bool   // Was summary from a checkpoint?
 	CheckpointID      string // If from checkpoint, which one
 	NeedsSummaryRetry bool   // True if emergency truncation, needs LLM retry
+
+	// LCM DAG fields
+	Kind               CompactionKind
+	Depth              int
+	SourceMessageIDs   []string
+	ChildCompactionIDs []string
+	EarliestMessageAt  *time.Time
+	LatestMessageAt    *time.Time
+	SourceTokenCount   int
+}
+
+type CompactionDAGUpdate struct {
+	Kind               CompactionKind
+	Depth              int
+	SourceMessageIDs   []string
+	ChildCompactionIDs []string
+	EarliestMessageAt  *time.Time
+	LatestMessageAt    *time.Time
+	SourceTokenCount   int
 }
 
 // StoreConfig configures the storage backend
@@ -178,6 +211,7 @@ type StoreConfig struct {
 	// SQLite specific
 	WALMode     bool // Enable WAL mode (default: true)
 	BusyTimeout int  // Busy timeout in ms (default: 5000)
+	LCMEnabled  bool // Enables lazy DAG backfill behavior on reads
 }
 
 // NewStore creates a storage backend based on config.

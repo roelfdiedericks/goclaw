@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"strings"
+	"unicode"
 
 	"github.com/roelfdiedericks/goclaw/internal/config/forms"
 )
@@ -382,8 +383,21 @@ func sectionID(prefix, title string) string {
 	if base == "" {
 		base = "section"
 	}
-	base = strings.ReplaceAll(base, " ", "_")
-	return "section_" + strings.ReplaceAll(base, ".", "__")
+	base = strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r):
+			return r
+		case r == '_', r == '-':
+			return r
+		default:
+			return '_'
+		}
+	}, base)
+	base = strings.Trim(base, "_")
+	if base == "" {
+		base = "section"
+	}
+	return "section_" + base
 }
 
 func collapsedClass(collapsed bool) string {

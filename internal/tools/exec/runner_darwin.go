@@ -45,20 +45,20 @@ func (r *Runner) buildSandboxedCommand(ctx context.Context, command, workDir str
 		"protectedDirs", len(protectedDirs),
 	)
 	cmd, err := sbruntime.BuildExecCommand(command, sbruntime.ExecLaunchOptions{
-		BackendPath:   r.config.BubblewrapPath,
-		SandboxMode:   mgr.GetMode(),
-		WorkspaceDir:  r.config.WorkingDir,
-		WorkDir:       workDir,
+		BackendPath:    r.config.BubblewrapPath,
+		SandboxMode:    mgr.GetMode(),
+		WorkspaceDir:   r.config.WorkingDir,
+		WorkDir:        workDir,
 		VisibleHomeDir: policy.VisibleHomeDir,
 		BackingHomeDir: policy.BackingHomeDir,
-		PathValue:     pathValue,
-		Volumes:       vols,
-		ProtectedDirs: protectedDirs,
-		ClearEnv:      r.config.Bubblewrap.ClearEnv,
-		AllowNetwork:  r.config.Bubblewrap.AllowNetwork,
-		ExtraEnv:      r.config.Bubblewrap.ExtraEnv,
-		ExtraBind:     extraBind,
-		ExtraRoBind:   extraRoBind,
+		PathValue:      pathValue,
+		Volumes:        vols,
+		ProtectedDirs:  protectedDirs,
+		ClearEnv:       r.config.Bubblewrap.ClearEnv,
+		AllowNetwork:   r.config.Bubblewrap.AllowNetwork,
+		ExtraEnv:       r.config.Bubblewrap.ExtraEnv,
+		ExtraBind:      extraBind,
+		ExtraRoBind:    extraRoBind,
 	})
 	if err != nil {
 		L_error("exec runner: failed to build sandbox command", "error", err)

@@ -94,7 +94,16 @@ GoClaw is configured via `goclaw.json` in the working directory.
         "maxMessages": 500,
         "preferCheckpoint": true,
         "keepPercent": 50,
-        "minMessages": 20
+        "minMessages": 20,
+        "freshTailCount": 10,
+        "freshTailMaxTokens": 4000,
+        "lcm": {
+          "preset": "balanced",
+          "enabled": true,
+          "summaryInjectionMode": "frontier",
+          "maxInjectedSummaryTokens": 4000,
+          "summaryMaxOverageFactor": 3
+        }
       }
     },
     
@@ -384,7 +393,7 @@ WhatsApp uses the linked device protocol (no business API required). The setup w
 | `inheritPath` | string | - | Path to OpenClaw sessions directory |
 | `inheritFrom` | string | - | Session key to inherit from |
 
-See [Session Management](session-management.md) for compaction, checkpoints, and memory flush.
+See [Session Management](session-management.md) for compaction, checkpoints, memory flush, fresh-tail retention, and Lossless Context Management.
 
 ### Media Storage
 

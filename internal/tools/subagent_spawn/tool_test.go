@@ -36,7 +36,9 @@ func (g *gatewayRunnerStub) DeliverSystemMessage(ctx context.Context, userID str
 	return delivery.Report{}
 }
 
-func (g *gatewayRunnerStub) HandoffCronResult(ctx context.Context, jobName, result string) error { return nil }
+func (g *gatewayRunnerStub) HandoffCronResult(ctx context.Context, jobName, result string) error {
+	return nil
+}
 
 func setupDelegatedService(t *testing.T) *cron.Service {
 	t.Helper()
@@ -332,4 +334,3 @@ func TestReturnToRequesterFailureAdvancesDispatchSequence(t *testing.T) {
 	rec, _ := svc.GetDelegatedRun(runID)
 	t.Fatalf("expected completion dispatch sequence to advance for retry, got %d", rec.CompletionDispatchSeq)
 }
-

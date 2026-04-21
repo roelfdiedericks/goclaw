@@ -43,17 +43,17 @@ func CreateSandboxedLauncher(browserBin, workspace, profileDir string, cfg Brows
 		extraRoBind = append(extraRoBind, autoDocsRoots...)
 	}
 	return sbruntime.CreateBrowserLauncher(browserBin, sbruntime.BrowserLaunchOptions{
-		BackendPath:   cfg.BwrapPath,
-		SandboxMode:   mgr.GetMode(),
-		WorkspaceDir:  workspace,
-		ProfileDir:    profileDir,
+		BackendPath:    cfg.BwrapPath,
+		SandboxMode:    mgr.GetMode(),
+		WorkspaceDir:   workspace,
+		ProfileDir:     profileDir,
 		VisibleHomeDir: policy.VisibleHomeDir,
 		BackingHomeDir: policy.BackingHomeDir,
-		ProtectedDirs: mgr.GetProtectedDirs(),
-		AllowGPU:      cfg.GPU,
-		ClearEnv:      true,
-		ExtraRoBind:   extraRoBind,
-		ExtraBind:     extraBind,
+		ProtectedDirs:  mgr.GetProtectedDirs(),
+		AllowGPU:       cfg.GPU,
+		ClearEnv:       true,
+		ExtraRoBind:    extraRoBind,
+		ExtraBind:      extraBind,
 	})
 }
 

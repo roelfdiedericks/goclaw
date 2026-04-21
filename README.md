@@ -12,7 +12,7 @@ GoClaw is a Golang implementation of a certain molty bot, compatible with OpenCl
 
 Originally intended as a "minimum viable" replacement for OpenClaw, it has molted to reasonable feature parity with OpenClaw. It's not a complete replacement for OpenClaw but it's very driveable.
 
-GoClaw has superpowers: **transcript search** — a persistent, searchable conversation history that survives context compaction — and a **memory graph** that extracts facts, preferences, and relationships into a semantic knowledge graph. Your bot can recall detailed chat messages from its birth and build structured understanding over time. Long live the memories!
+GoClaw has superpowers: **transcript search** — a persistent, searchable conversation history that survives context compaction — **long-memory recall** — when old messages get summarized away to free up context space, the summaries stay searchable and the agent can pull the original messages back out of the database whenever it needs the exact details — and a **memory graph** that extracts facts, preferences, and relationships into a semantic knowledge graph. Your bot can recall detailed chat messages from its birth and build structured understanding over time. Long live the memories!
 
 Telegram, WhatsApp, HTTP (web), real-time voice (via xAI), and TUI interfaces are available for chatting to GoClaw.
 
@@ -90,6 +90,8 @@ See [Installation Guide](docs/installation.md) for:
 
 Every conversation is indexed into a local, searchable database with semantic embeddings. Transcripts survive context compaction — nothing is ever truly lost. The agent can recover context, find previous decisions, or recall discussions from weeks ago.
 
+When the conversation gets long enough that older messages have to be rolled up to make room, GoClaw keeps those rolled-up parts as short, searchable summary entries. The agent can search the summaries by keyword, read a specific one in full, or expand any summary back into the original messages it was made from — so detail is recoverable whenever it's actually needed, instead of the agent having to guess from a hazy recollection.
+
 ```
 Agent: "What did we decide about the authentication system?"
 → Searches 500+ conversation chunks
@@ -162,7 +164,8 @@ GoClaw manages the LLM's context window automatically:
 ```
 
 - **Checkpoints** (optional): Rolling snapshots of conversation state, generated via LLM
-- **Compaction** (required): Truncates old messages when context is nearly full
+- **Compaction** (required): Rolls up old messages when context is nearly full
+- **Long-memory recall** (default): Compaction doesn't throw old messages away — it turns them into short, searchable summary entries that the agent can browse and expand back into the original messages on demand, instead of leaving a single dead-end summary blob
 
 See [Session Management](docs/session-management.md) for details.
 
@@ -247,6 +250,7 @@ Sessions are stored in SQLite (`~/.goclaw/sessions.db`) with full message histor
 - Audit trails
 - Embeddings/summarization rebuilds
 - Memory Graph extraction
+- Expanding old summaries back into the original messages on demand
 - Future analysis
 
 ---
@@ -281,7 +285,7 @@ Full documentation available at [goclaw.org/docs](https://goclaw.org/docs/) or i
 - [Concepts Overview](docs/concepts.md) — Key concepts explained
 - [Architecture](docs/architecture.md) — System components
 - [Delegated Runs](docs/delegated-runs.md) — Delegated runner/subagent architecture
-- [Session Management](docs/session-management.md) — Context and compaction
+- [Session Management](docs/session-management.md) — Context, compaction, and long-memory recall
 
 ### LLM Providers
 
@@ -315,7 +319,7 @@ Full documentation available at [goclaw.org/docs](https://goclaw.org/docs/) or i
 - [Memory Overview](docs/agent-memory.md) — Memory architecture
 - [Memory Graph](docs/memory-graph.md) — Knowledge graph extraction
 - [Memory Search](docs/memory-search.md) — Workspace files
-- [Transcript Search](docs/transcript-search.md) — Conversation history
+- [Transcript Search](docs/transcript-search.md) — Conversation history and long-memory recall
 - [Embeddings](docs/embeddings.md) — Vector search
 
 ### Advanced

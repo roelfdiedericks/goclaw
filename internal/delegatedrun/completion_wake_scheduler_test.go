@@ -39,4 +39,3 @@ func TestCompletionWakeScheduler_ImmediateWhenPastWake(t *testing.T) {
 		t.Fatalf("expected immediate wake callback")
 	}
 }
-

@@ -557,6 +557,7 @@ func (e *EditorTview) editSession() {
 
 	content, err := forms.BuildFormContent(formDef, &sessionCfg, "session", func(result forms.TviewResult) {
 		if result == forms.ResultAccepted {
+			sessionCfg = session.NormalizeSessionConfig(sessionCfg)
 			e.cfg.Session = sessionCfg
 			e.dirty = true
 			L_info("editor: session config updated")
@@ -822,6 +823,7 @@ func (e *EditorTview) saveConfig() {
 	}
 
 	// Save with backup
+	e.cfg.Session = session.NormalizeSessionConfig(e.cfg.Session)
 	if err := config.BackupAndWriteJSON(savePath, e.cfg, config.DefaultBackupCount); err != nil {
 		L_error("editor: failed to save config", "path", savePath, "error", err)
 		e.app.SetStatusText("Error: failed to save config")

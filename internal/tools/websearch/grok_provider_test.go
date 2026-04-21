@@ -60,4 +60,3 @@ func TestGrokDriverUsesResponsesWebSearchToolType(t *testing.T) {
 		t.Fatalf("expected deduped citation, got %#v", resp.Citations)
 	}
 }
-

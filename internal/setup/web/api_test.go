@@ -17,6 +17,7 @@ import (
 	"github.com/roelfdiedericks/goclaw/internal/jobs"
 	"github.com/roelfdiedericks/goclaw/internal/llm"
 	"github.com/roelfdiedericks/goclaw/internal/localllm"
+	"github.com/roelfdiedericks/goclaw/internal/session"
 	setupcore "github.com/roelfdiedericks/goclaw/internal/setup"
 )
 
@@ -641,5 +642,306 @@ func TestExpandVoiceLLMSectionPayloadAppliesEffectsPreset(t *testing.T) {
 	}
 	if got := bitcrush["bitDepth"]; got != float64(8) {
 		t.Fatalf("expected battlestar bit depth 8, got %#v", got)
+	}
+}
+
+func TestNormalizeSessionSectionPayloadAppliesLCMPreset(t *testing.T) {
+	payload := map[string]interface{}{
+		"store":       "sqlite",
+		"storePath":   "/tmp/sessions.db",
+		"inherit":     false,
+		"inheritPath": "/tmp/openclaw",
+		"inheritFrom": "agent:main:main",
+		"summarization": map[string]interface{}{
+			"fallbackModel":        "claude-3-haiku-20240307",
+			"failureThreshold":     3,
+			"resetMinutes":         30,
+			"retryIntervalSeconds": 60,
+			"checkpoint": map[string]interface{}{
+				"enabled":         true,
+				"thresholds":      []int{25, 50, 75},
+				"turnThreshold":   15,
+				"minTokensForGen": 10000,
+			},
+			"compaction": map[string]interface{}{
+				"reserveTokens":         4000,
+				"maxMessages":           100,
+				"preferCheckpoint":      true,
+				"keepPercent":           50,
+				"minMessages":           20,
+				"freshTailCount":        0,
+				"freshTailMaxTokens":    0,
+				"leafMinFanout":         4,
+				"condensedMinFanout":    4,
+				"incrementalMaxDepth":   2,
+				"leafTargetTokens":      800,
+				"condensedTargetTokens": 1200,
+				"lcm": map[string]interface{}{
+					"enabled":                  true,
+					"preset":                   session.LCMPresetAggressive,
+					"summaryInjectionMode":     session.LCMSummaryInjectionModeFrontier,
+					"maxInjectedSummaryTokens": 2500,
+					"summaryMaxOverageFactor":  2,
+				},
+			},
+		},
+		"memoryFlush": map[string]interface{}{
+			"enabled": true,
+		},
+	}
+
+	runtimePayload, err := normalizeSessionSectionPayload(payload)
+	if err != nil {
+		t.Fatalf("normalizeSessionSectionPayload: %v", err)
+	}
+
+	summarization, ok := runtimePayload["summarization"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected summarization map in runtime payload, got %#v", runtimePayload["summarization"])
+	}
+	compaction, ok := summarization["compaction"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected compaction map in runtime payload, got %#v", summarization["compaction"])
+	}
+	// Aggressive preset is authoritative: all outer fields reflect aggressive values,
+	// not whatever the payload carried.
+	if got := compaction["freshTailCount"]; got != float64(5) {
+		t.Fatalf("expected aggressive freshTailCount 5, got %#v", got)
+	}
+	if got := compaction["freshTailMaxTokens"]; got != float64(2000) {
+		t.Fatalf("expected aggressive freshTailMaxTokens 2000, got %#v", got)
+	}
+	if got := compaction["leafMinFanout"]; got != float64(3) {
+		t.Fatalf("expected aggressive leafMinFanout 3, got %#v", got)
+	}
+	if got := compaction["condensedMinFanout"]; got != float64(3) {
+		t.Fatalf("expected aggressive condensedMinFanout 3, got %#v", got)
+	}
+	if got := compaction["incrementalMaxDepth"]; got != float64(3) {
+		t.Fatalf("expected aggressive incrementalMaxDepth 3, got %#v", got)
+	}
+	if got := compaction["leafTargetTokens"]; got != float64(500) {
+		t.Fatalf("expected aggressive leafTargetTokens 500, got %#v", got)
+	}
+	if got := compaction["condensedTargetTokens"]; got != float64(800) {
+		t.Fatalf("expected aggressive condensedTargetTokens 800, got %#v", got)
+	}
+	lcm, ok := compaction["lcm"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected lcm map in runtime payload, got %#v", compaction["lcm"])
+	}
+	if got := lcm["summaryInjectionMode"]; got != session.LCMSummaryInjectionModeFrontier {
+		t.Fatalf("expected aggressive preset to use frontier mode, got %#v", got)
+	}
+	if got := lcm["maxInjectedSummaryTokens"]; got != float64(2500) {
+		t.Fatalf("expected aggressive preset budget 2500, got %#v", got)
+	}
+	if got := lcm["summaryMaxOverageFactor"]; got != float64(2) {
+		t.Fatalf("expected aggressive overage factor 2, got %#v", got)
+	}
+	if got := lcm["preset"]; got != session.LCMPresetAggressive {
+		t.Fatalf("expected aggressive preset to persist in runtime payload, got %#v", got)
+	}
+}
+
+func TestSetConfigPathSessionPayloadPreservesCompactionFields(t *testing.T) {
+	cfg := &config.Config{}
+	payload := map[string]interface{}{
+		"store":       "sqlite",
+		"storePath":   "/tmp/sessions.db",
+		"inherit":     false,
+		"inheritPath": "/tmp/openclaw",
+		"inheritFrom": "agent:main:main",
+		"summarization": map[string]interface{}{
+			"fallbackModel":        "claude-3-haiku-20240307",
+			"failureThreshold":     3,
+			"resetMinutes":         30,
+			"retryIntervalSeconds": 60,
+			"checkpoint": map[string]interface{}{
+				"enabled":         true,
+				"thresholds":      []int{25, 50, 75},
+				"turnThreshold":   15,
+				"minTokensForGen": 10000,
+			},
+			"compaction": map[string]interface{}{
+				"reserveTokens":         4000,
+				"maxMessages":           100,
+				"preferCheckpoint":      true,
+				"keepPercent":           50,
+				"minMessages":           20,
+				"freshTailCount":        0,
+				"freshTailMaxTokens":    0,
+				"leafMinFanout":         4,
+				"condensedMinFanout":    4,
+				"incrementalMaxDepth":   2,
+				"leafTargetTokens":      800,
+				"condensedTargetTokens": 1200,
+				"lcm": map[string]interface{}{
+					"enabled":                  true,
+					"preset":                   session.LCMPresetBalanced,
+					"summaryInjectionMode":     session.LCMSummaryInjectionModeFrontier,
+					"maxInjectedSummaryTokens": 4000,
+					"summaryMaxOverageFactor":  3,
+				},
+			},
+		},
+		"memoryFlush": map[string]interface{}{
+			"enabled": true,
+		},
+	}
+
+	if err := setConfigPath(cfg, "/session", payload); err != nil {
+		t.Fatalf("setConfigPath returned error: %v", err)
+	}
+
+	compaction := cfg.Session.Summarization.Compaction
+	if compaction.LeafMinFanout != 4 {
+		t.Fatalf("expected leafMinFanout 4 after setConfigPath, got %d", compaction.LeafMinFanout)
+	}
+	if compaction.CondensedMinFanout != 4 {
+		t.Fatalf("expected condensedMinFanout 4 after setConfigPath, got %d", compaction.CondensedMinFanout)
+	}
+	if compaction.IncrementalMaxDepth != 2 {
+		t.Fatalf("expected incrementalMaxDepth 2 after setConfigPath, got %d", compaction.IncrementalMaxDepth)
+	}
+	if compaction.LeafTargetTokens != 800 {
+		t.Fatalf("expected leafTargetTokens 800 after setConfigPath, got %d", compaction.LeafTargetTokens)
+	}
+	if compaction.CondensedTargetTokens != 1200 {
+		t.Fatalf("expected condensedTargetTokens 1200 after setConfigPath, got %d", compaction.CondensedTargetTokens)
+	}
+	if !compaction.LCM.Enabled {
+		t.Fatalf("expected lcm enabled after setConfigPath")
+	}
+	if compaction.LCM.Preset != session.LCMPresetBalanced {
+		t.Fatalf("expected balanced preset after setConfigPath, got %q", compaction.LCM.Preset)
+	}
+}
+
+func TestSaveSessionSectionPersistsNormalizedLCMConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "goclaw.json")
+	writeTestConfig(t, configPath, &config.Config{
+		Session: session.SessionConfig{
+			Store:       "sqlite",
+			StorePath:   "/tmp/sessions.db",
+			InheritPath: "/tmp/openclaw",
+			InheritFrom: "agent:main:main",
+			Summarization: session.SummarizationConfig{
+				Checkpoint: session.CheckpointSubConfig{
+					Enabled:         true,
+					Thresholds:      []int{25, 50, 75},
+					TurnThreshold:   15,
+					MinTokensForGen: 10000,
+				},
+				Compaction: session.CompactionSubConfig{
+					ReserveTokens:         4000,
+					MaxMessages:           100,
+					PreferCheckpoint:      true,
+					KeepPercent:           50,
+					MinMessages:           20,
+					FreshTailCount:        0,
+					FreshTailMaxTokens:    0,
+					LeafMinFanout:         4,
+					CondensedMinFanout:    4,
+					IncrementalMaxDepth:   2,
+					LeafTargetTokens:      800,
+					CondensedTargetTokens: 1200,
+				},
+			},
+		},
+	})
+
+	api := NewAPI(configPath, configapply.CallerWebStandalone, EditorSectionsForMode(false))
+	payload := map[string]interface{}{
+		"store":       "sqlite",
+		"storePath":   "/tmp/sessions.db",
+		"inherit":     false,
+		"inheritPath": "/tmp/openclaw",
+		"inheritFrom": "agent:main:main",
+		"summarization": map[string]interface{}{
+			"fallbackModel":        "claude-3-haiku-20240307",
+			"failureThreshold":     3,
+			"resetMinutes":         30,
+			"retryIntervalSeconds": 60,
+			"checkpoint": map[string]interface{}{
+				"enabled":         true,
+				"thresholds":      []int{25, 50, 75},
+				"turnThreshold":   15,
+				"minTokensForGen": 10000,
+			},
+			"compaction": map[string]interface{}{
+				"reserveTokens":         4000,
+				"maxMessages":           100,
+				"preferCheckpoint":      true,
+				"keepPercent":           50,
+				"minMessages":           20,
+				"freshTailCount":        0,
+				"freshTailMaxTokens":    0,
+				"leafMinFanout":         4,
+				"condensedMinFanout":    4,
+				"incrementalMaxDepth":   2,
+				"leafTargetTokens":      800,
+				"condensedTargetTokens": 1200,
+				"lcm": map[string]interface{}{
+					"enabled":                  true,
+					"preset":                   session.LCMPresetBalanced,
+					"summaryInjectionMode":     session.LCMSummaryInjectionModeFrontier,
+					"maxInjectedSummaryTokens": 2500,
+					"summaryMaxOverageFactor":  2,
+				},
+			},
+		},
+		"memoryFlush": map[string]interface{}{
+			"enabled": true,
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/setup/api/section/session", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	section := FindSection(EditorSectionsForMode(false), "session")
+	if section == nil {
+		t.Fatal("session section not found")
+	}
+	api.saveSectionConfig(rec, req, section)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rawData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read raw config: %v", err)
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(rawData, &raw); err != nil {
+		t.Fatalf("unmarshal raw config: %v", err)
+	}
+	sessionMap, ok := raw["session"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected session object in raw config, got %#v", raw["session"])
+	}
+	summarization, ok := sessionMap["summarization"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected summarization object in raw config, got %#v", sessionMap["summarization"])
+	}
+	compaction, ok := summarization["compaction"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected compaction object in raw config, got %#v", summarization["compaction"])
+	}
+	lcm, ok := compaction["lcm"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected raw config to persist lcm object, got %#v", compaction["lcm"])
+	}
+	if got := lcm["preset"]; got != session.LCMPresetBalanced {
+		t.Fatalf("expected balanced preset in raw config, got %#v", got)
+	}
+	if got := lcm["maxInjectedSummaryTokens"]; got != float64(4000) {
+		t.Fatalf("expected balanced budget 4000 in raw config, got %#v", got)
+	}
+	if got := lcm["summaryMaxOverageFactor"]; got != float64(3) {
+		t.Fatalf("expected balanced overage factor 3 in raw config, got %#v", got)
 	}
 }

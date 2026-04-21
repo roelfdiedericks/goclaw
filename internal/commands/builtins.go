@@ -14,8 +14,9 @@ import (
 // registerBuiltins registers all built-in commands
 func registerBuiltins(m *Manager) {
 	m.Register(&Command{
-		Name:        "/status",
+		Name:        "/session",
 		Description: "Show session info and compaction health",
+		Aliases:     []string{"/status"},
 		Handler:     handleStatus,
 	})
 
@@ -111,6 +112,41 @@ func registerBuiltins(m *Manager) {
 	})
 }
 
+// formatCondenseBacklog renders the un-parented compaction backlog as a
+// compact string like "233 leaves, d1=3". Depths are listed in ascending
+// order; depths with no backlog are omitted. If everything is drained it
+// returns "(empty)".
+func formatCondenseBacklog(unparentedLeaves int, unparentedByDepth map[int]int) string {
+	nonZeroDepths := make([]int, 0, len(unparentedByDepth))
+	for d, n := range unparentedByDepth {
+		if n > 0 {
+			nonZeroDepths = append(nonZeroDepths, d)
+		}
+	}
+	sort.Ints(nonZeroDepths)
+
+	if unparentedLeaves == 0 && len(nonZeroDepths) == 0 {
+		return "(empty)"
+	}
+
+	parts := make([]string, 0, 1+len(nonZeroDepths))
+	parts = append(parts, fmt.Sprintf("%d leaves", unparentedLeaves))
+	for _, d := range nonZeroDepths {
+		parts = append(parts, fmt.Sprintf("d%d=%d", d, unparentedByDepth[d]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// formatNextCondenseHint renders what the next condensation tick will do:
+// either a fanout-sized batch description, or "idle" when nothing is
+// eligible.
+func formatNextCondenseHint(batchSize, newDepth int) string {
+	if batchSize <= 0 || newDepth <= 0 {
+		return "idle (backlog below fanout)"
+	}
+	return fmt.Sprintf("condense %d → depth-%d", batchSize, newDepth)
+}
+
 // handleStatus returns session status and compaction health
 func handleStatus(ctx context.Context, args *CommandArgs) *CommandResult {
 	info, err := args.Provider.GetSessionInfoForCommands(ctx, args.SessionKey)
@@ -144,6 +180,22 @@ func handleStatus(ctx context.Context, args *CommandArgs) *CommandResult {
 	if compStatus.RetryInProgress {
 		text.WriteString("  Status: compaction in progress\n")
 	}
+	text.WriteString(fmt.Sprintf("  LCM: %t\n", info.LCMEnabled))
+	if info.LCMStats != nil {
+		text.WriteString(fmt.Sprintf("  Leaves: %d\n", info.LCMStats.Leaves))
+		text.WriteString(fmt.Sprintf("  Condensed: %d\n", info.LCMStats.Condensed))
+		if len(info.LCMStats.CondensedByDepth) > 0 {
+			text.WriteString("  Condensed by depth:")
+			for depth, count := range info.LCMStats.CondensedByDepth {
+				text.WriteString(fmt.Sprintf(" d%d=%d", depth, count))
+			}
+			text.WriteString("\n")
+		}
+		text.WriteString(fmt.Sprintf("  Condense backlog: %s\n", formatCondenseBacklog(info.LCMStats.UnparentedLeaves, info.LCMStats.UnparentedCondensedByDepth)))
+		text.WriteString(fmt.Sprintf("  Next tick: %s\n", formatNextCondenseHint(info.LCMStats.NextBatchSize, info.LCMStats.NextBatchNewDepth)))
+		text.WriteString(fmt.Sprintf("  Pending summaries: %d\n", info.LCMStats.Pending))
+		text.WriteString(fmt.Sprintf("  FTS rows: %d\n", info.LCMStats.FTSRows))
+	}
 
 	// Build markdown output
 	var md strings.Builder
@@ -161,6 +213,22 @@ func handleStatus(ctx context.Context, args *CommandArgs) *CommandResult {
 
 	if compStatus.PendingRetries > 0 {
 		md.WriteString(fmt.Sprintf("Pending retries: %d\n", compStatus.PendingRetries))
+	}
+	md.WriteString(fmt.Sprintf("LCM: %t\n", info.LCMEnabled))
+	if info.LCMStats != nil {
+		md.WriteString(fmt.Sprintf("Leaves: %d\n", info.LCMStats.Leaves))
+		md.WriteString(fmt.Sprintf("Condensed: %d\n", info.LCMStats.Condensed))
+		if len(info.LCMStats.CondensedByDepth) > 0 {
+			md.WriteString("Condensed by depth:")
+			for depth, count := range info.LCMStats.CondensedByDepth {
+				md.WriteString(fmt.Sprintf(" d%d=%d", depth, count))
+			}
+			md.WriteString("\n")
+		}
+		md.WriteString(fmt.Sprintf("Condense backlog: %s\n", formatCondenseBacklog(info.LCMStats.UnparentedLeaves, info.LCMStats.UnparentedCondensedByDepth)))
+		md.WriteString(fmt.Sprintf("Next tick: %s\n", formatNextCondenseHint(info.LCMStats.NextBatchSize, info.LCMStats.NextBatchNewDepth)))
+		md.WriteString(fmt.Sprintf("Pending summaries: %d\n", info.LCMStats.Pending))
+		md.WriteString(fmt.Sprintf("FTS rows: %d\n", info.LCMStats.FTSRows))
 	}
 
 	// Add last compaction info if available

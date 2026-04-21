@@ -408,12 +408,50 @@ func BuildMessagesForSummary(messages []Message, maxTokens int) string {
 	return result
 }
 
-// CompactionSummaryPrompt is the prompt for generating compaction summaries
-const CompactionSummaryPrompt = `Summarize this conversation for context preservation. Include:
-1. Main topics discussed
-2. Key decisions or conclusions
-3. Current state/context
-4. Any pending items or open questions
+// CompactionSummaryPrompt is the prompt template for generating leaf compaction summaries.
+const CompactionSummaryPrompt = `You summarize a SEGMENT of a GoClaw conversation for future model turns.
+Treat this as incremental memory compaction input, not a full-conversation summary.
 
-Keep the summary concise but comprehensive (max 2000 tokens).
-Format as plain text, not JSON.`
+Policy:
+- Preserve key decisions, rationale, constraints, and active tasks.
+- Keep essential technical details needed to continue work safely.
+- Remove obvious repetition and conversational filler.
+
+Output requirements:
+- Plain text only. No preamble, headings, or markdown formatting.
+- Keep it concise while preserving required details.
+- Track file operations (created, modified, deleted, renamed) with file paths and current status.
+- If no file operations appear, include exactly: "Files: none".
+- End with exactly: ` + "`Expand for details about: <comma-separated list of what was dropped or compressed>`" + `.
+- Target length: about {{TARGET_TOKENS}} tokens or less.
+
+<conversation_segment>
+{{CONVERSATION_TEXT}}
+</conversation_segment>`
+
+// CondensedSummaryPrompt is the prompt template for generating higher-depth summaries.
+const CondensedSummaryPrompt = `You are condensing {{LEVEL_NOUN}} into a higher-level memory node.
+{{FRAMING_LINE}}
+
+Preserve:
+- Decisions still in effect and their rationale.
+- Decisions that evolved: what changed and why.
+- Completed work with outcomes.
+- Active constraints, open questions, and blockers.
+- Current state of in-progress work.
+- {{PRESERVE_SPECIFICS}}
+
+Drop:
+- Intermediate states superseded by later outcomes.
+- Tool-internal mechanics and process scaffolding.
+- {{DROP_SPECIFICS}}
+
+Output requirements:
+- Plain text only. Brief headers are acceptable at depth >= 2.
+- Include a timeline with timestamps (hour or half-hour) for significant events.
+- End with exactly: ` + "`Expand for details about: <comma-separated list of what was dropped or compressed>`" + `.
+- Target length: about {{TARGET_TOKENS}} tokens.
+
+<summaries_to_condense>
+{{SUMMARIES_TEXT}}
+</summaries_to_condense>`

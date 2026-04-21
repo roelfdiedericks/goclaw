@@ -52,12 +52,12 @@ func TestNormalizeTildePaths(t *testing.T) {
 	}
 
 	tests := map[string]string{
-		"gateway.logFile":             cfg.Gateway.LogFile,
-		"gateway.pidFile":             cfg.Gateway.PIDFile,
-		"gateway.workingDir":          cfg.Gateway.WorkingDir,
-		"session.storePath":           cfg.Session.StorePath,
-		"session.inheritPath":         cfg.Session.InheritPath,
-		"auth.script":                 cfg.Auth.Script,
+		"gateway.logFile":              cfg.Gateway.LogFile,
+		"gateway.pidFile":              cfg.Gateway.PIDFile,
+		"gateway.workingDir":           cfg.Gateway.WorkingDir,
+		"session.storePath":            cfg.Session.StorePath,
+		"session.inheritPath":          cfg.Session.InheritPath,
+		"auth.script":                  cfg.Auth.Script,
 		"sandbox.general.dataDir":      cfg.Sandbox.General.DataDir,
 		"roles.guest.systemPromptFile": cfg.Roles["guest"].SystemPromptFile,
 	}

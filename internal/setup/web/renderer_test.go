@@ -144,6 +144,36 @@ func TestRenderFormHTMLCollapsedSectionUsesBootstrapCollapse(t *testing.T) {
 	}
 }
 
+func TestRenderFormHTMLCollapsedSectionSanitizesSlashInSectionID(t *testing.T) {
+	def := forms.FormDef{
+		Sections: []forms.Section{
+			{
+				Title:     "Advanced Condensation / Retention",
+				Collapsed: true,
+				Fields: []forms.Field{
+					{Name: "timeout", Title: "Timeout", Type: forms.Number},
+				},
+			},
+		},
+	}
+
+	html, err := RenderFormHTML(def, "formData")
+	if err != nil {
+		t.Fatalf("RenderFormHTML returned error: %v", err)
+	}
+
+	got := string(html)
+	if strings.Contains(got, `/`) && strings.Contains(got, `data-bs-target="#section_Advanced_Condensation_/_Retention_body"`) {
+		t.Fatalf("expected slash to be sanitized in collapse target, got:\n%s", got)
+	}
+	if !strings.Contains(got, `data-bs-target="#section_Advanced_Condensation___Retention_body"`) {
+		t.Fatalf("expected sanitized collapse target, got:\n%s", got)
+	}
+	if !strings.Contains(got, `id="section_Advanced_Condensation___Retention_body"`) {
+		t.Fatalf("expected sanitized body id, got:\n%s", got)
+	}
+}
+
 func TestRenderFormHTMLSliderFieldRendersRangeInput(t *testing.T) {
 	def := forms.FormDef{
 		Sections: []forms.Section{

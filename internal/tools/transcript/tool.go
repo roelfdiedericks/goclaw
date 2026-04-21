@@ -8,18 +8,24 @@ import (
 	"time"
 
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
+	"github.com/roelfdiedericks/goclaw/internal/session"
 	transcriptpkg "github.com/roelfdiedericks/goclaw/internal/transcript"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
 // Tool provides search and query access to conversation history.
 type Tool struct {
-	manager *transcriptpkg.Manager
+	manager    *transcriptpkg.Manager
+	store      session.Store
+	compactor  *session.CompactionManager
+	lcmEnabled bool
 }
 
-// NewTool creates a new transcript tool.
-func NewTool(manager *transcriptpkg.Manager) *Tool {
-	return &Tool{manager: manager}
+// NewTool creates a new transcript tool. The compactor is optional; when nil
+// the `stats` action still returns transcript indexer counters but omits the
+// LCM DAG/config/preset/semantics blocks.
+func NewTool(manager *transcriptpkg.Manager, store session.Store, compactor *session.CompactionManager, lcmEnabled bool) *Tool {
+	return &Tool{manager: manager, store: store, compactor: compactor, lcmEnabled: lcmEnabled}
 }
 
 func (t *Tool) Name() string {
@@ -27,7 +33,7 @@ func (t *Tool) Name() string {
 }
 
 func (t *Tool) Description() string {
-	return "Search and query conversation history. USE THIS when user says 'we discussed', 'remember when', 'a while ago', 'you mentioned', 'I told you'. Actions: 'semantic' (natural language search), 'recent' (latest messages), 'search' (supports matchType: 'exact' for substring, 'semantic' for vector, 'hybrid' default), 'gaps' (time gaps/breaks), 'stats' (indexing status). Filters: source, excludeSources, humanOnly (exclude cron/heartbeat), after/before/lastDays (time range), role (user/assistant). Output includes source field."
+	return "Search and recall from conversation transcripts, including compacted history. Actions: semantic (vector search over message embeddings), recent (latest N messages), search (supports matchType exact|semantic|hybrid), gaps (conversation breaks), stats (transcript indexer counters AND full LCM/DAG state: active preset, effective config, preset catalog with descriptions, un-parented backlog, next condense tick, and a field glossary + drift-signal semantics the agent can use to diagnose recall behavior and suggest preset tuning to the user), get_messages (fetch messages by ID), grep_summaries (FTS5 search across compacted summaries; FTS5 defaults to AND matching, so keep queries short and use 1-3 distinctive terms or one quoted phrase; sort recency|relevance|hybrid), describe (inspect one compacted summary by ID: kind, depth, lineage, content), expand (drill into compacted summaries' children and raw source messages, token-capped, accepts summaryIds or query; pending summaries return raw messages). Prefer grep_summaries -> describe -> expand for compacted history. Keep summary IDs out of user-facing prose unless asked. Call `stats` before making LCM tuning suggestions so suggestions are grounded in live state and the real preset catalog."
 }
 
 func (t *Tool) Schema() map[string]any {
@@ -36,8 +42,8 @@ func (t *Tool) Schema() map[string]any {
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"semantic", "recent", "search", "gaps", "stats", "get_messages"},
-				"description": "Action to perform: 'semantic' (natural language search on chunks), 'recent' (last N messages), 'search' (flexible search with matchType: exact/semantic/hybrid), 'gaps' (conversation time gaps), 'stats' (indexing status), 'get_messages' (fetch by message IDs for provenance tracing)",
+				"enum":        []string{"semantic", "recent", "search", "gaps", "stats", "get_messages", "grep_summaries", "describe", "expand"},
+				"description": "Action to perform: semantic/recent/search/gaps/stats/get_messages, plus compacted-history recall actions grep_summaries, describe, expand",
 			},
 			"query": map[string]any{
 				"type":        "string",
@@ -92,6 +98,37 @@ func (t *Tool) Schema() map[string]any {
 				"items":       map[string]any{"type": "string"},
 				"description": "For 'get_messages' action: array of message IDs to retrieve (from memory source_message field)",
 			},
+			"summaryId": map[string]any{
+				"type":        "string",
+				"description": "For 'describe' action: one summary ID from context, in the form sum_<id>",
+			},
+			"summaryIds": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "For 'expand' action: one or more summary IDs from context, in the form sum_<id>",
+			},
+			"tokenCap": map[string]any{
+				"type":        "integer",
+				"description": "For 'expand' action: maximum token budget for returned expansion text (default 4000)",
+			},
+			"maxDepth": map[string]any{
+				"type":        "integer",
+				"description": "For 'expand' action: maximum child-summary recursion depth (default 3)",
+			},
+			"includeMessages": map[string]any{
+				"type":        "boolean",
+				"description": "For 'expand' action: include raw source messages for non-pending summaries (default false)",
+			},
+			"sort": map[string]any{
+				"type":        "string",
+				"enum":        []string{"recency", "relevance", "hybrid"},
+				"description": "For 'grep_summaries' action: result ordering (default recency)",
+			},
+			"mode": map[string]any{
+				"type":        "string",
+				"enum":        []string{"full_text", "regex"},
+				"description": "For 'grep_summaries' action: full_text uses FTS5, regex runs Go regexp over summaries (default full_text)",
+			},
 		},
 		"required": []string{"action"},
 	}
@@ -117,6 +154,15 @@ type transcriptInput struct {
 
 	// For get_messages action
 	MessageIDs []string `json:"message_ids"`
+
+	// For LCM actions
+	SummaryID       string   `json:"summaryId"`
+	SummaryIDs      []string `json:"summaryIds"`
+	TokenCap        int      `json:"tokenCap"`
+	MaxDepth        int      `json:"maxDepth"`
+	IncludeMessages bool     `json:"includeMessages"`
+	Sort            string   `json:"sort"`
+	Mode            string   `json:"mode"`
 }
 
 func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolResult, error) {
@@ -133,6 +179,7 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	sessionCtx := types.GetSessionContext(ctx)
 	userID := ""
 	transcriptScope := "own" // Default to own (restrictive)
+	sessionKey := session.PrimarySession
 	if sessionCtx != nil && sessionCtx.User != nil {
 		userID = sessionCtx.User.ID
 		// Use TranscriptScope from session context if set, otherwise fall back to owner check
@@ -141,6 +188,9 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 		} else if sessionCtx.User.IsOwner() {
 			transcriptScope = "all" // Legacy: owner gets all access
 		}
+	}
+	if sessionCtx != nil && sessionCtx.SessionKey != "" {
+		sessionKey = sessionCtx.SessionKey
 	}
 
 	// Convert scope to isOwner for existing code (all = owner-like access)
@@ -173,9 +223,15 @@ func (t *Tool) Execute(ctx context.Context, input json.RawMessage) (*types.ToolR
 	case "gaps":
 		result, err = t.executeGaps(ctx, params, userID, isOwner)
 	case "stats":
-		result, err = t.executeStats(ctx)
+		result, err = t.executeStats(ctx, sessionKey)
 	case "get_messages":
 		result, err = t.executeGetMessages(ctx, params, userID, isOwner)
+	case "grep_summaries":
+		result, err = t.executeGrepSummaries(ctx, params, sessionKey)
+	case "describe":
+		result, err = t.executeDescribe(ctx, params, sessionKey)
+	case "expand":
+		result, err = t.executeExpand(ctx, params, sessionKey, userID, isOwner)
 	default:
 		return nil, fmt.Errorf("unknown action: %s", params.Action)
 	}
@@ -371,9 +427,125 @@ func (t *Tool) executeGaps(ctx context.Context, params transcriptInput, userID s
 	})
 }
 
-func (t *Tool) executeStats(ctx context.Context) (string, error) {
-	stats := t.manager.Stats()
-	return marshalOutput(stats)
+func (t *Tool) executeStats(ctx context.Context, sessionKey string) (string, error) {
+	transcriptStats := t.manager.Stats()
+
+	var dagStats *session.CompactionDAGStats
+	if t.compactor != nil && sessionKey != "" {
+		if stats, err := t.compactor.BuildDAGStatsForSession(ctx, sessionKey); err == nil {
+			dagStats = &stats
+		} else {
+			L_warn("transcript: BuildDAGStatsForSession failed for stats action",
+				"sessionKey", sessionKey, "error", err)
+		}
+	}
+
+	payload := assembleLCMStatsPayload(transcriptStats, t.compactor, dagStats)
+	return marshalOutput(payload)
+}
+
+// assembleLCMStatsPayload is the pure composition step: it takes pre-fetched
+// transcript indexer stats and (optional) DAG stats, plus the manager, and
+// builds the composite JSON-friendly map the agent sees. Split out from
+// executeStats so it is cheaply unit-testable without real stores.
+func assembleLCMStatsPayload(
+	transcriptStats transcriptpkg.TranscriptStats,
+	compactor *session.CompactionManager,
+	dagStats *session.CompactionDAGStats,
+) map[string]any {
+	payload := map[string]any{
+		"totalChunks":             transcriptStats.TotalChunks,
+		"chunksWithEmbeddings":    transcriptStats.ChunksWithEmbeddings,
+		"chunksNeedingEmbeddings": transcriptStats.ChunksNeedingEmbeddings,
+		"pendingMessages":         transcriptStats.PendingMessages,
+		"chunksIndexedSession":    transcriptStats.ChunksIndexedSession,
+		"lastSync":                transcriptStats.LastSync.Format(time.RFC3339),
+		"provider":                transcriptStats.Provider,
+	}
+
+	lcmEnabled := compactor != nil && compactor.IsLCMEnabled()
+	lcmBlock := map[string]any{
+		"enabled": lcmEnabled,
+	}
+	if compactor != nil {
+		lcmBlock["activePreset"] = compactor.Preset()
+		lcmBlock["config"] = compactor.LCMConfigSnapshot()
+	}
+	if dagStats != nil {
+		lcmBlock["dag"] = renderDAGStats(*dagStats)
+	}
+	payload["lcm"] = lcmBlock
+
+	payload["presets"] = renderPresetCatalog(session.LCMPresetCatalog())
+	payload["semantics"] = map[string]any{
+		"injectionModes":  session.LCMInjectionModeDescriptions,
+		"fieldGlossary":   session.LCMFieldGlossary,
+		"catchUpBehavior": session.LCMCatchUpBehaviorDescription,
+		"driftSignals":    session.LCMDriftSignals,
+	}
+	return payload
+}
+
+func renderDAGStats(s session.CompactionDAGStats) map[string]any {
+	unparentedByDepth := map[string]int{}
+	for d, n := range s.UnparentedCondensedByDepth {
+		unparentedByDepth[fmt.Sprintf("%d", d)] = n
+	}
+	condensedByDepth := map[string]int{}
+	for d, n := range s.CondensedByDepth {
+		condensedByDepth[fmt.Sprintf("%d", d)] = n
+	}
+	nextTick := map[string]any{
+		"batchSize":   s.NextBatchSize,
+		"newDepth":    s.NextBatchNewDepth,
+		"description": describeNextTick(s),
+	}
+	return map[string]any{
+		"leaves":                     s.Leaves,
+		"condensed":                  s.Condensed,
+		"condensedByDepth":           condensedByDepth,
+		"unparentedLeaves":           s.UnparentedLeaves,
+		"unparentedCondensedByDepth": unparentedByDepth,
+		"maxDepth":                   s.MaxDepth,
+		"pending":                    s.Pending,
+		"ftsRows":                    s.FTSRows,
+		"nextTick":                   nextTick,
+	}
+}
+
+func describeNextTick(s session.CompactionDAGStats) string {
+	if s.NextBatchSize <= 0 {
+		return "idle: no un-parented candidates meet fanout threshold"
+	}
+	unit := "leaves"
+	if s.NextBatchNewDepth > 1 {
+		unit = fmt.Sprintf("depth-%d condensed nodes", s.NextBatchNewDepth-1)
+	}
+	return fmt.Sprintf("condense %d %s -> depth-%d", s.NextBatchSize, unit, s.NextBatchNewDepth)
+}
+
+func renderPresetCatalog(presets []session.LCMPresetDef) []map[string]any {
+	out := make([]map[string]any, 0, len(presets))
+	for _, p := range presets {
+		out = append(out, map[string]any{
+			"name":        p.Name,
+			"label":       p.Label,
+			"description": p.Description,
+			"fields": map[string]any{
+				"summaryInjectionMode":     p.SummaryInjectionMode,
+				"maxInjectedSummaryTokens": p.MaxInjectedSummaryTokens,
+				"summaryMaxOverageFactor":  p.SummaryMaxOverageFactor,
+				"freshTailCount":           p.FreshTailCount,
+				"freshTailMaxTokens":       p.FreshTailMaxTokens,
+				"leafMinFanout":            p.LeafMinFanout,
+				"condensedMinFanout":       p.CondensedMinFanout,
+				"incrementalMaxDepth":      p.IncrementalMaxDepth,
+				"leafTargetTokens":         p.LeafTargetTokens,
+				"condensedTargetTokens":    p.CondensedTargetTokens,
+			},
+		})
+	}
+	return out
 }
 
 func (t *Tool) executeGetMessages(ctx context.Context, params transcriptInput, userID string, isOwner bool) (string, error) {
@@ -422,6 +594,320 @@ func (t *Tool) executeGetMessages(ctx context.Context, params transcriptInput, u
 		"count":     len(messages),
 		"requested": len(params.MessageIDs),
 	})
+}
+
+func (t *Tool) executeGrepSummaries(ctx context.Context, params transcriptInput, sessionKey string) (string, error) {
+	if !t.lcmEnabled || t.store == nil {
+		return t.lcmDisabledResult()
+	}
+	if params.Query == "" {
+		return "", fmt.Errorf("query is required for grep_summaries")
+	}
+
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	mode := session.CompactionSearchMode(params.Mode)
+	if mode == "" {
+		mode = session.CompactionSearchModeFTS
+	}
+	sort := session.CompactionSearchSort(params.Sort)
+	if sort == "" {
+		sort = session.CompactionSearchSortRecency
+	}
+
+	results, err := t.store.SearchCompactionsFTS(ctx, sessionKey, params.Query, limit, mode, sort)
+	if err != nil {
+		return marshalOutput(map[string]any{
+			"error":   err.Error(),
+			"results": []any{},
+		})
+	}
+
+	formatted := make([]map[string]any, 0, len(results))
+	for _, result := range results {
+		entry := map[string]any{
+			"id":        session.FormatSummaryID(result.Compaction.ID),
+			"kind":      result.Compaction.Kind,
+			"depth":     result.Compaction.Depth,
+			"timestamp": result.Compaction.Timestamp.Format(time.RFC3339),
+			"preview":   truncateContent(result.Compaction.Summary, 400),
+			"matchType": result.MatchSource,
+		}
+		if result.Relevance != 0 {
+			entry["score"] = fmt.Sprintf("%.4f", result.Relevance)
+		}
+		formatted = append(formatted, entry)
+	}
+
+	return marshalOutput(map[string]any{
+		"results": resultsOrEmpty(formatted),
+		"count":   len(formatted),
+		"query":   params.Query,
+		"mode":    mode,
+		"sort":    sort,
+	})
+}
+
+func (t *Tool) executeDescribe(ctx context.Context, params transcriptInput, sessionKey string) (string, error) {
+	if !t.lcmEnabled || t.store == nil {
+		return t.lcmDisabledResult()
+	}
+
+	summaryID := params.SummaryID
+	if summaryID == "" && len(params.SummaryIDs) > 0 {
+		summaryID = params.SummaryIDs[0]
+	}
+	if summaryID == "" {
+		return "", fmt.Errorf("summaryId is required for describe")
+	}
+
+	id, err := session.ParseSummaryID(summaryID)
+	if err != nil {
+		return "", err
+	}
+	comp, err := t.store.GetCompaction(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if comp == nil || comp.SessionKey != sessionKey {
+		return "", fmt.Errorf("summary not found: %s", summaryID)
+	}
+
+	children := make([]string, 0, len(comp.ChildCompactionIDs))
+	for _, childID := range comp.ChildCompactionIDs {
+		children = append(children, session.FormatSummaryID(childID))
+	}
+
+	result := map[string]any{
+		"id":                session.FormatSummaryID(comp.ID),
+		"kind":              session.CompactionKindOrLeaf(comp.Kind),
+		"depth":             comp.Depth,
+		"timestamp":         comp.Timestamp.Format(time.RFC3339),
+		"summary":           comp.Summary,
+		"needsSummaryRetry": comp.NeedsSummaryRetry,
+		"sourceMessages":    len(comp.SourceMessageIDs),
+		"children":          children,
+		"firstKeptEntryID":  comp.FirstKeptEntryID,
+	}
+	if comp.EarliestMessageAt != nil {
+		result["earliestAt"] = comp.EarliestMessageAt.UTC().Format(time.RFC3339)
+	}
+	if comp.LatestMessageAt != nil {
+		result["latestAt"] = comp.LatestMessageAt.UTC().Format(time.RFC3339)
+	}
+	if len(comp.SourceMessageIDs) > 0 {
+		result["messageRange"] = fmt.Sprintf("%s..%s",
+			session.FormatMessageID(comp.SourceMessageIDs[0]),
+			session.FormatMessageID(comp.SourceMessageIDs[len(comp.SourceMessageIDs)-1]),
+		)
+	}
+	return marshalOutput(result)
+}
+
+func (t *Tool) executeExpand(ctx context.Context, params transcriptInput, sessionKey, userID string, isOwner bool) (string, error) {
+	if !t.lcmEnabled || t.store == nil {
+		return t.lcmDisabledResult()
+	}
+
+	tokenCap := params.TokenCap
+	if tokenCap <= 0 {
+		tokenCap = 4000
+	}
+	maxDepth := params.MaxDepth
+	if maxDepth <= 0 {
+		maxDepth = 3
+	}
+
+	targets, err := t.resolveExpandTargets(ctx, params, sessionKey)
+	if err != nil {
+		return "", err
+	}
+	if len(targets) == 0 {
+		return "", fmt.Errorf("no summaries matched")
+	}
+
+	estimator := session.GetTokenEstimator()
+	remaining := tokenCap
+	var b strings.Builder
+	truncated := false
+	fellBackToRaw := false
+	seen := make(map[string]bool, len(targets))
+
+	appendText := func(text string) {
+		if truncated || strings.TrimSpace(text) == "" {
+			return
+		}
+		tokens := estimator.EstimateTokens(text)
+		if tokens <= remaining {
+			b.WriteString(text)
+			remaining -= tokens
+			return
+		}
+		maxChars := remaining * 4
+		if maxChars > len(text) {
+			maxChars = len(text)
+		}
+		if maxChars > 0 {
+			b.WriteString(text[:maxChars])
+			b.WriteString("\n[truncated]\n")
+		}
+		truncated = true
+		remaining = 0
+	}
+
+	appendText("Expanded compacted history:\n\n")
+	for _, comp := range targets {
+		if comp.NeedsSummaryRetry && len(comp.SourceMessageIDs) > 0 {
+			fellBackToRaw = true
+			L_warn("transcript: expand falling back to raw messages", "compactionID", comp.ID, "reason", "pending_summary")
+		}
+		t.renderExpandedCompaction(ctx, appendText, sessionKey, comp, maxDepth, params.IncludeMessages, userID, isOwner, seen)
+		if truncated {
+			break
+		}
+	}
+
+	if truncated {
+		L_warn("transcript: expand result truncated", "requestedTokens", tokenCap, "returnedTokens", tokenCap-remaining)
+	}
+
+	return marshalOutput(map[string]any{
+		"summaryIds":      prefixedCompactionIDs(targets),
+		"tokenCap":        tokenCap,
+		"returnedTokens":  tokenCap - remaining,
+		"truncated":       truncated,
+		"pendingFallback": fellBackToRaw,
+		"text":            strings.TrimSpace(b.String()),
+	})
+}
+
+func (t *Tool) resolveExpandTargets(ctx context.Context, params transcriptInput, sessionKey string) ([]session.StoredCompaction, error) {
+	if len(params.SummaryIDs) > 0 {
+		targets := make([]session.StoredCompaction, 0, len(params.SummaryIDs))
+		for _, rawID := range params.SummaryIDs {
+			id, err := session.ParseSummaryID(rawID)
+			if err != nil {
+				return nil, err
+			}
+			comp, err := t.store.GetCompaction(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			if comp != nil && comp.SessionKey == sessionKey {
+				targets = append(targets, *comp)
+			}
+		}
+		return targets, nil
+	}
+	if params.SummaryID != "" {
+		id, err := session.ParseSummaryID(params.SummaryID)
+		if err != nil {
+			return nil, err
+		}
+		comp, err := t.store.GetCompaction(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if comp == nil || comp.SessionKey != sessionKey {
+			return nil, nil
+		}
+		return []session.StoredCompaction{*comp}, nil
+	}
+	if params.Query == "" {
+		return nil, fmt.Errorf("expand requires summaryIds, summaryId, or query")
+	}
+
+	results, err := t.store.SearchCompactionsFTS(ctx, sessionKey, params.Query, 1, session.CompactionSearchModeFTS, session.CompactionSearchSortRecency)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return nil, nil
+	}
+	return []session.StoredCompaction{results[0].Compaction}, nil
+}
+
+func (t *Tool) renderExpandedCompaction(
+	ctx context.Context,
+	appendText func(string),
+	sessionKey string,
+	comp session.StoredCompaction,
+	maxDepth int,
+	includeMessages bool,
+	userID string,
+	isOwner bool,
+	seen map[string]bool,
+) {
+	if seen[comp.ID] || maxDepth < 0 {
+		return
+	}
+	seen[comp.ID] = true
+
+	appendText(fmt.Sprintf("[summary %s kind=%s depth=%d pending=%t]\n", session.FormatSummaryID(comp.ID), session.CompactionKindOrLeaf(comp.Kind), comp.Depth, comp.NeedsSummaryRetry))
+	if comp.EarliestMessageAt != nil || comp.LatestMessageAt != nil {
+		earliest := ""
+		latest := ""
+		if comp.EarliestMessageAt != nil {
+			earliest = comp.EarliestMessageAt.UTC().Format(time.RFC3339)
+		}
+		if comp.LatestMessageAt != nil {
+			latest = comp.LatestMessageAt.UTC().Format(time.RFC3339)
+		}
+		appendText(fmt.Sprintf("window: %s -> %s\n", earliest, latest))
+	}
+	appendText(comp.Summary + "\n\n")
+
+	shouldIncludeMessages := includeMessages || comp.NeedsSummaryRetry
+	if shouldIncludeMessages && len(comp.SourceMessageIDs) > 0 {
+		messages, err := t.store.GetMessagesByIDs(ctx, sessionKey, comp.SourceMessageIDs)
+		if err == nil && len(messages) > 0 {
+			appendText("source messages:\n")
+			for _, msg := range messages {
+				if !isOwner && msg.UserID != "" && msg.UserID != userID {
+					continue
+				}
+				content := msg.Content
+				if msg.Role == "tool_result" && msg.ToolResult != "" {
+					content = msg.ToolResult
+				}
+				appendText(fmt.Sprintf("- [%s] %s %s: %s\n",
+					session.FormatMessageID(msg.ID),
+					msg.Role,
+					msg.Timestamp.UTC().Format(time.RFC3339),
+					truncateContent(content, 800),
+				))
+			}
+			appendText("\n")
+		}
+	} else if len(comp.SourceMessageIDs) > 0 {
+		appendText(fmt.Sprintf("source messages: %d (%s..%s)\n\n",
+			len(comp.SourceMessageIDs),
+			session.FormatMessageID(comp.SourceMessageIDs[0]),
+			session.FormatMessageID(comp.SourceMessageIDs[len(comp.SourceMessageIDs)-1]),
+		))
+	}
+
+	if maxDepth == 0 || len(comp.ChildCompactionIDs) == 0 {
+		return
+	}
+	children, err := t.store.GetCompactionChildren(ctx, comp.ID)
+	if err != nil || len(children) == 0 {
+		return
+	}
+	appendText("children:\n")
+	for _, child := range children {
+		appendText(fmt.Sprintf("- %s\n", session.FormatSummaryID(child.ID)))
+	}
+	appendText("\n")
+	for _, child := range children {
+		t.renderExpandedCompaction(ctx, appendText, sessionKey, child, maxDepth-1, includeMessages, userID, isOwner, seen)
+	}
+}
+
+func (t *Tool) lcmDisabledResult() (string, error) {
+	return "", fmt.Errorf("LCM disabled: grep_summaries, describe, and expand are unavailable")
 }
 
 // buildQueryFilter creates a QueryFilter from transcript input parameters
@@ -517,6 +1003,21 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+func resultsOrEmpty(results []map[string]any) []map[string]any {
+	if results == nil {
+		return []map[string]any{}
+	}
+	return results
+}
+
+func prefixedCompactionIDs(compactions []session.StoredCompaction) []string {
+	ids := make([]string, 0, len(compactions))
+	for _, comp := range compactions {
+		ids = append(ids, session.FormatSummaryID(comp.ID))
+	}
+	return ids
 }
 
 // marshalOutput marshals output with indentation

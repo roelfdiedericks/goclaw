@@ -46,7 +46,7 @@ func (t *fakeTransport) NewSession(ctx context.Context, req NewSessionRequest) (
 				{Value: "claude-opus-4-6[thinking=true,context=200k,effort=high,fast=false]", Name: "Claude Opus 4.6"},
 			},
 		},
-		runtime:   struct{}{},
+		runtime: struct{}{},
 	}, nil
 }
 func (t *fakeTransport) LoadSession(ctx context.Context, req LoadSessionRequest) (*SessionHandle, error) {
@@ -64,7 +64,7 @@ func (t *fakeTransport) LoadSession(ctx context.Context, req LoadSessionRequest)
 				{Value: "claude-opus-4-6[thinking=true,context=200k,effort=high,fast=false]", Name: "Claude Opus 4.6"},
 			},
 		},
-		runtime:   struct{}{},
+		runtime: struct{}{},
 	}, nil
 }
 func (t *fakeTransport) SetMode(ctx context.Context, handle *SessionHandle, mode string) error {

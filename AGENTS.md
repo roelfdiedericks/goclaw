@@ -100,11 +100,69 @@ func (b *Bot) handleMessage(c tele.Context) error {
 - Handle errors explicitly, never ignore them silently
 - Use context.Context for cancellation and timeouts
 
+## Build patterns
+
+- Avoid running gofmt, and lint all the time. It can be done once after a major iteration
+
+## Config Form Patterns
+
+Default pattern:
+
+- Bind web/TUI forms directly to the real runtime config structs.
+- Treat this as the default for new config sections unless there is a very clear reason not to.
+
+Allowed exception:
+
+- Only add a separate form-data wrapper when the UI truly needs temporary or synthetic fields that must not live on the runtime struct.
+- `VoiceLLM` is the model for this pattern. It is the exception, not the default.
+
+Do not do this:
+
+- Do not invent a parallel wrapper just to carry presets, derived values, or save-time expansions for a section that should round-trip to `goclaw.json`.
+- If a selector or field must persist to disk, it belongs on the real config struct.
+
+Preset / derived-field rule:
+
+- For preset-backed config, store the persisted selector on the real config struct.
+- Put the preset/default expansion logic in one shared normalization helper on the real config type.
+- Do not duplicate that logic in separate web-only or TUI-only code paths.
+
+Required wiring:
+
+- If a section needs normalization, call the shared normalization helper in all relevant paths:
+- Web section save handler
+- TUI accept/save path
+- Runtime config load/default path
+
+Testing rule:
+
+- For persistence bugs, add a focused regression test that inspects the raw JSON written to disk.
+- Do not rely only on reload-through-`config.LoadFromPath(...)` tests, because runtime defaults and normalization can hide bad on-disk state.
+
+Checklist before merging:
+
+- Is the form bound to the real runtime config struct?
+- If not, is there a genuine UI-only reason for a wrapper?
+- Are presets/derived fields normalized by one shared helper?
+- Are web, TUI, and runtime load paths all using that helper?
+- Is there a raw-file persistence regression test?
+
 ---
 
 ## CHANGELOG.md updates
-When make changelog updates, follow the similar simple, terse style as the existing CHANGELOG.md entries
-Don't overword things, its a brief changelog not a dissertation. Do not update prior release changelog entries unless requested, add new entries under the "Unreleased" section
+
+The CHANGELOG is **end-user facing**. It lives next to the README and gets read by people who run GoClaw, not by the engineers who wrote the code. Write accordingly.
+
+- **This is the GoClaw project.** Always name it. Do not say "bots" or "the bot" as a generic stand-in for GoClaw — a changelog entry that works for any random chat bot isn't telling a GoClaw operator anything specific. Say "GoClaw does X" or name the concrete surface (`/session`, `transcript.stats`, the TUI, the HTTP UI, etc.).
+- **Audience:** a GoClaw operator who knows what GoClaw is but has never read the source. They want to know *what changed for them*, not what was refactored internally.
+- **Style:** same terse, one-line-per-entry format as prior releases (`## [0.1.14] stable`, `## [0.1.13] stable`, etc.). Look at those before writing new entries and match their voice.
+- **Length:** keep the `Unreleased` section tight. **Collapse related internal changes into a single user-observable bullet.** A feature that took 10 commits to land is one bullet, not ten — unless each commit was independently user-visible. If you find yourself adding a third bullet with the same `component:` prefix in one Unreleased block, you're almost certainly listing internal steps that should be merged.
+- **Plain language, not jargon:** explain feature names and acronyms the first time they appear in an Unreleased block (in parens or a short clause is fine). "**long-memory recall** — when old messages get rolled up into summaries, they stay searchable and expandable" is good. "LCM frontier injection with incremental_max_depth tuning" is not. Internal names like LCM, DAG, fanout, condensation are fine inside the GoClaw codebase but should be decoded for the changelog reader.
+- **Don't reference internal identifiers** unless they are user-facing surfaces. User-facing is OK: config keys (`session.summarization.compaction.lcm.*`), CLI commands (`goclaw onboard`), slash commands (`/session`), tool names (`transcript.stats`), HTTP endpoints (`/api/metrics`), file paths in the user's home (`~/.goclaw/sessions.db`). Not OK: Go type names (`CompactionManagerConfig`), function names (`backfillCompactionDAG`), struct field paths (`SessionConfig.Summarization.Compaction.LCM.*`), SQL table names, private interface names.
+- **Past-release blocks are frozen.** Do not edit `## [0.1.x]` entries unless the user explicitly asks. Only append new bullets under `## [Unreleased]`.
+- **One bullet = one observable outcome.** "The thing now works" or "the `/session` command now shows X" or "four new presets exist". Not "refactored X to do Y so that Z" — that's a commit message, not a changelog line.
+
+When in doubt, ask: *would a GoClaw operator skimming this before upgrading care?* If no, it doesn't belong in the changelog (or it should be collapsed into a more general bullet with other related work).
 
 ## Documentation updates
 Follow the docs/AGENTS.md guide for changing files in the docs/ subdirectory. Ensure documentation updates are user-facing and not overly technical.

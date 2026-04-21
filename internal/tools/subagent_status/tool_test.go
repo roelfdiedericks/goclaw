@@ -21,7 +21,7 @@ type statusGatewayStub struct {
 func (g *statusGatewayStub) RunAgentForCron(ctx context.Context, req cron.AgentRequest, events chan<- cron.AgentEvent) {
 	close(events)
 }
-func (g *statusGatewayStub) GetOwnerUserID() string { return "owner" }
+func (g *statusGatewayStub) GetOwnerUserID() string                                   { return "owner" }
 func (g *statusGatewayStub) InjectSystemEvent(ctx context.Context, text string) error { return nil }
 func (g *statusGatewayStub) DeliverAssistantOutput(ctx context.Context, userID string, msg delivery.AssistantMessage) delivery.Report {
 	return delivery.Report{}
@@ -29,7 +29,9 @@ func (g *statusGatewayStub) DeliverAssistantOutput(ctx context.Context, userID s
 func (g *statusGatewayStub) DeliverSystemMessage(ctx context.Context, userID string, msg delivery.SystemMessage) delivery.Report {
 	return delivery.Report{}
 }
-func (g *statusGatewayStub) HandoffCronResult(ctx context.Context, jobName, result string) error { return nil }
+func (g *statusGatewayStub) HandoffCronResult(ctx context.Context, jobName, result string) error {
+	return nil
+}
 func (g *statusGatewayStub) InjectMessage(ctx context.Context, sessionKey, message string, invokeLLM bool, supervisor *user.User) error {
 	g.injectCalls.Add(1)
 	g.lastInvoke.Store(invokeLLM)

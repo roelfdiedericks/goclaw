@@ -34,19 +34,19 @@ func (s *acpProviderStub) CleanOrphanedToolMessages(ctx context.Context, session
 func (s *acpProviderStub) GetCompactionStatus(ctx context.Context) session.CompactionStatus {
 	return session.CompactionStatus{}
 }
-func (s *acpProviderStub) GetSkillsStatusSection() string                          { return "" }
-func (s *acpProviderStub) GetSkillsListForCommand() *SkillsListResult              { return nil }
-func (s *acpProviderStub) TriggerHeartbeat(ctx context.Context) error              { return nil }
-func (s *acpProviderStub) StopAllUserSessions(userID string) (int, error)          { return 0, nil }
-func (s *acpProviderStub) ResumeAllUserSessions(userID string) (int, error)        { return 0, nil }
-func (s *acpProviderStub) RequestShutdown(userID string) error                     { return nil }
-func (s *acpProviderStub) GetHassInfo() *HassInfo                                  { return nil }
-func (s *acpProviderStub) SetHassDebug(enabled bool)                               {}
-func (s *acpProviderStub) ListHassSubscriptions() []HassSubscriptionInfo           { return nil }
-func (s *acpProviderStub) GetLLMProviderStatus() *LLMProviderStatusResult          { return nil }
-func (s *acpProviderStub) ResetLLMCooldowns() int                                  { return 0 }
-func (s *acpProviderStub) GetEmbeddingsStatus() *EmbeddingsStatusResult            { return nil }
-func (s *acpProviderStub) TriggerEmbeddingsRebuild() error                         { return nil }
+func (s *acpProviderStub) GetSkillsStatusSection() string                           { return "" }
+func (s *acpProviderStub) GetSkillsListForCommand() *SkillsListResult               { return nil }
+func (s *acpProviderStub) TriggerHeartbeat(ctx context.Context) error               { return nil }
+func (s *acpProviderStub) StopAllUserSessions(userID string) (int, error)           { return 0, nil }
+func (s *acpProviderStub) ResumeAllUserSessions(userID string) (int, error)         { return 0, nil }
+func (s *acpProviderStub) RequestShutdown(userID string) error                      { return nil }
+func (s *acpProviderStub) GetHassInfo() *HassInfo                                   { return nil }
+func (s *acpProviderStub) SetHassDebug(enabled bool)                                {}
+func (s *acpProviderStub) ListHassSubscriptions() []HassSubscriptionInfo            { return nil }
+func (s *acpProviderStub) GetLLMProviderStatus() *LLMProviderStatusResult           { return nil }
+func (s *acpProviderStub) ResetLLMCooldowns() int                                   { return 0 }
+func (s *acpProviderStub) GetEmbeddingsStatus() *EmbeddingsStatusResult             { return nil }
+func (s *acpProviderStub) TriggerEmbeddingsRebuild() error                          { return nil }
 func (s *acpProviderStub) ACPDetach(sessionKey string) (*acp.AttachmentInfo, error) { return nil, nil }
 func (s *acpProviderStub) ACPInspect(sessionKey string) (*acp.AttachmentInfo, error) {
 	return &acp.AttachmentInfo{SessionKey: sessionKey, Attached: true, SessionID: "sess-1", Driver: "cursor", Transport: "local-stdio", CWD: "/tmp/repo"}, nil
@@ -72,11 +72,11 @@ func (s *acpProviderStub) ACPSteer(ctx context.Context, sessionKey string, text 
 	s.steerStay = stayAttached
 	return &acp.PromptResult{FinalText: "ok"}, nil
 }
-func (s *acpProviderStub) ACPCancel(ctx context.Context, sessionKey string) error { return nil }
-func (s *acpProviderStub) GetA2AStatus() a2a.Status                                 { return a2a.Status{} }
-func (s *acpProviderStub) ListA2APeers(filter string) []a2a.PeerRecord              { return nil }
+func (s *acpProviderStub) ACPCancel(ctx context.Context, sessionKey string) error    { return nil }
+func (s *acpProviderStub) GetA2AStatus() a2a.Status                                  { return a2a.Status{} }
+func (s *acpProviderStub) ListA2APeers(filter string) []a2a.PeerRecord               { return nil }
 func (s *acpProviderStub) ListA2ATasks(filter string, peer string) []a2a.TaskSummary { return nil }
-func (s *acpProviderStub) GetA2APairingPayload() a2a.PairingPayload                 { return a2a.PairingPayload{} }
+func (s *acpProviderStub) GetA2APairingPayload() a2a.PairingPayload                  { return a2a.PairingPayload{} }
 func (s *acpProviderStub) PingA2APeer(ctx context.Context, target string) (a2a.PingResult, error) {
 	return a2a.PingResult{}, nil
 }

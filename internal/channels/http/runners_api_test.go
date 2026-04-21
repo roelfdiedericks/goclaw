@@ -19,8 +19,8 @@ import (
 )
 
 type runnersGatewayStub struct {
-	runs   []delegatedrun.RunRecord
-	events []delegatedrun.RunEvent
+	runs    []delegatedrun.RunRecord
+	events  []delegatedrun.RunEvent
 	history map[string][]session.Message
 
 	mu        sync.Mutex
@@ -33,10 +33,10 @@ func (s *runnersGatewayStub) RunAgent(ctx context.Context, req gateway.AgentRequ
 	return nil
 }
 
-func (s *runnersGatewayStub) AgentIdentity() *gwtypes.AgentIdentityConfig      { return nil }
-func (s *runnersGatewayStub) SupervisionConfig() *gwtypes.SupervisionConfig    { return nil }
-func (s *runnersGatewayStub) StopAllUserSessions(userID string) (int, error)   { return 0, nil }
-func (s *runnersGatewayStub) RequestShutdown(userID string) error               { return nil }
+func (s *runnersGatewayStub) AgentIdentity() *gwtypes.AgentIdentityConfig    { return nil }
+func (s *runnersGatewayStub) SupervisionConfig() *gwtypes.SupervisionConfig  { return nil }
+func (s *runnersGatewayStub) StopAllUserSessions(userID string) (int, error) { return 0, nil }
+func (s *runnersGatewayStub) RequestShutdown(userID string) error            { return nil }
 func (s *runnersGatewayStub) ACPRespond(sessionKey string, resp acp.ACPDriverExtensionResponse) error {
 	return nil
 }
@@ -98,25 +98,25 @@ func TestHandleRunnersReturnsSnapshot(t *testing.T) {
 	gw := &runnersGatewayStub{
 		runs: []delegatedrun.RunRecord{
 			{
-				RunID:                     "run-1",
-				ParentRunID:               "",
-				RequesterType:             "subagent",
-				RequesterID:               "http:chat-1",
-				RequesterSessionKey:       "session-primary",
-				SessionKey:                "subagent:abc",
-				Purpose:                   "research",
-				ResultMode:                "return_to_requester",
-				ExpectsCompletionMessage:  true,
-				DispatchOrder:             "direct_first",
-				FallbackMode:              "queue_fallback",
-				InjectMode:                "tool_result",
-				CompletionDispatchKey:     "run-1:1",
-				CompletionDispatchSeq:     1,
-				CleanupState:              "dispatched",
-				ContinuationState:         "none",
-				State:                     delegatedrun.RunStateCompleted,
-				StartedAt:                 started,
-				FinishedAt:                &finished,
+				RunID:                    "run-1",
+				ParentRunID:              "",
+				RequesterType:            "subagent",
+				RequesterID:              "http:chat-1",
+				RequesterSessionKey:      "session-primary",
+				SessionKey:               "subagent:abc",
+				Purpose:                  "research",
+				ResultMode:               "return_to_requester",
+				ExpectsCompletionMessage: true,
+				DispatchOrder:            "direct_first",
+				FallbackMode:             "queue_fallback",
+				InjectMode:               "tool_result",
+				CompletionDispatchKey:    "run-1:1",
+				CompletionDispatchSeq:    1,
+				CleanupState:             "dispatched",
+				ContinuationState:        "none",
+				State:                    delegatedrun.RunStateCompleted,
+				StartedAt:                started,
+				FinishedAt:               &finished,
 				Result: delegatedrun.RunResult{
 					FinalText: "done",
 				},
@@ -283,4 +283,3 @@ func TestHandleRunnerEventsResumesFromSinceAndStreamsEvents(t *testing.T) {
 		t.Fatalf("expected runId payload in SSE body, body=%q", body)
 	}
 }
-

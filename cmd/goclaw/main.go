@@ -4093,7 +4093,7 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 				}
 				transcriptMgr.Start()
 				transcriptMgr.RegisterOperationalCommands()
-				reg.Register(tooltranscript.NewTool(transcriptMgr))
+				reg.Register(tooltranscript.NewTool(transcriptMgr, gw.SessionManager().GetStore(), gw.Compactor(), cfg.Session.Summarization.Compaction.LCM.Enabled))
 			}
 		}
 	}

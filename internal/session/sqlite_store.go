@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -20,7 +22,7 @@ type SQLiteStore struct {
 }
 
 // Schema version for migrations
-const currentSchemaVersion = 8
+const currentSchemaVersion = 10
 
 // NewSQLiteStore creates a new SQLite store
 func NewSQLiteStore(cfg StoreConfig) (*SQLiteStore, error) {
@@ -91,6 +93,8 @@ func (s *SQLiteStore) Migrate() error {
 		migrateV6,
 		migrateV7,
 		migrateV8,
+		migrateV9,
+		migrateV10,
 	}
 
 	for i := version; i < len(migrations); i++ {
@@ -348,6 +352,96 @@ func migrateV8(db *sql.DB) error {
 	return err
 }
 
+// migrateV9 adds LCM DAG fields plus compaction FTS indexing.
+func migrateV9(db *sql.DB) error {
+	start := time.Now()
+
+	schema := `
+	ALTER TABLE compactions ADD COLUMN kind TEXT DEFAULT NULL;
+	ALTER TABLE compactions ADD COLUMN depth INTEGER DEFAULT 0;
+	ALTER TABLE compactions ADD COLUMN source_message_ids TEXT DEFAULT NULL;
+	ALTER TABLE compactions ADD COLUMN child_compaction_ids TEXT DEFAULT NULL;
+	ALTER TABLE compactions ADD COLUMN earliest_message_at INTEGER DEFAULT NULL;
+	ALTER TABLE compactions ADD COLUMN latest_message_at INTEGER DEFAULT NULL;
+	ALTER TABLE compactions ADD COLUMN source_token_count INTEGER DEFAULT 0;
+
+	CREATE INDEX IF NOT EXISTS idx_compactions_session_depth ON compactions(session_key, depth, timestamp);
+	CREATE INDEX IF NOT EXISTS idx_compactions_kind_depth ON compactions(kind, depth, timestamp);
+
+	CREATE VIRTUAL TABLE IF NOT EXISTS compactions_fts USING fts5(content);
+
+	CREATE TRIGGER IF NOT EXISTS compactions_ai AFTER INSERT ON compactions BEGIN
+		INSERT INTO compactions_fts(rowid, content) VALUES (new.rowid, new.summary);
+	END;
+
+	CREATE TRIGGER IF NOT EXISTS compactions_ad AFTER DELETE ON compactions BEGIN
+		INSERT INTO compactions_fts(compactions_fts, rowid, content) VALUES ('delete', old.rowid, old.summary);
+	END;
+
+	CREATE TRIGGER IF NOT EXISTS compactions_au AFTER UPDATE OF summary ON compactions BEGIN
+		INSERT INTO compactions_fts(compactions_fts, rowid, content) VALUES ('delete', old.rowid, old.summary);
+		INSERT INTO compactions_fts(rowid, content) VALUES (new.rowid, new.summary);
+	END;
+
+	INSERT INTO schema_version (version, applied_at) VALUES (9, ?);
+	`
+
+	if _, err := db.Exec(schema, time.Now().Unix()); err != nil {
+		return err
+	}
+
+	result, err := db.Exec(`INSERT INTO compactions_fts(rowid, content) SELECT rowid, summary FROM compactions`)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	L_info("lcm: bulk-indexed legacy compactions for FTS", "rows", rows, "durationMs", time.Since(start).Milliseconds())
+
+	return nil
+}
+
+// migrateV10 repairs compaction FTS triggers and rebuilds the derived index.
+func migrateV10(db *sql.DB) error {
+	start := time.Now()
+
+	schema := `
+	DROP TRIGGER IF EXISTS compactions_ai;
+	DROP TRIGGER IF EXISTS compactions_ad;
+	DROP TRIGGER IF EXISTS compactions_au;
+	DROP TABLE IF EXISTS compactions_fts;
+
+	CREATE VIRTUAL TABLE compactions_fts USING fts5(content);
+
+	CREATE TRIGGER IF NOT EXISTS compactions_ai AFTER INSERT ON compactions BEGIN
+		INSERT INTO compactions_fts(rowid, content) VALUES (new.rowid, new.summary);
+	END;
+
+	CREATE TRIGGER IF NOT EXISTS compactions_ad AFTER DELETE ON compactions BEGIN
+		DELETE FROM compactions_fts WHERE rowid = old.rowid;
+	END;
+
+	CREATE TRIGGER IF NOT EXISTS compactions_au AFTER UPDATE OF summary ON compactions BEGIN
+		DELETE FROM compactions_fts WHERE rowid = old.rowid;
+		INSERT INTO compactions_fts(rowid, content) VALUES (new.rowid, new.summary);
+	END;
+
+	INSERT INTO schema_version (version, applied_at) VALUES (10, ?);
+	`
+
+	if _, err := db.Exec(schema, time.Now().Unix()); err != nil {
+		return err
+	}
+
+	result, err := db.Exec(`INSERT INTO compactions_fts(rowid, content) SELECT rowid, summary FROM compactions`)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	L_info("lcm: rebuilt compaction FTS index", "rows", rows, "durationMs", time.Since(start).Milliseconds())
+
+	return nil
+}
+
 // Close closes the database connection
 func (s *SQLiteStore) Close() error {
 	L_debug("sqlite: closing store")
@@ -475,6 +569,31 @@ func (s *SQLiteStore) ListSessions(ctx context.Context) ([]StoredSessionInfo, er
 	return sessions, rows.Err()
 }
 
+// ListCompactionSessionKeys returns every distinct session_key present in the
+// compactions table. See the Store interface doc for why this exists —
+// condensation drives iteration from here, not from the sessions table.
+func (s *SQLiteStore) ListCompactionSessionKeys(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT session_key
+		FROM compactions
+		ORDER BY session_key
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
+}
+
 // AppendMessage appends a message to a session
 func (s *SQLiteStore) AppendMessage(ctx context.Context, sessionKey string, msg *StoredMessage) error {
 	_, err := s.db.ExecContext(ctx, `
@@ -507,6 +626,7 @@ func (s *SQLiteStore) AppendMessage(ctx context.Context, sessionKey string, msg 
 
 // GetMessages retrieves messages for a session
 func (s *SQLiteStore) GetMessages(ctx context.Context, sessionKey string, opts MessageQueryOpts) ([]StoredMessage, error) {
+	// #nosec G202 -- placeholder list is generated internally; values remain parameterized
 	query := `
 		SELECT id, session_key, parent_id, timestamp, role, content,
 		       tool_call_id, tool_name, tool_input, tool_result, tool_is_error,
@@ -597,6 +717,77 @@ func (s *SQLiteStore) GetMessageCount(ctx context.Context, sessionKey string) (i
 	var count int
 	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages WHERE session_key = ?", sessionKey).Scan(&count)
 	return count, err
+}
+
+func (s *SQLiteStore) GetMessagesByIDs(ctx context.Context, sessionKey string, ids []string) ([]StoredMessage, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, 0, len(ids)+1)
+	args = append(args, sessionKey)
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString(`
+		SELECT id, session_key, parent_id, timestamp, role, content,
+		       tool_call_id, tool_name, tool_input, tool_result, tool_is_error,
+		       source, channel_id, user_id, input_tokens, output_tokens, raw_json, thinking, phase,
+		       supervisor, intervention_type, response_group_id
+		FROM messages
+		WHERE session_key = ? AND id IN (?`)
+	queryBuilder.WriteString(repeatString(",?", len(ids)-1))
+	queryBuilder.WriteString(`)
+		ORDER BY timestamp ASC
+	`)
+	query := queryBuilder.String()
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []StoredMessage
+	for rows.Next() {
+		var msg StoredMessage
+		var ts int64
+		var parentID, toolCallID, toolName, toolResult, source, channelID, userID, thinking, phase sql.NullString
+		var supervisor, interventionType, responseGroupID sql.NullString
+		var toolInput, rawJSON []byte
+
+		if err := rows.Scan(
+			&msg.ID, &msg.SessionKey, &parentID, &ts, &msg.Role, &msg.Content,
+			&toolCallID, &toolName, &toolInput, &toolResult, &msg.ToolIsError,
+			&source, &channelID, &userID, &msg.InputTokens, &msg.OutputTokens, &rawJSON, &thinking, &phase,
+			&supervisor, &interventionType, &responseGroupID,
+		); err != nil {
+			return nil, err
+		}
+
+		msg.Timestamp = time.Unix(ts, 0)
+		msg.ParentID = parentID.String
+		msg.ToolCallID = toolCallID.String
+		msg.ToolName = toolName.String
+		msg.ToolInput = toolInput
+		msg.ToolResult = toolResult.String
+		msg.Source = source.String
+		msg.ChannelID = channelID.String
+		msg.UserID = userID.String
+		msg.Thinking = thinking.String
+		msg.Phase = phase.String
+		msg.Supervisor = supervisor.String
+		msg.InterventionType = interventionType.String
+		msg.ResponseGroupID = responseGroupID.String
+		msg.RawJSON = rawJSON
+
+		messages = append(messages, msg)
+	}
+
+	return messages, rows.Err()
 }
 
 // AppendCheckpoint appends a checkpoint to a session
@@ -725,15 +916,22 @@ func (s *SQLiteStore) GetCheckpoints(ctx context.Context, sessionKey string) ([]
 
 // AppendCompaction appends a compaction record
 func (s *SQLiteStore) AppendCompaction(ctx context.Context, sessionKey string, comp *StoredCompaction) error {
+	sourceMessageIDsJSON, _ := json.Marshal(comp.SourceMessageIDs)
+	childCompactionIDsJSON, _ := json.Marshal(comp.ChildCompactionIDs)
+
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO compactions (id, session_key, parent_id, timestamp,
 		                         summary, first_kept_entry_id, tokens_before, tokens_after,
-		                         messages_removed, from_checkpoint, checkpoint_id, needs_summary_retry)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                         messages_removed, from_checkpoint, checkpoint_id, needs_summary_retry,
+		                         kind, depth, source_message_ids, child_compaction_ids,
+		                         earliest_message_at, latest_message_at, source_token_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		comp.ID, sessionKey, nullString(comp.ParentID), comp.Timestamp.Unix(),
 		comp.Summary, nullString(comp.FirstKeptEntryID), comp.TokensBefore, comp.TokensAfter,
 		comp.MessagesRemoved, comp.FromCheckpoint, nullString(comp.CheckpointID), comp.NeedsSummaryRetry,
+		nullString(string(comp.Kind)), comp.Depth, nullString(string(sourceMessageIDsJSON)), nullString(string(childCompactionIDsJSON)),
+		nullUnixTime(comp.EarliestMessageAt), nullUnixTime(comp.LatestMessageAt), comp.SourceTokenCount,
 	)
 
 	if err != nil {
@@ -753,12 +951,204 @@ func (s *SQLiteStore) AppendCompaction(ctx context.Context, sessionKey string, c
 	return nil
 }
 
+const compactionSelectColumns = `
+	id, session_key, parent_id, timestamp,
+	summary, first_kept_entry_id, tokens_before, tokens_after,
+	messages_removed, from_checkpoint, checkpoint_id, needs_summary_retry,
+	kind, depth, source_message_ids, child_compaction_ids,
+	earliest_message_at, latest_message_at, source_token_count
+`
+
+func scanStoredCompaction(scanner interface{ Scan(dest ...any) error }) (StoredCompaction, error) {
+	var comp StoredCompaction
+	var ts int64
+	var parentID, firstKeptID, checkpointID sql.NullString
+	var kind sql.NullString
+	var sourceMessageIDsJSON, childCompactionIDsJSON sql.NullString
+	var earliestAt, latestAt sql.NullInt64
+
+	err := scanner.Scan(
+		&comp.ID, &comp.SessionKey, &parentID, &ts,
+		&comp.Summary, &firstKeptID, &comp.TokensBefore, &comp.TokensAfter,
+		&comp.MessagesRemoved, &comp.FromCheckpoint, &checkpointID, &comp.NeedsSummaryRetry,
+		&kind, &comp.Depth, &sourceMessageIDsJSON, &childCompactionIDsJSON,
+		&earliestAt, &latestAt, &comp.SourceTokenCount,
+	)
+	if err != nil {
+		return StoredCompaction{}, err
+	}
+
+	comp.Timestamp = time.Unix(ts, 0).UTC()
+	comp.ParentID = parentID.String
+	comp.FirstKeptEntryID = firstKeptID.String
+	comp.CheckpointID = checkpointID.String
+	comp.Kind = CompactionKind(kind.String)
+	if comp.SourceMessageIDs, err = parseStringSliceJSON(sourceMessageIDsJSON); err != nil {
+		return StoredCompaction{}, fmt.Errorf("parse source_message_ids for %s: %w", comp.ID, err)
+	}
+	if comp.ChildCompactionIDs, err = parseStringSliceJSON(childCompactionIDsJSON); err != nil {
+		return StoredCompaction{}, fmt.Errorf("parse child_compaction_ids for %s: %w", comp.ID, err)
+	}
+	if earliestAt.Valid {
+		t := time.Unix(earliestAt.Int64, 0).UTC()
+		comp.EarliestMessageAt = &t
+	}
+	if latestAt.Valid {
+		t := time.Unix(latestAt.Int64, 0).UTC()
+		comp.LatestMessageAt = &t
+	}
+
+	return comp, nil
+}
+
+func parseStringSliceJSON(raw sql.NullString) ([]string, error) {
+	if !raw.Valid || raw.String == "" {
+		return nil, nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw.String), &values); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func nullUnixTime(t *time.Time) interface{} {
+	if t == nil || t.IsZero() {
+		return nil
+	}
+	return t.Unix()
+}
+
+func (s *SQLiteStore) needsCompactionBackfill(comp *StoredCompaction) bool {
+	if !s.config.LCMEnabled || comp == nil {
+		return false
+	}
+	if comp.Kind != "" || len(comp.SourceMessageIDs) > 0 || len(comp.ChildCompactionIDs) > 0 {
+		return false
+	}
+	if comp.EarliestMessageAt != nil || comp.LatestMessageAt != nil || comp.SourceTokenCount > 0 {
+		return false
+	}
+	return comp.FirstKeptEntryID != ""
+}
+
+func (s *SQLiteStore) maybeBackfillCompaction(ctx context.Context, comp *StoredCompaction) error {
+	if !s.needsCompactionBackfill(comp) {
+		return nil
+	}
+
+	start := time.Now()
+	if err := s.backfillCompactionDAG(ctx, comp.ID); err != nil {
+		L_warn("lcm: backfill failed, falling back to minimal XML", "id", comp.ID, "error", err)
+		return err
+	}
+
+	refreshed, err := s.getCompactionRaw(ctx, comp.ID)
+	if err != nil {
+		return err
+	}
+	if refreshed != nil {
+		*comp = *refreshed
+	}
+	L_info("lcm: backfilled compaction DAG fields", "id", comp.ID, "sourceMessages", len(comp.SourceMessageIDs), "durationMs", time.Since(start).Milliseconds())
+	return nil
+}
+
+func (s *SQLiteStore) getCompactionRaw(ctx context.Context, compactionID string) (*StoredCompaction, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT `+compactionSelectColumns+`
+		FROM compactions
+		WHERE id = ?
+	`, compactionID)
+	comp, err := scanStoredCompaction(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &comp, nil
+}
+
+func (s *SQLiteStore) backfillCompactionDAG(ctx context.Context, compactionID string) error {
+	comp, err := s.getCompactionRaw(ctx, compactionID)
+	if err != nil {
+		return err
+	}
+	if comp == nil || !s.needsCompactionBackfill(comp) {
+		return nil
+	}
+
+	prevCompaction, err := s.getPreviousCompactionRaw(ctx, comp.SessionKey, comp.Timestamp)
+	if err != nil {
+		return err
+	}
+
+	var startAfterID string
+	if prevCompaction != nil {
+		startAfterID = prevCompaction.FirstKeptEntryID
+	}
+
+	messages, err := s.GetMessagesInRange(ctx, comp.SessionKey, startAfterID, comp.FirstKeptEntryID)
+	if err != nil {
+		return err
+	}
+
+	var (
+		sourceIDs    []string
+		earliestAt   *time.Time
+		latestAt     *time.Time
+		sourceTokens int
+	)
+	if len(messages) > 0 {
+		sourceIDs = make([]string, 0, len(messages))
+		for i := range messages {
+			sourceIDs = append(sourceIDs, messages[i].ID)
+			ts := messages[i].Timestamp.UTC()
+			if earliestAt == nil || ts.Before(*earliestAt) {
+				earliestAt = cloneTimePtr(&ts)
+			}
+			if latestAt == nil || ts.After(*latestAt) {
+				latestAt = cloneTimePtr(&ts)
+			}
+		}
+		sourceTokens = estimateStoredMessageTokens(messages)
+	}
+
+	return s.UpdateCompactionDAG(ctx, comp.ID, CompactionDAGUpdate{
+		Kind:              CompactionKindLeaf,
+		Depth:             0,
+		SourceMessageIDs:  sourceIDs,
+		EarliestMessageAt: earliestAt,
+		LatestMessageAt:   latestAt,
+		SourceTokenCount:  sourceTokens,
+	})
+}
+
+func estimateStoredMessageTokens(messages []StoredMessage) int {
+	estimator := GetTokenEstimator()
+	total := 0
+	for i := range messages {
+		msg := Message{
+			ID:        messages[i].ID,
+			Role:      messages[i].Role,
+			Content:   messages[i].Content,
+			Timestamp: messages[i].Timestamp,
+			ToolName:  messages[i].ToolName,
+			ToolInput: messages[i].ToolInput,
+		}
+		if messages[i].Role == "tool_result" && messages[i].ToolResult != "" {
+			msg.Content = messages[i].ToolResult
+		}
+		total += estimator.EstimateMessageTokens(&msg)
+	}
+	return total
+}
+
 // GetCompactions returns all compactions for a session
 func (s *SQLiteStore) GetCompactions(ctx context.Context, sessionKey string) ([]StoredCompaction, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, session_key, parent_id, timestamp,
-		       summary, first_kept_entry_id, tokens_before, tokens_after,
-		       messages_removed, from_checkpoint, checkpoint_id
+		SELECT `+compactionSelectColumns+`
 		FROM compactions
 		WHERE session_key = ?
 		ORDER BY timestamp ASC
@@ -770,23 +1160,13 @@ func (s *SQLiteStore) GetCompactions(ctx context.Context, sessionKey string) ([]
 
 	var compactions []StoredCompaction
 	for rows.Next() {
-		var comp StoredCompaction
-		var ts int64
-		var parentID, firstKeptID, checkpointID sql.NullString
-
-		if err := rows.Scan(
-			&comp.ID, &comp.SessionKey, &parentID, &ts,
-			&comp.Summary, &firstKeptID, &comp.TokensBefore, &comp.TokensAfter,
-			&comp.MessagesRemoved, &comp.FromCheckpoint, &checkpointID,
-		); err != nil {
+		comp, err := scanStoredCompaction(rows)
+		if err != nil {
 			return nil, err
 		}
-
-		comp.Timestamp = time.Unix(ts, 0)
-		comp.ParentID = parentID.String
-		comp.FirstKeptEntryID = firstKeptID.String
-		comp.CheckpointID = checkpointID.String
-
+		if err := s.maybeBackfillCompaction(ctx, &comp); err != nil {
+			L_debug("lcm: compaction read continuing without DAG metadata", "id", comp.ID, "error", err)
+		}
 		compactions = append(compactions, comp)
 	}
 
@@ -795,72 +1175,144 @@ func (s *SQLiteStore) GetCompactions(ctx context.Context, sessionKey string) ([]
 
 // GetLatestCompaction returns the most recent compaction for a session, or nil if none exist.
 func (s *SQLiteStore) GetLatestCompaction(ctx context.Context, sessionKey string) (*StoredCompaction, error) {
-	var comp StoredCompaction
-	var ts int64
-	var parentID, firstKeptID, checkpointID sql.NullString
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, session_key, parent_id, timestamp,
-		       summary, first_kept_entry_id, tokens_before, tokens_after,
-		       messages_removed, from_checkpoint, checkpoint_id, needs_summary_retry
+	row := s.db.QueryRowContext(ctx, `
+		SELECT `+compactionSelectColumns+`
 		FROM compactions
 		WHERE session_key = ?
 		ORDER BY timestamp DESC
 		LIMIT 1
-	`, sessionKey).Scan(
-		&comp.ID, &comp.SessionKey, &parentID, &ts,
-		&comp.Summary, &firstKeptID, &comp.TokensBefore, &comp.TokensAfter,
-		&comp.MessagesRemoved, &comp.FromCheckpoint, &checkpointID, &comp.NeedsSummaryRetry,
-	)
-
+	`, sessionKey)
+	comp, err := scanStoredCompaction(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-
-	comp.Timestamp = time.Unix(ts, 0)
-	comp.ParentID = parentID.String
-	comp.FirstKeptEntryID = firstKeptID.String
-	comp.CheckpointID = checkpointID.String
-
+	if err := s.maybeBackfillCompaction(ctx, &comp); err != nil {
+		L_debug("lcm: latest compaction read continuing without DAG metadata", "id", comp.ID, "error", err)
+	}
 	return &comp, nil
+}
+
+func (s *SQLiteStore) GetCompaction(ctx context.Context, compactionID string) (*StoredCompaction, error) {
+	comp, err := s.getCompactionRaw(ctx, compactionID)
+	if err != nil || comp == nil {
+		return comp, err
+	}
+	if err := s.maybeBackfillCompaction(ctx, comp); err != nil {
+		L_debug("lcm: compaction read continuing without DAG metadata", "id", comp.ID, "error", err)
+	}
+	return comp, nil
+}
+
+func (s *SQLiteStore) GetCompactionsByDepth(ctx context.Context, sessionKey string, depth int, kind CompactionKind) ([]StoredCompaction, error) {
+	query := `
+		SELECT ` + compactionSelectColumns + `
+		FROM compactions
+		WHERE session_key = ? AND depth = ?
+	`
+	args := []interface{}{sessionKey, depth}
+	if kind != "" {
+		query += ` AND kind = ?`
+		args = append(args, string(kind))
+	}
+	query += ` ORDER BY timestamp ASC`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var compactions []StoredCompaction
+	for rows.Next() {
+		comp, err := scanStoredCompaction(rows)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.maybeBackfillCompaction(ctx, &comp); err != nil {
+			L_debug("lcm: compaction-by-depth read continuing without DAG metadata", "id", comp.ID, "error", err)
+		}
+		compactions = append(compactions, comp)
+	}
+	return compactions, rows.Err()
+}
+
+func (s *SQLiteStore) GetCompactionChildren(ctx context.Context, compactionID string) ([]StoredCompaction, error) {
+	parent, err := s.GetCompaction(ctx, compactionID)
+	if err != nil {
+		return nil, err
+	}
+	if parent == nil || len(parent.ChildCompactionIDs) == 0 {
+		return nil, nil
+	}
+
+	children := make([]StoredCompaction, 0, len(parent.ChildCompactionIDs))
+	for _, childID := range parent.ChildCompactionIDs {
+		child, err := s.GetCompaction(ctx, childID)
+		if err != nil {
+			return nil, err
+		}
+		if child != nil {
+			children = append(children, *child)
+		}
+	}
+	return children, nil
+}
+
+func (s *SQLiteStore) SearchCompactionsFTS(ctx context.Context, sessionKey, query string, limit int, mode CompactionSearchMode, sort CompactionSearchSort) ([]CompactionSearchResult, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	switch mode {
+	case "", CompactionSearchModeFTS:
+		return s.searchCompactionsFTS(ctx, sessionKey, query, limit, sort)
+	case CompactionSearchModeRegex:
+		return s.searchCompactionsRegex(ctx, sessionKey, query, limit)
+	default:
+		return nil, fmt.Errorf("unknown compaction search mode: %s", mode)
+	}
+}
+
+func (s *SQLiteStore) UpdateCompactionDAG(ctx context.Context, compactionID string, dag CompactionDAGUpdate) error {
+	sourceMessageIDsJSON, _ := json.Marshal(dag.SourceMessageIDs)
+	childCompactionIDsJSON, _ := json.Marshal(dag.ChildCompactionIDs)
+
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE compactions
+		SET kind = ?, depth = ?, source_message_ids = ?, child_compaction_ids = ?,
+		    earliest_message_at = ?, latest_message_at = ?, source_token_count = ?
+		WHERE id = ?
+	`,
+		nullString(string(dag.Kind)), dag.Depth, nullString(string(sourceMessageIDsJSON)), nullString(string(childCompactionIDsJSON)),
+		nullUnixTime(dag.EarliestMessageAt), nullUnixTime(dag.LatestMessageAt), dag.SourceTokenCount, compactionID,
+	)
+	if err != nil {
+		return fmt.Errorf("update compaction DAG failed: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	L_debug("lcm: compaction DAG updated", "id", compactionID, "rowsAffected", rows, "kind", dag.Kind, "depth", dag.Depth)
+	return nil
 }
 
 // GetPendingSummaryRetry returns a compaction that needs summary retry (for background processing)
 // Returns nil if no pending retries found
 func (s *SQLiteStore) GetPendingSummaryRetry(ctx context.Context) (*StoredCompaction, error) {
-	var comp StoredCompaction
-	var ts int64
-	var parentID, firstKeptID, checkpointID sql.NullString
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, session_key, parent_id, timestamp,
-		       summary, first_kept_entry_id, tokens_before, tokens_after,
-		       messages_removed, from_checkpoint, checkpoint_id, needs_summary_retry
+	row := s.db.QueryRowContext(ctx, `
+		SELECT `+compactionSelectColumns+`
 		FROM compactions
 		WHERE needs_summary_retry = 1
 		ORDER BY timestamp ASC
 		LIMIT 1
-	`).Scan(
-		&comp.ID, &comp.SessionKey, &parentID, &ts,
-		&comp.Summary, &firstKeptID, &comp.TokensBefore, &comp.TokensAfter,
-		&comp.MessagesRemoved, &comp.FromCheckpoint, &checkpointID, &comp.NeedsSummaryRetry,
-	)
-
+	`)
+	comp, err := scanStoredCompaction(row)
 	if err == sql.ErrNoRows {
 		return nil, nil // No pending retries
 	}
 	if err != nil {
 		return nil, err
 	}
-
-	comp.Timestamp = time.Unix(ts, 0)
-	comp.ParentID = parentID.String
-	comp.FirstKeptEntryID = firstKeptID.String
-	comp.CheckpointID = checkpointID.String
-
 	return &comp, nil
 }
 
@@ -979,37 +1431,160 @@ func (s *SQLiteStore) GetMessagesInRange(ctx context.Context, sessionKey string,
 
 // GetPreviousCompaction returns the compaction before the given one (for finding message range)
 func (s *SQLiteStore) GetPreviousCompaction(ctx context.Context, sessionKey string, beforeTimestamp time.Time) (*StoredCompaction, error) {
-	var comp StoredCompaction
-	var ts int64
-	var parentID, firstKeptID, checkpointID sql.NullString
+	comp, err := s.getPreviousCompactionRaw(ctx, sessionKey, beforeTimestamp)
+	if err != nil || comp == nil {
+		return comp, err
+	}
+	if err := s.maybeBackfillCompaction(ctx, comp); err != nil {
+		L_debug("lcm: previous compaction read continuing without DAG metadata", "id", comp.ID, "error", err)
+	}
+	return comp, nil
+}
 
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, session_key, parent_id, timestamp,
-		       summary, first_kept_entry_id, tokens_before, tokens_after,
-		       messages_removed, from_checkpoint, checkpoint_id, needs_summary_retry
+func (s *SQLiteStore) getPreviousCompactionRaw(ctx context.Context, sessionKey string, beforeTimestamp time.Time) (*StoredCompaction, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT `+compactionSelectColumns+`
 		FROM compactions
 		WHERE session_key = ? AND timestamp < ?
 		ORDER BY timestamp DESC
 		LIMIT 1
-	`, sessionKey, beforeTimestamp.Unix()).Scan(
-		&comp.ID, &comp.SessionKey, &parentID, &ts,
-		&comp.Summary, &firstKeptID, &comp.TokensBefore, &comp.TokensAfter,
-		&comp.MessagesRemoved, &comp.FromCheckpoint, &checkpointID, &comp.NeedsSummaryRetry,
-	)
-
+	`, sessionKey, beforeTimestamp.Unix())
+	comp, err := scanStoredCompaction(row)
 	if err == sql.ErrNoRows {
-		return nil, nil // No previous compaction
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-
-	comp.Timestamp = time.Unix(ts, 0)
-	comp.ParentID = parentID.String
-	comp.FirstKeptEntryID = firstKeptID.String
-	comp.CheckpointID = checkpointID.String
-
 	return &comp, nil
+}
+
+func (s *SQLiteStore) searchCompactionsFTS(ctx context.Context, sessionKey, query string, limit int, sort CompactionSearchSort) ([]CompactionSearchResult, error) {
+	var orderBy string
+	switch sort {
+	case CompactionSearchSortRelevance:
+		orderBy = "score ASC, c.timestamp DESC"
+	case CompactionSearchSortHybrid:
+		orderBy = "score ASC, c.timestamp DESC"
+	case "", CompactionSearchSortRecency:
+		orderBy = "c.timestamp DESC, score ASC"
+	default:
+		return nil, fmt.Errorf("unknown compaction search sort: %s", sort)
+	}
+
+	//nolint:gosec // orderBy is internal, values are parameterized
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT %s, bm25(compactions_fts) AS score
+		FROM compactions_fts
+		JOIN compactions c ON c.rowid = compactions_fts.rowid
+		WHERE c.session_key = ? AND compactions_fts MATCH ?
+		ORDER BY %s
+		LIMIT ?
+	`, compactionSelectColumns, orderBy), sessionKey, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []CompactionSearchResult
+	for rows.Next() {
+		comp, score, err := scanStoredCompactionWithScore(rows)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.maybeBackfillCompaction(ctx, &comp); err != nil {
+			L_debug("lcm: FTS result continuing without DAG metadata", "id", comp.ID, "error", err)
+		}
+		results = append(results, CompactionSearchResult{
+			Compaction:   comp,
+			MatchSource:  "fts",
+			Relevance:    score,
+			MatchedQuery: query,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func scanStoredCompactionWithScore(scanner interface{ Scan(dest ...any) error }) (StoredCompaction, float64, error) {
+	var score float64
+	comp, err := scanStoredCompaction(scoreScanner{scanner: scanner, score: &score})
+	return comp, score, err
+}
+
+type scoreScanner struct {
+	scanner interface{ Scan(dest ...any) error }
+	score   *float64
+}
+
+func (s scoreScanner) Scan(dest ...any) error {
+	dest = append(dest, s.score)
+	return s.scanner.Scan(dest...)
+}
+
+func (s *SQLiteStore) searchCompactionsRegex(ctx context.Context, sessionKey, query string, limit int) ([]CompactionSearchResult, error) {
+	re, err := regexp.Compile(query)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+compactionSelectColumns+`
+		FROM compactions
+		WHERE session_key = ?
+		ORDER BY timestamp DESC
+	`, sessionKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []CompactionSearchResult
+	for rows.Next() {
+		comp, err := scanStoredCompaction(rows)
+		if err != nil {
+			return nil, err
+		}
+		if !re.MatchString(comp.Summary) {
+			continue
+		}
+		if err := s.maybeBackfillCompaction(ctx, &comp); err != nil {
+			L_debug("lcm: regex result continuing without DAG metadata", "id", comp.ID, "error", err)
+		}
+		results = append(results, CompactionSearchResult{
+			Compaction:   comp,
+			MatchSource:  "regex",
+			MatchedQuery: query,
+		})
+		if len(results) >= limit {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (s *SQLiteStore) GetCompactionDAGStats(ctx context.Context, sessionKey string) (CompactionDAGStats, error) {
+	compactions, err := s.GetCompactions(ctx, sessionKey)
+	if err != nil {
+		return CompactionDAGStats{}, err
+	}
+
+	stats := buildCompactionDAGStats(compactions)
+
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM compactions_fts
+		JOIN compactions c ON c.rowid = compactions_fts.rowid
+		WHERE c.session_key = ?
+	`, sessionKey).Scan(&stats.FTSRows); err != nil {
+		return CompactionDAGStats{}, err
+	}
+
+	return stats, nil
 }
 
 // DeleteOrphanedToolMessages deletes ALL tool_use and tool_result messages from a session

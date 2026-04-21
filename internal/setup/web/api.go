@@ -19,6 +19,7 @@ import (
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/media"
 	"github.com/roelfdiedericks/goclaw/internal/metadata"
+	"github.com/roelfdiedericks/goclaw/internal/session"
 	setupcore "github.com/roelfdiedericks/goclaw/internal/setup"
 	"github.com/roelfdiedericks/goclaw/internal/voicellm"
 )
@@ -350,6 +351,17 @@ func (a *API) saveSectionConfig(w http.ResponseWriter, r *http.Request, section 
 		}
 		payload = runtimePayload
 	}
+	if section.ID == "session" {
+		runtimePayload, err := normalizeSessionSectionPayload(payload)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, APIResponse{
+				Success: false,
+				Message: err.Error(),
+			})
+			return
+		}
+		payload = runtimePayload
+	}
 
 	// Enforce root payload allowlist for composite root-backed FormDef sections.
 	if section.ConfigPath == "/" && section.Type == SectionTypeFormDef {
@@ -388,7 +400,6 @@ func (a *API) saveSectionConfig(w http.ResponseWriter, r *http.Request, section 
 		})
 		return
 	}
-
 	// Save config to the same path it was loaded from
 	savePath := a.resolveSavePath(result)
 
@@ -429,6 +440,27 @@ func expandVoiceLLMSectionPayload(payload map[string]interface{}) (map[string]in
 	var runtimePayload map[string]interface{}
 	if err := json.Unmarshal(runtimeData, &runtimePayload); err != nil {
 		return nil, fmt.Errorf("failed to decode VoiceLLM runtime payload: %w", err)
+	}
+	return runtimePayload, nil
+}
+
+func normalizeSessionSectionPayload(payload map[string]interface{}) (map[string]interface{}, error) {
+	var sessionCfg session.SessionConfig
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal session payload: %w", err)
+	}
+	if err := json.Unmarshal(data, &sessionCfg); err != nil {
+		return nil, fmt.Errorf("invalid session payload: %w", err)
+	}
+	sessionCfg = session.NormalizeSessionConfig(sessionCfg)
+	runtimeData, err := json.Marshal(sessionCfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal session runtime config: %w", err)
+	}
+	var runtimePayload map[string]interface{}
+	if err := json.Unmarshal(runtimeData, &runtimePayload); err != nil {
+		return nil, fmt.Errorf("failed to decode session runtime payload: %w", err)
 	}
 	return runtimePayload, nil
 }

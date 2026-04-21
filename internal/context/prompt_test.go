@@ -175,3 +175,64 @@ func TestBuildAgentExtractionSectionUsesRecallFirstGuidance(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildSystemPromptIncludesLCMSectionsOnlyWhenEnabled(t *testing.T) {
+	base := PromptParams{
+		WorkspaceDir:   "/tmp/workspace",
+		Channel:        "telegram",
+		WorkspaceFiles: []WorkspaceFile{},
+		IncludeMemory:  true,
+	}
+
+	prompt := BuildSystemPrompt(base)
+	if strings.Contains(prompt, "## Lossless Recall Policy") {
+		t.Fatalf("did not expect LCM policy when disabled")
+	}
+
+	prompt = BuildSystemPrompt(PromptParams{
+		WorkspaceDir:        "/tmp/workspace",
+		Channel:             "telegram",
+		WorkspaceFiles:      []WorkspaceFile{},
+		IncludeMemory:       true,
+		LCMEnabled:          true,
+		CompactionCount:     1,
+		CompactionMaxDepth:  2,
+		CompactionCondensed: 2,
+	})
+	if !strings.Contains(prompt, "## Lossless Recall Policy") {
+		t.Fatalf("expected LCM policy when enabled")
+	}
+	if !strings.Contains(prompt, "## Compacted Conversation Context") {
+		t.Fatalf("expected dynamic compacted-context guidance when summaries are present")
+	}
+	if !strings.Contains(prompt, "Deeply compacted context: expand before asserting specifics.") {
+		t.Fatalf("expected heavy dynamic compacted-context guidance")
+	}
+}
+
+func TestLCMStaticPolicyReferencesRealMemoryGraphToolNames(t *testing.T) {
+	prompt := BuildSystemPrompt(PromptParams{
+		WorkspaceDir:    "/tmp/workspace",
+		Channel:         "telegram",
+		WorkspaceFiles:  []WorkspaceFile{},
+		IncludeMemory:   true,
+		LCMEnabled:      true,
+		CompactionCount: 1,
+	})
+
+	// Positive: real tool names must appear.
+	for _, name := range []string{"memory_graph_store", "memory_graph_recall", "memory_graph_query"} {
+		if !strings.Contains(prompt, name) {
+			t.Fatalf("expected LCM policy to reference %q", name)
+		}
+	}
+
+	// Negative: the invented short names must not appear as standalone tool names.
+	// We check the backtick-bounded forms to avoid matching substrings of the real
+	// names (e.g. "memory_recall" is a suffix of "memory_graph_recall").
+	for _, bad := range []string{"`memory_store`", "`memory_recall`", "`memory_query`"} {
+		if strings.Contains(prompt, bad) {
+			t.Fatalf("expected LCM policy NOT to reference invented tool %s", bad)
+		}
+	}
+}

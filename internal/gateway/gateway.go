@@ -332,11 +332,16 @@ func New(cfg *config.Config, configPath string, users *user.Registry, registry *
 		storeType = "sqlite" // Default
 	}
 
+	lcmCfg := session.NormalizeLCMConfig(cfg.Session.Summarization.Compaction.LCM)
+
 	// Initialize session manager with config
 	managerCfg := &session.ManagerConfig{
-		StoreType:  storeType,
-		StorePath:  cfg.Session.StorePath,
-		WorkingDir: cfg.Gateway.WorkingDir,
+		StoreType:                   storeType,
+		StorePath:                   cfg.Session.StorePath,
+		WorkingDir:                  cfg.Gateway.WorkingDir,
+		LCMEnabled:                  lcmCfg.Enabled,
+		LCMSummaryInjectionMode:     lcmCfg.SummaryInjectionMode,
+		LCMMaxInjectedSummaryTokens: lcmCfg.MaxInjectedSummaryTokens,
 	}
 	if cfg.Session.Inherit {
 		managerCfg.SessionsDir = cfg.Session.InheritPath
@@ -389,22 +394,40 @@ func New(cfg *config.Config, configPath string, users *user.Registry, registry *
 
 	// Initialize compaction manager
 	compactorCfg := &session.CompactionManagerConfig{
-		ReserveTokens:        sumCfg.Compaction.ReserveTokens,
-		MaxMessages:          sumCfg.Compaction.MaxMessages,
-		PreferCheckpoint:     sumCfg.Compaction.PreferCheckpoint,
-		KeepPercent:          sumCfg.Compaction.KeepPercent,
-		MinMessages:          sumCfg.Compaction.MinMessages,
-		RetryIntervalSeconds: sumCfg.RetryIntervalSeconds,
+		ReserveTokens:            sumCfg.Compaction.ReserveTokens,
+		MaxMessages:              sumCfg.Compaction.MaxMessages,
+		PreferCheckpoint:         sumCfg.Compaction.PreferCheckpoint,
+		KeepPercent:              sumCfg.Compaction.KeepPercent,
+		MinMessages:              sumCfg.Compaction.MinMessages,
+		FreshTailCount:           sumCfg.Compaction.FreshTailCount,
+		FreshTailMaxTokens:       sumCfg.Compaction.FreshTailMaxTokens,
+		RetryIntervalSeconds:     sumCfg.RetryIntervalSeconds,
+		LCMEnabled:               lcmCfg.Enabled,
+		Preset:                   lcmCfg.Preset,
+		SummaryInjectionMode:     lcmCfg.SummaryInjectionMode,
+		MaxInjectedSummaryTokens: lcmCfg.MaxInjectedSummaryTokens,
+		SummaryMaxOverageFactor:  lcmCfg.SummaryMaxOverageFactor,
+		LeafMinFanout:            sumCfg.Compaction.LeafMinFanout,
+		CondensedMinFanout:       sumCfg.Compaction.CondensedMinFanout,
+		IncrementalMaxDepth:      sumCfg.Compaction.IncrementalMaxDepth,
+		LeafTargetTokens:         sumCfg.Compaction.LeafTargetTokens,
+		CondensedTargetTokens:    sumCfg.Compaction.CondensedTargetTokens,
 	}
 	g.compactor = session.NewCompactionManager(compactorCfg)
 	g.compactor.SetStore(g.sessions.GetStore())
+	g.compactor.SetSessionLookup(g.sessions.GetIfExists)
 	L_debug("session: compaction manager configured",
 		"reserveTokens", sumCfg.Compaction.ReserveTokens,
 		"maxMessages", sumCfg.Compaction.MaxMessages,
 		"preferCheckpoint", sumCfg.Compaction.PreferCheckpoint,
 		"keepPercent", sumCfg.Compaction.KeepPercent,
 		"minMessages", sumCfg.Compaction.MinMessages,
-		"retryInterval", sumCfg.RetryIntervalSeconds)
+		"retryInterval", sumCfg.RetryIntervalSeconds,
+		"lcmEnabled", lcmCfg.Enabled,
+		"summaryInjectionMode", lcmCfg.SummaryInjectionMode,
+		"maxInjectedSummaryTokens", lcmCfg.MaxInjectedSummaryTokens,
+		"summaryMaxOverageFactor", lcmCfg.SummaryMaxOverageFactor,
+		"preset", lcmCfg.Preset)
 
 	allowList := g.parallelToolAllowlistNames()
 	allowSource := "default"
@@ -1440,6 +1463,17 @@ func (g *Gateway) Start(ctx context.Context) {
 	// Start skill watcher for live reloads (skills already loaded in New)
 	if g.skillManager != nil {
 		g.skillManager.StartWatcher()
+	}
+
+	// Self-heal any session-row drift (missing rows for keys that exist in
+	// the compactions table, stale compaction_count, etc.) before the
+	// compactor starts iterating. This is what makes sure historical
+	// compactions keyed to `primary` actually become visible to
+	// ListSessions and stop lying to the /session command.
+	if g.sessions != nil {
+		if err := g.sessions.ReconcileSessionRowsFromCompactions(ctx); err != nil {
+			L_warn("session: reconcile failed", "error", err)
+		}
 	}
 
 	// Start compaction manager background retry
@@ -2718,6 +2752,10 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		ParallelExecution:     g.config.Gateway.ToolExecution.ParallelEnabled,
 		ParallelMaxConcurrent: g.parallelToolMaxConcurrent(),
 		ParallelEligibleTools: g.parallelToolAllowlistNames(),
+		LCMEnabled:            g.config.Session.Summarization.Compaction.LCM.Enabled,
+		CompactionCount:       sess.CompactionCount,
+		CompactionMaxDepth:    sess.CompactionMaxDepth,
+		CompactionCondensed:   sess.CompactionCondensed,
 	}
 
 	// Inject bulletins into prompt params based on injection mode (only if not empty)
@@ -3815,6 +3853,8 @@ type SessionInfo struct {
 	UsagePercent    float64
 	CompactionCount int
 	LastCompaction  *session.StoredCompaction
+	LCMEnabled      bool
+	LCMStats        *session.CompactionDAGStats
 }
 
 // ForceCompact triggers compaction for a session regardless of token threshold
@@ -3864,14 +3904,20 @@ func (g *Gateway) GetSessionInfo(ctx context.Context, sessionKey string) (*Sessi
 		MaxTokens:       sess.GetMaxTokens(),
 		UsagePercent:    sess.GetContextUsage() * 100,
 		CompactionCount: sess.CompactionCount,
+		LCMEnabled:      g.config.Session.Summarization.Compaction.LCM.Enabled,
 	}
 
 	// Get last compaction from store
 	store := g.sessions.GetStore()
 	if store != nil {
-		compactions, err := store.GetCompactions(ctx, session.PrimarySession)
+		compactions, err := store.GetCompactions(ctx, sessionKey)
 		if err == nil && len(compactions) > 0 {
 			info.LastCompaction = &compactions[len(compactions)-1]
+		}
+	}
+	if g.compactor != nil {
+		if stats, err := g.compactor.BuildDAGStatsForSession(ctx, sessionKey); err == nil {
+			info.LCMStats = &stats
 		}
 	}
 
@@ -3900,6 +3946,8 @@ func (g *Gateway) GetSessionInfoForCommands(ctx context.Context, sessionKey stri
 		UsagePercent:    info.UsagePercent,
 		CompactionCount: info.CompactionCount,
 		LastCompaction:  info.LastCompaction,
+		LCMEnabled:      info.LCMEnabled,
+		LCMStats:        info.LCMStats,
 	}, nil
 }
 
@@ -4495,6 +4543,7 @@ func (g *Gateway) BuildSystemPromptForVoice(ctx context.Context, params VoicePro
 	var bulletinCfg memorygraph.BulletinConfig
 	agentExtraction := false
 	userID := ""
+	voiceSession := g.sessions.GetPrimary()
 	if params.User != nil {
 		userID = params.User.ID
 	}
@@ -4534,6 +4583,12 @@ func (g *Gateway) BuildSystemPromptForVoice(ctx context.Context, params VoicePro
 		ParallelExecution:     g.config.Gateway.ToolExecution.ParallelEnabled,
 		ParallelMaxConcurrent: g.parallelToolMaxConcurrent(),
 		ParallelEligibleTools: g.parallelToolAllowlistNames(),
+		LCMEnabled:            g.config.Session.Summarization.Compaction.LCM.Enabled,
+	}
+	if voiceSession != nil {
+		promptParams.CompactionCount = voiceSession.CompactionCount
+		promptParams.CompactionMaxDepth = voiceSession.CompactionMaxDepth
+		promptParams.CompactionCondensed = voiceSession.CompactionCondensed
 	}
 
 	// Inject bulletins based on mode
@@ -4873,6 +4928,13 @@ func (g *Gateway) Users() *user.Registry {
 // SessionManager returns the session manager
 func (g *Gateway) SessionManager() *session.Manager {
 	return g.sessions
+}
+
+// Compactor exposes the gateway's compaction manager for callers that need
+// read-only access to LCM state (e.g. the transcript.stats agent tool).
+// Returns nil when the gateway was constructed without a compactor.
+func (g *Gateway) Compactor() *session.CompactionManager {
+	return g.compactor
 }
 
 // RunAgentForSession triggers an agent run for a specific session.

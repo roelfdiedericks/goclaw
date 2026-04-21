@@ -31,14 +31,14 @@ func TestLinuxExecBackendBindsAutodocsRootsByMode(t *testing.T) {
 	}, workspaceDir)
 
 	tests := []struct {
-		name              string
-		mode              string
-		extraBind         []string
-		extraRo           []string
-		expectBind        string
-		expectRo          string
-		expectHomeBind    bool
-		expectHomeTmpfs   bool
+		name            string
+		mode            string
+		extraBind       []string
+		extraRo         []string
+		expectBind      string
+		expectRo        string
+		expectHomeBind  bool
+		expectHomeTmpfs bool
 	}{
 		{
 			name:            "autodocs-read uses ro bind",

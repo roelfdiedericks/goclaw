@@ -294,11 +294,11 @@ func TestExecuteJobDelegatedPathPreservesResultSemantics(t *testing.T) {
 				state:  delegatedrun.RunStateCompleted,
 			}
 			svc := &Service{
-				store:           store,
-				history:         NewHistoryManager(filepath.Join(tmp, "runs")),
-				gateway:         gw,
-				runner:          runner,
-				registry:        delegatedrun.NewMemoryRegistry(),
+				store:            store,
+				history:          NewHistoryManager(filepath.Join(tmp, "runs")),
+				gateway:          gw,
+				runner:           runner,
+				registry:         delegatedrun.NewMemoryRegistry(),
 				delegatedEnabled: true,
 			}
 

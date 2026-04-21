@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/roelfdiedericks/goclaw/internal/contentguard"
 	. "github.com/roelfdiedericks/goclaw/internal/logging"
 )
@@ -38,8 +39,11 @@ type SessionInfo struct {
 // ManagerConfig holds configuration for the session manager
 type ManagerConfig struct {
 	// Storage backend
-	StoreType string // "jsonl" or "sqlite"
-	StorePath string // Path for storage (DB file or sessions dir)
+	StoreType                   string // "jsonl" or "sqlite"
+	StorePath                   string // Path for storage (DB file or sessions dir)
+	LCMEnabled                  bool
+	LCMSummaryInjectionMode     string
+	LCMMaxInjectedSummaryTokens int
 
 	// OpenClaw session inheritance (read-only)
 	SessionsDir string // Directory for OpenClaw session files (for watching)
@@ -85,6 +89,7 @@ func NewManagerWithConfig(cfg *ManagerConfig) (*Manager, error) {
 			Path:        cfg.StorePath,
 			WALMode:     true,
 			BusyTimeout: 5000,
+			LCMEnabled:  cfg.LCMEnabled,
 		}
 		store, err := NewStore(storeCfg)
 		if err != nil {
@@ -398,31 +403,36 @@ func (m *Manager) loadSQLiteMessages() ([]StoredMessage, *StoredCompaction) {
 
 // applyCompactionContext prepends the compaction summary and sets compaction metadata on the session.
 func (m *Manager) applyCompactionContext(sess *Session, comp *StoredCompaction) {
+	lcmEnabled := false
+	mode := LCMSummaryInjectionModeFrontier
+	maxTokens := defaultLCMBudgetTokens
+	if m.config != nil {
+		lcmEnabled = m.config.LCMEnabled
+		mode = m.config.LCMSummaryInjectionMode
+		maxTokens = m.config.LCMMaxInjectedSummaryTokens
+	}
+
 	if comp == nil {
+		if lcmEnabled {
+			L_warn("lcm: skipping overlay, no latest compaction",
+				"sessionKey", PrimarySession,
+				"lcmEnabled", lcmEnabled)
+		}
 		return
 	}
 
-	if comp.Summary != "" {
-		summaryMsg := Message{
-			ID:        "compaction-summary",
-			Role:      "user",
-			Content:   fmt.Sprintf("[Previous context summary]\n%s", comp.Summary),
-			Source:    "system",
-			Timestamp: comp.Timestamp,
-		}
-		sess.Messages = append([]Message{summaryMsg}, sess.Messages...)
-		L_info("session: prepended compaction summary",
-			"summaryLen", len(comp.Summary),
-			"totalMessages", len(sess.Messages))
-	}
-
-	compID := comp.ID
-	sess.LastRecordID = &compID
+	compactions := []StoredCompaction{*comp}
 	if m.store != nil {
-		if compactions, err := m.store.GetCompactions(context.Background(), PrimarySession); err == nil {
-			sess.CompactionCount = len(compactions)
+		if latestCompaction, loadedCompactions, err := loadCompactionContextFromStore(context.Background(), m.store, PrimarySession); err == nil {
+			if latestCompaction != nil {
+				comp = latestCompaction
+			}
+			if len(loadedCompactions) > 0 {
+				compactions = loadedCompactions
+			}
 		}
 	}
+	applyCompactionContextData(sess, comp, compactions, lcmEnabled, mode, maxTokens)
 }
 
 // storedToMessages converts StoredMessage slice to Message slice.
@@ -740,30 +750,52 @@ func (m *Manager) Close() error {
 	return nil
 }
 
+// ensureSessionRow guarantees a row exists in the sessions table for
+// sessionKey before we write child records (messages, checkpoints,
+// compactions). Without this, the compactions/messages tables would silently
+// accumulate data under keys the sessions table has never heard of — exactly
+// the drift that caused the LCM condensation loop to iterate the wrong keys.
+// If the primary session is initialised and its key matches, we reuse its
+// UUID; otherwise a fresh UUID is generated so every synthesized row has a
+// stable, unique identity.
+func (m *Manager) ensureSessionRow(ctx context.Context, sessionKey string) {
+	if m.store == nil || sessionKey == "" {
+		return
+	}
+	if _, err := m.store.GetSession(ctx, sessionKey); err != ErrSessionNotFound {
+		return
+	}
+
+	now := time.Now()
+	id := uuid.NewString()
+	createdAt := now
+	updatedAt := now
+
+	if primary := m.GetPrimary(); primary != nil && primary.Key == sessionKey {
+		id = primary.ID
+		createdAt = primary.CreatedAt
+		updatedAt = primary.UpdatedAt
+	}
+
+	stored := &StoredSession{
+		Key:       sessionKey,
+		ID:        id,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	}
+	if err := m.store.CreateSession(ctx, stored); err != nil {
+		L_warn("session: failed to create session row in store", "key", sessionKey, "error", err)
+		return
+	}
+	L_debug("session: synthesized sessions row", "key", sessionKey, "id", id)
+}
+
 // PersistMessage writes a message to the storage backend
 func (m *Manager) PersistMessage(ctx context.Context, sessionKey string, msg *StoredMessage) error {
 	if m.store == nil {
 		return nil // No store configured
 	}
-
-	// Ensure session exists in store
-	_, err := m.store.GetSession(ctx, sessionKey)
-	if err == ErrSessionNotFound {
-		// Create session
-		sess := m.GetPrimary()
-		if sess != nil {
-			stored := &StoredSession{
-				Key:       sessionKey,
-				ID:        sess.ID,
-				CreatedAt: sess.CreatedAt,
-				UpdatedAt: sess.UpdatedAt,
-			}
-			if err := m.store.CreateSession(ctx, stored); err != nil {
-				L_warn("session: failed to create session in store", "key", sessionKey, "error", err)
-			}
-		}
-	}
-
+	m.ensureSessionRow(ctx, sessionKey)
 	return m.store.AppendMessage(ctx, sessionKey, msg)
 }
 
@@ -772,6 +804,7 @@ func (m *Manager) PersistCheckpoint(ctx context.Context, sessionKey string, cp *
 	if m.store == nil {
 		return nil
 	}
+	m.ensureSessionRow(ctx, sessionKey)
 	return m.store.AppendCheckpoint(ctx, sessionKey, cp)
 }
 
@@ -780,5 +813,82 @@ func (m *Manager) PersistCompaction(ctx context.Context, sessionKey string, comp
 	if m.store == nil {
 		return nil
 	}
+	m.ensureSessionRow(ctx, sessionKey)
 	return m.store.AppendCompaction(ctx, sessionKey, comp)
+}
+
+// ReconcileSessionRowsFromCompactions performs a one-shot self-heal pass over
+// the sessions/compactions tables. For every session_key that has compaction
+// rows but no matching sessions row (the exact drift that caused the LCM
+// condensation loop to silently skip real work), a synthesized row is
+// created. Additionally, the compaction_count on every existing sessions row
+// is recomputed from the compactions table so stale counters stop lying to
+// the `/session` command and the transcript.stats agent tool.
+//
+// This is cheap (two small queries + a handful of writes), idempotent, and
+// safe to call on every startup.
+func (m *Manager) ReconcileSessionRowsFromCompactions(ctx context.Context) error {
+	if m.store == nil {
+		return nil
+	}
+
+	keys, err := m.store.ListCompactionSessionKeys(ctx)
+	if err != nil {
+		return fmt.Errorf("list compaction session keys: %w", err)
+	}
+
+	created := 0
+	for _, key := range keys {
+		if _, err := m.store.GetSession(ctx, key); err == ErrSessionNotFound {
+			m.ensureSessionRow(ctx, key)
+			created++
+		} else if err != nil {
+			L_warn("session: reconcile GetSession failed", "key", key, "error", err)
+		}
+	}
+
+	// Recompute compaction_count for every session row we can see. We keep
+	// this conservative: if GetSession fails for any reason, we just skip it
+	// rather than guessing.
+	sessions, err := m.store.ListSessions(ctx)
+	if err != nil {
+		return fmt.Errorf("list sessions: %w", err)
+	}
+	updated := 0
+	for _, info := range sessions {
+		stored, err := m.store.GetSession(ctx, info.Key)
+		if err != nil {
+			continue
+		}
+		comps, err := m.store.GetCompactions(ctx, info.Key)
+		if err != nil {
+			continue
+		}
+		realCount := len(comps)
+		if stored.CompactionCount == realCount {
+			continue
+		}
+		L_debug("session: reconcile compaction_count drift",
+			"key", info.Key,
+			"stored", stored.CompactionCount,
+			"real", realCount)
+		stored.CompactionCount = realCount
+		if err := m.store.UpdateSession(ctx, stored); err != nil {
+			L_warn("session: reconcile UpdateSession failed", "key", info.Key, "error", err)
+			continue
+		}
+		updated++
+	}
+
+	if created > 0 || updated > 0 {
+		L_info("session: reconciled session rows",
+			"createdFromCompactions", created,
+			"compactionCountFixed", updated,
+			"compactionSessionKeys", len(keys))
+	} else {
+		L_debug("session: reconcile found no drift",
+			"compactionSessionKeys", len(keys),
+			"sessionRows", len(sessions))
+	}
+	return nil
 }

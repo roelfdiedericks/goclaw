@@ -14,25 +14,27 @@ type mockProvider struct {
 	model string
 }
 
-func (m *mockProvider) Name() string                        { return m.name }
-func (m *mockProvider) Type() string                        { return m.typ }
-func (m *mockProvider) Model() string                       { return m.model }
-func (m *mockProvider) MetadataProvider() string            { return "" }
-func (m *mockProvider) WithModel(model string) Provider     { cp := *m; cp.model = model; return &cp }
-func (m *mockProvider) WithMaxTokens(_ int) Provider        { cp := *m; return &cp }
-func (m *mockProvider) IsAvailable() bool                   { return true }
-func (m *mockProvider) ContextTokens() int                  { return 128000 }
-func (m *mockProvider) MaxTokens() int                      { return 8192 }
+func (m *mockProvider) Name() string                    { return m.name }
+func (m *mockProvider) Type() string                    { return m.typ }
+func (m *mockProvider) Model() string                   { return m.model }
+func (m *mockProvider) MetadataProvider() string        { return "" }
+func (m *mockProvider) WithModel(model string) Provider { cp := *m; cp.model = model; return &cp }
+func (m *mockProvider) WithMaxTokens(_ int) Provider    { cp := *m; return &cp }
+func (m *mockProvider) IsAvailable() bool               { return true }
+func (m *mockProvider) ContextTokens() int              { return 128000 }
+func (m *mockProvider) MaxTokens() int                  { return 8192 }
 func (m *mockProvider) SimpleMessage(context.Context, string, string) (string, error) {
 	return "ok", nil
 }
 func (m *mockProvider) StreamMessage(context.Context, []types.Message, []types.ToolDefinition, string, func(string), *StreamOptions) (*Response, error) {
 	return &Response{Text: "ok"}, nil
 }
-func (m *mockProvider) Embed(context.Context, string) ([]float32, error)         { return []float32{0.1}, nil }
-func (m *mockProvider) EmbedBatch(context.Context, []string) ([][]float32, error) { return [][]float32{{0.1}}, nil }
-func (m *mockProvider) EmbeddingDimensions() int                                  { return 1 }
-func (m *mockProvider) SupportsEmbeddings() bool                                  { return true }
+func (m *mockProvider) Embed(context.Context, string) ([]float32, error) { return []float32{0.1}, nil }
+func (m *mockProvider) EmbedBatch(context.Context, []string) ([][]float32, error) {
+	return [][]float32{{0.1}}, nil
+}
+func (m *mockProvider) EmbeddingDimensions() int { return 1 }
+func (m *mockProvider) SupportsEmbeddings() bool { return true }
 
 func TestAllowsAgentFallbackPurposeRules(t *testing.T) {
 	if allowsAgentFallback("agent") {

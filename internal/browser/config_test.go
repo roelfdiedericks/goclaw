@@ -26,14 +26,14 @@ empty=
 
 func TestToolsConfigAdapterToConfigRemoteFields(t *testing.T) {
 	cfg := ToolsConfigAdapter{
-		ChromeCDP:                    "ws://localhost:9333",
-		AllowAgentProfiles:           true,
-		RemoteEnabled:                true,
-		RemoteProfilesText:           "workstation=ws://192.168.1.50:9222/devtools/browser/abc123",
-		RemoteAllowedHosts:           []string{"192.168.1.50"},
-		RemoteAllowDirectEndpoints:   true,
-		RemoteAllowHTTPDiscovery:     true,
-		RemoteConnectionTimeout:      "15s",
+		ChromeCDP:                     "ws://localhost:9333",
+		AllowAgentProfiles:            true,
+		RemoteEnabled:                 true,
+		RemoteProfilesText:            "workstation=ws://192.168.1.50:9222/devtools/browser/abc123",
+		RemoteAllowedHosts:            []string{"192.168.1.50"},
+		RemoteAllowDirectEndpoints:    true,
+		RemoteAllowHTTPDiscovery:      true,
+		RemoteConnectionTimeout:       "15s",
 		AdvancedNetworkCaptureEnabled: true,
 		AdvancedNetworkCaptureMax:     123,
 		AdvancedConsoleCaptureEnabled: true,

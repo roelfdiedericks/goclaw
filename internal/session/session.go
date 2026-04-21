@@ -41,9 +41,12 @@ type Session struct {
 	LastRecordID *string `json:"-"` // ID of last record (for parentId)
 
 	// Checkpoints & Compaction
-	LastCheckpoint    *CheckpointRecord `json:"-"` // Most recent checkpoint
-	CompactionCount   int               `json:"compactionCount"`
-	FlushedThresholds map[int]bool      `json:"-"` // Track which flush thresholds have fired
+	LastCheckpoint      *CheckpointRecord   `json:"-"` // Most recent checkpoint
+	CompactionCount     int                 `json:"compactionCount"`
+	CompactionMaxDepth  int                 `json:"-"`
+	CompactionCondensed int                 `json:"-"`
+	CompactionDAGStats  *CompactionDAGStats `json:"-"`
+	FlushedThresholds   map[int]bool        `json:"-"` // Track which flush thresholds have fired
 
 	// Metadata
 	FlushActioned bool `json:"flushActioned,omitempty"` // True if agent wrote to memory at 90%

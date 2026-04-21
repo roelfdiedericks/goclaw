@@ -210,7 +210,9 @@ When inheritance is enabled, GoClaw monitors the OpenClaw session file for chang
 
 ### Compaction
 
-Aggressive compaction for constrained environments:
+For constrained environments, prefer the named LCM `aggressive` preset —
+it tightens fresh-tail retention, fanouts, and prompt injection budget in one step:
+
 ```json
 {
   "session": {
@@ -218,12 +220,16 @@ Aggressive compaction for constrained environments:
       "compaction": {
         "reserveTokens": 20000,
         "maxMessages": 200,
-        "keepPercent": 30
+        "lcm": { "preset": "aggressive" }
       }
     }
   }
 }
 ```
+
+Named presets are authoritative — picking one overwrites the individual
+compaction and LCM fields it owns. Use `"preset": "custom"` to edit fields
+manually. See [Session Management](session-management.md) for the full preset table.
 
 ### Prompt Cache
 

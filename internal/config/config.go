@@ -486,6 +486,7 @@ func applyRuntimeDefaults(cfg *Config, goclawDir, home string) {
 	if cfg.Session.InheritPath == "" {
 		cfg.Session.InheritPath = filepath.Join(home, ".openclaw", "agents", "main", "sessions")
 	}
+	cfg.Session = session.NormalizeSessionConfig(cfg.Session)
 	if cfg.A2A.DefaultTransport == "" {
 		cfg.A2A.DefaultTransport = a2a.DefaultTransportLibp2p
 	}

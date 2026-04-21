@@ -80,10 +80,10 @@ func makeParityManager(mode string, fx parityFixture) *Manager {
 	return &Manager{
 		config: Config{
 			General: GeneralConfig{
-				Enabled:         true,
-				Mode:            mode,
-				ExecEnabled:     true,
-				BrowserEnabled:  true,
+				Enabled:          true,
+				Mode:             mode,
+				ExecEnabled:      true,
+				BrowserEnabled:   true,
 				FileToolsEnabled: true,
 			},
 		},

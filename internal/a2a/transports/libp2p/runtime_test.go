@@ -11,8 +11,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
-	"github.com/roelfdiedericks/goclaw/internal/logging"
 	ma "github.com/multiformats/go-multiaddr"
+	"github.com/roelfdiedericks/goclaw/internal/logging"
 )
 
 func TestSanitizeRemoteRegistrationAddrsPublicSafe(t *testing.T) {
