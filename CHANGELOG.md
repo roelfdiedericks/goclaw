@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
 ## [0.1.15] stable - 2026-04-21
 
 - session: GoClaw now remembers long conversations, similar in spirit to OpenClaw's `lossless-claw` plugin. When the chat grows past the context window, older parts get rolled up into searchable summaries instead of being dropped, and GoClaw pulls the exact original messages back whenever it actually needs the detail — so a decision from three months ago stays recoverable instead of being hallucinated
