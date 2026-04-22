@@ -534,8 +534,17 @@ func (b *Bot) setupHandlers() {
 	// Handle photo messages
 	b.bot.Handle(tele.OnPhoto, b.handlePhoto)
 
-	// Handle voice messages
+	// Handle voice notes (push-to-talk) - transcribed via STT in the gateway.
 	b.bot.Handle(tele.OnVoice, b.handleVoice)
+
+	// Handle generic uploads - saved to the media store and surfaced to the
+	// agent as image/audio/file content blocks. See handlers_uploads.go.
+	b.bot.Handle(tele.OnDocument, b.handleDocument)
+	b.bot.Handle(tele.OnVideo, b.handleVideo)
+	b.bot.Handle(tele.OnAudio, b.handleAudio)
+	b.bot.Handle(tele.OnAnimation, b.handleAnimation)
+	b.bot.Handle(tele.OnVideoNote, b.handleVideoNote)
+	b.bot.Handle(tele.OnSticker, b.handleSticker)
 
 	// Handle ACP interactive callback buttons.
 	b.bot.Handle(&tele.Btn{Unique: "acp"}, b.handleACPCallback)
@@ -1197,7 +1206,6 @@ func (b *Bot) handleVoice(c tele.Context) error {
 		"fileSize", voice.FileSize,
 	)
 
-	// Download voice file
 	reader, err := b.bot.File(&voice.File)
 	if err != nil {
 		logging.L_error("telegram: failed to get voice file", "error", err)
@@ -1205,7 +1213,6 @@ func (b *Bot) handleVoice(c tele.Context) error {
 	}
 	defer func() { _ = reader.Close() }()
 
-	// Read all voice data
 	voiceData, err := io.ReadAll(reader)
 	if err != nil {
 		logging.L_error("telegram: failed to read voice data", "error", err)
@@ -1214,37 +1221,30 @@ func (b *Bot) handleVoice(c tele.Context) error {
 
 	logging.L_debug("telegram: voice downloaded", "size", len(voiceData))
 
-	// Save voice file to disk for ephemeral resolution
-	// Determine extension from MIME type
-	ext := ".ogg"
-	mimeType := voice.MIME
-	if mimeType == "" {
-		mimeType = "audio/ogg"
+	store := b.gateway.MediaStore()
+	if store == nil {
+		logging.L_error("telegram: no media store available, dropping voice note")
+		return c.Send("Sorry, I can't accept voice messages right now.")
 	}
 
-	// Save to media store
-	var absPath, relPath string
-	if b.gateway != nil && b.gateway.MediaStore() != nil {
-		var err error
-		absPath, relPath, err = b.gateway.MediaStore().Save(voiceData, "voice", ext)
-		if err != nil {
-			logging.L_error("telegram: failed to save voice file", "error", err)
-			return c.Send("Sorry, I couldn't save that voice message.")
-		}
-		logging.L_debug("telegram: voice saved", "path", absPath, "relPath", relPath)
-	} else {
-		logging.L_warn("telegram: no media store, voice will be stored inline")
+	// Route through the shared upload helper. IsVoiceNote=true emits an "audio"
+	// ContentBlock which the gateway then passes through STT.
+	audioBlock, absPath, err := media.BuildUploadBlock(store, voiceData, media.UploadMeta{
+		Channel:        "telegram",
+		User:           u,
+		ChannelUserID:  userID,
+		ChatID:         fmt.Sprintf("%d", chatID),
+		ProvidedMime:   voice.MIME,
+		Caption:        c.Message().Caption,
+		Duration:       voice.Duration,
+		IsVoiceNote:    true,
+		ForceMediaType: "voice",
+	})
+	if err != nil {
+		logging.L_error("telegram: failed to save voice file", "error", err)
+		return c.Send("Sorry, I couldn't save that voice message.")
 	}
-
-	// Create audio content block with file reference
-	// Gateway's resolveMediaContent will handle STT transcription
-	audioBlock := types.ContentBlock{
-		Type:     "audio",
-		FilePath: absPath,
-		MimeType: mimeType,
-		Duration: voice.Duration,
-		Source:   "telegram",
-	}
+	logging.L_debug("telegram: voice saved", "path", absPath)
 
 	// Get caption (if any) as additional context
 	caption := c.Message().Caption

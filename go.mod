@@ -38,7 +38,7 @@ require (
 	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/rivo/tview v0.42.0
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/roelfdiedericks/go-markitdown v0.1.1
+	github.com/roelfdiedericks/go-markitdown v0.2.0
 	github.com/roelfdiedericks/xai-go v0.4.0
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/sevlyar/go-daemon v0.1.6

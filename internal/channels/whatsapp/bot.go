@@ -441,37 +441,97 @@ func (b *Bot) handleMessage(evt *events.Message) {
 
 	L_info("whatsapp: authenticated message", "user", u.Name, "role", u.Role)
 
-	// Extract text, voice, or image
+	// Extract text / media content. All media paths go through the shared
+	// upload helper so the gateway sees a consistent ContentBlock regardless
+	// of channel.
 	msg := evt.Message
 	text := ""
 	var contentBlocks []itypes.ContentBlock
+	senderIdentity := senderJID
+	if senderIdentity == "" {
+		senderIdentity = senderAlt
+	}
 
-	if msg.GetConversation() != "" {
+	switch {
+	case msg.GetConversation() != "":
 		text = msg.GetConversation()
-	} else if msg.GetExtendedTextMessage() != nil {
+
+	case msg.GetExtendedTextMessage() != nil:
 		text = msg.GetExtendedTextMessage().GetText()
-	} else if audioMsg := msg.GetAudioMessage(); audioMsg != nil && audioMsg.GetPTT() {
-		block, err := b.downloadMedia(audioMsg, "voice", ".ogg", audioMsg.GetMimetype())
-		if err != nil {
-			L_error("whatsapp: failed to download voice", "error", err)
+
+	case msg.GetAudioMessage() != nil && msg.GetAudioMessage().GetPTT():
+		audioMsg := msg.GetAudioMessage()
+		block, ok := b.buildUploadBlock(audioMsg, u, senderIdentity, "", audioMsg.GetMimetype(), "", "voice", true)
+		if !ok {
 			return
 		}
-		contentBlocks = append(contentBlocks, *block)
+		contentBlocks = append(contentBlocks, block)
 		text = "[Voice note received]"
-	} else if imageMsg := msg.GetImageMessage(); imageMsg != nil {
-		block, err := b.downloadMedia(imageMsg, "image", mimeToExt(imageMsg.GetMimetype()), imageMsg.GetMimetype())
-		if err != nil {
-			L_error("whatsapp: failed to download image", "error", err)
+
+	case msg.GetImageMessage() != nil:
+		imageMsg := msg.GetImageMessage()
+		block, ok := b.buildUploadBlock(imageMsg, u, senderIdentity, "", imageMsg.GetMimetype(), imageMsg.GetCaption(), "image", false)
+		if !ok {
 			return
 		}
-		contentBlocks = append(contentBlocks, *block)
-		caption := imageMsg.GetCaption()
-		if caption != "" {
+		contentBlocks = append(contentBlocks, block)
+		if caption := imageMsg.GetCaption(); caption != "" {
 			text = caption
 		} else {
 			text = "<media:image>"
 		}
-	} else {
+
+	case msg.GetDocumentMessage() != nil:
+		docMsg := msg.GetDocumentMessage()
+		block, ok := b.buildUploadBlock(docMsg, u, senderIdentity, docMsg.GetFileName(), docMsg.GetMimetype(), docMsg.GetCaption(), "document", false)
+		if !ok {
+			return
+		}
+		contentBlocks = append(contentBlocks, block)
+		if caption := docMsg.GetCaption(); caption != "" {
+			text = caption
+		} else {
+			text = "<media:document>"
+		}
+
+	case msg.GetVideoMessage() != nil:
+		vidMsg := msg.GetVideoMessage()
+		block, ok := b.buildUploadBlock(vidMsg, u, senderIdentity, "", vidMsg.GetMimetype(), vidMsg.GetCaption(), "video", false)
+		if !ok {
+			return
+		}
+		contentBlocks = append(contentBlocks, block)
+		if caption := vidMsg.GetCaption(); caption != "" {
+			text = caption
+		} else {
+			text = "<media:video>"
+		}
+
+	case msg.GetAudioMessage() != nil && !msg.GetAudioMessage().GetPTT():
+		// Non-PTT audio (music / podcast file). Surfaced as a file block so
+		// STT isn't run blindly; the agent can decide what to do with it.
+		audioMsg := msg.GetAudioMessage()
+		block, ok := b.buildUploadBlock(audioMsg, u, senderIdentity, "", audioMsg.GetMimetype(), "", "audio", false)
+		if !ok {
+			return
+		}
+		contentBlocks = append(contentBlocks, block)
+		text = "<media:audio>"
+
+	case msg.GetStickerMessage() != nil:
+		stickerMsg := msg.GetStickerMessage()
+		mime := stickerMsg.GetMimetype()
+		if mime == "" {
+			mime = "image/webp"
+		}
+		block, ok := b.buildUploadBlock(stickerMsg, u, senderIdentity, "", mime, "", "sticker", false)
+		if !ok {
+			return
+		}
+		contentBlocks = append(contentBlocks, block)
+		text = "<media:sticker>"
+
+	default:
 		L_debug("whatsapp: unsupported message type, ignoring")
 		return
 	}
@@ -732,35 +792,69 @@ func (b *Bot) processEvents(evt *events.Message, evChan <-chan gateway.AgentEven
 	}
 }
 
-// downloadMedia downloads a whatsmeow media message, saves it, and returns a ContentBlock
-func (b *Bot) downloadMedia(msg whatsmeow.DownloadableMessage, category, ext, mimeType string) (*itypes.ContentBlock, error) {
+// buildUploadBlock downloads a whatsmeow media message and hands the bytes to
+// media.BuildUploadBlock. Returns the built ContentBlock and ok=true, or
+// ok=false after logging the failure (callers should return early in that case).
+//
+// isVoiceNote must be true for push-to-talk voice notes so the gateway runs
+// STT. For all other media (images, documents, video, music audio, stickers)
+// callers pass false; the helper picks the block type from MIME.
+func (b *Bot) buildUploadBlock(
+	msg whatsmeow.DownloadableMessage,
+	u *user.User,
+	channelUserID string,
+	originalName string,
+	providedMime string,
+	caption string,
+	mediaType string,
+	isVoiceNote bool,
+) (itypes.ContentBlock, bool) {
 	data, err := b.client.Download(b.ctx, msg)
 	if err != nil {
-		return nil, fmt.Errorf("download failed: %w", err)
+		L_error("whatsapp: media download failed", "mediaType", mediaType, "error", err)
+		return itypes.ContentBlock{}, false
 	}
 
-	L_debug("whatsapp: media downloaded", "category", category, "size", len(data), "mime", mimeType)
+	L_debug("whatsapp: media downloaded",
+		"mediaType", mediaType,
+		"size", len(data),
+		"mime", providedMime,
+		"voice", isVoiceNote,
+	)
 
-	if b.gateway == nil || b.gateway.MediaStore() == nil {
-		return nil, fmt.Errorf("no media store available")
+	store := b.gateway.MediaStore()
+	if store == nil {
+		L_error("whatsapp: no media store available, dropping upload", "mediaType", mediaType)
+		return itypes.ContentBlock{}, false
 	}
 
-	absPath, _, err := b.gateway.MediaStore().Save(data, category, ext)
+	chatID := ""
+	if u != nil {
+		chatID = u.ID
+	}
+
+	block, absPath, err := media.BuildUploadBlock(store, data, media.UploadMeta{
+		Channel:        "whatsapp",
+		User:           u,
+		ChannelUserID:  channelUserID,
+		ChatID:         chatID,
+		OriginalName:   originalName,
+		ProvidedMime:   providedMime,
+		Caption:        caption,
+		IsVoiceNote:    isVoiceNote,
+		ForceMediaType: mediaType,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("save failed: %w", err)
+		L_error("whatsapp: failed to build upload block", "mediaType", mediaType, "error", err)
+		return itypes.ContentBlock{}, false
 	}
 
-	blockType := "audio"
-	if strings.HasPrefix(mimeType, "image/") {
-		blockType = "image"
-	}
-
-	return &itypes.ContentBlock{
-		Type:     blockType,
-		FilePath: absPath,
-		MimeType: mimeType,
-		Source:   "whatsapp",
-	}, nil
+	L_debug("whatsapp: upload saved",
+		"mediaType", mediaType,
+		"blockType", block.Type,
+		"path", absPath,
+	)
+	return block, true
 }
 
 // sendMediaFile uploads and sends a media file to a WhatsApp chat
@@ -895,24 +989,6 @@ func mimeToMediaType(mimeType string) whatsmeow.MediaType {
 		return whatsmeow.MediaAudio
 	default:
 		return whatsmeow.MediaDocument
-	}
-}
-
-// mimeToExt returns a file extension for common MIME types
-func mimeToExt(mimeType string) string {
-	switch mimeType {
-	case "image/jpeg":
-		return ".jpg"
-	case "image/png":
-		return ".png"
-	case "image/gif":
-		return ".gif"
-	case "image/webp":
-		return ".webp"
-	case "audio/ogg", "audio/ogg; codecs=opus":
-		return ".ogg"
-	default:
-		return ".bin"
 	}
 }
 

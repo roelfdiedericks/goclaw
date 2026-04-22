@@ -33,12 +33,12 @@ and the agent will call `document_extract` on whatever file you attached.
 
 | Format | Notes |
 |--------|-------|
-| PDF | Text extraction; OCR optional (via vision chain) |
-| DOCX | Microsoft Word |
-| XLSX | Microsoft Excel (first sheet) |
-| PPTX | Microsoft PowerPoint |
-| EPUB / MOBI | E-books |
-| HTML / XHTML | Web pages |
+| PDF | Text extraction; OCR optional (via vision chain); `<!-- Page N of M -->` markers at page boundaries |
+| DOCX | Microsoft Word; footnotes and endnotes preserved as `[^fn-N]` anchors with a `## Footnotes` section |
+| XLSX | Microsoft Excel; every sheet rendered under its own `## SheetName` heading; embedded pictures described via the vision chain |
+| PPTX | Microsoft PowerPoint; `<!-- Slide number: N -->` markers per slide |
+| EPUB / MOBI | E-books; `<!-- Page N of M -->` markers at page boundaries |
+| HTML / XHTML | Web pages; inline base64 `data:` images flow through the vision chain |
 | Markdown / Plain text | Pass-through |
 
 Images are not supported here — use the regular image tools (`read` with an

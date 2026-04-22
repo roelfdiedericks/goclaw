@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- channels: Telegram and WhatsApp now accept documents, videos, audio files, animations, video notes, and stickers — previously they were silently dropped. The agent sees each upload as an attachment and can call `document_extract` on supported document types.
+- channels: all user uploads across Telegram, WhatsApp, and HTTP go through a single helper and land under `uploads/<channel>/<user>/<type>/` (permanent); Telegram voice notes and WhatsApp voice/images are no longer pruned by media TTL
+- tools: `document_extract` picks up [go-markitdown v0.2.0](https://github.com/roelfdiedericks/go-markitdown) — PDFs no longer split hyphenated words across line breaks, scanned pages inside otherwise-text PDFs are OCR'd per page, image captions use surrounding document context, decorative logos/rules are dropped from output, and DOCX footnotes/endnotes, HTML inline images, and XLSX embedded pictures all make it through
+
 ## [0.1.16] stable - 2026-04-22
 
 - tools: new `document_extract` turns uploaded PDFs, Office docs, EPUBs, and HTML into markdown via [go-markitdown](https://github.com/roelfdiedericks/go-markitdown); embedded images and scanned pages go through the agent vision chain for OCR, and the tool returns a short preview while caching the full output for `read`

@@ -679,44 +679,18 @@ func (s *Server) handleSendMultipart(w http.ResponseWriter, r *http.Request) {
 		if len(data) == 0 {
 			continue
 		}
-		ext := strings.ToLower(filepath.Ext(fh.Filename))
-		if ext == "" {
-			ext = ".bin"
-		}
-		mime := media.DetectMIME(data)
-		mediaType := "file"
-		if strings.HasPrefix(mime, "image/") {
-			mediaType = "image"
-		}
-		ctx := media.UploadContext{
+		block, _, err := media.BuildUploadBlock(store, data, media.UploadMeta{
 			Channel:      "http",
 			User:         u,
 			ChatID:       sessionID,
-			MediaType:    mediaType,
 			OriginalName: fh.Filename,
-		}
-		absPath, _, err := store.SaveUpload(data, ext, ctx)
+		})
 		if err != nil {
 			logging.L_warn("http: send multipart - save failed", "user", u.ID, "error", err)
 			http.Error(w, "Failed to store upload", http.StatusInternalServerError)
 			return
 		}
-		if mediaType == "image" {
-			contentBlocks = append(contentBlocks, types.ContentBlock{
-				Type:     "image",
-				FilePath: absPath,
-				MimeType: mime,
-				Source:   "http",
-			})
-		} else {
-			contentBlocks = append(contentBlocks, types.ContentBlock{
-				Type:     "file",
-				FilePath: absPath,
-				MimeType: mime,
-				FileName: fh.Filename,
-				Source:   "http",
-			})
-		}
+		contentBlocks = append(contentBlocks, block)
 	}
 
 	if len(contentBlocks) == 0 {
