@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.16] stable - 2026-04-22
+
 - tools: new `document_extract` turns uploaded PDFs, Office docs, EPUBs, and HTML into markdown via [go-markitdown](https://github.com/roelfdiedericks/go-markitdown); embedded images and scanned pages go through the agent vision chain for OCR, and the tool returns a short preview while caching the full output for `read`
 - gateway: file-attachment summaries hint at `document_extract` for supported document types so the agent picks it up without being told
 - media: new `extracted` category (30 day TTL, 2 GB quota) caches extracted document markdown; configurable in the web wizard and TUI alongside the other ephemeral categories
