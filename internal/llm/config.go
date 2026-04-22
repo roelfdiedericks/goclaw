@@ -26,6 +26,7 @@ type LLMConfig struct {
 	Heartbeat        LLMPurposeConfig             `json:"heartbeat,omitempty"`
 	Cron             LLMPurposeConfig             `json:"cron,omitempty"`
 	Hass             LLMPurposeConfig             `json:"hass,omitempty"`
+	MemTrigger       LLMPurposeConfig             `json:"memtrigger,omitempty"`
 	MemoryExtraction LLMPurposeConfig             `json:"memoryExtraction,omitempty"`
 	Thinking         ThinkingConfig               `json:"thinking"`
 	SystemPrompt     string                       `json:"systemPrompt"`
@@ -502,6 +503,7 @@ func handleApply(cmd bus.Command) bus.CommandResult {
 		Heartbeat:        cfg.Heartbeat,
 		Cron:             cfg.Cron,
 		Hass:             cfg.Hass,
+		MemTrigger:       cfg.MemTrigger,
 		MemoryExtraction: cfg.MemoryExtraction,
 	}
 
@@ -748,6 +750,15 @@ func ConfigFormDef() forms.FormDef {
 				Collapsed: true,
 				Fields: []forms.Field{
 					{Name: "models", Title: "Models", Type: forms.ModelChain, Purpose: "heartbeat"},
+					{Name: "autoRebuild", Title: "Auto Rebuild", Type: forms.Toggle},
+				},
+			},
+			{
+				Title:     "Memory Trigger",
+				FieldName: "memtrigger",
+				Collapsed: true,
+				Fields: []forms.Field{
+					{Name: "models", Title: "Models", Desc: "Routine-memory wakeups. Leave empty to reuse the agent chain.", Type: forms.ModelChain, Purpose: "memtrigger"},
 					{Name: "autoRebuild", Title: "Auto Rebuild", Type: forms.Toggle},
 				},
 			},

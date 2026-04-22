@@ -17,6 +17,22 @@ type Config struct {
 	Ingestion      IngestionConfig      `json:"ingestion"`              // Ingestion configuration
 	LiveExtraction LiveExtractionConfig `json:"liveExtraction"`         // Live extraction configuration
 	Bulletin       BulletinConfig       `json:"bulletin"`               // Bulletin injection configuration
+	Trigger        TriggerConfig        `json:"trigger"`                // Memory trigger poller configuration
+}
+
+// TriggerConfig controls the memory-trigger poller, which wakes the agent on
+// `primary` (or `user:<id>`) when a structured routine's scheduled time
+// arrives. Disable entirely with Enabled=false.
+type TriggerConfig struct {
+	// Enabled turns the poller on/off. Default: true.
+	Enabled bool `json:"enabled" default:"true"`
+	// PollIntervalSeconds is how often to scan for due routines. Default: 60.
+	PollIntervalSeconds int `json:"pollIntervalSeconds" default:"60"`
+	// MissedGraceMinutes is the tolerance window for firing late triggers.
+	// Triggers whose scheduled_for is older than (now - MissedGrace) are
+	// silently dropped and next_trigger_at is recomputed instead. Prevents
+	// startup spam and post-downtime floods. Default: 30 minutes.
+	MissedGraceMinutes int `json:"missedGraceMinutes" default:"30"`
 }
 
 // LiveExtractionConfig configures automatic memory extraction from conversations
@@ -46,8 +62,9 @@ type BulletinConfig struct {
 	Deduplicate      bool   `json:"deduplicate" default:"true"`         // Skip items already shown in earlier sections
 
 	// Injection context controls
-	InjectForHeartbeat bool `json:"injectForHeartbeat"`           // Inject for heartbeat sessions
-	InjectForCron      bool `json:"injectForCron" default:"true"` // Inject for cron sessions
+	InjectForHeartbeat  bool `json:"injectForHeartbeat"`                 // Inject for heartbeat sessions
+	InjectForCron       bool `json:"injectForCron" default:"true"`       // Inject for cron sessions
+	InjectForMemTrigger bool `json:"injectForMemTrigger" default:"true"` // Inject for memory-trigger ("memtrigger") sessions
 
 	// Memory bulletin section limits (0 = disabled)
 	IdentityLimit         int     `json:"identityLimit" default:"3"`           // Identity items
@@ -806,7 +823,21 @@ func ValidateConfig(cfg *Config) error {
 	// Apply defaults for bulletin config
 	NormalizeBulletinConfig(&cfg.Bulletin)
 
+	// Apply defaults for trigger config
+	NormalizeTriggerConfig(&cfg.Trigger)
+
 	return nil
+}
+
+// NormalizeTriggerConfig applies defaults for zero/invalid values on the
+// memory-trigger poller config.
+func NormalizeTriggerConfig(t *TriggerConfig) {
+	if t.PollIntervalSeconds <= 0 {
+		t.PollIntervalSeconds = 60
+	}
+	if t.MissedGraceMinutes <= 0 {
+		t.MissedGraceMinutes = 30
+	}
 }
 
 // NormalizeBulletinConfig applies defaults for zero/invalid values

@@ -26,7 +26,9 @@ func (t *RecallTool) Name() string {
 }
 
 func (t *RecallTool) Description() string {
-	return "Search for related memories. Use before saving to find existing memories on a topic. Returns memories matching the query."
+	return "Search for related memories. Use before saving to find existing memories on a topic. " +
+		"Returns memories matching the query; routine results include a compact recurrence line " +
+		"(days, time, location, next occurrence) when structured recurrence metadata is present."
 }
 
 func (t *RecallTool) Schema() map[string]any {
@@ -196,8 +198,10 @@ func (t *RecallTool) Execute(ctx context.Context, input json.RawMessage) (*types
 		)
 	}
 
-	// Format output for LLM
-	output := formatRecallResults(results)
+	// Format output for LLM; batch-fetch routine metadata so routine results
+	// render a compact recurrence/next line alongside the content.
+	routineMetas := collectRoutineMetas(t.manager.Store(), results)
+	output := formatRecallResults(results, routineMetas)
 
 	L_debug("memory_graph_recall: completed",
 		"mode", params.Mode,
@@ -207,7 +211,7 @@ func (t *RecallTool) Execute(ctx context.Context, input json.RawMessage) (*types
 	return types.TextResult(output), nil
 }
 
-func formatRecallResults(results []SearchResult) string {
+func formatRecallResults(results []SearchResult, routineMetas map[string]*RoutineMetadata) string {
 	if len(results) == 0 {
 		return "No memories found."
 	}
@@ -227,7 +231,18 @@ func formatRecallResults(results []SearchResult) string {
 			sb.WriteString(fmt.Sprintf(", emotion: %s", m.Emotion))
 		}
 		sb.WriteString(")\n")
-		sb.WriteString(fmt.Sprintf("   %s\n\n", m.Content))
+		sb.WriteString(fmt.Sprintf("   %s\n", m.Content))
+
+		if m.Type == TypeRoutine {
+			if meta := routineMetas[m.UUID]; meta != nil {
+				if rec := formatRoutineRecurrenceLine(meta, m.NextTriggerAt, false); rec != "" {
+					sb.WriteString("   ")
+					sb.WriteString(rec)
+					sb.WriteByte('\n')
+				}
+			}
+		}
+		sb.WriteByte('\n')
 	}
 
 	return sb.String()

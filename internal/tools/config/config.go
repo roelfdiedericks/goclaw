@@ -12,12 +12,18 @@ import (
 
 // ToolsConfig contains tool-specific settings
 type ToolsConfig struct {
-	Web        WebToolsConfig      `json:"web"`
-	Browser    BrowserToolsConfig  `json:"browser"`
-	Exec       ExecToolsConfig     `json:"exec"`
-	Subagent   SubagentToolsConfig `json:"subagent"`
-	XAIImagine XAIImagineConfig    `json:"xaiImagine"`
-	XAIVideo   XAIVideoConfig      `json:"xaiVideo"`
+	Web             WebToolsConfig        `json:"web"`
+	Browser         BrowserToolsConfig    `json:"browser"`
+	Exec            ExecToolsConfig       `json:"exec"`
+	Subagent        SubagentToolsConfig   `json:"subagent"`
+	XAIImagine      XAIImagineConfig      `json:"xaiImagine"`
+	XAIVideo        XAIVideoConfig        `json:"xaiVideo"`
+	DocumentExtract DocumentExtractConfig `json:"documentExtract"`
+}
+
+// DocumentExtractConfig contains document_extract tool settings.
+type DocumentExtractConfig struct {
+	Enabled bool `json:"enabled" default:"true"` // Enable the document_extract tool
 }
 
 // SubagentToolsConfig contains delegated subagent tool settings.
@@ -254,6 +260,13 @@ func ConfigFormDef() forms.FormDef {
 					{Name: "xaiImagine.model", Title: "Model", Type: forms.Text, Default: "grok-2-image", Desc: "Default model for image generation"},
 					{Name: "xaiImagine.resolution", Title: "Resolution", Type: forms.Select, Default: "1K", Options: []forms.Option{{Label: "1K", Value: "1K"}, {Label: "2K", Value: "2K"}}, Desc: "Default resolution"},
 					{Name: "xaiImagine.saveToMedia", Title: "Save to Media", Type: forms.Toggle, Default: true, Desc: "Save generated images to media store"},
+				},
+			},
+			{
+				Title: "Document Extract",
+				Desc:  "Convert uploaded documents (PDF, DOCX, PPTX, XLSX, EPUB, HTML, etc.) into LLM-ready markdown. OCR and embedded image descriptions route through the configured agent vision chain.",
+				Fields: []forms.Field{
+					{Name: "documentExtract.enabled", Title: "Enable document_extract", Type: forms.Toggle, Default: true, Desc: "Register the `document_extract` tool so agents can read uploaded documents."},
 				},
 			},
 			{

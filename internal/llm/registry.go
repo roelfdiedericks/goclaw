@@ -3,6 +3,7 @@ package llm
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"math"
 	"strings"
@@ -94,6 +95,7 @@ type RegistryConfig struct {
 	Heartbeat        LLMPurposeConfig             `json:"heartbeat,omitempty"`
 	Cron             LLMPurposeConfig             `json:"cron,omitempty"`
 	Hass             LLMPurposeConfig             `json:"hass,omitempty"`
+	MemTrigger       LLMPurposeConfig             `json:"memtrigger,omitempty"`
 	MemoryExtraction LLMPurposeConfig             `json:"memoryExtraction,omitempty"`
 }
 
@@ -109,6 +111,7 @@ func NewRegistry(cfg RegistryConfig) (*Registry, error) {
 			"heartbeat":         cfg.Heartbeat,
 			"cron":              cfg.Cron,
 			"hass":              cfg.Hass,
+			"memtrigger":        cfg.MemTrigger,
 			"memory_extraction": cfg.MemoryExtraction,
 		},
 		cooldowns: make(map[string]*providerCooldown),
@@ -1000,3 +1003,182 @@ func (r *Registry) SimpleMessageWithFailover(
 	// All models failed
 	return result, buildAllModelsFailedError(purpose, nil, lastErr)
 }
+
+// DescribeImageResult contains the result of a DescribeImageWithFailover call.
+type DescribeImageResult struct {
+	Text       string
+	ModelUsed  string
+	FailedOver bool
+	Recovered  *RecoveryInfo
+}
+
+// DescribeImageWithFailover runs a one-shot vision call through the chain for
+// purpose, filtering candidates to only vision-capable models and returning
+// the collected text description. Used by the docconv image describer adapter
+// to route OCR and embedded-image-description calls through an existing model
+// chain (typically "agent") with full failover and cooldown support.
+//
+// img is raw encoded image bytes (PNG/JPEG/etc). mimeType is the image MIME
+// (e.g. "image/png"). prompt is the instruction sent alongside the image.
+//
+// Returns ErrNoVisionModels when no vision-capable model is available in the
+// chain (or agent fallback), so the caller can degrade gracefully.
+func (r *Registry) DescribeImageWithFailover(
+	ctx context.Context,
+	purpose string,
+	img []byte,
+	mimeType string,
+	prompt string,
+) (*DescribeImageResult, error) {
+	r.mu.RLock()
+	_, ok := r.purposes[purpose]
+	r.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("unknown purpose: %s", purpose)
+	}
+
+	candidates := r.getModelsWithAgentFallback(purpose)
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no models configured for purpose: %s", purpose)
+	}
+
+	if len(img) == 0 {
+		return nil, fmt.Errorf("empty image payload")
+	}
+	if mimeType == "" {
+		return nil, fmt.Errorf("empty image mime type")
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(img)
+	messages := []types.Message{
+		{
+			Role:    "user",
+			Content: prompt,
+			ContentBlocks: []types.ContentBlock{
+				{Type: "text", Text: prompt},
+				{Type: "image", Data: encoded, MimeType: mimeType},
+			},
+		},
+	}
+
+	L_debug("describe-image: starting",
+		"purpose", purpose,
+		"imageBytes", len(img),
+		"mimeType", mimeType,
+		"promptLen", len(prompt),
+		"candidates", len(candidates),
+	)
+
+	result := &DescribeImageResult{}
+	var lastErr error
+	var primaryModel string
+	visionAttempts := 0
+
+	for _, modelRef := range candidates {
+		parts := strings.SplitN(modelRef, "/", 2)
+		if len(parts) < 2 {
+			L_debug("describe-image: invalid model ref", "ref", modelRef)
+			continue
+		}
+		providerAlias := parts[0]
+
+		if r.isProviderInCooldown(providerAlias) {
+			L_debug("describe-image: provider in cooldown, skipping", "model", modelRef)
+			continue
+		}
+
+		resolved, err := r.resolveForPurpose(modelRef, purpose)
+		if err != nil {
+			L_debug("describe-image: model unavailable", "model", modelRef, "error", err)
+			continue
+		}
+
+		p, ok := resolved.(Provider)
+		if !ok || !p.IsAvailable() {
+			continue
+		}
+
+		if !SupportsVision(p) {
+			L_debug("describe-image: model lacks vision, skipping",
+				"model", modelRef)
+			continue
+		}
+
+		visionAttempts++
+		if primaryModel == "" {
+			primaryModel = modelRef
+		}
+
+		purposeCtx := ContextWithPurpose(ctx, purpose)
+		var collected strings.Builder
+		onDelta := func(delta string) { collected.WriteString(delta) }
+
+		resp, err := p.StreamMessage(purposeCtx, messages, nil, "", onDelta, nil)
+		if err == nil {
+			text := strings.TrimSpace(collected.String())
+			if text == "" && resp != nil {
+				text = strings.TrimSpace(resp.Text)
+			}
+			result.Text = text
+			result.ModelUsed = modelRef
+			result.FailedOver = modelRef != primaryModel
+
+			if wasInCooldown, wasReason := r.clearProviderCooldown(providerAlias); wasInCooldown {
+				result.Recovered = &RecoveryInfo{
+					Provider:  providerAlias,
+					WasReason: wasReason,
+				}
+			}
+
+			L_debug("describe-image: success",
+				"model", modelRef,
+				"textLen", len(text),
+				"failedOver", result.FailedOver,
+			)
+			return result, nil
+		}
+
+		errType := ClassifyError(err.Error())
+
+		if !IsFailoverError(errType) {
+			result.ModelUsed = modelRef
+			L_warn("describe-image: non-failover error, stopping",
+				"model", modelRef,
+				"errType", errType,
+				"error", err,
+				"purpose", purpose,
+			)
+			return result, err
+		}
+
+		r.markProviderCooldown(providerAlias, errType)
+		L_warn("describe-image: trying next model",
+			"failed", modelRef,
+			"reason", errType,
+			"error", err,
+			"purpose", purpose,
+		)
+		lastErr = err
+	}
+
+	if visionAttempts == 0 {
+		L_warn("describe-image: no vision-capable models available",
+			"purpose", purpose,
+			"candidates", len(candidates),
+		)
+		return nil, ErrNoVisionModels
+	}
+
+	L_error("describe-image: all vision models failed",
+		"purpose", purpose,
+		"attempted", visionAttempts,
+		"lastError", lastErr,
+	)
+	return result, buildAllModelsFailedError(purpose, nil, lastErr)
+}
+
+// ErrNoVisionModels is returned by DescribeImageWithFailover when the purpose
+// chain (plus agent fallback) contains no vision-capable models. Callers
+// should treat this as a non-fatal, "graceful degradation" signal.
+var ErrNoVisionModels = fmt.Errorf("no vision-capable models available in chain")

@@ -151,6 +151,19 @@ type RoutineMetadata struct {
 	Rejections       int64      `json:"rejections"`
 	AutoRuns         int64      `json:"auto_runs"`
 	LastTriggeredAt  *time.Time `json:"last_triggered_at"`
+
+	// Structured recurrence (v3). When any of these are set, TriggerCron is
+	// derived from Days + TimeStart at store time; bounds (StartsOn / EndsOn /
+	// SkipDates) are enforced at query and fire time, not in cron.
+	Days            []string   `json:"days,omitempty"`             // lowercase day names: "monday", "tuesday", ...
+	TimeStart       string     `json:"time_start,omitempty"`       // "HH:MM" (24h, server local)
+	TimeEnd         string     `json:"time_end,omitempty"`         // "HH:MM" (24h, server local)
+	DurationMinutes *int       `json:"duration_minutes,omitempty"` // optional; alternative to TimeEnd
+	Location        string     `json:"location,omitempty"`
+	Person          string     `json:"person,omitempty"`
+	StartsOn        *time.Time `json:"starts_on,omitempty"`  // inclusive, YYYY-MM-DD
+	EndsOn          *time.Time `json:"ends_on,omitempty"`    // inclusive, YYYY-MM-DD
+	SkipDates       []string   `json:"skip_dates,omitempty"` // "YYYY-MM-DD" exclusions
 }
 
 // FeedbackMetadata contains metadata specific to feedback memories

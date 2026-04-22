@@ -19,6 +19,7 @@ type SessionContext struct {
 	OwnerChatID       string          // Owner's telegram chat ID (fallback for cron/heartbeat)
 	SessionKey        string          // Current session key (for delegated return routing)
 	RunID             string          // Current agent run ID (for delegated lineage propagation)
+	Purpose           string          // Turn purpose (e.g., "heartbeat", "cron", "memtrigger"); empty = regular agent
 	TotalTokens       int             // Current estimated session token count
 	MaxTokens         int             // Current session context window
 	ReserveTokens     int             // Reserved token floor before compaction/overflow

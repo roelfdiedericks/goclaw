@@ -19,6 +19,8 @@ User Message → LLM → Tool Use? → Execute Tool → LLM → ... → Final Re
 
 The loop continues until the LLM provides a final response without requesting tool use. This enables complex, multi-step reasoning where the agent can read files, execute commands, search memory, and more.
 
+Turns can originate from several sources: an incoming **user message** on a channel, a **cron** job, a **heartbeat** tick, or a **memory trigger** when a routine memory's scheduled time arrives. All four feed the same agent loop on the user's primary session. See [Memory Triggers](memory-graph.md#memory-triggers) for the routine-memory case and [Delegated Runs](delegated-runs.md) for cron/subagent origins.
+
 ## Sessions
 
 A **session** represents a conversation with persistent state:

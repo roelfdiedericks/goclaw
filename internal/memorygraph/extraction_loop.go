@@ -20,6 +20,10 @@ const (
 	ContextKeyMessageIDs       contextKey = "messageIDs"
 	ContextKeySessionKey       contextKey = "sessionKey"
 	ContextKeyChannel          contextKey = "channel"
+	// ContextKeyPurpose is set by the gateway to the AgentRequest.Purpose value
+	// ("memtrigger", "cron", "heartbeat", ...). Tools use it for behaviour
+	// guards (e.g. the memtrigger loop-avoidance guard in memory_graph_store).
+	ContextKeyPurpose contextKey = "purpose"
 )
 
 // ExtractionLoop is a mini agentic loop for memory extraction.

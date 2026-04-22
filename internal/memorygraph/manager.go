@@ -39,6 +39,13 @@ type Manager struct {
 
 	// Bulletin cache
 	bulletinCache *BulletinCache // Per-user cached bulletins
+
+	// Memory-trigger poller (wakes agent on due routines). Wired via
+	// SetTriggerInvoker from main after the gateway is constructed; started
+	// from Start(ctx) if an invoker is present and cfg.Trigger.Enabled.
+	triggerInvoker TriggerInvoker
+	triggerPoller  *TriggerPoller
+	triggerCancel  context.CancelFunc
 }
 
 var (
@@ -373,7 +380,17 @@ func (m *Manager) SetSessionsDB(db *sql.DB) {
 	m.mu.Unlock()
 }
 
-// Start begins all background processes (maintenance + live extraction).
+// SetTriggerInvoker wires the gateway (or any TriggerInvoker) to the memory
+// graph manager so the trigger poller can wake the agent on due routines.
+// Called from main.go after the gateway is constructed, before Start(ctx).
+func (m *Manager) SetTriggerInvoker(inv TriggerInvoker) {
+	m.mu.Lock()
+	m.triggerInvoker = inv
+	m.mu.Unlock()
+}
+
+// Start begins all background processes (maintenance + live extraction +
+// memory-trigger poller).
 func (m *Manager) Start(ctx context.Context) {
 	m.StartMaintenance(ctx)
 
@@ -386,6 +403,30 @@ func (m *Manager) Start(ctx context.Context) {
 	} else if m.config.LiveExtraction.Enabled {
 		L_warn("memorygraph: live extraction enabled but no sessions DB available")
 	}
+
+	// Start the memory-trigger poller if enabled and an invoker is wired.
+	m.mu.Lock()
+	invoker := m.triggerInvoker
+	cfg := m.config.Trigger
+	m.mu.Unlock()
+
+	if cfg.Enabled && invoker != nil {
+		pollerCtx, cancel := context.WithCancel(ctx)
+		poller := NewTriggerPoller(m.store, invoker, cfg)
+
+		m.mu.Lock()
+		m.triggerPoller = poller
+		m.triggerCancel = cancel
+		m.mu.Unlock()
+
+		go poller.Start(pollerCtx)
+		L_info("memorygraph: trigger poller started",
+			"interval", cfg.PollIntervalSeconds,
+			"missedGraceMinutes", cfg.MissedGraceMinutes,
+		)
+	} else if cfg.Enabled && invoker == nil {
+		L_warn("memorygraph: trigger poller enabled but no invoker wired")
+	}
 }
 
 // Stop stops background processes (called before Close).
@@ -393,6 +434,14 @@ func (m *Manager) Stop() {
 	if m.liveExtractor != nil {
 		m.liveExtractor.Stop()
 		m.liveExtractor = nil
+	}
+	m.mu.Lock()
+	cancel := m.triggerCancel
+	m.triggerCancel = nil
+	m.triggerPoller = nil
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 

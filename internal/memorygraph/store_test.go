@@ -254,8 +254,8 @@ func TestSchemaMigrationAddsHappensAt(t *testing.T) {
 	if err := db.QueryRow(`SELECT version FROM schema_version ORDER BY version DESC LIMIT 1`).Scan(&version); err != nil {
 		t.Fatalf("read schema version failed: %v", err)
 	}
-	if version != 2 {
-		t.Fatalf("expected schema version 2, got %d", version)
+	if version != 3 {
+		t.Fatalf("expected schema version 3, got %d", version)
 	}
 
 	var happensAt sql.NullString

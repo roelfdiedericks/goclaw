@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -307,12 +308,57 @@ func (s *Store) SetRoutineMetadata(m *RoutineMetadata) error {
 		lastTriggered = &t
 	}
 
+	var daysJSON, skipDatesJSON *string
+	if len(m.Days) > 0 {
+		if b, err := json.Marshal(m.Days); err == nil {
+			s := string(b)
+			daysJSON = &s
+		}
+	}
+	if len(m.SkipDates) > 0 {
+		if b, err := json.Marshal(m.SkipDates); err == nil {
+			s := string(b)
+			skipDatesJSON = &s
+		}
+	}
+
+	var timeStart, timeEnd, location, person *string
+	if m.TimeStart != "" {
+		timeStart = &m.TimeStart
+	}
+	if m.TimeEnd != "" {
+		timeEnd = &m.TimeEnd
+	}
+	if m.Location != "" {
+		location = &m.Location
+	}
+	if m.Person != "" {
+		person = &m.Person
+	}
+
+	var durationMinutes *int
+	if m.DurationMinutes != nil {
+		durationMinutes = m.DurationMinutes
+	}
+
+	var startsOn, endsOn *string
+	if m.StartsOn != nil {
+		s := m.StartsOn.Format("2006-01-02")
+		startsOn = &s
+	}
+	if m.EndsOn != nil {
+		s := m.EndsOn.Format("2006-01-02")
+		endsOn = &s
+	}
+
 	_, err := s.db.Exec(`
 		INSERT INTO routine_metadata (
 			memory_uuid, trigger_type, trigger_cron, trigger_event, trigger_condition,
 			action, action_entity, action_extra, autonomy,
-			observations, suggestions, acceptances, rejections, auto_runs, last_triggered_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			observations, suggestions, acceptances, rejections, auto_runs, last_triggered_at,
+			days, time_start, time_end, duration_minutes, location, person,
+			starts_on, ends_on, skip_dates
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(memory_uuid) DO UPDATE SET
 			trigger_type = excluded.trigger_type,
 			trigger_cron = excluded.trigger_cron,
@@ -327,10 +373,21 @@ func (s *Store) SetRoutineMetadata(m *RoutineMetadata) error {
 			acceptances = excluded.acceptances,
 			rejections = excluded.rejections,
 			auto_runs = excluded.auto_runs,
-			last_triggered_at = excluded.last_triggered_at
+			last_triggered_at = excluded.last_triggered_at,
+			days = excluded.days,
+			time_start = excluded.time_start,
+			time_end = excluded.time_end,
+			duration_minutes = excluded.duration_minutes,
+			location = excluded.location,
+			person = excluded.person,
+			starts_on = excluded.starts_on,
+			ends_on = excluded.ends_on,
+			skip_dates = excluded.skip_dates
 	`, m.MemoryUUID, m.TriggerType, m.TriggerCron, m.TriggerEvent, m.TriggerCondition,
 		m.Action, m.ActionEntity, m.ActionExtra, m.Autonomy,
-		m.Observations, m.Suggestions, m.Acceptances, m.Rejections, m.AutoRuns, lastTriggered)
+		m.Observations, m.Suggestions, m.Acceptances, m.Rejections, m.AutoRuns, lastTriggered,
+		daysJSON, timeStart, timeEnd, durationMinutes, location, person,
+		startsOn, endsOn, skipDatesJSON)
 	return err
 }
 
@@ -339,17 +396,71 @@ func (s *Store) GetRoutineMetadata(memoryUUID string) (*RoutineMetadata, error) 
 	row := s.db.QueryRow(`
 		SELECT memory_uuid, trigger_type, trigger_cron, trigger_event, trigger_condition,
 			action, action_entity, action_extra, autonomy,
-			observations, suggestions, acceptances, rejections, auto_runs, last_triggered_at
+			observations, suggestions, acceptances, rejections, auto_runs, last_triggered_at,
+			days, time_start, time_end, duration_minutes, location, person,
+			starts_on, ends_on, skip_dates
 		FROM routine_metadata WHERE memory_uuid = ?
 	`, memoryUUID)
 
+	return scanRoutineMetadata(row)
+}
+
+// GetRoutineMetadataMulti batch-fetches routine metadata for a set of memory UUIDs.
+// Returns a map keyed by memory_uuid; UUIDs with no routine_metadata row are absent
+// from the map. Used by query/recall output formatters so they issue one SQL call
+// per result set instead of N per-result fetches.
+func (s *Store) GetRoutineMetadataMulti(uuids []string) (map[string]*RoutineMetadata, error) {
+	out := make(map[string]*RoutineMetadata)
+	if len(uuids) == 0 {
+		return out, nil
+	}
+
+	placeholders := make([]string, len(uuids))
+	args := make([]any, len(uuids))
+	for i, u := range uuids {
+		placeholders[i] = "?"
+		args[i] = u
+	}
+
+	// #nosec G201 -- placeholders are literal "?" chars; all values go through args.
+	query := fmt.Sprintf(`
+		SELECT memory_uuid, trigger_type, trigger_cron, trigger_event, trigger_condition,
+			action, action_entity, action_extra, autonomy,
+			observations, suggestions, acceptances, rejections, auto_runs, last_triggered_at,
+			days, time_start, time_end, duration_minutes, location, person,
+			starts_on, ends_on, skip_dates
+		FROM routine_metadata
+		WHERE memory_uuid IN (%s)
+	`, strings.Join(placeholders, ","))
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query routine metadata multi: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		m, scanErr := scanRoutineMetadata(rows)
+		if scanErr != nil || m == nil {
+			continue
+		}
+		out[m.MemoryUUID] = m
+	}
+	return out, rows.Err()
+}
+
+func scanRoutineMetadata(row scannable) (*RoutineMetadata, error) {
 	m := &RoutineMetadata{}
 	var triggerCron, triggerEvent, triggerCondition, actionEntity, actionExtra, lastTriggered sql.NullString
+	var daysJSON, timeStart, timeEnd, location, person, startsOn, endsOn, skipDatesJSON sql.NullString
+	var durationMinutes sql.NullInt64
 
 	err := row.Scan(
 		&m.MemoryUUID, &m.TriggerType, &triggerCron, &triggerEvent, &triggerCondition,
 		&m.Action, &actionEntity, &actionExtra, &m.Autonomy,
 		&m.Observations, &m.Suggestions, &m.Acceptances, &m.Rejections, &m.AutoRuns, &lastTriggered,
+		&daysJSON, &timeStart, &timeEnd, &durationMinutes, &location, &person,
+		&startsOn, &endsOn, &skipDatesJSON,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -366,6 +477,37 @@ func (s *Store) GetRoutineMetadata(memoryUUID string) (*RoutineMetadata, error) 
 	if lastTriggered.Valid {
 		t, _ := time.Parse(time.RFC3339, lastTriggered.String)
 		m.LastTriggeredAt = &t
+	}
+
+	if daysJSON.Valid && daysJSON.String != "" {
+		var days []string
+		if err := json.Unmarshal([]byte(daysJSON.String), &days); err == nil {
+			m.Days = days
+		}
+	}
+	m.TimeStart = timeStart.String
+	m.TimeEnd = timeEnd.String
+	if durationMinutes.Valid {
+		d := int(durationMinutes.Int64)
+		m.DurationMinutes = &d
+	}
+	m.Location = location.String
+	m.Person = person.String
+	if startsOn.Valid && startsOn.String != "" {
+		if t, err := time.ParseInLocation("2006-01-02", startsOn.String, time.Local); err == nil {
+			m.StartsOn = &t
+		}
+	}
+	if endsOn.Valid && endsOn.String != "" {
+		if t, err := time.ParseInLocation("2006-01-02", endsOn.String, time.Local); err == nil {
+			m.EndsOn = &t
+		}
+	}
+	if skipDatesJSON.Valid && skipDatesJSON.String != "" {
+		var skip []string
+		if err := json.Unmarshal([]byte(skipDatesJSON.String), &skip); err == nil {
+			m.SkipDates = skip
+		}
 	}
 
 	return m, nil

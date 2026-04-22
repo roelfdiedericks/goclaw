@@ -69,6 +69,7 @@ import (
 	toolacpcontrol "github.com/roelfdiedericks/goclaw/internal/tools/acp_control"
 	toolacpinspect "github.com/roelfdiedericks/goclaw/internal/tools/acp_inspect"
 	toolcron "github.com/roelfdiedericks/goclaw/internal/tools/cron"
+	tooldocextract "github.com/roelfdiedericks/goclaw/internal/tools/document_extract"
 	"github.com/roelfdiedericks/goclaw/internal/tools/edit"
 	"github.com/roelfdiedericks/goclaw/internal/tools/exec"
 	toolhass "github.com/roelfdiedericks/goclaw/internal/tools/hass"
@@ -2442,6 +2443,7 @@ func buildLLMRegistry(cfg *config.Config) (*llm.Registry, error) {
 		Heartbeat:        cfg.LLM.Heartbeat,
 		Cron:             cfg.LLM.Cron,
 		Hass:             cfg.LLM.Hass,
+		MemTrigger:       cfg.LLM.MemTrigger,
 		MemoryExtraction: cfg.LLM.MemoryExtraction,
 	}
 	return llm.NewRegistry(regCfg)
@@ -3533,8 +3535,12 @@ func runGateway(ctx *Context, useTUI bool, devMode bool) error {
 	gw.Start(runCtx)
 	gatewayStarted = true
 
-	// Start memory graph background tasks (maintenance + live extraction)
+	// Start memory graph background tasks (maintenance + live extraction +
+	// memory-trigger poller).
 	if mgraphMgr := gw.MemoryGraphManager(); mgraphMgr != nil {
+		// Wire the gateway as the TriggerInvoker so the poller can wake the
+		// agent on due routine memories.
+		mgraphMgr.SetTriggerInvoker(gw)
 		mgraphMgr.Start(runCtx)
 	}
 
@@ -4054,6 +4060,15 @@ func registerTools(reg *tools.Registry, cfg *config.Config, gw *gateway.Gateway,
 			} else {
 				reg.Register(xaiVideoTool)
 			}
+		}
+	}
+
+	// Document Extract tool — requires media store; registry optional (degrades gracefully)
+	if cfg.Tools.DocumentExtract.Enabled {
+		if mediaStore := gw.MediaStore(); mediaStore != nil {
+			reg.Register(tooldocextract.NewTool(mediaStore, gw.Registry(), cfg.Gateway.WorkingDir))
+		} else {
+			L_warn("document_extract: media store not initialized; tool not registered")
 		}
 	}
 

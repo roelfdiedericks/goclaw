@@ -193,6 +193,43 @@ CREATE INDEX IF NOT EXISTS idx_memories_happens_at ON memories(happens_at ASC) W
 INSERT INTO schema_version (version) VALUES (2);
 `,
 	},
+	{
+		Version: 3,
+		Up: `
+-- Structured recurrence columns on routine_metadata
+ALTER TABLE routine_metadata ADD COLUMN days TEXT;              -- JSON array of lowercase day names
+ALTER TABLE routine_metadata ADD COLUMN time_start TEXT;        -- "HH:MM" local
+ALTER TABLE routine_metadata ADD COLUMN time_end TEXT;          -- "HH:MM" local (nullable)
+ALTER TABLE routine_metadata ADD COLUMN duration_minutes INTEGER;
+ALTER TABLE routine_metadata ADD COLUMN location TEXT;
+ALTER TABLE routine_metadata ADD COLUMN person TEXT;
+ALTER TABLE routine_metadata ADD COLUMN starts_on TEXT;         -- "YYYY-MM-DD"
+ALTER TABLE routine_metadata ADD COLUMN ends_on TEXT;           -- "YYYY-MM-DD"
+ALTER TABLE routine_metadata ADD COLUMN skip_dates TEXT;        -- JSON array of "YYYY-MM-DD"
+
+CREATE INDEX IF NOT EXISTS idx_routine_meta_person ON routine_metadata(person) WHERE person IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_routine_meta_days   ON routine_metadata(days)   WHERE days IS NOT NULL;
+
+-- Memory-trigger audit + dedup table (crash-safe idempotency via UNIQUE)
+CREATE TABLE IF NOT EXISTS memory_triggers_fired (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_uuid    TEXT NOT NULL,
+    scheduled_for  TEXT NOT NULL,                    -- RFC3339, exact occurrence instant
+    fired_at       TEXT NOT NULL,                    -- RFC3339
+    username       TEXT NOT NULL,
+    session_key    TEXT NOT NULL,                    -- "primary" or "user:<id>"
+    outcome        TEXT,                             -- "sent" | "silent" | "error" (filled post-turn)
+    run_id         TEXT,                             -- gateway agent-run id for audit
+    UNIQUE(memory_uuid, scheduled_for),
+    FOREIGN KEY (memory_uuid) REFERENCES memories(uuid) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_mtf_memory   ON memory_triggers_fired(memory_uuid);
+CREATE INDEX IF NOT EXISTS idx_mtf_fired_at ON memory_triggers_fired(fired_at DESC);
+
+INSERT INTO schema_version (version) VALUES (3);
+`,
+	},
 }
 
 // InitSchema initializes the database schema

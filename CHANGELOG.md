@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- tools: new `document_extract` turns uploaded PDFs, Office docs, EPUBs, and HTML into markdown via [go-markitdown](https://github.com/roelfdiedericks/go-markitdown); embedded images and scanned pages go through the agent vision chain for OCR, and the tool returns a short preview while caching the full output for `read`
+- gateway: file-attachment summaries hint at `document_extract` for supported document types so the agent picks it up without being told
+- media: new `extracted` category (30 day TTL, 2 GB quota) caches extracted document markdown; configurable in the web wizard and TUI alongside the other ephemeral categories
+- memory: routine memories take structured recurrence (days, time, location, person, start/end dates, skip dates) instead of free-text, and today's occurrences surface in a new "Today's Schedule" bulletin section
+- memory: due routines wake the agent on your primary session at the scheduled time; it can nudge you or stay quiet, and replies fan out to every active channel
+- memory: `memtrigger` is now a configurable LLM purpose chain (falls back to `agent`); fixes a crash on routine fires and sharpens the wake preamble so the agent responds instead of hedging
+- memory: routine recurrence shows inline on `memory_graph_query` / `memory_graph_recall` results — a compact `recurrence:` line with cadence, location, person, and next occurrence
+- memory: `memory_graph_query` gains `mode: "triggers"` to read the routine-fire audit log (filter by memory, outcome, time range) so the agent can answer "did I remind them?"
+- memory: "Today's Schedule" bulletin annotates routines that fired silently, were skipped as stale, or errored (`[silent]`, `[skipped]`, `[err]`)
 
 ## [0.1.15] stable - 2026-04-21
 
@@ -14,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - session: four recall presets (`balanced` default, `aggressive`, `long_term_memory`, `recall_heavy`) trade off how much history GoClaw carries forward against prompt size and cost; configure under `session.summarization.compaction.lcm.preset`
 - session: existing installs with large chat histories catch up automatically after upgrade — no manual migration. `/session` shows the catch-up progress while it runs
 - tools: the `transcript.stats` agent tool surfaces the same long-memory picture plus preset-tuning hints, so GoClaw's own agent can diagnose its recall behavior
+- security: bumped `golang.org/x/image` (GO-2026-4961) — fixes a panic on 32-bit builds when decoding large WEBP images via `web_fetch` / media optimization
 
 ## [0.1.14] stable - 2026-04-19
 

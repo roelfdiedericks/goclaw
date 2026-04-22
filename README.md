@@ -113,6 +113,12 @@ A semantic knowledge graph that automatically extracts entities, facts, and rela
 
 See [Memory Graph](docs/memory-graph.md) for details.
 
+### Memory Triggers — Routines That Wake the Agent
+
+Give GoClaw a recurring routine — gym Tue/Thu at 17:45, meds before bed — and the agent will check in when the time comes. It decides whether to actually nudge you or stay quiet, and any message lands on whichever channel you're currently using.
+
+See [Memory Triggers](docs/memory-graph.md#memory-triggers) for details.
+
 ### Managed Browser — First-Class Web Access
 
 GoClaw includes a managed Chromium browser with auto-download/update:
@@ -216,7 +222,7 @@ GoClaw routes LLM requests based on **purpose**. Each purpose has a model chain 
 | `summarization` | Checkpoints, compaction | Ollama / Haiku |
 | `embeddings` | Memory, transcript, Memory Graph search | Ollama |
 
-Additional purposes (`heartbeat`, `cron`, `hass`, `memoryExtraction`) fall back to `agent` if not configured.
+Additional purposes (`heartbeat`, `cron`, `hass`, `memoryExtraction`, `memtrigger`) fall back to `agent` if not configured.
 
 If a provider fails, GoClaw automatically tries the next model in the chain. See [LLM Providers](docs/llm-providers.md#purpose-chains) for configuration details.
 
@@ -311,6 +317,7 @@ Full documentation available at [goclaw.org/docs](https://goclaw.org/docs/) or i
 - [Tools Overview](docs/tools.md) — Available tools
 - [ACP Tools](docs/tools/acp.md) — Agent-facing ACP control and inspection
 - [Browser](docs/tools/browser.md) — Web automation
+- [Document Extract](docs/tools/document-extract.md) — PDFs, Office docs, EPUBs, HTML → markdown
 - [Home Assistant](docs/tools/hass.md) — Smart home
 - [Cron](docs/tools/cron.md) — Scheduling
 

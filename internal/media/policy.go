@@ -28,11 +28,13 @@ const (
 	DefaultDownloadsQuotaBytes = bytesPerGB / 2
 	DefaultVoiceTTL            = 1 * time.Hour
 	DefaultVoiceQuotaBytes     = bytesPerGB / 2
+	DefaultExtractedTTL        = 30 * 24 * time.Hour
+	DefaultExtractedQuotaBytes = 2 * bytesPerGB
 )
 
 var (
-	ephemeralCategories = []string{"browser", "camera", "generated", "downloads", "voice"}
-	allCategories       = []string{"uploads", "keeper", "browser", "camera", "generated", "downloads", "voice"}
+	ephemeralCategories = []string{"browser", "camera", "generated", "downloads", "voice", "extracted"}
+	allCategories       = []string{"uploads", "keeper", "browser", "camera", "generated", "downloads", "voice", "extracted"}
 )
 
 type MediaCleanupConfig struct {
@@ -57,6 +59,7 @@ type MediaCategoriesConfig struct {
 	Generated MediaCategoryConfig `json:"generated"`
 	Downloads MediaCategoryConfig `json:"downloads"`
 	Voice     MediaCategoryConfig `json:"voice"`
+	Extracted MediaCategoryConfig `json:"extracted"`
 }
 
 // MediaConfig configures the MediaStore.
@@ -117,6 +120,7 @@ func (c *MediaConfig) Normalize() {
 	normalizeCategoryConfig(&c.Categories.Generated, defaultCategoryConfig("generated"), legacyTTL)
 	normalizeCategoryConfig(&c.Categories.Downloads, defaultCategoryConfig("downloads"), legacyTTL)
 	normalizeCategoryConfig(&c.Categories.Voice, defaultCategoryConfig("voice"), legacyTTL)
+	normalizeCategoryConfig(&c.Categories.Extracted, defaultCategoryConfig("extracted"), legacyTTL)
 }
 
 func normalizeCategoryConfig(cfg *MediaCategoryConfig, defaults MediaCategoryConfig, legacyTTL int) {
@@ -143,6 +147,8 @@ func defaultCategoryConfig(category string) MediaCategoryConfig {
 		return MediaCategoryConfig{TTL: int(DefaultDownloadsTTL / time.Second), Quota: DefaultDownloadsQuotaBytes}
 	case "voice":
 		return MediaCategoryConfig{TTL: int(DefaultVoiceTTL / time.Second), Quota: DefaultVoiceQuotaBytes}
+	case "extracted":
+		return MediaCategoryConfig{TTL: int(DefaultExtractedTTL / time.Second), Quota: DefaultExtractedQuotaBytes}
 	default:
 		return MediaCategoryConfig{}
 	}
@@ -161,6 +167,8 @@ func (c MediaConfig) CategoryPolicy(category string) MediaCategoryConfig {
 		return c.Categories.Downloads
 	case "voice":
 		return c.Categories.Voice
+	case "extracted":
+		return c.Categories.Extracted
 	default:
 		return MediaCategoryConfig{}
 	}
@@ -173,7 +181,7 @@ func (c MediaConfig) QuotaForCategory(category string) int64 {
 		return int64(c.Quotas.Uploads)
 	case "keeper":
 		return int64(c.Quotas.Keeper)
-	case "browser", "camera", "generated", "downloads", "voice":
+	case "browser", "camera", "generated", "downloads", "voice", "extracted":
 		return int64(c.CategoryPolicy(category).Quota)
 	default:
 		return int64(c.CategoryPolicy("downloads").Quota)
@@ -192,7 +200,7 @@ func topLevelCategory(path string) string {
 		root = cleaned[:idx]
 	}
 	switch root {
-	case "uploads", "keeper", "browser", "camera", "generated", "downloads", "voice":
+	case "uploads", "keeper", "browser", "camera", "generated", "downloads", "voice", "extracted":
 		return root
 	default:
 		return "downloads"

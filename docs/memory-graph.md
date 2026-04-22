@@ -304,6 +304,57 @@ Control context bulletin injection:
 }
 ```
 
+### Memory Trigger Configuration
+
+Controls the poller that wakes the agent when a routine memory comes due. See [Memory Triggers](#memory-triggers) below for the architectural overview.
+
+```json
+{
+  "memoryGraph": {
+    "trigger": {
+      "enabled": true,
+      "pollIntervalSeconds": 60,
+      "missedGraceMinutes": 30
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Master switch for the memory-trigger poller. |
+| `pollIntervalSeconds` | int | `60` | How often to scan for due routines. |
+| `missedGraceMinutes` | int | `30` | If a routine's scheduled time is older than `now - missedGraceMinutes`, the fire is silently dropped and `next_trigger_at` is rolled forward. Prevents post-downtime floods. |
+
+Bulletin injection for memtrigger turns is controlled separately by `memoryGraph.bulletin.injectForMemTrigger` (default `true`), and the LLM chain used for the turn is `llm.memtrigger` (falls back to `llm.agent` when unset).
+
+## Memory Triggers
+
+Routine memories with a structured [recurrence](#recurring-routines) can **spontaneously wake the agent** when their scheduled time arrives. Alongside user messages, heartbeat, and cron, memory triggers are a first-class turn source in GoClaw.
+
+### Lifecycle
+
+1. **Schedule.** When a routine is created or updated, its `next_trigger_at` is derived from the recurrence cadence (`days` + `time_start`, honouring `starts_on`/`ends_on`/`skip_dates`).
+2. **Poll.** A background poller (`pollIntervalSeconds`, default `60s`) scans for routines whose `next_trigger_at <= now`.
+3. **Grace check.** If the scheduled time is older than `missedGraceMinutes` (default `30m`), the fire is recorded as `missed_grace` and dropped — the poller rolls `next_trigger_at` forward to the next valid occurrence instead of flooding after downtime.
+4. **Wake.** The poller opens a turn on the user's **primary session** (`primary` for the owner, or `user:<id>`) with `Purpose = "memtrigger"`. A short `[memtrigger]` preamble tells the agent a routine is due and to either respond or reply `SILENT_OK`.
+5. **Bulletin injection.** Memory and context bulletins are injected into the system prompt (controlled by `bulletin.injectForMemTrigger`, default on), so the agent has the same situational awareness it would have during a user-initiated turn.
+6. **LLM chain.** The turn routes through the `memtrigger` LLM purpose chain, which falls back to `agent` when unconfigured. Configure a distinct chain under `llm.memtrigger` if you want memtrigger turns to use a different model from normal conversation.
+7. **Response fan-out.** Any agent output (not `SILENT_OK`) is fanned out to every active channel for the owning user — Telegram, WhatsApp, HTTP, TUI — so a nudge reaches wherever the user currently is.
+8. **Outcome.** Each fire is recorded in an audit log as `fired` (agent produced output), `silent` (agent replied `SILENT_OK`), `missed_grace` (poller skipped as stale), or `error` (invocation failed).
+
+### Safeguards
+
+- **Grace window.** `missedGraceMinutes` prevents a backlog of old routines from firing at once after GoClaw restarts.
+- **Loop-avoidance guard.** `memory_graph_store` calls that originate from a `memtrigger` turn are refused when the new routine's next occurrence is less than 5 minutes away, so a misbehaving agent can't create a routine that immediately re-wakes itself.
+- **Autonomy hint.** Each routine carries an `autonomy` field (`observe` default, `suggest`, `confirm`, `auto`, `silent`) that the agent uses as context for whether to speak up.
+
+### Related Surfaces
+
+- **Today's Schedule bulletin** — due routines for today appear in a dedicated bulletin section, with `[silent]` / `[skipped]` / `[err]` annotations when recent fires weren't successful nudges.
+- **`memory_graph_query` `mode: "triggers"`** — reads the fire audit log so the agent can answer "did I remind them?" or debug missed nudges. See [Inspecting fired triggers](#inspecting-fired-triggers).
+- **`memory_graph_store` with `recurrence`** — the agent-facing entry point for creating a triggered routine. See [Recurring Routines](#recurring-routines).
+
 ## Agent Tools
 
 The agent has access to six tools for managing the memory graph:
@@ -369,6 +420,69 @@ Add a new memory to the graph.
 | `confidence` | float | Confidence score (0-1) for pattern-style memories |
 
 Use `occurred_at` for observation or past-event timing, and `happens_at` for structured scheduling of future events and deadlines. `next_trigger_at` remains internal to routine and prediction behavior.
+
+#### Recurring Routines
+
+For `memory_type: "routine"` you can pass a structured `recurrence` object instead of hoping the agent encodes the cadence in prose. The fields are normalized, the cron expression is derived from `days` + `time_start`, and the routine surfaces in the bulletin's new **Today's Schedule** section at the scheduled time.
+
+```json
+{
+  "tool": "memory_graph_store",
+  "input": {
+    "content": "Evening lifting with Bob",
+    "memory_type": "routine",
+    "reasoning": "Recurring gym session with Bob that we want surfaced on the right days",
+    "recurrence": {
+      "days": ["tuesday", "thursday"],
+      "time_start": "17:45",
+      "time_end": "18:45",
+      "location": "gym",
+      "person": "Bob",
+      "starts_on": "2025-10-01",
+      "ends_on": "2026-06-30",
+      "skip_dates": ["2025-12-24", "2025-12-25"]
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `days` | array | Lowercase full day names (`"monday"`..`"sunday"`). Short forms (`"mon"`) and ISO numbers (`1`..`7`) also accepted. |
+| `time_start` | string | Start time `"HH:MM"` (server-local). Required alongside `days` for the cron to be derived. |
+| `time_end` | string | Optional end time `"HH:MM"`. Used for the `recurs_at_time` window filter and the rendered cadence line. |
+| `duration_minutes` | int | Optional duration in minutes; alternative to `time_end`. |
+| `location` | string | Optional location (e.g. `"office"`, `"Carrefour"`). |
+| `person` | string | Optional person the routine involves. Queryable via `involves_person`. |
+| `starts_on` | string | Inclusive `"YYYY-MM-DD"` — routine doesn't fire before this date. |
+| `ends_on` | string | Inclusive `"YYYY-MM-DD"` — routine stops firing after this date; recall/query results render `(ended YYYY-MM-DD)` in place of `next:`. |
+| `skip_dates` | array | List of `"YYYY-MM-DD"` dates to skip (holidays, travel). |
+| `autonomy` | string | One of `observe` (default), `suggest`, `confirm`, `auto`, `silent` — how autonomously the agent should act when the routine fires. |
+
+Once stored, the routine shows up in the bulletin's **Today's Schedule** section on matching days and wakes the agent at each occurrence via the memory-trigger poller. See [Memory Triggers](#memory-triggers) above for the wake-up lifecycle, grace window, LLM chain, and loop-avoidance guard.
+
+The matching filters on `memory_graph_query` (`recurs_on_day`, `recurs_on_days`, `recurs_today`, `recurs_at_time: "17:00-19:00"`, `next_occurrence_within: "1h"`, `involves_person`) let the agent find routines by cadence without free-text search. `recurs_on_day` takes a single day; `recurs_on_days` takes an array for multi-day matches.
+
+Query and recall results for routine memories also surface a compact `recurrence:` line alongside the content (e.g. `recurrence: Tue,Thu @ 17:45-18:45 @ gym | person: Bob | next: Tue 2026-04-21 17:45`). When a routine has passed its `ends_on`, the line shows `(ended YYYY-MM-DD)` instead of `next:`. At `detail_level: "full"` on `memory_graph_query` the line also includes `bounds:` and `skip:` entries.
+
+#### Inspecting fired triggers
+
+`memory_graph_query` with `mode: "triggers"` reads the trigger-fire audit log so the agent can answer "did I remind them?" or debug missed nudges. Filters: `memory_uuid`, `outcome` (one of `fired | silent | missed_grace | error`), `since`, `before`, `max_results`. In triggers mode the `since`/`before` filters apply to `fired_at` (not `occurred_at`); hybrid/recurrence filters are ignored.
+
+```json
+{
+  "tool": "memory_graph_query",
+  "input": {
+    "mode": "triggers",
+    "outcome": "silent",
+    "since": "24h"
+  }
+}
+```
+
+Scope to a single routine by adding `"memory_uuid": "<uuid>"`. Each result shows `scheduled`, `fired` (with non-negative lag — the poller only acts when `next_trigger_at <= now`), `outcome`, and the originating `run_id`.
+
+When the bulletin's **Today's Schedule** includes any line whose fire had a non-success outcome, the section header is annotated with a short legend (`[silent]` = agent stayed quiet via `SILENT_OK`, `[skipped]` = poller skipped the fire as stale past the `missedGraceMinutes` window, `[err]` = invocation error). Successful fires carry no annotation.
 
 ### memory_graph_update
 

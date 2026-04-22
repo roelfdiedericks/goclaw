@@ -57,6 +57,7 @@ func ConfigFormDefWithValues(cfg MediaConfig) forms.FormDef {
 			ephemeralCategorySection("Generated Directory", "AI-generated images and videos.", "generated", cfg, snapshot),
 			ephemeralCategorySection("Downloads Directory", "Downloaded files and general fallback storage.", "downloads", cfg, snapshot),
 			ephemeralCategorySection("Voice Directory", "Text-to-speech audio output.", "voice", cfg, snapshot),
+			ephemeralCategorySection("Extracted Documents", "Cached markdown extracted from uploaded documents by `document_extract`. Safe to delete; regenerated on next request.", "extracted", cfg, snapshot),
 		},
 		Actions: []forms.ActionDef{
 			{Name: "stats", Label: "Refresh Usage", Desc: "Show current usage and warning information"},

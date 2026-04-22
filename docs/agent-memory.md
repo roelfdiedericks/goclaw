@@ -179,6 +179,7 @@ The Memory Graph is a semantic knowledge graph that provides structured, queryab
 - **Structured storage** — Typed entities with relationships (not free-form text)
 - **Smart recall** — Relevant context automatically injected into system prompt
 - **CRUD operations** — Agent can store, update, query, and forget memories
+- **Memory triggers** — Routine memories with structured recurrence spontaneously wake the agent on the primary session at their scheduled time, alongside user messages, heartbeat, and cron. See [Memory Triggers](memory-graph.md#memory-triggers).
 
 ### Tools
 

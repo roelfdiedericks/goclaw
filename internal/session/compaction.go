@@ -621,7 +621,7 @@ func (m *CompactionManager) runRetryLoop(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			tickCount++
-			L_debug("lcm: retry loop tick fired", "tickCount", tickCount)
+			L_trace("lcm: retry loop tick fired", "tickCount", tickCount)
 			m.retryPendingSummary(ctx)
 			m.condenseTick(ctx)
 		case <-m.stopCh:
@@ -636,15 +636,15 @@ func (m *CompactionManager) runRetryLoop(ctx context.Context) {
 
 func (m *CompactionManager) condenseTick(ctx context.Context) {
 	if !m.IsLCMEnabled() {
-		L_debug("lcm: condenseTick skipped (LCM disabled)")
+		L_trace("lcm: condenseTick skipped (LCM disabled)")
 		return
 	}
 	if m.store == nil {
-		L_debug("lcm: condenseTick skipped (store is nil)")
+		L_trace("lcm: condenseTick skipped (store is nil)")
 		return
 	}
 	if m.inProgress.Load() {
-		L_debug("lcm: condenseTick skipped (compaction in progress)")
+		L_trace("lcm: condenseTick skipped (compaction in progress)")
 		return
 	}
 
@@ -659,7 +659,7 @@ func (m *CompactionManager) condenseTick(ctx context.Context) {
 		L_warn("lcm: condenseTick failed to list compaction session keys", "error", err)
 		return
 	}
-	L_debug("lcm: condenseTick iterating compaction session keys",
+	L_trace("lcm: condenseTick iterating compaction session keys",
 		"sessionKeyCount", len(sessionKeys),
 		"sessionKeys", sessionKeys)
 	for _, key := range sessionKeys {
@@ -736,7 +736,7 @@ func (m *CompactionManager) condenseSession(ctx context.Context, sessionKey stri
 		return err
 	}
 	if len(compactions) == 0 {
-		L_debug("lcm: condenseSession no compactions", "sessionKey", sessionKey)
+		L_trace("lcm: condenseSession no compactions", "sessionKey", sessionKey)
 		return nil
 	}
 
@@ -749,7 +749,7 @@ func (m *CompactionManager) condenseSession(ctx context.Context, sessionKey stri
 		m.config.IncrementalMaxDepth,
 	)
 	if batch == nil {
-		L_debug("lcm: condenseSession no batch picked",
+		L_trace("lcm: condenseSession no batch picked",
 			"sessionKey", sessionKey,
 			"totalCompactions", len(compactions),
 			"unparentedLeaves", leafCandidates,

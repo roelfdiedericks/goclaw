@@ -19,6 +19,7 @@ import (
 
 	a2aproto "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/google/uuid"
+	"github.com/roelfdiedericks/go-markitdown/docconv"
 	"github.com/roelfdiedericks/goclaw/internal/a2a"
 	"github.com/roelfdiedericks/goclaw/internal/a2apeers"
 	"github.com/roelfdiedericks/goclaw/internal/acp"
@@ -1085,6 +1086,9 @@ func (g *Gateway) resolveMediaContent(messages []types.Message, provider llm.Pro
 					mime = "application/octet-stream"
 				}
 				summary := fmt.Sprintf("[Attached file: `%s` MIME: %s Path: %s]", name, mime, rel)
+				if docconv.Supports(mime) {
+					summary += " Call `document_extract` with this path to read the contents."
+				}
 				resolvedBlocks = append(resolvedBlocks, types.ContentBlock{Type: "text", Text: summary})
 				continue
 			}
@@ -1664,6 +1668,77 @@ func (g *Gateway) ListDelegatedRunEvents(sinceID int64, limit int) []delegatedru
 		return nil
 	}
 	return g.cronService.ListDelegatedRunEvents(sinceID, limit)
+}
+
+// RunAgentForMemoryTrigger wakes the agent on the user's primary (or user:<id>)
+// session with a system-injected preamble describing a due routine memory.
+// The run is persisted (the agent remembers its own autonomous touches), and
+// its response is fanned out to every registered channel for the user via
+// ProcessMessage's batch-mode delivery.
+//
+// Parameters:
+//   - ownerUsername: the user whose routine is firing (memory.Username).
+//   - memoryUUID: routine memory UUID (for logging / attribution).
+//   - preamble: the system-injected user message for the turn. Callers build
+//     this from the routine content, scheduled time, location, person, etc.
+//
+// Returns the runID when the run reached an EventAgentEnd, or "" if the run
+// produced no text (SILENT_OK / empty). Returns an error only when the run
+// itself failed (user not found, agent exec error, ...).
+func (g *Gateway) RunAgentForMemoryTrigger(ctx context.Context, ownerUsername, memoryUUID, preamble string) (string, error) {
+	if strings.TrimSpace(ownerUsername) == "" {
+		return "", fmt.Errorf("memtrigger: empty owner username")
+	}
+	if strings.TrimSpace(preamble) == "" {
+		return "", fmt.Errorf("memtrigger: empty preamble")
+	}
+
+	u := g.users.Get(ownerUsername)
+	if u == nil {
+		return "", fmt.Errorf("memtrigger: unknown user %q", ownerUsername)
+	}
+
+	L_info("memtrigger: waking agent",
+		"user", u.ID,
+		"memory", memoryUUID,
+		"preambleLen", len(preamble),
+	)
+
+	msg := types.NewInboundMessage("memtrigger", u, preamble)
+	msg.Purpose = "memtrigger"
+	msg.SkipMirror = true // fanout via DeliverAssistantOutput; don't mirror preamble
+	msg.SuppressDeliveryOn = "SILENT_OK"
+	msg.Meta = map[string]string{"memory_uuid": memoryUUID}
+
+	// ProcessMessage batch mode: runs the agent, collects FinalText, delivers
+	// to every user channel (unless suppressed).
+	report, err := g.ProcessMessage(ctx, msg, nil)
+	if err != nil {
+		L_error("memtrigger: agent run failed",
+			"user", u.ID,
+			"memory", memoryUUID,
+			"error", err,
+		)
+		return "", err
+	}
+
+	runID := ""
+	if report != nil {
+		runID = report.RunID
+		L_info("memtrigger: run complete",
+			"user", u.ID,
+			"memory", memoryUUID,
+			"runID", runID,
+			"suppressed", report.Suppressed,
+			"finalLen", len(report.FinalText),
+		)
+		// Silent outcome: no text or suppressed. Empty runID here is possible
+		// when the agent never emitted an EventAgentEnd; treat as silent too.
+		if report.Suppressed || strings.TrimSpace(report.FinalText) == "" {
+			return "", nil
+		}
+	}
+	return runID, nil
 }
 
 // RunAgentForCron implements the cron.GatewayRunner interface.
@@ -2710,12 +2785,16 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 		// Determine if we should inject bulletins
 		isHeartbeat := req.Purpose == "heartbeat"
 		isCron := strings.HasPrefix(req.Purpose, "cron")
+		isMemTrigger := req.Purpose == "memtrigger"
 
 		shouldInject := bulletinCfg.Enabled && userID != ""
 		if shouldInject && isHeartbeat && !bulletinCfg.InjectForHeartbeat {
 			shouldInject = false
 		}
 		if shouldInject && isCron && !bulletinCfg.InjectForCron {
+			shouldInject = false
+		}
+		if shouldInject && isMemTrigger && !bulletinCfg.InjectForMemTrigger {
 			shouldInject = false
 		}
 
@@ -3411,6 +3490,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 							OwnerChatID:       ownerChatID,
 							SessionKey:        sessionKey,
 							RunID:             runID,
+							Purpose:           req.Purpose,
 							TotalTokens:       sess.GetTotalTokens(),
 							MaxTokens:         sess.GetMaxTokens(),
 							ReserveTokens:     reserveTokens,
@@ -3632,6 +3712,7 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					OwnerChatID:       ownerChatID,
 					SessionKey:        sessionKey,
 					RunID:             runID,
+					Purpose:           req.Purpose,
 					TotalTokens:       sess.GetTotalTokens(),
 					MaxTokens:         sess.GetMaxTokens(),
 					ReserveTokens:     reserveTokens,
