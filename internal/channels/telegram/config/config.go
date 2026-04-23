@@ -16,8 +16,44 @@ import (
 
 // Config holds the Telegram bot configuration
 type Config struct {
-	Enabled  bool   `json:"enabled"`
-	BotToken string `json:"botToken"`
+	Enabled   bool            `json:"enabled"`
+	BotToken  string          `json:"botToken"`
+	RateLimit RateLimitConfig `json:"rateLimit"`
+}
+
+// RateLimitConfig controls outbound flood-control behavior for the Telegram bot.
+// All durations are in milliseconds to match the project's existing retry-config style.
+type RateLimitConfig struct {
+	// MaxRetries is the maximum number of flood-retry attempts after the initial send.
+	// A value of 3 means up to 4 attempts total (initial + 3 retries).
+	MaxRetries int `json:"maxRetries" default:"3"`
+	// InitialBackoffMs is the minimum backoff for the first retry; subsequent retries
+	// double this value. The actual wait is max(retry_after, initial*2^attempt).
+	InitialBackoffMs int `json:"initialBackoffMs" default:"1000"`
+	// MaxBackoffMs caps the wait per retry. If Telegram's retry_after exceeds this
+	// value, the retry is abandoned and the error is returned immediately.
+	MaxBackoffMs int `json:"maxBackoffMs" default:"120000"`
+	// PerChatMinGapMs is the minimum spacing between consecutive sends to the same
+	// chat. Acts as a proactive throttle to avoid hitting Telegram's per-chat limit.
+	// Only sends to the same chatID serialize; different chats never block each other.
+	PerChatMinGapMs int `json:"perChatMinGapMs" default:"35"`
+}
+
+// Normalize fills in default values for any zero-valued rate-limit fields so
+// configs loaded from disk without a `rateLimit` block behave correctly.
+func (c *Config) Normalize() {
+	if c.RateLimit.MaxRetries <= 0 {
+		c.RateLimit.MaxRetries = 3
+	}
+	if c.RateLimit.InitialBackoffMs <= 0 {
+		c.RateLimit.InitialBackoffMs = 1000
+	}
+	if c.RateLimit.MaxBackoffMs <= 0 {
+		c.RateLimit.MaxBackoffMs = 120000
+	}
+	if c.RateLimit.PerChatMinGapMs <= 0 {
+		c.RateLimit.PerChatMinGapMs = 35
+	}
 }
 
 // ConfigFormDef returns the form definition for editing TelegramConfig

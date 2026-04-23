@@ -5,6 +5,10 @@ All notable changes to GoClaw will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- gateway: tool panics no longer crash the gateway — the tool registry and the cron / parallel-tool / event-forwarder goroutines now recover panics, log a full stack, and surface them to the agent as a normal tool error it can apologise for or retry; also fixes a specific browser-tool crash on pages that blow the underlying JS engine's stack limit (e.g. some old web.archive.org snapshots)
+- channels: Telegram now retries flood-limited (HTTP 429) sends instead of silently dropping the message — the retry honors Telegram's `retry_after` hint up to a 120s cap, and a per-chat minimum-gap throttle smooths rapid bursts so the 429 usually doesn't fire in the first place; other chats and channels stay responsive during a back-off, and a panic-stop / shutdown aborts in-flight retries immediately
 
 ## [0.1.17] stable - 2026-04-23
 

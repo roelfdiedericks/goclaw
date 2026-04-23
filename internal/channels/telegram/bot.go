@@ -46,6 +46,10 @@ type Bot struct {
 	// Per-chat preferences
 	chatPrefs sync.Map // chatID (int64) -> *ChatPreferences
 
+	// Outbound flood-control: proactive per-chat min-gap limiter composed with
+	// reactive FloodError retry (see ratelimit.go / sender.go).
+	chatLimiter *chatLimiter
+
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -109,6 +113,8 @@ func New(cfg *config.Config, gw *gateway.Gateway, users *user.Registry) (*Bot, e
 		return nil, fmt.Errorf("telegram bot token not configured")
 	}
 
+	cfg.Normalize()
+
 	pref := tele.Settings{
 		Token:  cfg.BotToken,
 		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
@@ -136,12 +142,20 @@ func New(cfg *config.Config, gw *gateway.Gateway, users *user.Registry) (*Bot, e
 		gateway:           gw,
 		users:             users,
 		config:            cfg,
+		chatLimiter:       newChatLimiter(time.Duration(cfg.RateLimit.PerChatMinGapMs) * time.Millisecond),
 		ctx:               ctx,
 		cancel:            cancel,
 		delegatedLast:     make(map[string]time.Time),
 		interactiveStates: make(map[string]*telegramInteractiveState),
 		interactivePolls:  make(map[string]string),
 	}
+
+	logging.L_debug("telegram: rate limit configured",
+		"maxRetries", cfg.RateLimit.MaxRetries,
+		"initialBackoffMs", cfg.RateLimit.InitialBackoffMs,
+		"maxBackoffMs", cfg.RateLimit.MaxBackoffMs,
+		"perChatMinGapMs", cfg.RateLimit.PerChatMinGapMs,
+	)
 
 	// Register handlers
 	b.setupHandlers()
@@ -1824,12 +1838,12 @@ func (b *Bot) streamResponse(c tele.Context, events <-chan gateway.AgentEvent) e
 					_ = b.bot.Delete(currentMsg)
 				}
 				// Send text/media segments
-				if err := b.sendWithMediaRefs(c.Chat(), finalText); err != nil {
+				if err := b.sendWithMediaRefs(b.ctx, c.Chat(), finalText); err != nil {
 					logging.L_error("telegram: failed to send with media", "error", err)
 				}
 			} else {
 				// No media refs - send as regular text, splitting by formatted HTML length.
-				if _, err := b.sendTextWithOptionalEdit(c.Chat(), finalText, currentMsg); err != nil {
+				if _, err := b.sendTextWithOptionalEdit(b.ctx, c.Chat(), finalText, currentMsg); err != nil {
 					logging.L_error("telegram: failed to send final text", "error", err)
 				}
 			}
@@ -1993,8 +2007,8 @@ func (b *Bot) Send(ctx context.Context, msg string) error {
 }
 
 // sendWithHTMLFallback sends a message with HTML formatting, falling back to plain text
-func (b *Bot) sendWithHTMLFallback(chat *tele.Chat, text string) (*tele.Message, error) {
-	return b.sendTextWithOptionalEdit(chat, text, nil)
+func (b *Bot) sendWithHTMLFallback(ctx context.Context, chat *tele.Chat, text string) (*tele.Message, error) {
+	return b.sendTextWithOptionalEdit(ctx, chat, text, nil)
 }
 
 // containsMediaRefs checks if text contains any media references (delegates to shared media package)
@@ -2009,7 +2023,7 @@ func splitMediaSegments(text string) []media.MediaSegment {
 
 // sendWithMediaRefs parses and sends text with inline media references
 // Supports captions (preceding text < 1024 chars) and albums (consecutive images)
-func (b *Bot) sendWithMediaRefs(chat *tele.Chat, text string) error {
+func (b *Bot) sendWithMediaRefs(ctx context.Context, chat *tele.Chat, text string) error {
 	segments := splitMediaSegments(text)
 
 	// Get media root
@@ -2032,7 +2046,7 @@ func (b *Bot) sendWithMediaRefs(chat *tele.Chat, text string) error {
 
 					if len(imageSegments) > 1 {
 						// Album with caption
-						b.sendAlbum(chat, mediaRoot, imageSegments, seg.Text)
+						b.sendAlbum(ctx, chat, mediaRoot, imageSegments, seg.Text)
 						i += 1 + len(imageSegments) // skip text + all images
 						continue
 					}
@@ -2042,12 +2056,12 @@ func (b *Bot) sendWithMediaRefs(chat *tele.Chat, text string) error {
 					absPath, err := media.ResolveMediaPath(mediaRoot, nextSeg.Path)
 					if err != nil {
 						// Send text separately, then continue
-						_, _ = b.sendWithHTMLFallback(chat, seg.Text)
+						_, _ = b.sendWithHTMLFallback(ctx, chat, seg.Text)
 						i++
 						continue
 					}
 
-					b.sendMediaByMime(chat.ID, absPath, nextSeg.Mime, seg.Text)
+					b.sendMediaByMime(ctx, chat.ID, absPath, nextSeg.Mime, seg.Text)
 					i += 2 // skip both text and media
 					continue
 				}
@@ -2055,7 +2069,7 @@ func (b *Bot) sendWithMediaRefs(chat *tele.Chat, text string) error {
 
 			// No media follows, or text too long - send text separately
 			if seg.Text != "" {
-				_, _ = b.sendWithHTMLFallback(chat, seg.Text)
+				_, _ = b.sendWithHTMLFallback(ctx, chat, seg.Text)
 			}
 			i++
 			continue
@@ -2066,7 +2080,7 @@ func (b *Bot) sendWithMediaRefs(chat *tele.Chat, text string) error {
 		if strings.HasPrefix(seg.Mime, "error/") {
 			errType := strings.TrimPrefix(seg.Mime, "error/")
 			errMsg := fmt.Sprintf("[Media %s: %s]", errType, seg.Path)
-			_, _ = b.sendWithHTMLFallback(chat, errMsg)
+			_, _ = b.sendWithHTMLFallback(ctx, chat, errMsg)
 			i++
 			continue
 		}
@@ -2074,7 +2088,7 @@ func (b *Bot) sendWithMediaRefs(chat *tele.Chat, text string) error {
 		// Check for consecutive images (album without caption)
 		imageSegments := b.collectConsecutiveImages(segments, i)
 		if len(imageSegments) > 1 {
-			b.sendAlbum(chat, mediaRoot, imageSegments, "")
+			b.sendAlbum(ctx, chat, mediaRoot, imageSegments, "")
 			i += len(imageSegments)
 			continue
 		}
@@ -2087,7 +2101,7 @@ func (b *Bot) sendWithMediaRefs(chat *tele.Chat, text string) error {
 			continue
 		}
 
-		b.sendMediaByMime(chat.ID, absPath, seg.Mime, "")
+		b.sendMediaByMime(ctx, chat.ID, absPath, seg.Mime, "")
 		i++
 	}
 
@@ -2114,7 +2128,7 @@ func (b *Bot) collectConsecutiveImages(segments []media.MediaSegment, startIdx i
 }
 
 // sendAlbum sends multiple images as a Telegram album
-func (b *Bot) sendAlbum(chat *tele.Chat, mediaRoot string, segments []media.MediaSegment, caption string) {
+func (b *Bot) sendAlbum(ctx context.Context, chat *tele.Chat, mediaRoot string, segments []media.MediaSegment, caption string) {
 	if len(segments) == 0 {
 		return
 	}
@@ -2145,7 +2159,9 @@ func (b *Bot) sendAlbum(chat *tele.Chat, mediaRoot string, segments []media.Medi
 		return
 	}
 
-	_, err := b.bot.SendAlbum(chat, album, &tele.SendOptions{ParseMode: tele.ModeHTML})
+	_, err := retryOn429(ctx, b, chat.ID, "album", func() ([]tele.Message, error) {
+		return b.bot.SendAlbum(chat, album, &tele.SendOptions{ParseMode: tele.ModeHTML})
+	})
 	if err != nil {
 		logging.L_warn("telegram: failed to send album", "count", len(album), "error", err)
 		// Fallback: send individually
@@ -2155,7 +2171,7 @@ func (b *Bot) sendAlbum(chat *tele.Chat, mediaRoot string, segments []media.Medi
 			if i == 0 {
 				cap = caption
 			}
-			b.sendMediaByMime(chat.ID, absPath, seg.Mime, cap)
+			b.sendMediaByMime(ctx, chat.ID, absPath, seg.Mime, cap)
 		}
 	} else {
 		logging.L_debug("telegram: sent album", "count", len(album), "hasCaption", caption != "")
@@ -2163,22 +2179,22 @@ func (b *Bot) sendAlbum(chat *tele.Chat, mediaRoot string, segments []media.Medi
 }
 
 // sendMediaByMime sends media based on mimetype with optional caption
-func (b *Bot) sendMediaByMime(chatID int64, absPath, mime, caption string) {
+func (b *Bot) sendMediaByMime(ctx context.Context, chatID int64, absPath, mime, caption string) {
 	switch {
 	case strings.HasPrefix(mime, "image/"):
-		if err := b.SendPhoto(chatID, absPath, caption); err != nil {
+		if err := b.sendPhotoCtx(ctx, chatID, absPath, caption); err != nil {
 			logging.L_warn("telegram: failed to send photo", "path", absPath, "error", err)
 		}
 	case strings.HasPrefix(mime, "video/"):
-		if err := b.SendVideo(chatID, absPath, caption); err != nil {
+		if err := b.sendVideoCtx(ctx, chatID, absPath, caption); err != nil {
 			logging.L_warn("telegram: failed to send video", "path", absPath, "error", err)
 		}
 	case strings.HasPrefix(mime, "audio/"):
-		if err := b.SendAudio(chatID, absPath, caption); err != nil {
+		if err := b.sendAudioCtx(ctx, chatID, absPath, caption); err != nil {
 			logging.L_warn("telegram: failed to send audio", "path", absPath, "error", err)
 		}
 	default:
-		if err := b.SendDocument(chatID, absPath, caption); err != nil {
+		if err := b.sendDocumentCtx(ctx, chatID, absPath, caption); err != nil {
 			logging.L_warn("telegram: failed to send document", "path", absPath, "error", err)
 		}
 	}
@@ -2190,6 +2206,11 @@ const TelegramCaptionLimit = 1024
 // SendPhoto sends a photo to a chat with optional caption.
 // If caption exceeds Telegram's limit, sends photo first then follow-up message.
 func (b *Bot) SendPhoto(chatID int64, path string, caption string) error {
+	return b.sendPhotoCtx(b.ctx, chatID, path, caption)
+}
+
+// sendPhotoCtx is the ctx-aware implementation of SendPhoto.
+func (b *Bot) sendPhotoCtx(ctx context.Context, chatID int64, path string, caption string) error {
 	chat := &tele.Chat{ID: chatID}
 	photo := &tele.Photo{File: tele.FromDisk(path)}
 
@@ -2202,12 +2223,16 @@ func (b *Bot) SendPhoto(chatID int64, path string, caption string) error {
 	if len(formattedCaption) <= TelegramCaptionLimit {
 		// Caption fits - send photo with caption
 		photo.Caption = formattedCaption
-		_, err := b.bot.Send(chat, photo, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		_, err := b.sendWithRetry(ctx, chatID, "photo-html", func() (*tele.Message, error) {
+			return b.bot.Send(chat, photo, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		})
 		if err != nil {
 			// Fallback: try without HTML formatting
 			logging.L_debug("telegram: HTML caption failed, trying plain text", "error", err)
 			photo.Caption = caption
-			_, err = b.bot.Send(chat, photo)
+			_, err = b.sendWithRetry(ctx, chatID, "photo-plain", func() (*tele.Message, error) {
+				return b.bot.Send(chat, photo)
+			})
 		}
 		return err
 	}
@@ -2218,13 +2243,15 @@ func (b *Bot) SendPhoto(chatID int64, path string, caption string) error {
 		"limit", TelegramCaptionLimit,
 	)
 
-	_, err := b.bot.Send(chat, photo)
+	_, err := b.sendWithRetry(ctx, chatID, "photo-only", func() (*tele.Message, error) {
+		return b.bot.Send(chat, photo)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to send photo: %w", err)
 	}
 
 	// Send follow-up text message with full caption
-	_, err = b.sendWithHTMLFallback(chat, caption)
+	_, err = b.sendWithHTMLFallback(ctx, chat, caption)
 	if err != nil {
 		logging.L_warn("telegram: failed to send follow-up caption", "error", err)
 	}
@@ -2233,6 +2260,7 @@ func (b *Bot) SendPhoto(chatID int64, path string, caption string) error {
 
 // SendPhotoFromBytes sends a photo from bytes data to a chat
 func (b *Bot) SendPhotoFromBytes(chatID int64, data []byte, caption string) error {
+	ctx := b.ctx
 	chat := &tele.Chat{ID: chatID}
 	photo := &tele.Photo{File: tele.FromReader(strings.NewReader(string(data)))}
 
@@ -2243,21 +2271,27 @@ func (b *Bot) SendPhotoFromBytes(chatID int64, data []byte, caption string) erro
 
 	if len(formattedCaption) <= TelegramCaptionLimit {
 		photo.Caption = formattedCaption
-		_, err := b.bot.Send(chat, photo, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		_, err := b.sendWithRetry(ctx, chatID, "photo-bytes-html", func() (*tele.Message, error) {
+			return b.bot.Send(chat, photo, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		})
 		if err != nil {
 			photo.Caption = caption
-			_, err = b.bot.Send(chat, photo)
+			_, err = b.sendWithRetry(ctx, chatID, "photo-bytes-plain", func() (*tele.Message, error) {
+				return b.bot.Send(chat, photo)
+			})
 		}
 		return err
 	}
 
 	// Caption too long - send photo first, then follow-up
-	_, err := b.bot.Send(chat, photo)
+	_, err := b.sendWithRetry(ctx, chatID, "photo-bytes-only", func() (*tele.Message, error) {
+		return b.bot.Send(chat, photo)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to send photo: %w", err)
 	}
 
-	_, err = b.sendWithHTMLFallback(chat, caption)
+	_, err = b.sendWithHTMLFallback(ctx, chat, caption)
 	return err
 }
 
@@ -2280,11 +2314,15 @@ func (b *Bot) SendMirror(ctx context.Context, source, userMsg string) error {
 	escapedUser := escapeHTML(truncatedUser)
 	mirror := fmt.Sprintf("📱 <b>%s</b>\n\n<b>You:</b> %s", source, escapedUser)
 
-	_, err := b.bot.Send(chat, mirror, &tele.SendOptions{ParseMode: tele.ModeHTML})
+	_, err := b.sendWithRetry(ctx, chatID, "mirror-html", func() (*tele.Message, error) {
+		return b.bot.Send(chat, mirror, &tele.SendOptions{ParseMode: tele.ModeHTML})
+	})
 	if err != nil {
 		logging.L_debug("telegram: HTML mirror failed, falling back to plain text", "error", err, "source", source)
 		plainMirror := fmt.Sprintf("📱 %s\n\nYou: %s", source, truncatedUser)
-		_, err = b.bot.Send(chat, plainMirror)
+		_, err = b.sendWithRetry(ctx, chatID, "mirror-plain", func() (*tele.Message, error) {
+			return b.bot.Send(chat, plainMirror)
+		})
 	}
 	if err != nil {
 		logging.L_error("failed to send telegram mirror", "error", err)
@@ -2307,10 +2345,10 @@ func (b *Bot) DeliverAssistantMessage(ctx context.Context, u *user.User, message
 
 	// Handle messages with media refs (e.g., from media_display tool)
 	if containsMediaRefs(message) {
-		return b.sendWithMediaRefs(chat, message)
+		return b.sendWithMediaRefs(ctx, chat, message)
 	}
 
-	_, err := b.sendTextWithOptionalEdit(chat, message, nil)
+	_, err := b.sendTextWithOptionalEdit(ctx, chat, message, nil)
 	return err
 }
 
@@ -2356,12 +2394,18 @@ func (b *Bot) DeliverGhostwrite(ctx context.Context, u *user.User, message strin
 		}
 	}
 
-	// Wait for typing delay (simulates thinking/typing)
-	time.Sleep(typingDelay)
+	// Wait for typing delay (simulates thinking/typing). Interruptible so
+	// panic-stop or shutdown doesn't have to wait out the full delay.
+	timer := time.NewTimer(typingDelay)
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return ctx.Err()
+	case <-timer.C:
+	}
 
-	// Send the message
-	_, err = b.SendText(chatID, message)
-	if err != nil {
+	// Send the message using the ctx-aware path so flood retries obey ctx.
+	if _, err := b.sendTextWithOptionalEdit(ctx, &tele.Chat{ID: chatID}, message, nil); err != nil {
 		return fmt.Errorf("failed to send ghostwrite: %w", err)
 	}
 	logging.L_info("telegram: ghostwrite delivered", "user", u.ID, "messageLen", len(message))
@@ -2370,24 +2414,31 @@ func (b *Bot) DeliverGhostwrite(ctx context.Context, u *user.User, message strin
 
 // SendText sends a text message to a chat, splitting if necessary.
 // Returns the last sent message for potential editing/deletion.
+// Uses the bot's lifecycle context; callers needing cancellation should use
+// sendTextWithOptionalEdit directly with their own ctx.
 func (b *Bot) SendText(chatID int64, text string) (*tele.Message, error) {
 	chat := &tele.Chat{ID: chatID}
-	return b.sendTextWithOptionalEdit(chat, text, nil)
+	return b.sendTextWithOptionalEdit(b.ctx, chat, text, nil)
 }
 
 // EditMessage edits an existing message.
 func (b *Bot) EditMessage(chatID int64, messageID int, text string) error {
+	ctx := b.ctx
 	msg := &tele.Message{
 		ID:   messageID,
 		Chat: &tele.Chat{ID: chatID},
 	}
 
 	formatted := FormatMessage(text)
-	_, err := b.bot.Edit(msg, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
+	_, err := b.sendWithRetry(ctx, chatID, "edit-html", func() (*tele.Message, error) {
+		return b.bot.Edit(msg, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
+	})
 	if err != nil {
 		// Fallback to plain text
 		logging.L_debug("telegram: HTML edit failed, falling back to plain text", "error", err)
-		_, err = b.bot.Edit(msg, text)
+		_, err = b.sendWithRetry(ctx, chatID, "edit-plain", func() (*tele.Message, error) {
+			return b.bot.Edit(msg, text)
+		})
 	}
 
 	if err != nil {
@@ -2443,6 +2494,11 @@ func (b *Bot) React(chatID int64, messageID int, emoji string) error {
 
 // SendVideo sends a video file to a chat.
 func (b *Bot) SendVideo(chatID int64, path string, caption string) error {
+	return b.sendVideoCtx(b.ctx, chatID, path, caption)
+}
+
+// sendVideoCtx is the ctx-aware implementation of SendVideo.
+func (b *Bot) sendVideoCtx(ctx context.Context, chatID int64, path string, caption string) error {
 	chat := &tele.Chat{ID: chatID}
 	video := &tele.Video{File: tele.FromDisk(path)}
 
@@ -2453,26 +2509,37 @@ func (b *Bot) SendVideo(chatID int64, path string, caption string) error {
 
 	if len(formattedCaption) <= TelegramCaptionLimit {
 		video.Caption = formattedCaption
-		_, err := b.bot.Send(chat, video, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		_, err := b.sendWithRetry(ctx, chatID, "video-html", func() (*tele.Message, error) {
+			return b.bot.Send(chat, video, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		})
 		if err != nil {
 			video.Caption = caption
-			_, err = b.bot.Send(chat, video)
+			_, err = b.sendWithRetry(ctx, chatID, "video-plain", func() (*tele.Message, error) {
+				return b.bot.Send(chat, video)
+			})
 		}
 		return err
 	}
 
 	// Caption too long - send video first, then follow-up
-	_, err := b.bot.Send(chat, video)
+	_, err := b.sendWithRetry(ctx, chatID, "video-only", func() (*tele.Message, error) {
+		return b.bot.Send(chat, video)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to send video: %w", err)
 	}
 
-	_, err = b.sendWithHTMLFallback(chat, caption)
+	_, err = b.sendWithHTMLFallback(ctx, chat, caption)
 	return err
 }
 
 // SendDocument sends a document file to a chat.
 func (b *Bot) SendDocument(chatID int64, path string, caption string) error {
+	return b.sendDocumentCtx(b.ctx, chatID, path, caption)
+}
+
+// sendDocumentCtx is the ctx-aware implementation of SendDocument.
+func (b *Bot) sendDocumentCtx(ctx context.Context, chatID int64, path string, caption string) error {
 	chat := &tele.Chat{ID: chatID}
 	doc := &tele.Document{File: tele.FromDisk(path)}
 
@@ -2483,26 +2550,37 @@ func (b *Bot) SendDocument(chatID int64, path string, caption string) error {
 
 	if len(formattedCaption) <= TelegramCaptionLimit {
 		doc.Caption = formattedCaption
-		_, err := b.bot.Send(chat, doc, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		_, err := b.sendWithRetry(ctx, chatID, "doc-html", func() (*tele.Message, error) {
+			return b.bot.Send(chat, doc, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		})
 		if err != nil {
 			doc.Caption = caption
-			_, err = b.bot.Send(chat, doc)
+			_, err = b.sendWithRetry(ctx, chatID, "doc-plain", func() (*tele.Message, error) {
+				return b.bot.Send(chat, doc)
+			})
 		}
 		return err
 	}
 
 	// Caption too long - send document first, then follow-up
-	_, err := b.bot.Send(chat, doc)
+	_, err := b.sendWithRetry(ctx, chatID, "doc-only", func() (*tele.Message, error) {
+		return b.bot.Send(chat, doc)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to send document: %w", err)
 	}
 
-	_, err = b.sendWithHTMLFallback(chat, caption)
+	_, err = b.sendWithHTMLFallback(ctx, chat, caption)
 	return err
 }
 
 // SendAudio sends an audio file to a chat.
 func (b *Bot) SendAudio(chatID int64, path string, caption string) error {
+	return b.sendAudioCtx(b.ctx, chatID, path, caption)
+}
+
+// sendAudioCtx is the ctx-aware implementation of SendAudio.
+func (b *Bot) sendAudioCtx(ctx context.Context, chatID int64, path string, caption string) error {
 	chat := &tele.Chat{ID: chatID}
 	audio := &tele.Audio{File: tele.FromDisk(path)}
 
@@ -2513,21 +2591,27 @@ func (b *Bot) SendAudio(chatID int64, path string, caption string) error {
 
 	if len(formattedCaption) <= TelegramCaptionLimit {
 		audio.Caption = formattedCaption
-		_, err := b.bot.Send(chat, audio, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		_, err := b.sendWithRetry(ctx, chatID, "audio-html", func() (*tele.Message, error) {
+			return b.bot.Send(chat, audio, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		})
 		if err != nil {
 			audio.Caption = caption
-			_, err = b.bot.Send(chat, audio)
+			_, err = b.sendWithRetry(ctx, chatID, "audio-plain", func() (*tele.Message, error) {
+				return b.bot.Send(chat, audio)
+			})
 		}
 		return err
 	}
 
 	// Caption too long - send audio first, then follow-up
-	_, err := b.bot.Send(chat, audio)
+	_, err := b.sendWithRetry(ctx, chatID, "audio-only", func() (*tele.Message, error) {
+		return b.bot.Send(chat, audio)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to send audio: %w", err)
 	}
 
-	_, err = b.sendWithHTMLFallback(chat, caption)
+	_, err = b.sendWithHTMLFallback(ctx, chat, caption)
 	return err
 }
 
@@ -2557,7 +2641,11 @@ const maxTelegramHTMLRetrySplitDepth = 6
 // sendTextWithOptionalEdit sends a potentially long text message to Telegram.
 // Chunks are split using formatted HTML length so markdown expansion doesn't overflow Telegram limits.
 // If firstMsg is provided, first chunk is edited into that message and remaining chunks are sent as new messages.
-func (b *Bot) sendTextWithOptionalEdit(chat *tele.Chat, text string, firstMsg *tele.Message) (*tele.Message, error) {
+//
+// ctx is threaded through to the flood-retry sleeps so panic-stop / bot shutdown
+// can abort an in-flight 429 back-off immediately rather than serving out the
+// full retry_after.
+func (b *Bot) sendTextWithOptionalEdit(ctx context.Context, chat *tele.Chat, text string, firstMsg *tele.Message) (*tele.Message, error) {
 	chunks := splitMessageByFormattedLength(text, maxTelegramMessage)
 	if len(chunks) == 0 {
 		return nil, nil
@@ -2565,7 +2653,7 @@ func (b *Bot) sendTextWithOptionalEdit(chat *tele.Chat, text string, firstMsg *t
 
 	var lastMsg *tele.Message
 	for i, chunk := range chunks {
-		msgs, err := b.sendChunkWithRetry(chat, firstMsg, i == 0 && firstMsg != nil, chunk, 0)
+		msgs, err := b.sendChunkWithRetry(ctx, chat, firstMsg, i == 0 && firstMsg != nil, chunk, 0)
 		if err != nil {
 			return lastMsg, fmt.Errorf("failed to deliver telegram text chunk %d/%d: %w", i+1, len(chunks), err)
 		}
@@ -2579,7 +2667,10 @@ func (b *Bot) sendTextWithOptionalEdit(chat *tele.Chat, text string, firstMsg *t
 
 // sendChunkWithRetry sends one chunk using HTML mode, with split-and-retry for fixable HTML errors.
 // If useEdit is true, the first successful send edits firstMsg; additional split children are sent as new messages.
-func (b *Bot) sendChunkWithRetry(chat *tele.Chat, firstMsg *tele.Message, useEdit bool, chunk string, depth int) ([]*tele.Message, error) {
+//
+// The underlying b.bot.Send / b.bot.Edit calls are wrapped in sendWithRetry so
+// Telegram flood (429) responses are retried with honor to retry_after.
+func (b *Bot) sendChunkWithRetry(ctx context.Context, chat *tele.Chat, firstMsg *tele.Message, useEdit bool, chunk string, depth int) ([]*tele.Message, error) {
 	chunk = strings.TrimSpace(chunk)
 	if chunk == "" {
 		return nil, nil
@@ -2592,9 +2683,13 @@ func (b *Bot) sendChunkWithRetry(chat *tele.Chat, firstMsg *tele.Message, useEdi
 		err error
 	)
 	if useEdit {
-		msg, err = b.bot.Edit(firstMsg, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		msg, err = b.sendWithRetry(ctx, chat.ID, "text-edit-html", func() (*tele.Message, error) {
+			return b.bot.Edit(firstMsg, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		})
 	} else {
-		msg, err = b.bot.Send(chat, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		msg, err = b.sendWithRetry(ctx, chat.ID, "text-send-html", func() (*tele.Message, error) {
+			return b.bot.Send(chat, formatted, &tele.SendOptions{ParseMode: tele.ModeHTML})
+		})
 	}
 	if err == nil {
 		return []*tele.Message{msg}, nil
@@ -2610,9 +2705,9 @@ func (b *Bot) sendChunkWithRetry(chat *tele.Chat, firstMsg *tele.Message, useEdi
 				"rightLen", len(right),
 			)
 
-			leftMsgs, leftErr := b.sendChunkWithRetry(chat, firstMsg, useEdit, left, depth+1)
+			leftMsgs, leftErr := b.sendChunkWithRetry(ctx, chat, firstMsg, useEdit, left, depth+1)
 			if leftErr == nil {
-				rightMsgs, rightErr := b.sendChunkWithRetry(chat, nil, false, right, depth+1)
+				rightMsgs, rightErr := b.sendChunkWithRetry(ctx, chat, nil, false, right, depth+1)
 				if rightErr == nil {
 					return append(leftMsgs, rightMsgs...), nil
 				}
@@ -2626,9 +2721,13 @@ func (b *Bot) sendChunkWithRetry(chat *tele.Chat, firstMsg *tele.Message, useEdi
 		"chunkLen", len(chunk),
 	)
 	if useEdit {
-		msg, err = b.bot.Edit(firstMsg, chunk)
+		msg, err = b.sendWithRetry(ctx, chat.ID, "text-edit-plain", func() (*tele.Message, error) {
+			return b.bot.Edit(firstMsg, chunk)
+		})
 	} else {
-		msg, err = b.bot.Send(chat, chunk)
+		msg, err = b.sendWithRetry(ctx, chat.ID, "text-send-plain", func() (*tele.Message, error) {
+			return b.bot.Send(chat, chunk)
+		})
 	}
 	if err != nil {
 		return nil, err

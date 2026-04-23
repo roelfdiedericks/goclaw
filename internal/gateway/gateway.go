@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -1787,8 +1788,26 @@ func (g *Gateway) RunAgentForCron(ctx context.Context, cronReq cron.AgentRequest
 	// Create internal events channel
 	events := make(chan AgentEvent, 100)
 
-	// Run the agent in a goroutine
-	go g.RunAgent(ctx, req, events) //nolint:errcheck // fire-and-forget goroutine
+	// Panic-signal channel: if the agent goroutine panics, its recover writes
+	// the panic message here before exiting. The main goroutine drains it
+	// AFTER the events range loop finishes, so we can emit a proper
+	// AgentErrorEvent without racing against RunAgent's `defer close(events)`
+	// or against the close of cronEvents below.
+	panicSignal := make(chan string, 1)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				L_error("gateway: RunAgent panic recovered (cron path)",
+					"recover", r,
+					"stack", string(debug.Stack()),
+				)
+				panicSignal <- fmt.Sprintf("internal panic: %v", r)
+			}
+			close(panicSignal)
+		}()
+		_ = g.RunAgent(ctx, req, events)
+	}()
 
 	// Forward events, converting types
 	for event := range events {
@@ -1798,6 +1817,13 @@ func (g *Gateway) RunAgentForCron(ctx context.Context, cronReq cron.AgentRequest
 		case EventAgentError:
 			cronEvents <- cron.AgentErrorEvent{Error: e.Error}
 		}
+	}
+
+	// Surface panic as an AgentErrorEvent if the agent goroutine died
+	// unexpectedly. Buffered + guaranteed closed means this is non-blocking
+	// in the clean-run case.
+	if msg, ok := <-panicSignal; ok {
+		cronEvents <- cron.AgentErrorEvent{Error: msg}
 	}
 
 	// Close the cron events channel when done
@@ -2135,6 +2161,14 @@ func (g *Gateway) ProcessMessage(ctx context.Context, msg *types.InboundMessage,
 
 		// Forward events to caller and collect finalText
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					L_error("gateway: event-forwarder panic recovered (streaming)",
+						"recover", r,
+						"stack", string(debug.Stack()),
+					)
+				}
+			}()
 			for event := range internalEvents {
 				// Forward to caller
 				events <- event
@@ -2168,6 +2202,14 @@ func (g *Gateway) ProcessMessage(ctx context.Context, msg *types.InboundMessage,
 
 		go func() {
 			defer close(done)
+			defer func() {
+				if r := recover(); r != nil {
+					L_error("gateway: event-forwarder panic recovered (batch)",
+						"recover", r,
+						"stack", string(debug.Stack()),
+					)
+				}
+			}()
 			for event := range internalEvents {
 				if e, ok := event.(EventAgentStart); ok {
 					runID = e.RunID
@@ -3462,6 +3504,31 @@ func (g *Gateway) RunAgent(ctx context.Context, req AgentRequest, events chan<- 
 					wg.Add(1)
 					go func(i int, tc llm.ToolCallInfo) {
 						defer wg.Done()
+						defer func() {
+							if r := recover(); r != nil {
+								L_error("gateway: parallel tool-call panic recovered",
+									"tool", tc.Name,
+									"toolID", tc.ID,
+									"recover", r,
+									"stack", string(debug.Stack()),
+								)
+								msg := fmt.Sprintf("tool %q panicked: %v (see gateway logs)", tc.Name, r)
+								sendEvent(EventToolEnd{
+									RunID:         runID,
+									ToolName:      tc.Name,
+									ToolID:        tc.ID,
+									Result:        msg,
+									DisplayResult: msg,
+									Error:         "panic",
+								})
+								results[i] = parallelToolResult{
+									resultText:  msg,
+									displayText: msg,
+									errStr:      "panic",
+									handled:     true,
+								}
+							}
+						}()
 						select {
 						case sem <- struct{}{}:
 							defer func() { <-sem }()

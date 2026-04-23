@@ -1207,10 +1207,13 @@ func (t *Tool) snapshotText(page *rod.Page, info *proto.TargetTargetInfo, maxLen
 	article, err := readability.FromReader(strings.NewReader(html), parsedURL)
 	if err != nil {
 		L_warn("browser: readability failed, using raw text", "error", err)
-		// Fallback to raw text
-		text, err := page.MustElement("body").Text()
-		if err != nil {
-			return "", fmt.Errorf("failed to get page text: %w", err)
+		body, bodyErr := page.Element("body")
+		if bodyErr != nil {
+			return "", fmt.Errorf("failed to locate body element: %w", bodyErr)
+		}
+		text, textErr := body.Text()
+		if textErr != nil {
+			return "", fmt.Errorf("failed to get page text: %w", textErr)
 		}
 		if len(text) > maxLength {
 			text = text[:maxLength] + "\n\n[Content truncated...]"
@@ -1253,12 +1256,20 @@ func (t *Tool) snapshotAI(sessionID string, page *rod.Page, info *proto.TargetTa
 		result.WriteString("\n\n---\n\n")
 	}
 
-	// Get page text content
 	startText := time.Now()
-	text, err := page.MustElement("body").Text()
-	if err != nil {
-		L_warn("browser: failed to get body text", "error", err)
-		text = "[Failed to extract page content]"
+	var text string
+	body, bodyErr := page.Element("body")
+	if bodyErr != nil {
+		L_warn("browser: failed to locate body element", "error", bodyErr)
+		text = "[Failed to locate body element]"
+	} else {
+		t, textErr := body.Text()
+		if textErr != nil {
+			L_warn("browser: failed to get body text", "error", textErr)
+			text = "[Failed to extract page content]"
+		} else {
+			text = t
+		}
 	}
 	L_debug("browser: got body text", "chars", len(text), "took", time.Since(startText))
 

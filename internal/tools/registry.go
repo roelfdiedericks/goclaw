@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
 
+	. "github.com/roelfdiedericks/goclaw/internal/logging"
 	"github.com/roelfdiedericks/goclaw/internal/types"
 )
 
@@ -47,8 +49,15 @@ func (r *Registry) Has(name string) bool {
 	return ok
 }
 
-// Execute runs a tool by name with the given input
-func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessage) (*types.ToolResult, error) {
+// Execute runs a tool by name with the given input.
+//
+// A panic inside the tool's Execute is recovered here so that a single
+// misbehaving tool cannot crash the gateway. The recovered panic is logged
+// with a full stack trace and surfaced to the caller as both an IsError
+// ToolResult (so the LLM sees a normal tool failure it can report to the
+// user) and a non-nil error (so internal callers checking err still observe
+// failure).
+func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessage) (result *types.ToolResult, err error) {
 	r.mu.RLock()
 	tool, ok := r.tools[name]
 	r.mu.RUnlock()
@@ -56,6 +65,20 @@ func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessa
 	if !ok {
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
+
+	defer func() {
+		if rec := recover(); rec != nil {
+			stack := debug.Stack()
+			L_error("tools: panic during Execute",
+				"tool", name,
+				"recover", rec,
+				"stack", string(stack),
+			)
+			msg := fmt.Sprintf("tool %q panicked: %v (see gateway logs for stack)", name, rec)
+			result = types.ErrorResult(msg)
+			err = fmt.Errorf("%s", msg)
+		}
+	}()
 
 	return tool.Execute(ctx, input)
 }

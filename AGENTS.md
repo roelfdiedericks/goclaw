@@ -167,4 +167,24 @@ When in doubt, ask: *would a GoClaw operator skimming this before upgrading care
 ## Documentation updates
 Follow the docs/AGENTS.md guide for changing files in the docs/ subdirectory. Ensure documentation updates are user-facing and not overly technical.
 
+## Release readiness
+
+When the user says "release it" (or asks whether something is ready for release), run this check — in this order — and report status. **Never cut the version, tag, or run any git write commands. The user handles the actual release.**
+
+1. **Docs review.** Scan `docs/` for anything that could be stale because of the current changeset. Pure reliability / internal fixes usually need no user-facing doc change — the CHANGELOG is the right place. User-visible features or behavior changes usually do. Honor `docs/AGENTS.md`.
+2. **`make build`** — must be clean.
+3. **Targeted tests** — `go test -vet=off -count=1` against the packages touched by the changeset. Only widen if you've touched cross-cutting infrastructure.
+4. **`make audit`** — full pipeline (build + golangci-lint + module audit + govulncheck + gitleaks). Must be green. If it fails, fix and re-run; don't hand off a broken audit.
+5. **`git status` + `git diff --stat`** — sanity-check the changeset. Flag:
+   - unrelated / collateral edits
+   - accidentally included secrets (`.env`, credentials, keys)
+   - new binaries or generated files that shouldn't be tracked
+6. **`## [Unreleased]` in `CHANGELOG.md`** — verify entries match the `CHANGELOG.md updates` rules above (terse, user-facing, one bullet per observable outcome, no internal jargon).
+7. **Report.** Summarize verification results, diff footprint, and CHANGELOG state. If a version cut is useful, *propose* the rename (`[Unreleased]` → `[0.1.x] stable - YYYY-MM-DD` plus a fresh empty `[Unreleased]`) but **wait for approval** before writing it.
+
+Do NOT:
+- Run `git add` / `commit` / `tag` / `push` / any git write command (see `ground-rules`)
+- Bump the version in any file yourself
+- Run `goclaw gateway` or `make run` to "verify the build works at runtime" — the user tests manually
+
 
